@@ -5,9 +5,10 @@
 // 而 Color32 在 xcal_core::types 中。因此渲染样式组件归入 xcal-render。
 
 pub use xcal_core::scene::components::{
-    Circle, CPUDevice, ClockState, FunctionX2Y, Interpolator, Line, LocalClock, ParameterCurveT2XY,
-    ParameterCurveT2XYZ, Parent, Path, PathMesh, QuadMesh, Sampler1D, Sampler2D, SyncSendFn,
-    Transform, TriangleMesh, WGPUDevice, animation, marker, mesh,
+    Circle, CircleAnim, CPUDevice, ClockState, FunctionX2Y, Interpolator, Line, LocalClock,
+    ParameterCurveT2XY, ParameterCurveT2XYZ, Parent, Path, PathMesh, PhaseAnim, QuadMesh,
+    Sampler1D, Sampler2D, SyncSendFn, Transform, TriangleMesh, WGPUDevice, animation, marker,
+    mesh,
 };
 
 pub mod render {

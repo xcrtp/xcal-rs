@@ -15,6 +15,6 @@ pub mod resources;
 pub use egui_support::Egui2dRender;
 pub use resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 pub use systems::{
-    CameraInputSystem, ControlPanelSystem, GridBuildSystem, RenderSubmitSystem,
-    SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
+    AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
+    RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
 };

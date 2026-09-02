@@ -1,20 +1,31 @@
 // xcal-core: 纯逻辑层
 // 包含：错误、类型(数学+相机)、Transform2D trait 数学部分、
-//      executor（System trait + ExecutorContext + Resources）、
-//      scheduler（Phase + Scheduler）、
+//      resource（Resource marker + Resources + ResourceTuple）、
+//      access（Access 冲突检测）、
+//      context（ExecutorContext + debug BorrowTracker）、
+//      system（System trait + Sys 闭包适配器 + InitSystem + ErasedSystem）、
+//      scheduler（Phase + Scheduler + 冲突校验 + 借用追踪）、
 //      scene 中的 marker/mesh/animation 子模块 + Circle/Path/Line/Scene 等纯逻辑组件、
 //      utils 宏
 
 pub mod errors;
 pub mod types;
 pub mod transform;
-pub mod executor;
+pub mod resource;
+pub mod access;
+pub mod context;
+pub mod system;
 pub mod scheduler;
 pub mod scene;
 pub mod utils;
 
 pub use errors::Error;
-pub use executor::{ExecutorContext, Resources, System};
+pub use resource::{Resource, ResourceTuple, ResourceTupleDefault, Resources};
+pub use access::Access;
+#[cfg(debug_assertions)]
+pub use context::BorrowTracker;
+pub use context::ExecutorContext;
+pub use system::{sys, ErasedSystem, InitSystem, Sys, System};
 pub use scheduler::{Phase, Scheduler};
 pub use scene::{Scene, comp, components};
 pub use transform::{Transform2D, Transform2DInto};

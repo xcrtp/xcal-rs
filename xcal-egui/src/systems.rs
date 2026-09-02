@@ -1,12 +1,27 @@
-// systems.rs: egui 层 System 实现
+// systems.rs: egui 层 System 实现（新架构）
+//
+// 每个 System 显式声明 `Reads` / `Writes` 关联类型，使用
+// `ctx.get` / `ctx.get_mut` 访问 Resource。旧 `ctx.resources.borrow*`
+// 已废弃。
+//
+// Phase 分配（避开同 phase 内 read/write 冲突）：
+// - Input:        TimeUpdate   (W=TimeState)
+//                 CameraInput  (R=EguiFrameContext, W=AppCamera)
+// - LogicUpdate:  ControlPanel (R=TimeState, AppCamera, EguiFrameContext, W=UiConfig)
+// - SceneSync:    ViewRectUpdate (R=EguiFrameContext, W=ViewRect)
+// - Prepare:      GridBuild    (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
+// - RenderCommit: SceneRecord  (R=ViewRect, AppCamera, W=DrawQueue)
+// - FrameEnd:     RenderSubmit (R=ViewRect, EguiFrameContext, DrawQueue, W=())
 
 use egui::Panel;
 
-use xcal_core::executor::{ExecutorContext, System};
+use xcal_core::context::ExecutorContext;
+use xcal_core::system::System;
 use xcal_core::transform::Transform2D;
 use xcal_core::types::{Camera2D, Rect, Vec3};
 use xcal_render::components::{
-    FillSolid, FunctionX2Y, Line, Path, Sampler1D, StrokeSolid,
+    Circle, CircleAnim, FillSolid, FunctionX2Y, Line, LocalClock, Path, PhaseAnim, Sampler1D,
+    StrokeSolid,
 };
 use xcal_render::{DrawQueue, ZIndex, record_scene};
 
@@ -15,9 +30,8 @@ use crate::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRec
 
 // ─── 从 Resources 提取 EguiFrameContext ────────────────────────────────────
 
-fn extract_ui_ptr(ctx: &ExecutorContext<'_>) -> *mut egui::Ui {
-    ctx.resources
-        .borrow::<EguiFrameContext>()
+fn extract_ui_ptr(ctx: &mut ExecutorContext<'_>) -> *mut egui::Ui {
+    ctx.get::<EguiFrameContext>()
         .map(|c| c.ui_ptr())
         .unwrap_or(std::ptr::null_mut())
 }
@@ -26,9 +40,12 @@ fn extract_ui_ptr(ctx: &ExecutorContext<'_>) -> *mut egui::Ui {
 
 pub struct TimeUpdateSystem;
 impl System for TimeUpdateSystem {
+    type Reads = ();
+    type Writes = (TimeState,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let dt = ctx.dt.min(0.1);
-        if let Some(state) = ctx.resources.borrow_mut::<TimeState>() {
+        if let Some(state) = ctx.get_mut::<TimeState>() {
             state.elapsed += dt;
         }
     }
@@ -38,11 +55,16 @@ impl System for TimeUpdateSystem {
 
 pub struct CameraInputSystem;
 impl System for CameraInputSystem {
+    type Reads = (EguiFrameContext,);
+    type Writes = (AppCamera,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() { return; }
+        if ui_ptr.is_null() {
+            return;
+        }
 
-        let Some(camera) = ctx.resources.borrow_mut::<AppCamera>() else { return };
+        let Some(camera) = ctx.get_mut::<AppCamera>() else { return };
         let ui = unsafe { &mut *ui_ptr };
         camera.handle_input(ui);
     }
@@ -52,25 +74,29 @@ impl System for CameraInputSystem {
 
 pub struct ControlPanelSystem;
 impl System for ControlPanelSystem {
+    type Reads = (TimeState, AppCamera, EguiFrameContext);
+    type Writes = (UiConfig,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() { return; }
+        if ui_ptr.is_null() {
+            return;
+        }
         let ui = unsafe { &mut *ui_ptr };
 
+        // 三阶段闭包模式：先克隆只读值，再在闭包内修改本地副本，
+        // 闭包结束后写回 Resources。避免 BorrowTracker 同时持有多份 &mut。
         let time = ctx
-            .resources
-            .borrow::<TimeState>()
+            .get::<TimeState>()
             .map(|t| t.elapsed)
             .unwrap_or(0.0);
         let camera = ctx
-            .resources
-            .borrow::<AppCamera>()
-            .cloned()
+            .get::<AppCamera>()
+            .map(|c| c.clone())
             .unwrap_or_default();
         let mut ui_config = ctx
-            .resources
-            .borrow::<UiConfig>()
-            .cloned()
+            .get::<UiConfig>()
+            .map(|c| c.clone())
             .unwrap_or_default();
 
         Panel::left("controls")
@@ -93,7 +119,7 @@ impl System for ControlPanelSystem {
                 ui.label(format!("scale: {:.1}", camera.scale));
             });
 
-        if let Some(cfg) = ctx.resources.borrow_mut::<UiConfig>() {
+        if let Some(cfg) = ctx.get_mut::<UiConfig>() {
             *cfg = ui_config;
         }
     }
@@ -103,13 +129,51 @@ impl System for ControlPanelSystem {
 
 pub struct ViewRectUpdateSystem;
 impl System for ViewRectUpdateSystem {
+    type Reads = (EguiFrameContext,);
+    type Writes = (ViewRect,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() { return; }
+        if ui_ptr.is_null() {
+            return;
+        }
         let ui = unsafe { &mut *ui_ptr };
 
-        if let Some(vr) = ctx.resources.borrow_mut::<ViewRect>() {
+        if let Some(vr) = ctx.get_mut::<ViewRect>() {
             vr.rect = Rect::from(ui.available_rect_before_wrap());
+        }
+    }
+}
+
+// ─── AnimationApplySystem ───────────────────────────────────────────────────
+// Phase::SceneSync：读 TimeState.elapsed 作全局时间，按实体 LocalClock 的
+// start/speed 映射为本地时间 t，驱动 Circle 半径 sin 振荡与 FunctionX2Y 相位滑动。
+// Reads=(TimeState,)（LocalClock/CircleAnim/PhaseAnim 是 hecs 组件，不进 Resource 关联类型）；
+// Writes=()（组件通过 ctx.world 直接 query 修改，不经 Resource）。
+// LocalClock 在本系统只读（不更新 current），避免与自身 Reads 声明冲突。
+
+pub struct AnimationApplySystem;
+impl System for AnimationApplySystem {
+    type Reads = (TimeState,);
+    type Writes = ();
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        // 先取出 Copy 值释放 &mut ctx 借用，再 split-borrow world 字段做 query。
+        let t_global = ctx.get::<TimeState>().map(|s| s.elapsed).unwrap_or(0.0);
+
+        // 圆半径振荡：radius = base + amp * sin(t * omega)
+        for (clock, anim, circle) in ctx
+            .world
+            .query::<(&LocalClock, &CircleAnim, &mut Circle)>()
+            .iter()
+        {
+            let t = clock.start + t_global * clock.speed;
+            circle.radius = anim.base + anim.amp * (t * anim.omega).sin();
+        }
+        // sin 曲线相位滑动：phase = t * omega（SceneRecordSystem 采样 x + phase）
+        for (clock, phase) in ctx.world.query::<(&LocalClock, &mut PhaseAnim)>().iter() {
+            let t = clock.start + t_global * clock.speed;
+            phase.phase = t * phase.omega;
         }
     }
 }
@@ -168,26 +232,27 @@ impl GridBuildSystem {
 }
 
 impl System for GridBuildSystem {
+    type Reads = (ViewRect, AppCamera, UiConfig);
+    type Writes = (DrawQueue,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        // 三阶段闭包：先克隆只读值，再写回。
         let rect = ctx
-            .resources
-            .borrow::<ViewRect>()
+            .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
         let cam = ctx
-            .resources
-            .borrow::<AppCamera>()
-            .cloned()
+            .get::<AppCamera>()
+            .map(|c| c.clone())
             .unwrap_or_default();
         let show_grid = ctx
-            .resources
-            .borrow::<UiConfig>()
+            .get::<UiConfig>()
             .map(|c| c.show_grid)
             .unwrap_or(true);
 
         let camera = cam.to_camera_2d(rect);
 
-        let Some(queue) = ctx.resources.borrow_mut::<DrawQueue>() else { return };
+        let Some(queue) = ctx.get_mut::<DrawQueue>() else { return };
 
         queue.rect_fill(
             ZIndex::new(-1000),
@@ -205,40 +270,49 @@ impl System for GridBuildSystem {
 
 pub struct SceneRecordSystem;
 impl System for SceneRecordSystem {
+    type Reads = (ViewRect, AppCamera);
+    type Writes = (DrawQueue,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let rect = ctx
-            .resources
-            .borrow::<ViewRect>()
+            .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
         let cam = ctx
-            .resources
-            .borrow::<AppCamera>()
-            .cloned()
+            .get::<AppCamera>()
+            .map(|c| c.clone())
             .unwrap_or_default();
         let camera = cam.to_camera_2d(rect);
 
-        let Some(queue) = ctx.resources.borrow_mut::<DrawQueue>() else { return };
-        let world: &hecs::World = &*ctx.world;
+        // 同时需要 &hecs::World（不可变）与 &mut DrawQueue；
+        // 通过 split-borrow 辅助 API 在闭包内同时持有两个引用。
+        ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, queue| {
+            record_scene(world, &camera, queue);
 
-        record_scene(world, &camera, queue);
-
-        for (func, sampler, stroke) in world
-            .query::<(&FunctionX2Y<f32, f32>, &Sampler1D<f32>, &StrokeSolid)>()
-            .iter()
-        {
-            let mut pts: Vec<Vec3> = Vec::new();
-            let mut x = sampler.start;
-            while x <= sampler.end {
-                pts.push((x, (func.f)(x), 0.0).into());
-                x += sampler.step;
+            for (func, sampler, stroke, phase) in world
+                .query::<(
+                    &FunctionX2Y<f32, f32>,
+                    &Sampler1D<f32>,
+                    &StrokeSolid,
+                    Option<&PhaseAnim>,
+                )>()
+                .iter()
+            {
+                // AnimationApplySystem 写入的相位偏移：让 sin 曲线随时间水平滑动。
+                let phase = phase.map(|p| p.phase).unwrap_or(0.0);
+                let mut pts: Vec<Vec3> = Vec::new();
+                let mut x = sampler.start;
+                while x <= sampler.end {
+                    pts.push((x, (func.f)(x + phase), 0.0).into());
+                    x += sampler.step;
+                }
+                queue.path_stroke(
+                    ZIndex::new(0),
+                    Path::new(pts, false).to_screen(&camera),
+                    stroke.clone(),
+                );
             }
-            queue.path_stroke(
-                ZIndex::new(0),
-                Path::new(pts, false).to_screen(&camera),
-                stroke.clone(),
-            );
-        }
+        });
     }
 }
 
@@ -246,18 +320,22 @@ impl System for SceneRecordSystem {
 
 pub struct RenderSubmitSystem;
 impl System for RenderSubmitSystem {
+    type Reads = (ViewRect, EguiFrameContext);
+    type Writes = (DrawQueue,);
+
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() { return; }
+        if ui_ptr.is_null() {
+            return;
+        }
         let ui = unsafe { &mut *ui_ptr };
 
         let view_rect = ctx
-            .resources
-            .borrow::<ViewRect>()
+            .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
 
-        let Some(queue) = ctx.resources.borrow_mut::<DrawQueue>() else { return };
+        let Some(queue) = ctx.get_mut::<DrawQueue>() else { return };
         let painter = ui.painter_at(view_rect.into_egui_rect());
         queue.execute(&Egui2dRender::new(&painter));
     }

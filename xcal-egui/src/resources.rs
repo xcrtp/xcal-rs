@@ -102,7 +102,7 @@ impl Default for ViewRect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::executor::Resources;
+    use xcal_core::resource::Resources;
 
     #[test]
     fn test_app_camera_default() {
@@ -122,9 +122,9 @@ mod tests {
     fn test_resources_remove() {
         let mut r = Resources::new();
         r.insert(42_i32);
-        assert!(r.borrow::<i32>().is_some());
+        assert!(r.get::<i32>().is_some());
         let removed = r.remove::<i32>();
         assert_eq!(removed, Some(42));
-        assert!(r.borrow::<i32>().is_none());
+        assert!(r.get::<i32>().is_none());
     }
 }
