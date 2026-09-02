@@ -8,7 +8,7 @@
 //! Hard constraint: this crate must never depend on `xcal-core` /
 //! `xcal-render` / `xcal-app` / `xcal-macro`.
 //!
-//! Planned modules (filled in across implementation stages):
+//! Module map:
 //! - `view`: `NodeView` / `DefaultNodeView` card appearance (stage 7)
 //! - `edge_render`: `EdgeRenderer`, bezier/orthogonal painters (stage 7)
 //! - `painter`: `GraphPainter` full-scene painting (stage 7)
@@ -17,3 +17,13 @@
 //! - `app`: `NodeGraphApp` per-frame driver (stage 8)
 
 #![forbid(unsafe_code)]
+
+pub mod edge_render;
+pub mod painter;
+pub mod view;
+
+pub use edge_render::{
+    ArrowStyle, BezierRenderer, EdgeRenderer, EdgeStyle, OrthogonalRenderer, StrokeKind,
+};
+pub use painter::GraphPainter;
+pub use view::{DefaultNodeView, NodeView};
