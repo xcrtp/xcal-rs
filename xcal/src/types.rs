@@ -12,11 +12,17 @@ macro_rules! export_vec {
            pub $id (glam::$id)
         }
     };
+    ($id:ident, $($extra:meta),*) => {
+        export_type! {
+            #[derive(Clone,Copy,derive_new::new,Debug, $($extra),*)]
+           pub $id (glam::$id)
+        }
+    };
 }
 
 type Tuple4<T> = (T, T, T, T);
 
-export_vec!(Vec2);
+export_vec!(Vec2, xcal_macro::Transform2DInto);
 
 impl From<(f32, f32)> for Vec2 {
     fn from((x, y): (f32, f32)) -> Self {
@@ -31,7 +37,7 @@ impl Into<egui::Pos2> for Vec2 {
     }
 }
 
-export_vec!(Vec3);
+export_vec!(Vec3, xcal_macro::Transform2DInto);
 
 impl From<(f32, f32, f32)> for Vec3 {
     fn from((x, y, z): (f32, f32, f32)) -> Self {
@@ -121,8 +127,126 @@ mod tests {
         let vec: Vec2 = glam::Vec2::ONE.into();
         let _: egui::Pos2 = vec.into();
     }
+
+    #[test]
+    fn test_vec2_from_tuple() {
+        let v: Vec2 = (1.0_f32, 2.0).into();
+        assert_eq!(v.x, 1.0);
+        assert_eq!(v.y, 2.0);
+    }
+
+    #[test]
+    fn test_vec3_from_tuple() {
+        let v: Vec3 = (1.0_f32, 2.0, 3.0).into();
+        assert_eq!(v.x, 1.0);
+        assert_eq!(v.y, 2.0);
+        assert_eq!(v.z, 3.0);
+    }
+
+    #[test]
+    fn test_vec4_from_tuple() {
+        let v: Vec4 = (1.0_f32, 2.0, 3.0, 4.0).into();
+        assert_eq!(v.x, 1.0);
+        assert_eq!(v.y, 2.0);
+        assert_eq!(v.z, 3.0);
+        assert_eq!(v.w, 4.0);
+    }
+
+    #[test]
+    fn test_i8vec4_from_tuple() {
+        let v: I8Vec4 = (1_i8, 2, 3, 4).into();
+        assert_eq!(v.x, 1);
+        assert_eq!(v.y, 2);
+        assert_eq!(v.z, 3);
+        assert_eq!(v.w, 4);
+    }
+
+    #[test]
+    fn test_u8vec4_from_tuple() {
+        let v: U8Vec4 = (1_u8, 2, 3, 4).into();
+        assert_eq!(v.x, 1);
+        assert_eq!(v.y, 2);
+        assert_eq!(v.z, 3);
+        assert_eq!(v.w, 4);
+    }
+
+    #[test]
+    fn test_color32_from_tuple() {
+        let c: Color32 = (10_u8, 20, 30, 40).into();
+        assert_eq!(c.r(), 10);
+        assert_eq!(c.g(), 20);
+        assert_eq!(c.b(), 30);
+        assert_eq!(c.a(), 40);
+    }
+
+    #[test]
+    fn test_color32_from_egui() {
+        let ec = egui::Color32::from_rgba_premultiplied(10, 20, 30, 40);
+        let c: Color32 = ec.into();
+        assert_eq!(c.r(), 10);
+        assert_eq!(c.g(), 20);
+        assert_eq!(c.b(), 30);
+        assert_eq!(c.a(), 40);
+    }
+
+    #[test]
+    fn test_color32_round_trip() {
+        let original = egui::Color32::from_rgba_premultiplied(100, 150, 200, 255);
+        let xcal_color: Color32 = original.into();
+        let back: egui::Color32 = xcal_color.into_egui_color32();
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn test_rect_size() {
+        let min: Vec2 = (0.0, 0.0).into();
+        let max: Vec2 = (10.0, 20.0).into();
+        let r = Rect::new(min, max);
+        let size = r.size();
+        assert_eq!(size.x, 10.0);
+        assert_eq!(size.y, 20.0);
+    }
+
+    #[test]
+    fn test_rect_center() {
+        let min: Vec2 = (0.0, 0.0).into();
+        let max: Vec2 = (10.0, 20.0).into();
+        let r = Rect::new(min, max);
+        let center = r.center();
+        assert_eq!(center.x, 5.0);
+        assert_eq!(center.y, 10.0);
+    }
+
+    #[test]
+    fn test_rect_size_negative_coords() {
+        let min: Vec2 = (-5.0, -10.0).into();
+        let max: Vec2 = (5.0, 10.0).into();
+        let r = Rect::new(min, max);
+        let size = r.size();
+        assert_eq!(size.x, 10.0);
+        assert_eq!(size.y, 20.0);
+    }
+
+    #[test]
+    fn test_rect_from_egui() {
+        let er = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(10.0, 20.0));
+        let r: Rect = er.into();
+        let size = r.size();
+        assert_eq!(size.x, 10.0);
+        assert_eq!(size.y, 20.0);
+    }
+
+    #[test]
+    fn test_rect_into_egui() {
+        let min: Vec2 = (0.0, 0.0).into();
+        let max: Vec2 = (10.0, 20.0).into();
+        let r = Rect::new(min, max);
+        let er: egui::Rect = r.into_egui_rect();
+        assert_eq!(er.min, egui::pos2(0.0, 0.0));
+        assert_eq!(er.max, egui::pos2(10.0, 20.0));
+    }
 }
-#[derive(Debug, Clone, Copy, derive_new::new)]
+#[derive(Debug, Clone, Copy, derive_new::new, xcal_macro::Transform2DInto)]
 pub struct Rect {
     min: Vec2,
     max: Vec2,
@@ -154,4 +278,22 @@ impl Rect {
     pub fn center(&self) -> Vec2 {
         ((*self.max + *self.min) / 2.0).into()
     }
+}
+
+/// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
+///
+/// - 屏幕坐标系：以视口左上角为原点，y 向下，单位为像素。
+/// - 逻辑坐标系：以 `center` 为相机中心，y 向上，单位为世界单位。
+///
+/// 转换关系（参见 [`crate::render::Transform2D`]）：
+/// - 逻辑 → 屏幕：`screen = rect.center + (logical - center) * scale`，y 取反。
+/// - 屏幕 → 逻辑：`logical = (screen - rect.center) / scale + center`，y 取反。
+#[derive(Debug, Clone, Copy, derive_new::new)]
+pub struct Camera2D {
+    /// 逻辑坐标系中相机中心位置
+    pub center: Vec2,
+    /// 缩放系数：1 单位逻辑 = `scale` 像素
+    pub scale: f32,
+    /// 屏幕视口矩形（像素）
+    pub rect: Rect,
 }

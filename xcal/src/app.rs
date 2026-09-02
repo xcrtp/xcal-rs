@@ -322,3 +322,131 @@ impl eframe::App for App {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+        Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1))
+    }
+
+    #[test]
+    fn test_math_to_screen() {
+        let center = Pos2::new(0.0, 0.0);
+        let rect = make_rect(0.0, 0.0, 100.0, 100.0);
+        // rect center = (50, 50)
+        // math_to_screen(1, 1) = (50 + 1, 50 - 1) = (51, 49)
+        let p = utils::math_to_screen(1.0, 1.0, center, 1.0, rect);
+        assert_eq!(p, Pos2::new(51.0, 49.0));
+    }
+
+    #[test]
+    fn test_math_to_screen_with_scale() {
+        let center = Pos2::new(0.0, 0.0);
+        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
+        // rect center = (400, 300), scale = 10
+        // math_to_screen(3, 4) = (400 + 30, 300 - 40) = (430, 260)
+        let p = utils::math_to_screen(3.0, 4.0, center, 10.0, rect);
+        assert_eq!(p, Pos2::new(430.0, 260.0));
+    }
+
+    #[test]
+    fn test_math_to_screen_with_offset_center() {
+        let center = Pos2::new(5.0, 5.0);
+        let rect = make_rect(0.0, 0.0, 200.0, 200.0);
+        // rect center = (100, 100), center = (5, 5), scale = 2
+        // math_to_screen(10, 10) = (100 + (10-5)*2, 100 - (10-5)*2) = (110, 90)
+        let p = utils::math_to_screen(10.0, 10.0, center, 2.0, rect);
+        assert_eq!(p, Pos2::new(110.0, 90.0));
+    }
+
+    #[test]
+    fn test_screen_to_math() {
+        let center = Pos2::new(0.0, 0.0);
+        let rect = make_rect(0.0, 0.0, 100.0, 100.0);
+        // screen_to_math(51, 49) = (0 + (51-50)/1, 0 - (49-50)/1) = (1, 1)
+        let (mx, my) = utils::screen_to_math(51.0, 49.0, center, 1.0, rect);
+        assert!((mx - 1.0).abs() < 1e-5);
+        assert!((my - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_screen_to_math_with_scale() {
+        let center = Pos2::new(0.0, 0.0);
+        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
+        // screen_to_math(430, 260) = (0 + (430-400)/10, 0 - (260-300)/10) = (3, 4)
+        let (mx, my) = utils::screen_to_math(430.0, 260.0, center, 10.0, rect);
+        assert!((mx - 3.0).abs() < 1e-5);
+        assert!((my - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_seg() {
+        let a = Pos2::new(0.0, 0.0);
+        let b = Pos2::new(1.0, 1.0);
+        let s = utils::seg(a, b);
+        assert_eq!(s, [a, b]);
+    }
+
+    #[test]
+    fn test_camera_default() {
+        let c = Camera::default();
+        assert_eq!(c.center, Pos2::new(0.0, 0.0));
+        assert_eq!(c.scale, 40.0);
+    }
+
+    #[test]
+    fn test_camera_math_to_screen() {
+        let c = Camera::default();
+        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
+        // center=(0,0), scale=40, rect center=(400,300)
+        // math_to_screen(1,1) = (440, 260)
+        let p = c.math_to_screen(1.0, 1.0, rect);
+        assert_eq!(p, Pos2::new(440.0, 260.0));
+    }
+
+    #[test]
+    fn test_camera_screen_to_math() {
+        let c = Camera::default();
+        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
+        let (mx, my) = c.screen_to_math(440.0, 260.0, rect);
+        assert!((mx - 1.0).abs() < 1e-5);
+        assert!((my - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_camera_round_trip() {
+        let c = Camera::default();
+        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
+        for &(mx, my) in &[(0.0, 0.0), (3.5, -2.0), (-10.0, 10.0)] {
+            let screen = c.math_to_screen(mx, my, rect);
+            let (mx2, my2) = c.screen_to_math(screen.x, screen.y, rect);
+            assert!((mx - mx2).abs() < 1e-3);
+            assert!((my - my2).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn test_camera_length_to_screen() {
+        let c = Camera::default();
+        assert_eq!(c.length_to_screen(1.0), 40.0);
+        assert_eq!(c.length_to_screen(2.5), 100.0);
+        assert_eq!(c.length_to_screen(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_camera_screen_to_length() {
+        let c = Camera::default();
+        assert_eq!(c.screen_to_length(40.0), 1.0);
+        assert_eq!(c.screen_to_length(100.0), 2.5);
+    }
+
+    #[test]
+    fn test_camera_length_round_trip() {
+        let c = Camera::default();
+        for &len in &[0.0, 1.0, 2.5, -3.0] {
+            assert!((len - c.screen_to_length(c.length_to_screen(len))).abs() < 1e-5);
+        }
+    }
+}

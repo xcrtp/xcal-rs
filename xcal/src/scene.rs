@@ -86,10 +86,18 @@ pub mod components {
         pub radius: f32,
     }
 
-    #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
+    #[derive(
+        Debug,
+        Clone,
+        derive_builder::Builder,
+        derive_new::new,
+        xcal_macro::Transform2DInto,
+    )]
     pub struct Path {
         #[new(into_iter = "Vec3")]
+        #[transform(iter)]
         pub vertices: Vec<Vec3>,
+        #[transform(skip)]
         pub closed: bool,
     }
 
@@ -210,5 +218,106 @@ impl Scene {
 
     pub fn spawn(&mut self, bundle: impl hecs::DynamicBundle) -> hecs::Entity {
         self.world.spawn(bundle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::components::*;
+
+    #[test]
+    fn test_scene_new_is_empty() {
+        let mut scene = Scene::new();
+        let count = scene.render(|w, _| w.len());
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_scene_spawn() {
+        let mut scene = Scene::new();
+        scene.spawn((Circle::new((0.0, 0.0), 1.0),));
+        let count = scene.render(|w, _| w.len());
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_scene_spawn_multiple() {
+        let mut scene = Scene::new();
+        scene.spawn((Circle::new((0.0, 0.0), 1.0),));
+        scene.spawn((Circle::new((1.0, 0.0), 2.0),));
+        let count = scene.render(|w, _| w.len());
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_scene_add_and_borrow_resource() {
+        let mut scene = Scene::new();
+        scene.add_resource(42_i32);
+        assert_eq!(scene.borrow_resource::<i32>(), Some(&42));
+    }
+
+    #[test]
+    fn test_scene_borrow_resource_mut() {
+        let mut scene = Scene::new();
+        scene.add_resource(42_i32);
+        if let Some(r) = scene.borrow_resource_mut::<i32>() {
+            *r = 100;
+        }
+        assert_eq!(scene.borrow_resource::<i32>(), Some(&100));
+    }
+
+    #[test]
+    fn test_scene_borrow_missing_resource() {
+        let scene = Scene::new();
+        assert!(scene.borrow_resource::<i32>().is_none());
+    }
+
+    #[test]
+    fn test_scene_borrow_mut_missing_resource() {
+        let mut scene = Scene::new();
+        assert!(scene.borrow_resource_mut::<i32>().is_none());
+    }
+
+    #[test]
+    fn test_scene_resource_type_isolation() {
+        let mut scene = Scene::new();
+        scene.add_resource(42_i32);
+        scene.add_resource(3.14_f64);
+        assert_eq!(scene.borrow_resource::<i32>(), Some(&42));
+        assert_eq!(scene.borrow_resource::<f64>(), Some(&3.14));
+    }
+
+    #[test]
+    fn test_scene_render_returns_value() {
+        let mut scene = Scene::new();
+        scene.add_resource(7_i32);
+        let result = scene.render(|w, r| {
+            let count = w.len();
+            let res = r
+                .get(&std::any::TypeId::of::<i32>())
+                .and_then(|b| b.downcast_ref::<i32>())
+                .copied();
+            (count, res)
+        });
+        assert_eq!(result.0, 0);
+        assert_eq!(result.1, Some(7));
+    }
+
+    #[test]
+    fn test_scene_query_components() {
+        let mut scene = Scene::new();
+        scene.spawn((
+            Circle::new((0.0, 0.0), 1.0),
+            StrokeSolid::new(2.0, (100, 200, 50, 255)),
+        ));
+        scene.spawn((Circle::new((3.0, 4.0), 2.0),));
+
+        let circle_count = scene.render(|w, _| w.query::<&Circle>().iter().count());
+        assert_eq!(circle_count, 2);
+
+        let stroke_count = scene
+            .render(|w, _| w.query::<(&Circle, &StrokeSolid)>().iter().count());
+        assert_eq!(stroke_count, 1);
     }
 }
