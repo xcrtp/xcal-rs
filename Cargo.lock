@@ -3484,6 +3484,7 @@ name = "xcal-node-editor"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "thiserror 2.0.20",
  "xcal-node",
 ]
 

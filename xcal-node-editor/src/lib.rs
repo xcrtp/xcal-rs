@@ -22,12 +22,18 @@
 
 #![forbid(unsafe_code)]
 
+pub mod command;
 pub mod edge_geom;
+pub mod error;
+pub mod event;
 pub mod geometry;
 pub mod layout;
 pub mod socket_layout;
 
+pub use command::Command;
 pub use edge_geom::{BezierGeometry, EdgeGeometry, EdgePath, OrthogonalGeometry};
+pub use error::EditorError;
+pub use event::EditorEvent;
 pub use geometry::{HitTarget, Rect, Vec2};
 pub use layout::{FreeLayout, LayoutStrategy, NodeSizeMap};
 pub use socket_layout::{DefaultSocketLayout, SocketLayout};
