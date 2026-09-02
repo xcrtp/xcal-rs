@@ -1,7 +1,7 @@
 // scheduler.rs
 //
 // 按阶段（Phase）分组管理 System 的调度器。
-// 每帧执行顺序：Input → LogicUpdate → SceneSync → RenderCommit → FrameEnd。
+// 每帧执行顺序：Input → LogicUpdate → SceneSync → Prepare → RenderCommit → FrameEnd。
 //
 // Scheduler 不再直接依赖 egui：UI 作为 EguiFrameContext Resource 存储，
 // 由 App 在 run_frame 前插入、帧末移除。

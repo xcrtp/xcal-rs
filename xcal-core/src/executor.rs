@@ -71,10 +71,6 @@ impl Resources {
 /// 借用规则（Rust 编译器会自动检查）：
 /// - 同时 `&mut resources` + `&mut world` ✓（不同字段）
 /// - 同类型 Resource 不能同时 & 和 &mut —— 自行按顺序管理
-///
-/// egui UI 不再直接出现在此结构中，而是作为 `EguiFrameContext` Resource
-/// 存储在 `Resources` 里，System 通过 `ctx.resources.borrow_mut::<EguiFrameContext>()`
-/// 获取。
 pub struct ExecutorContext<'frame> {
     pub world: &'frame mut hecs::World,
     pub commands: &'frame mut hecs::CommandBuffer,
@@ -111,11 +107,6 @@ impl<'frame> ExecutorContext<'frame> {
     }
 
     // ─── Resources 便捷访问 ──────────────────────────────────
-    //
-    // 注意：Rust 的 split borrow 只在 **不同字段间** 生效。
-    // 对同一个 `resources` 字段，仍然遵循"不能同时 & 和 &mut"的规则。
-    // 所以 System 中如需先 clone 几个只读 Resource，再 mutably borrow 另一个，
-    // 请先把所有只读值 clone 出来，再调用 resources_mut。
 
     pub fn borrow_resource<T: 'static>(&self) -> Option<&T> {
         self.resources.borrow::<T>()
@@ -204,7 +195,6 @@ mod tests {
             0.0,
         );
 
-        // split borrow：同时 &mut world 和 &mut resources
         assert_eq!(ctx.borrow_world().len(), 0);
         let _ = ctx.borrow_resource_mut::<i32>();
     }

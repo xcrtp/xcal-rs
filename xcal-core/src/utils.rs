@@ -1,4 +1,4 @@
-
+// utils.rs
 
 #[macro_export(local_inner_macros)]
 macro_rules! auto_into {
@@ -13,7 +13,6 @@ mod tests {
 
     #[test]
     fn test_auto_into_basic() {
-        // i32 -> f64 is a valid Into conversion
         let v: [f64; 3] = auto_into!([1_i32, 2, 3]);
         assert_eq!(v, [1.0, 2.0, 3.0]);
     }

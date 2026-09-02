@@ -1,5 +1,5 @@
 use eframe::egui;
-use xcal::App;
+use xcal_app::App;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {

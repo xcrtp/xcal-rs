@@ -1,17 +1,4 @@
 // render_backend.rs
-//
-// 渲染后端抽象：RenderBackend trait + GpuHandle 类型擦除句柄。
-// 为资源缓存管理器（ResourceCache）提供统一的 GPU 资源创建入口。
-//
-// 设计要点：
-// - wgpu 的 Buffer / Texture / TextureView / RenderPipeline 在 native 后端
-//   均满足 Send + Sync + 'static，可安全装箱进 GpuHandle。
-// - begin_frame / end_frame 仅是生命周期钩子：egui/eframe 路径下
-//   surface 的 acquire/present 由 egui_wgpu renderer 处理，
-//   后端不得触碰 surface。
-// - desc 参数直接透传 wgpu 描述符，与 Device::create_* 一一对应。
-// - EframeWgpuBackend 为 owning 版（内部持有 RenderContext，'static），
-//   可 Box<dyn RenderBackend> 存入 Resources。
 
 use std::any::{Any, TypeId};
 
@@ -19,39 +6,29 @@ use crate::render_context::RenderContext;
 
 // ─── GpuHandle ────────────────────────────────────────────────────────────
 
-/// 类型擦除的 GPU 资源句柄。
-///
-/// 通过 [`downcast_ref`](Self::downcast_ref) / [`downcast_mut`](Self::downcast_mut)
-/// 取回具体类型；[`into_inner`](Self::into_inner) 消费句柄取回所有权。
 pub struct GpuHandle(Box<dyn Any + Send + Sync>);
 
 impl GpuHandle {
-    /// 装箱任意 GPU 资源（wgpu 资源类型均满足 Any + Send + Sync）。
     pub fn new<T: Any + Send + Sync>(value: T) -> Self {
         Self(Box::new(value))
     }
 
-    /// 不可变借用内部资源。
     pub fn downcast_ref<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.0.downcast_ref::<T>()
     }
 
-    /// 可变借用内部资源。
     pub fn downcast_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
         self.0.downcast_mut::<T>()
     }
 
-    /// 消费句柄，取回资源所有权。
     pub fn into_inner<T: Any + Send + Sync>(self) -> Option<T> {
         self.0.downcast::<T>().ok().map(|b| *b)
     }
 
-    /// 内部资源的 TypeId（用于缓存 key / 调试）。
     pub fn type_id(&self) -> TypeId {
-        self.0.type_id()
+        (*self.0).type_id()
     }
 
-    /// 判断内部资源是否为指定类型。
     pub fn is<T: Any>(&self) -> bool {
         self.0.is::<T>()
     }
@@ -59,14 +36,6 @@ impl GpuHandle {
 
 // ─── RenderBackend trait ──────────────────────────────────────────────────
 
-/// 渲染后端最小接口。
-///
-/// 约束：
-/// - `Send + Sync`：为后续并行调度与多线程资源准备预留。
-/// - [`begin_frame`](Self::begin_frame) / [`end_frame`](Self::end_frame)
-///   是生命周期钩子，默认空实现；不负责 surface acquire/present。
-/// - [`set_target`](Self::set_target)：离屏路径注入自己的 TextureView；
-///   egui 主帧缓冲路径（egui_wgpu renderer 或 CallbackTrait）target 置 None。
 pub trait RenderBackend: Send + Sync {
     fn device(&self) -> &wgpu::Device;
 
@@ -74,28 +43,20 @@ pub trait RenderBackend: Send + Sync {
 
     fn target_format(&self) -> wgpu::TextureFormat;
 
-    /// 创建 GPU buffer（返回装箱 `wgpu::Buffer`）。
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> GpuHandle;
 
-    /// 创建 GPU texture（返回装箱 `wgpu::Texture`；
-    /// 需要视图时先 downcast 再 `texture.create_view(..)`）。
     fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> GpuHandle;
 
-    /// 创建渲染管线（返回装箱 `wgpu::RenderPipeline`）。
     fn create_pipeline(&self, desc: &wgpu::RenderPipelineDescriptor<'_>) -> GpuHandle;
 
-    /// 设置当帧渲染目标视图（owning，旧 view 自动 drop）。
     fn set_target(&mut self, view: Option<wgpu::TextureView>);
 
-    /// 当前渲染目标视图。
     fn target(&self) -> Option<&wgpu::TextureView>;
 
-    /// 帧开始钩子（默认空实现）。
     fn begin_frame(&mut self) {
         let _ = self;
     }
 
-    /// 帧结束钩子（默认空实现；离屏 encoder 可在此统一提交）。
     fn end_frame(&mut self) {
         let _ = self;
     }
@@ -103,14 +64,6 @@ pub trait RenderBackend: Send + Sync {
 
 // ─── EframeWgpuBackend ────────────────────────────────────────────────────
 
-/// 基于 eframe/egui_wgpu 的 owning 渲染后端。
-///
-/// 内部持有 [`RenderContext`]（owning + Clone + 'static），因此整个后端
-/// 满足 `'static`，可 `Box<dyn RenderBackend>` 存入 Resources。
-///
-/// 构造路径：
-/// - App 启动：[`EframeWgpuBackend::from_render_state`]；
-/// - 测试/离屏：[`EframeWgpuBackend::headless`]。
 pub struct EframeWgpuBackend {
     ctx: RenderContext,
     target: Option<wgpu::TextureView>,
@@ -118,7 +71,6 @@ pub struct EframeWgpuBackend {
 }
 
 impl EframeWgpuBackend {
-    /// 从 egui_wgpu::RenderState 构造（App 启动路径）。
     pub fn from_render_state(rs: &egui_wgpu::RenderState) -> Self {
         Self {
             ctx: RenderContext::from_render_state(rs),
@@ -127,8 +79,7 @@ impl EframeWgpuBackend {
         }
     }
 
-    /// headless 构造（测试/离屏路径；无 GPU 环境返回错误）。
-    pub fn headless() -> crate::Result<Self> {
+    pub fn headless() -> crate::render_context::Result<Self> {
         Ok(Self {
             ctx: RenderContext::headless()?,
             target: None,
@@ -136,7 +87,6 @@ impl EframeWgpuBackend {
         })
     }
 
-    /// 从已有 RenderContext 构造。
     pub fn from_context(ctx: RenderContext) -> Self {
         Self {
             ctx,
@@ -145,12 +95,10 @@ impl EframeWgpuBackend {
         }
     }
 
-    /// 只读访问内部 RenderContext。
     pub fn render_context(&self) -> &RenderContext {
         &self.ctx
     }
 
-    /// 是否处于 begin_frame / end_frame 之间。
     pub fn is_frame_active(&self) -> bool {
         self.frame_active
     }
@@ -231,21 +179,16 @@ mod tests {
         assert_eq!(handle.into_inner::<u32>(), None);
     }
 
-    /// headless 后端完整生命周期：buffer / texture / view / target / 钩子。
-    /// 无 GPU 环境静默跳过。
     #[test]
     fn test_headless_backend_lifecycle() {
         let Ok(mut backend) = EframeWgpuBackend::headless() else { return };
 
-        // 初始无 target
         assert!(backend.target().is_none());
         assert!(!backend.is_frame_active());
 
-        // 钩子
         backend.begin_frame();
         assert!(backend.is_frame_active());
 
-        // create_buffer
         let buf = backend.create_buffer(&wgpu::BufferDescriptor {
             label: Some("test-buffer"),
             size: 16,
@@ -254,7 +197,6 @@ mod tests {
         });
         assert!(buf.downcast_ref::<wgpu::Buffer>().is_some());
 
-        // create_texture → create_view → set_target
         let tex = backend.create_texture(&wgpu::TextureDescriptor {
             label: Some("test-texture"),
             size: wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
@@ -271,17 +213,13 @@ mod tests {
         backend.set_target(Some(view));
         assert!(backend.target().is_some());
 
-        // end_frame
         backend.end_frame();
         assert!(!backend.is_frame_active());
 
-        // 消费 target
         backend.set_target(None);
         assert!(backend.target().is_none());
     }
 
-    /// create_pipeline：最小三角 shader，验证装箱 RenderPipeline。
-    /// 无 GPU 环境静默跳过。
     #[test]
     fn test_headless_backend_create_pipeline() {
         let Ok(backend) = EframeWgpuBackend::headless() else { return };

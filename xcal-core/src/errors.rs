@@ -1,3 +1,5 @@
+// errors.rs (从 errrors.rs 修正拼写)
+
 #[derive(Debug, thiserror::Error, smart_default::SmartDefault)]
 pub enum Error {
     #[error("Initialization error: {0}")]

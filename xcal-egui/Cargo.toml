@@ -1,0 +1,21 @@
+[package]
+name = "xcal-egui"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xcal-core = { path = "../xcal-core", features = ["egui"] }
+xcal-render = { path = "../xcal-render" }
+xcal-macro = { path = "../xcal-macro" }
+
+egui.workspace = true
+wgpu.workspace = true
+hecs.workspace = true
+derive-new.workspace = true
+derive_builder.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+egui.workspace = true

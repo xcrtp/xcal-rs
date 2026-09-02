@@ -53,7 +53,7 @@ pub(crate) mod transform2d {
         })
     }
 
-    /// 为结构体自动派生 [`xcal::render::Transform2DInto`]（消耗 `self` 版本）。
+    /// 为结构体自动派生 [`xcal_core::transform::Transform2DInto`]（消耗 `self` 版本）。
     ///
     /// 对每个字段，按 `#[transform(...)]` 属性生成对应的初始化表达式：
     /// - 默认（无属性）：`field.to_logical_into(camera)` / `field.to_screen_into(camera)`
@@ -73,9 +73,9 @@ pub(crate) mod transform2d {
                 Fields::Unit => {
                     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
                     return quote! {
-                        impl #impl_g xcal::render::Transform2DInto for #name #ty_g #where_g {
-                            fn to_logical_into(self, _: &xcal::types::Camera2D) -> Self { Self }
-                            fn to_screen_into(self, _: &xcal::types::Camera2D) -> Self { Self }
+                        impl #impl_g xcal_core::transform::Transform2DInto for #name #ty_g #where_g {
+                            fn to_logical_into(self, _: &xcal_core::types::Camera2D) -> Self { Self }
+                            fn to_screen_into(self, _: &xcal_core::types::Camera2D) -> Self { Self }
                         }
                     };
                 }
@@ -103,7 +103,7 @@ pub(crate) mod transform2d {
         for (f, &kind) in fields.iter().zip(&kinds) {
             if let FieldKind::Default = kind {
                 let ty = &f.ty;
-                where_clause.predicates.push(parse_quote!(#ty: xcal::render::Transform2DInto));
+                where_clause.predicates.push(parse_quote!(#ty: xcal_core::transform::Transform2DInto));
             }
         }
         let (impl_generics, ty_generics, where_clauses) = generics.split_for_impl();
@@ -116,23 +116,23 @@ pub(crate) mod transform2d {
                     match &f.ident {
                         Some(ident) => match kind {
                             FieldKind::Default => quote! {
-                                #ident: xcal::render::Transform2DInto::$method(self.#ident, camera)
+                                #ident: xcal_core::transform::Transform2DInto::$method(self.#ident, camera)
                             },
                             FieldKind::Skip => quote! { #ident: self.#ident },
                             FieldKind::Iter => quote! {
                                 #ident: ::core::iter::IntoIterator::into_iter(self.#ident)
-                                    .map(|v| xcal::render::Transform2DInto::$method(v, camera))
+                                    .map(|v| xcal_core::transform::Transform2DInto::$method(v, camera))
                                     .collect()
                             },
                         },
                         None => match kind {
                             FieldKind::Default => quote! {
-                                xcal::render::Transform2DInto::$method(self.#idx, camera)
+                                xcal_core::transform::Transform2DInto::$method(self.#idx, camera)
                             },
                             FieldKind::Skip => quote! { self.#idx },
                             FieldKind::Iter => quote! {
                                 ::core::iter::IntoIterator::into_iter(self.#idx)
-                                    .map(|v| xcal::render::Transform2DInto::$method(v, camera))
+                                    .map(|v| xcal_core::transform::Transform2DInto::$method(v, camera))
                                     .collect()
                             },
                         },
@@ -157,11 +157,11 @@ pub(crate) mod transform2d {
         };
 
         quote! {
-            impl #impl_generics xcal::render::Transform2DInto for #name #ty_generics #where_clauses {
-                fn to_logical_into(self, camera: &xcal::types::Camera2D) -> Self {
+            impl #impl_generics xcal_core::transform::Transform2DInto for #name #ty_generics #where_clauses {
+                fn to_logical_into(self, camera: &xcal_core::types::Camera2D) -> Self {
                     #constructor_logical
                 }
-                fn to_screen_into(self, camera: &xcal::types::Camera2D) -> Self {
+                fn to_screen_into(self, camera: &xcal_core::types::Camera2D) -> Self {
                     #constructor_screen
                 }
             }
@@ -170,93 +170,9 @@ pub(crate) mod transform2d {
 }
 
 pub(crate) mod details {
-
-    #[derive(Debug)]
-    struct AstList<T, U>(pub Vec<T>, std::marker::PhantomData<U>);
-    impl<T: Parse, U: Parse> syn::parse::Parse for AstList<T, U> {
-        fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-            let mut attrs = Vec::new();
-            loop {
-                attrs.push(input.parse()?);
-                if input.is_empty() {
-                    break;
-                }
-                input.parse::<U>()?;
-            }
-            Ok(Self(attrs, std::marker::PhantomData))
-        }
-    }
-    impl<T: Parse, U: Parse> Deref for AstList<T, U> {
-        type Target = Vec<T>;
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    use quote::{ToTokens, quote};
-    use std::ops::Deref;
-    use syn::{Token, parse::Parse};
     pub fn derive_scene_object(input: syn::DeriveInput) -> proc_macro2::TokenStream {
-        println!("attr count {}", input.attrs.iter().count());
-        let ident = input.ident.clone();
-        let attr = input
-            .attrs
-            .into_iter()
-            .filter(|a| a.path().is_ident("with"))
-            .filter_map(|attr| {
-                if let syn::Meta::List(meta_list) = attr.meta {
-                    Some(meta_list)
-                } else {
-                    None
-                }
-            })
-            .flat_map(|i| {
-                let attrs: AstList<syn::Ident, Token![,]> =
-                    syn::parse2(i.tokens.to_token_stream().into()).unwrap();
-                attrs
-                    .iter()
-                    .map(|a| match a.to_string().as_str() {
-                        "Sizeable" => quote! {
-                                    fn bound_box(&self) -> Result<&dyn #a> {
-                                        Ok(self)
-                                    }
-                        },
-                        "Positionable" => quote! {
-                                 fn position(&self) -> Result<&dyn #a> {
-                                     Ok(self)
-                                 }
-                        },
-                        "Strokeable" => quote! {
-                                    fn stroke(&self) -> Result<&dyn #a> {
-                                        Ok(self)
-                                    }
-                        },
-                        "Fillable" => quote! {
-                                    fn fill(&self) -> Result<&dyn #a> {
-                                        Ok(self)
-                                    }
-                        },
-                        "Moveable" => quote! {
-                            fn shift(&mut self) -> Result<&dyn #a> {
-                                Ok(self)
-                            }
-                        },
-                        "Transformable" => quote! {
-                            fn transform(&self) -> Result<&dyn #a> {
-                                Ok(self)
-                            }
-                            fn transform_mut(&mut self) -> Result<&mut dyn #a> {
-                                Ok(self)
-                            }
-                        },
-                        _ => quote! {},
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        quote! {
-
-        }
+        let _ = input;
+        proc_macro2::TokenStream::new()
     }
 }
 
@@ -271,6 +187,7 @@ pub fn derive_transform2d_into(input: TokenStream) -> TokenStream {
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use proc_macro::TokenStream;
     use std::str::FromStr;

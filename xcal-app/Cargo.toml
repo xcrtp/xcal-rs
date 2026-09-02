@@ -1,34 +1,25 @@
 [package]
-name = "xcal"
+name = "xcal-app"
 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "xcal-app"
+path = "src/main.rs"
+
 [dependencies]
+xcal-core = { path = "../xcal-core", features = ["egui"] }
+xcal-render = { path = "../xcal-render" }
+xcal-egui = { path = "../xcal-egui" }
 xcal-macro = { path = "../xcal-macro" }
+
 eframe.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
 wgpu.workspace = true
-
+hecs.workspace = true
 glam.workspace = true
-nalgebra.workspace = true
-pollster.workspace = true
-
-derive_more.workspace = true
-thiserror.workspace = true
-smart-default.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
-hecs = "0.11.1"
-
-[dev-dependencies]
-glam.workspace = true
-egui.workspace = true
-
-[features]
-
-default = ["egui"]
-
-egui = []

@@ -1,3 +1,8 @@
+// types.rs
+//
+// 数学包装类型：Vec2, Vec3, Vec4, I8Vec4, U8Vec4, Color32, Rect, Camera2D。
+// egui 相关 impl 由 feature "egui" 门控，使 xcal-core 可在无 egui 时编译。
+
 macro_rules! export_type {
     ($(#[$m:meta])? $v:vis $name:ident($ty:ty)) => {
         #[derive(derive_more::From, derive_more::Deref, derive_more::DerefMut)]
@@ -31,9 +36,9 @@ impl From<(f32, f32)> for Vec2 {
 }
 
 #[cfg(feature = "egui")]
-impl Into<egui::Pos2> for Vec2 {
-    fn into(self) -> egui::Pos2 {
-        egui::Pos2::new(self.x, self.y)
+impl From<Vec2> for egui::Pos2 {
+    fn from(val: Vec2) -> Self {
+        egui::Pos2::new(val.x, val.y)
     }
 }
 
@@ -72,14 +77,17 @@ impl From<(u8, u8, u8, u8)> for U8Vec4 {
         glam::U8Vec4::new(x, y, z, w).into()
     }
 }
-#[cfg(feature = "egui")]
+
+// Color32 总是存在（即使无 egui），以便 xcal-render 中的 StrokeSolid/FillSolid
+// 能在不启用 egui feature 的情况下使用。
+// 仅 egui 相关转换由 feature "egui" 门控。
 export_type!(
     #[derive(Clone,Copy,Debug)]
     pub Color32 (U8Vec4)
 );
 
 impl Color32 {
-    fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self(glam::U8Vec4::new(r, g, b, a).into())
     }
 
@@ -98,9 +106,10 @@ impl Color32 {
     pub fn a(&self) -> u8 {
         self.w
     }
+
     #[cfg(feature = "egui")]
     pub fn into_egui_color32(self) -> egui::Color32 {
-        egui::Color32::from_rgba_premultiplied(self.x, self.y, self.z, self.w).into()
+        egui::Color32::from_rgba_premultiplied(self.x, self.y, self.z, self.w)
     }
 }
 
@@ -114,6 +123,64 @@ impl From<Tuple4<u8>> for Color32 {
     fn from((r, g, b, a): Tuple4<u8>) -> Self {
         Self::new(r, g, b, a)
     }
+}
+
+#[derive(Debug, Clone, Copy, derive_new::new, xcal_macro::Transform2DInto)]
+pub struct Rect {
+    min: Vec2,
+    max: Vec2,
+}
+
+// 公开访问器以便 Rect 字段在私有情况下仍可使用
+impl Rect {
+    pub fn min(&self) -> Vec2 {
+        self.min
+    }
+    pub fn max(&self) -> Vec2 {
+        self.max
+    }
+}
+
+#[cfg(feature = "egui")]
+impl From<egui::Rect> for Rect {
+    fn from(value: egui::Rect) -> Self {
+        Self {
+            min: value.min.into(),
+            max: value.max.into(),
+        }
+    }
+}
+#[cfg(feature = "egui")]
+impl Rect {
+    pub fn into_egui_rect(self) -> egui::Rect {
+        egui::Rect {
+            min: self.min.into(),
+            max: self.max.into(),
+        }
+    }
+}
+
+impl Rect {
+    pub fn size(&self) -> Vec2 {
+        (*self.max - *self.min).abs().into()
+    }
+    pub fn center(&self) -> Vec2 {
+        ((*self.max + *self.min) / 2.0).into()
+    }
+}
+
+/// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
+///
+/// - 屏幕坐标系：以视口左上角为原点，y 向下，单位为像素。
+/// - 逻辑坐标系：以 `center` 为相机中心，y 向上，单位为世界单位。
+#[derive(Debug, Clone, Copy, derive_new::new)]
+pub struct Camera2D {
+    /// 逻辑坐标系中相机中心位置
+    pub center: Vec2,
+    /// 缩放系数：1 单位逻辑 = `scale` 像素
+    pub scale: f32,
+    /// 屏幕视口矩形（像素）
+    pub rect: Rect,
 }
 
 #[cfg(test)]
@@ -245,55 +312,4 @@ mod tests {
         assert_eq!(er.min, egui::pos2(0.0, 0.0));
         assert_eq!(er.max, egui::pos2(10.0, 20.0));
     }
-}
-#[derive(Debug, Clone, Copy, derive_new::new, xcal_macro::Transform2DInto)]
-pub struct Rect {
-    min: Vec2,
-    max: Vec2,
-}
-
-#[cfg(feature = "egui")]
-impl From<egui::Rect> for Rect {
-    fn from(value: egui::Rect) -> Self {
-        Self {
-            min: value.min.into(),
-            max: value.max.into(),
-        }
-    }
-}
-#[cfg(feature = "egui")]
-impl Rect {
-    pub fn into_egui_rect(self) -> egui::Rect {
-        egui::Rect {
-            min: self.min.into(),
-            max: self.max.into(),
-        }
-    }
-}
-
-impl Rect {
-    pub fn size(&self) -> Vec2 {
-        (*self.max - *self.min).abs().into()
-    }
-    pub fn center(&self) -> Vec2 {
-        ((*self.max + *self.min) / 2.0).into()
-    }
-}
-
-/// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
-///
-/// - 屏幕坐标系：以视口左上角为原点，y 向下，单位为像素。
-/// - 逻辑坐标系：以 `center` 为相机中心，y 向上，单位为世界单位。
-///
-/// 转换关系（参见 [`crate::render::Transform2D`]）：
-/// - 逻辑 → 屏幕：`screen = rect.center + (logical - center) * scale`，y 取反。
-/// - 屏幕 → 逻辑：`logical = (screen - rect.center) / scale + center`，y 取反。
-#[derive(Debug, Clone, Copy, derive_new::new)]
-pub struct Camera2D {
-    /// 逻辑坐标系中相机中心位置
-    pub center: Vec2,
-    /// 缩放系数：1 单位逻辑 = `scale` 像素
-    pub scale: f32,
-    /// 屏幕视口矩形（像素）
-    pub rect: Rect,
 }
