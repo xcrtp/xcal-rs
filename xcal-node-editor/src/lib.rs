@@ -8,7 +8,7 @@
 //! Hard constraint: this crate must never depend on `egui`/`eframe` or any
 //! `xcal-core`/`xcal-render`/`xcal-app` crate.
 //!
-//! Planned modules (filled in across implementation stages):
+//! Module map:
 //! - `geometry`: `Rect`, `HitTarget`, hit-test constants (stage 1)
 //! - `layout`: `LayoutStrategy` / `FreeLayout` node placement (stage 2)
 //! - `socket_layout`: `SocketLayout` / `DefaultSocketLayout` port offsets (stage 2)
@@ -21,3 +21,7 @@
 //! - `undo`: `UndoStack` (stage 6)
 
 #![forbid(unsafe_code)]
+
+pub mod geometry;
+
+pub use geometry::{HitTarget, Rect, Vec2};

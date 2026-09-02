@@ -40,6 +40,8 @@ pub trait Graph: Send + Sync + fmt::Debug {
     // --- queries ---
     fn node_count(&self) -> usize;
     fn get_node(&self, node: NodeId) -> Option<&dyn Node>;
+    /// Mutable access to a node (editors need to mutate node parameters).
+    fn get_node_mut(&mut self, node: NodeId) -> Option<&mut dyn Node>;
     /// Output sockets feeding `input`. Empty if none.
     fn upstream(&self, input: InputSocketId) -> Vec<OutputSocketId>;
     /// Input sockets fed by `output`. Empty if none.

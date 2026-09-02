@@ -107,6 +107,12 @@ impl Graph for SimpleGraph {
         self.nodes.get(&node).map(|n| n.as_ref() as &dyn Node)
     }
 
+    fn get_node_mut(&mut self, node: NodeId) -> Option<&mut dyn Node> {
+        self.nodes
+            .get_mut(&node)
+            .map(|n| n.as_mut() as &mut dyn Node)
+    }
+
     fn upstream(&self, input: InputSocketId) -> Vec<OutputSocketId> {
         self.upstream.get(&input).cloned().unwrap_or_default()
     }
