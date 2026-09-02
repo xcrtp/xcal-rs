@@ -1,0 +1,32 @@
+[workspace]
+members = ["xcal", "xcal-macro"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+eframe = { version = "0.36", default-features = false, features = [
+    "wgpu",
+    "x11",
+    "wayland",
+] }
+
+egui = "0.36"
+egui-wgpu = "0.36"
+wgpu = "0.19"
+
+nalgebra = "0.33"
+glam = "0.33.6"
+pollster = "0.3"
+
+serde = { version = "1.0" }
+serde_json = { version = "1.0" }
+serde_yaml = { version = "1.0" }
+derive_more = { version = "2.1.1", features = ["full"] }
+thiserror = "2.0.20"
+smart-default = "0.7.1"
+derive-new = "0.7.0"
+derive_builder = "0.20.2"

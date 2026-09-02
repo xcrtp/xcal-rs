@@ -1,0 +1,30 @@
+[package]
+name = "xcal"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xcal-macro = { path = "../xcal-macro" }
+eframe.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+
+glam.workspace = true
+nalgebra.workspace = true
+pollster.workspace = true
+
+derive_more.workspace = true
+thiserror.workspace = true
+smart-default.workspace = true
+derive-new.workspace = true
+derive_builder.workspace = true
+hecs = "0.11.1"
+
+[features]
+
+default = ["egui"]
+
+egui = []
