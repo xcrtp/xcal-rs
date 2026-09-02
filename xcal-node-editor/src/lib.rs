@@ -23,5 +23,9 @@
 #![forbid(unsafe_code)]
 
 pub mod geometry;
+pub mod layout;
+pub mod socket_layout;
 
 pub use geometry::{HitTarget, Rect, Vec2};
+pub use layout::{FreeLayout, LayoutStrategy, NodeSizeMap};
+pub use socket_layout::{DefaultSocketLayout, SocketLayout};
