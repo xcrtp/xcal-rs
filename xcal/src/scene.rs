@@ -235,6 +235,23 @@ impl Scene {
     pub fn spawn(&mut self, bundle: impl hecs::DynamicBundle) -> hecs::Entity {
         self.world.spawn(bundle)
     }
+
+    // ─── 访问底层 World / 所有权转移 ──────────────────────────────
+
+    /// 只读访问底层 World。
+    pub fn world(&self) -> &hecs::World {
+        &self.world
+    }
+
+    /// 可变访问底层 World。
+    pub fn world_mut(&mut self) -> &mut hecs::World {
+        &mut self.world
+    }
+
+    /// 消费 Scene，取出内部的 World 用于交给 Scheduler 等外部持有者。
+    pub fn into_world(self) -> hecs::World {
+        self.world
+    }
 }
 
 #[cfg(test)]

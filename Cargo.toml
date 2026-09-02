@@ -16,7 +16,7 @@ eframe = { version = "0.36", default-features = false, features = [
 
 egui = "0.36"
 egui-wgpu = "0.36"
-wgpu = "0.19"
+wgpu = "30"
 
 nalgebra = "0.33"
 glam = "0.33.6"
