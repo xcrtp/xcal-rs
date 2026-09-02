@@ -2,47 +2,20 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, Panel, Pos2, Rect, Stroke};
+use egui::{Panel, Pos2};
 use egui_wgpu::RenderState;
 
 use scene::comp as cm;
 
 use crate::{
-    scene::components::{Circle, CircleBuilder, FunctionX2Y, Sampler1D, Sampler1DBuilder},
+    render::{egui_support::Egui2dRender, record_scene, DrawQueue, Transform2D, ZIndex},
+    scene::components::{Circle, FillSolid, FunctionX2Y, Line, Path, Sampler1D, StrokeSolid},
+    types::{Camera2D, Rect, Vec3},
     *,
 };
 
 /// ─────────────────────────────────────────────
-/// 坐标变换工具模块
-/// ─────────────────────────────────────────────
-mod utils {
-    use egui::{Pos2, Rect, pos2};
-
-    /// 数学坐标 → 屏幕坐标
-    #[inline]
-    pub fn math_to_screen(mx: f32, my: f32, center: Pos2, scale: f32, rect: Rect) -> Pos2 {
-        pos2(
-            rect.center().x + (mx - center.x) * scale,
-            rect.center().y - (my - center.y) * scale,
-        )
-    }
-
-    /// 屏幕坐标 → 数学坐标
-    #[inline]
-    pub fn screen_to_math(px: f32, py: f32, center: Pos2, scale: f32, rect: Rect) -> (f32, f32) {
-        let c = rect.center();
-        (center.x + (px - c.x) / scale, center.y - (py - c.y) / scale)
-    }
-
-    /// 构造线段端点对（避免到处写 `.into()`）
-    #[inline]
-    pub fn seg(a: Pos2, b: Pos2) -> [Pos2; 2] {
-        [a, b]
-    }
-}
-
-/// ─────────────────────────────────────────────
-/// 摄像机
+/// 摄像机（仅负责交互：拖拽平移 + 滚轮缩放）
 /// ─────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Camera {
@@ -62,26 +35,6 @@ impl Default for Camera {
 }
 
 impl Camera {
-    #[inline]
-    pub fn math_to_screen(&self, mx: f32, my: f32, rect: Rect) -> Pos2 {
-        utils::math_to_screen(mx, my, self.center, self.scale, rect)
-    }
-
-    #[inline]
-    pub fn screen_to_math(&self, px: f32, py: f32, rect: Rect) -> (f32, f32) {
-        utils::screen_to_math(px, py, self.center, self.scale, rect)
-    }
-
-    #[inline]
-    pub fn length_to_screen(&self, length: f32) -> f32 {
-        length * self.scale
-    }
-
-    #[inline]
-    pub fn screen_to_length(&self, length: f32) -> f32 {
-        length / self.scale
-    }
-
     /// 处理鼠标输入（拖拽平移 + 滚轮缩放）
     pub fn handle_input(&mut self, ui: &egui::Ui) {
         let input = ui.input(|i| i.clone());
@@ -180,106 +133,59 @@ impl App {
         Ok(())
     }
 
-    fn draw_grid(&self, painter: &egui::Painter, rect: Rect) {
-        let step = self.camera.scale.max(10.0);
-        let grid_unit = step / self.camera.scale;
+    /// 生成网格与坐标轴线段命令（逻辑坐标 → 屏幕坐标后压入队列）。
+    fn push_grid(&self, queue: &mut DrawQueue, camera: &Camera2D, rect: Rect) {
+        let center = camera.center;
+        let scale = camera.scale;
+        // 视口覆盖的逻辑范围
+        let half_w = rect.size().x / 2.0 / scale;
+        let half_h = rect.size().y / 2.0 / scale;
+        let x0 = center.x - half_w;
+        let x1 = center.x + half_w;
+        let y0 = center.y - half_h;
+        let y1 = center.y + half_h;
+
+        let grid = StrokeSolid::new(1.0, (50, 50, 50, 255));
+        let axis = StrokeSolid::new(2.0, (255, 255, 255, 255));
+        let z_grid = ZIndex::new(-100);
+        let z_axis = ZIndex::new(-90);
+
+        // 网格间距（逻辑单位）
+        let unit = scale.max(10.0) / scale;
 
         // 竖线
-        let mut x =
-            (self.camera.center.x - rect.center().x / self.camera.scale).floor() * grid_unit;
-
-        while let Some(sx) = {
-            let p = self.camera.math_to_screen(x, 0.0, rect);
-            if p.x > rect.max.x { None } else { Some(p.x) }
-        } {
-            let a = Pos2::new(sx, rect.min.y);
-            let b = Pos2::new(sx, rect.max.y);
-            painter.line_segment(utils::seg(a, b), Stroke::new(1.0, Color32::from_gray(50)));
-            x += grid_unit;
+        let mut x = (x0 / unit).floor() * unit;
+        while x <= x1 {
+            queue.line_stroke(
+                z_grid,
+                Line::new((x, y0), (x, y1)).to_screen(camera),
+                grid.clone(),
+            );
+            x += unit;
         }
 
         // 横线
-        let mut y =
-            (self.camera.center.y - rect.center().y / self.camera.scale).floor() * grid_unit;
-
-        while let Some(sy) = {
-            let p = self.camera.math_to_screen(0.0, y, rect);
-            if p.y > rect.max.y { None } else { Some(p.y) }
-        } {
-            let a = Pos2::new(rect.min.x, sy);
-            let b = Pos2::new(rect.max.x, sy);
-            painter.line_segment(utils::seg(a, b), Stroke::new(1.0, Color32::from_gray(50)));
-            y += grid_unit;
+        let mut y = (y0 / unit).floor() * unit;
+        while y <= y1 {
+            queue.line_stroke(
+                z_grid,
+                Line::new((x0, y), (x1, y)).to_screen(camera),
+                grid.clone(),
+            );
+            y += unit;
         }
 
         // 坐标轴
-        let origin = self.camera.math_to_screen(0.0, 0.0, rect);
-        painter.line_segment(
-            utils::seg(
-                Pos2::new(rect.min.x, origin.y),
-                Pos2::new(rect.max.x, origin.y),
-            ),
-            Stroke::new(2.0, Color32::WHITE),
+        queue.line_stroke(
+            z_axis,
+            Line::new((x0, 0.0), (x1, 0.0)).to_screen(camera),
+            axis.clone(),
         );
-        painter.line_segment(
-            utils::seg(
-                Pos2::new(origin.x, rect.min.y),
-                Pos2::new(origin.x, rect.max.y),
-            ),
-            Stroke::new(2.0, Color32::WHITE),
+        queue.line_stroke(
+            z_axis,
+            Line::new((0.0, y0), (0.0, y1)).to_screen(camera),
+            axis,
         );
-    }
-
-    fn render_to_painter(&mut self, painter: &egui::Painter, rect: Rect) {
-        use scene::components::*;
-
-        let camera = &self.camera;
-
-        self.scene.render(move |w, _r| {
-            for (cir, st) in w
-                .query::<(&Circle, &scene::components::render::StrokeSolid)>()
-                .iter()
-            {
-                painter.circle_stroke(
-                    camera.math_to_screen(cir.center.x, cir.center.y, rect),
-                    camera.length_to_screen(cir.radius),
-                    egui::Stroke {
-                        width: st.width,
-                        color: st.color.into_egui_color32(),
-                    },
-                );
-            }
-
-            for (func, sampler, stroke) in w
-                .query::<(
-                    &FunctionX2Y<f32, f32>,
-                    &Sampler1D<f32>,
-                    &scene::components::render::StrokeSolid,
-                )>()
-                .iter()
-            {
-                let mut prev: Option<Pos2> = None;
-
-                let mut x = sampler.start;
-                while x <= sampler.end {
-                    let y = (func.f)(x);
-                    let screen_pos = camera.math_to_screen(x, y, rect);
-
-                    if let Some(p) = prev {
-                        painter.line_segment(
-                            utils::seg(p, screen_pos),
-                            egui::Stroke {
-                                width: stroke.width,
-                                color: stroke.color.into_egui_color32(),
-                            },
-                        );
-                    }
-
-                    prev = Some(screen_pos);
-                    x += sampler.step;
-                }
-            }
-        });
     }
 }
 
@@ -308,17 +214,46 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            let rect = ui.max_rect();
-            let painter = ui.painter();
+            let rect = Rect::from(ui.max_rect());
+            let camera = Camera2D::new(
+                (self.camera.center.x, self.camera.center.y).into(),
+                self.camera.scale,
+                rect,
+            );
 
-            painter.rect_filled(rect, 0.0, Color32::from_gray(20));
+            let mut queue = DrawQueue::new();
+
+            // 背景（最底层）
+            queue.rect_fill(ZIndex::new(-1000), rect, FillSolid::new((20, 20, 20, 255)));
 
             if self.show_grid {
-                self.draw_grid(painter, rect);
+                self.push_grid(&mut queue, &camera, rect);
             }
 
-            // self.draw_sin(painter, rect);
-            self.render_to_painter(painter, rect);
+            // 场景实体（Circle 等）录制进队列；函数曲线在此采样为 Path。
+            self.scene.render(|w, _| {
+                record_scene(w, &camera, &mut queue);
+
+                for (func, sampler, stroke) in w
+                    .query::<(&FunctionX2Y<f32, f32>, &Sampler1D<f32>, &StrokeSolid)>()
+                    .iter()
+                {
+                    let mut pts: Vec<Vec3> = Vec::new();
+                    let mut x = sampler.start;
+                    while x <= sampler.end {
+                        pts.push((x, (func.f)(x), 0.0).into());
+                        x += sampler.step;
+                    }
+                    queue.path_stroke(
+                        ZIndex::new(0),
+                        Path::new(pts, false).to_screen(&camera),
+                        stroke.clone(),
+                    );
+                }
+            });
+
+            // 按 ZIndex 排序后一次性交给 EGUI 绘制
+            queue.execute(&Egui2dRender::new(ui.painter()));
         });
     }
 }
@@ -327,126 +262,10 @@ impl eframe::App for App {
 mod tests {
     use super::*;
 
-    fn make_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
-        Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1))
-    }
-
-    #[test]
-    fn test_math_to_screen() {
-        let center = Pos2::new(0.0, 0.0);
-        let rect = make_rect(0.0, 0.0, 100.0, 100.0);
-        // rect center = (50, 50)
-        // math_to_screen(1, 1) = (50 + 1, 50 - 1) = (51, 49)
-        let p = utils::math_to_screen(1.0, 1.0, center, 1.0, rect);
-        assert_eq!(p, Pos2::new(51.0, 49.0));
-    }
-
-    #[test]
-    fn test_math_to_screen_with_scale() {
-        let center = Pos2::new(0.0, 0.0);
-        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
-        // rect center = (400, 300), scale = 10
-        // math_to_screen(3, 4) = (400 + 30, 300 - 40) = (430, 260)
-        let p = utils::math_to_screen(3.0, 4.0, center, 10.0, rect);
-        assert_eq!(p, Pos2::new(430.0, 260.0));
-    }
-
-    #[test]
-    fn test_math_to_screen_with_offset_center() {
-        let center = Pos2::new(5.0, 5.0);
-        let rect = make_rect(0.0, 0.0, 200.0, 200.0);
-        // rect center = (100, 100), center = (5, 5), scale = 2
-        // math_to_screen(10, 10) = (100 + (10-5)*2, 100 - (10-5)*2) = (110, 90)
-        let p = utils::math_to_screen(10.0, 10.0, center, 2.0, rect);
-        assert_eq!(p, Pos2::new(110.0, 90.0));
-    }
-
-    #[test]
-    fn test_screen_to_math() {
-        let center = Pos2::new(0.0, 0.0);
-        let rect = make_rect(0.0, 0.0, 100.0, 100.0);
-        // screen_to_math(51, 49) = (0 + (51-50)/1, 0 - (49-50)/1) = (1, 1)
-        let (mx, my) = utils::screen_to_math(51.0, 49.0, center, 1.0, rect);
-        assert!((mx - 1.0).abs() < 1e-5);
-        assert!((my - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_screen_to_math_with_scale() {
-        let center = Pos2::new(0.0, 0.0);
-        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
-        // screen_to_math(430, 260) = (0 + (430-400)/10, 0 - (260-300)/10) = (3, 4)
-        let (mx, my) = utils::screen_to_math(430.0, 260.0, center, 10.0, rect);
-        assert!((mx - 3.0).abs() < 1e-5);
-        assert!((my - 4.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_seg() {
-        let a = Pos2::new(0.0, 0.0);
-        let b = Pos2::new(1.0, 1.0);
-        let s = utils::seg(a, b);
-        assert_eq!(s, [a, b]);
-    }
-
     #[test]
     fn test_camera_default() {
         let c = Camera::default();
         assert_eq!(c.center, Pos2::new(0.0, 0.0));
         assert_eq!(c.scale, 40.0);
-    }
-
-    #[test]
-    fn test_camera_math_to_screen() {
-        let c = Camera::default();
-        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
-        // center=(0,0), scale=40, rect center=(400,300)
-        // math_to_screen(1,1) = (440, 260)
-        let p = c.math_to_screen(1.0, 1.0, rect);
-        assert_eq!(p, Pos2::new(440.0, 260.0));
-    }
-
-    #[test]
-    fn test_camera_screen_to_math() {
-        let c = Camera::default();
-        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
-        let (mx, my) = c.screen_to_math(440.0, 260.0, rect);
-        assert!((mx - 1.0).abs() < 1e-5);
-        assert!((my - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_camera_round_trip() {
-        let c = Camera::default();
-        let rect = make_rect(0.0, 0.0, 800.0, 600.0);
-        for &(mx, my) in &[(0.0, 0.0), (3.5, -2.0), (-10.0, 10.0)] {
-            let screen = c.math_to_screen(mx, my, rect);
-            let (mx2, my2) = c.screen_to_math(screen.x, screen.y, rect);
-            assert!((mx - mx2).abs() < 1e-3);
-            assert!((my - my2).abs() < 1e-3);
-        }
-    }
-
-    #[test]
-    fn test_camera_length_to_screen() {
-        let c = Camera::default();
-        assert_eq!(c.length_to_screen(1.0), 40.0);
-        assert_eq!(c.length_to_screen(2.5), 100.0);
-        assert_eq!(c.length_to_screen(0.0), 0.0);
-    }
-
-    #[test]
-    fn test_camera_screen_to_length() {
-        let c = Camera::default();
-        assert_eq!(c.screen_to_length(40.0), 1.0);
-        assert_eq!(c.screen_to_length(100.0), 2.5);
-    }
-
-    #[test]
-    fn test_camera_length_round_trip() {
-        let c = Camera::default();
-        for &len in &[0.0, 1.0, 2.5, -3.0] {
-            assert!((len - c.screen_to_length(c.length_to_screen(len))).abs() < 1e-5);
-        }
     }
 }

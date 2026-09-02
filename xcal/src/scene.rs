@@ -101,6 +101,22 @@ pub mod components {
         pub closed: bool,
     }
 
+    /// 线段图元：两个端点独立完成坐标转换（派生 [`xcal::render::Transform2DInto`]）。
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        derive_builder::Builder,
+        derive_new::new,
+        xcal_macro::Transform2DInto,
+    )]
+    pub struct Line {
+        #[new(into)]
+        pub a: Vec2,
+        #[new(into)]
+        pub b: Vec2,
+    }
+
     pub trait SyncSendFn<X, Y>: Sync + Send + Fn(X) -> Y {}
     impl<X, Y, T: Send + Sync + Fn(X) -> Y> SyncSendFn<X, Y> for T {}
 
