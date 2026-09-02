@@ -1,5 +1,14 @@
 [workspace]
-members = ["xcal-core", "xcal-render", "xcal-egui", "xcal-app", "xcal-macro"]
+members = [
+    "xcal-core",
+    "xcal-render",
+    "xcal-egui",
+    "xcal-app",
+    "xcal-macro",
+    "xcal-node",
+    "xcal-graph-algo",
+    "xcal-graph-eval",
+]
 resolver = "2"
 
 [workspace.package]

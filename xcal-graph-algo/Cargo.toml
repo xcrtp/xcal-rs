@@ -1,0 +1,11 @@
+[package]
+name = "xcal-graph-algo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Graph algorithms (topo sort, dirty propagation, SCC) for xcal-node"
+
+[dependencies]
+xcal-node = { path = "../xcal-node" }
+
+[dev-dependencies]
