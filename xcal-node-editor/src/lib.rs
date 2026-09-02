@@ -24,14 +24,19 @@
 
 pub mod command;
 pub mod edge_geom;
+pub mod editor;
 pub mod error;
 pub mod event;
 pub mod geometry;
 pub mod layout;
 pub mod socket_layout;
 
+#[cfg(test)]
+mod test_util;
+
 pub use command::Command;
 pub use edge_geom::{BezierGeometry, EdgeGeometry, EdgePath, OrthogonalGeometry};
+pub use editor::{Editor, PendingConnection};
 pub use error::EditorError;
 pub use event::EditorEvent;
 pub use geometry::{HitTarget, Rect, Vec2};
