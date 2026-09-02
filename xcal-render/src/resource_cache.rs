@@ -238,8 +238,18 @@ mod tests {
         let key_v0 = CacheKey::of::<u32>(e, 0);
         let key_v1 = CacheKey::of::<u32>(e, 1);
 
-        cache.get_or_insert(key_v0, (), |_, _| GpuHandle::new(10_u32), &mut StubBackend {});
-        cache.get_or_insert(key_v1, (), |_, _| GpuHandle::new(20_u32), &mut StubBackend {});
+        cache.get_or_insert(
+            key_v0,
+            (),
+            |_, _| GpuHandle::new(10_u32),
+            &mut StubBackend {},
+        );
+        cache.get_or_insert(
+            key_v1,
+            (),
+            |_, _| GpuHandle::new(20_u32),
+            &mut StubBackend {},
+        );
 
         assert_eq!(cache.len(), 2);
         assert_eq!(
@@ -337,7 +347,10 @@ mod tests {
         cache.begin_frame();
         cache.evict_unused(1);
         assert_eq!(cache.dirty_len(), 0);
-        assert_eq!(cache.upload_dirty(&mut StubBackend {}, |_, _, _| GpuHandle::new(0_u32)), 0);
+        assert_eq!(
+            cache.upload_dirty(&mut StubBackend {}, |_, _, _| GpuHandle::new(0_u32)),
+            0
+        );
     }
 
     #[test]
@@ -378,9 +391,7 @@ mod tests {
     }
 
     fn bytemuck_bytes(f32s: &[f32]) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(f32s.as_ptr() as *const u8, f32s.len() * 4)
-        }
+        unsafe { std::slice::from_raw_parts(f32s.as_ptr() as *const u8, f32s.len() * 4) }
     }
 
     struct StubBackend;
@@ -401,10 +412,7 @@ mod tests {
         fn create_texture(&self, _desc: &wgpu::TextureDescriptor<'_>) -> GpuHandle {
             GpuHandle::new(0_u32)
         }
-        fn create_pipeline(
-            &self,
-            _desc: &wgpu::RenderPipelineDescriptor<'_>,
-        ) -> GpuHandle {
+        fn create_pipeline(&self, _desc: &wgpu::RenderPipelineDescriptor<'_>) -> GpuHandle {
             GpuHandle::new(0_u32)
         }
         fn set_target(&mut self, _view: Option<wgpu::TextureView>) {}

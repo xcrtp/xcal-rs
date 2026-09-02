@@ -80,19 +80,11 @@ pub trait Graph: Send + Sync + fmt::Debug {
         target: InputSocketId,
     ) -> Option<&mut dyn EdgeData>;
     /// Immutable access to the data carried by an edge.
-    fn edge_data(
-        &self,
-        source: OutputSocketId,
-        target: InputSocketId,
-    ) -> Option<&dyn EdgeData>;
+    fn edge_data(&self, source: OutputSocketId, target: InputSocketId) -> Option<&dyn EdgeData>;
 
     /// Monotonic version of an edge (bumped when its data mutates), for dirty
     /// detection. `None` if no such edge.
-    fn edge_version(
-        &self,
-        source: OutputSocketId,
-        target: InputSocketId,
-    ) -> Option<u64>;
+    fn edge_version(&self, source: OutputSocketId, target: InputSocketId) -> Option<u64>;
 
     /// The type caster used for connect-time compatibility checks.
     fn type_cast(&self) -> &dyn crate::type_tag::TypeCast;

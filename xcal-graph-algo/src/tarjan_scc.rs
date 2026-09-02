@@ -45,6 +45,7 @@ impl CycleDetector for TarjanSccDetector {
         let mut index_counter: usize = 0;
         let mut sccs: Vec<Vec<NodeId>> = Vec::new();
 
+        #[allow(clippy::too_many_arguments)]
         fn strongconnect(
             v: NodeId,
             succ: &HashMap<NodeId, Vec<NodeId>>,
@@ -64,7 +65,16 @@ impl CycleDetector for TarjanSccDetector {
             let neighbors = succ.get(&v).cloned().unwrap_or_default();
             for w in neighbors {
                 if !indices.contains_key(&w) {
-                    strongconnect(w, succ, indices, lowlink, on_stack, stack, index_counter, sccs);
+                    strongconnect(
+                        w,
+                        succ,
+                        indices,
+                        lowlink,
+                        on_stack,
+                        stack,
+                        index_counter,
+                        sccs,
+                    );
                     let lw = *lowlink.get(&w).unwrap();
                     let lv = lowlink.get(&v).copied().unwrap();
                     lowlink.insert(v, lv.min(lw));
@@ -184,10 +194,16 @@ mod tests {
         let mut g = SimpleGraph::default();
         let a = g.add_node(Box::new(mk(1, 1)));
         let b = g.add_node(Box::new(mk(1, 1)));
-        g.quick_connect(xcal_node::OutputSocketId::new(a, 0), xcal_node::InputSocketId::new(b, 0))
-            .unwrap();
-        g.quick_connect(xcal_node::OutputSocketId::new(b, 0), xcal_node::InputSocketId::new(a, 0))
-            .unwrap();
+        g.quick_connect(
+            xcal_node::OutputSocketId::new(a, 0),
+            xcal_node::InputSocketId::new(b, 0),
+        )
+        .unwrap();
+        g.quick_connect(
+            xcal_node::OutputSocketId::new(b, 0),
+            xcal_node::InputSocketId::new(a, 0),
+        )
+        .unwrap();
         assert!(TarjanSccDetector::new().detect(&g).is_some());
     }
 
@@ -196,8 +212,11 @@ mod tests {
         let mut g = SimpleGraph::default();
         let a = g.add_node(Box::new(mk(0, 1)));
         let b = g.add_node(Box::new(mk(1, 0)));
-        g.quick_connect(xcal_node::OutputSocketId::new(a, 0), xcal_node::InputSocketId::new(b, 0))
-            .unwrap();
+        g.quick_connect(
+            xcal_node::OutputSocketId::new(a, 0),
+            xcal_node::InputSocketId::new(b, 0),
+        )
+        .unwrap();
         assert!(TarjanSccDetector::new().detect(&g).is_none());
     }
 }

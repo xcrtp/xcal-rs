@@ -8,26 +8,26 @@
 //      scene 中的 marker/mesh/animation 子模块 + Circle/Path/Line/Scene 等纯逻辑组件、
 //      utils 宏
 
-pub mod errors;
-pub mod types;
-pub mod transform;
-pub mod resource;
 pub mod access;
 pub mod context;
-pub mod system;
-pub mod scheduler;
+pub mod errors;
+pub mod resource;
 pub mod scene;
+pub mod scheduler;
+pub mod system;
+pub mod transform;
+pub mod types;
 pub mod utils;
 
-pub use errors::Error;
-pub use resource::{Resource, ResourceTuple, ResourceTupleDefault, Resources};
 pub use access::Access;
 #[cfg(debug_assertions)]
 pub use context::BorrowTracker;
 pub use context::ExecutorContext;
-pub use system::{sys, ErasedSystem, InitSystem, Sys, System};
-pub use scheduler::{Phase, Scheduler};
+pub use errors::Error;
+pub use resource::{Resource, ResourceTuple, ResourceTupleDefault, Resources};
 pub use scene::{Scene, comp, components};
+pub use scheduler::{Phase, Scheduler};
+pub use system::{ErasedSystem, InitSystem, Sys, System, sys};
 pub use transform::{Transform2D, Transform2DInto};
 pub use types::{Camera2D, Color32, I8Vec4, Rect, U8Vec4, Vec2, Vec3, Vec4};
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），

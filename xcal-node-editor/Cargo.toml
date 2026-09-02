@@ -1,0 +1,17 @@
+[package]
+name = "xcal-node-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure-logic node editor state machine for xcal-node (no UI dependencies)"
+
+[dependencies]
+xcal-node = { path = "../xcal-node" }
+glam = { workspace = true }
+
+[features]
+default = []
+# Stage 10: automatic layout via xcal-graph-algo topo sort.
+auto-layout = []
+
+[dev-dependencies]

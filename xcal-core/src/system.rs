@@ -360,10 +360,7 @@ mod tests {
         #[cfg(debug_assertions)]
         let mut tracker = BorrowTracker::new();
         #[cfg(debug_assertions)]
-        tracker.begin_system(
-            "CountingSystem",
-            Access::from_tuples::<(), (Counter,)>(),
-        );
+        tracker.begin_system("CountingSystem", Access::from_tuples::<(), (Counter,)>());
         {
             let mut ctx = ExecutorContext::new(
                 &mut world,

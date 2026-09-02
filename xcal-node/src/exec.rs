@@ -39,7 +39,11 @@ pub trait ExecContext: Send + Sync {
     fn peek_input(&self, socket: InputSocketId) -> Result<&dyn Any, EvalError>;
 
     /// Inject a value into a node's input cache (e.g. defaults, recovery).
-    fn push_input(&mut self, socket: InputSocketId, value: Box<dyn NodeValue>) -> Result<(), EvalError>;
+    fn push_input(
+        &mut self,
+        socket: InputSocketId,
+        value: Box<dyn NodeValue>,
+    ) -> Result<(), EvalError>;
 
     /// Write the value a node produced at one of its output sockets.
     fn set_output(

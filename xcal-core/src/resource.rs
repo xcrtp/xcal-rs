@@ -163,9 +163,9 @@ mod tests {
     fn test_resources_insert_and_get() {
         let mut r = Resources::new();
         r.insert(42_i32);
-        r.insert(3.14_f64);
+        r.insert(2.5_f64);
         assert_eq!(r.get::<i32>(), Some(&42));
-        assert_eq!(r.get::<f64>(), Some(&3.14));
+        assert_eq!(r.get::<f64>(), Some(&2.5));
     }
 
     #[test]

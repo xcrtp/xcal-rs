@@ -1,0 +1,14 @@
+[package]
+name = "xcal-node-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "egui rendering and interaction layer for xcal-node-editor"
+
+[dependencies]
+xcal-node-editor = { path = "../xcal-node-editor" }
+xcal-node = { path = "../xcal-node" }
+egui = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]

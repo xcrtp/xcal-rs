@@ -64,7 +64,9 @@ impl System for CameraInputSystem {
             return;
         }
 
-        let Some(camera) = ctx.get_mut::<AppCamera>() else { return };
+        let Some(camera) = ctx.get_mut::<AppCamera>() else {
+            return;
+        };
         let ui = unsafe { &mut *ui_ptr };
         camera.handle_input(ui);
     }
@@ -86,18 +88,9 @@ impl System for ControlPanelSystem {
 
         // 三阶段闭包模式：先克隆只读值，再在闭包内修改本地副本，
         // 闭包结束后写回 Resources。避免 BorrowTracker 同时持有多份 &mut。
-        let time = ctx
-            .get::<TimeState>()
-            .map(|t| t.elapsed)
-            .unwrap_or(0.0);
-        let camera = ctx
-            .get::<AppCamera>()
-            .map(|c| c.clone())
-            .unwrap_or_default();
-        let mut ui_config = ctx
-            .get::<UiConfig>()
-            .map(|c| c.clone())
-            .unwrap_or_default();
+        let time = ctx.get::<TimeState>().map(|t| t.elapsed).unwrap_or(0.0);
+        let camera = ctx.get::<AppCamera>().cloned().unwrap_or_default();
+        let mut ui_config = ctx.get::<UiConfig>().cloned().unwrap_or_default();
 
         Panel::left("controls")
             .resizable(true)
@@ -241,24 +234,16 @@ impl System for GridBuildSystem {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
-        let cam = ctx
-            .get::<AppCamera>()
-            .map(|c| c.clone())
-            .unwrap_or_default();
-        let show_grid = ctx
-            .get::<UiConfig>()
-            .map(|c| c.show_grid)
-            .unwrap_or(true);
+        let cam = ctx.get::<AppCamera>().cloned().unwrap_or_default();
+        let show_grid = ctx.get::<UiConfig>().map(|c| c.show_grid).unwrap_or(true);
 
         let camera = cam.to_camera_2d(rect);
 
-        let Some(queue) = ctx.get_mut::<DrawQueue>() else { return };
+        let Some(queue) = ctx.get_mut::<DrawQueue>() else {
+            return;
+        };
 
-        queue.rect_fill(
-            ZIndex::new(-1000),
-            rect,
-            FillSolid::new((20, 20, 20, 255)),
-        );
+        queue.rect_fill(ZIndex::new(-1000), rect, FillSolid::new((20, 20, 20, 255)));
 
         if show_grid {
             Self::push_grid(queue, &camera, rect);
@@ -278,10 +263,7 @@ impl System for SceneRecordSystem {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
-        let cam = ctx
-            .get::<AppCamera>()
-            .map(|c| c.clone())
-            .unwrap_or_default();
+        let cam = ctx.get::<AppCamera>().cloned().unwrap_or_default();
         let camera = cam.to_camera_2d(rect);
 
         // 同时需要 &hecs::World（不可变）与 &mut DrawQueue；
@@ -335,7 +317,9 @@ impl System for RenderSubmitSystem {
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
 
-        let Some(queue) = ctx.get_mut::<DrawQueue>() else { return };
+        let Some(queue) = ctx.get_mut::<DrawQueue>() else {
+            return;
+        };
         let painter = ui.painter_at(view_rect.into_egui_rect());
         queue.execute(&Egui2dRender::new(&painter));
     }

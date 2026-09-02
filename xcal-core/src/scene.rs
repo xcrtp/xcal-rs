@@ -87,11 +87,7 @@ pub mod components {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        derive_builder::Builder,
-        derive_new::new,
-        xcal_macro::Transform2DInto,
+        Debug, Clone, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto,
     )]
     pub struct Path {
         #[new(into_iter = "Vec3")]
@@ -103,12 +99,7 @@ pub mod components {
 
     /// 线段图元：两个端点独立完成坐标转换（派生 [`xcal_core::transform::Transform2DInto`]）。
     #[derive(
-        Debug,
-        Clone,
-        Copy,
-        derive_builder::Builder,
-        derive_new::new,
-        xcal_macro::Transform2DInto,
+        Debug, Clone, Copy, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto,
     )]
     pub struct Line {
         #[new(into)]
@@ -259,8 +250,8 @@ impl Default for Scene {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::components::*;
+    use super::*;
 
     #[test]
     fn test_scene_new_is_empty() {
@@ -319,9 +310,9 @@ mod tests {
     fn test_scene_resource_type_isolation() {
         let mut scene = Scene::new();
         scene.add_resource(42_i32);
-        scene.add_resource(3.14_f64);
+        scene.add_resource(2.5_f64);
         assert_eq!(scene.borrow_resource::<i32>(), Some(&42));
-        assert_eq!(scene.borrow_resource::<f64>(), Some(&3.14));
+        assert_eq!(scene.borrow_resource::<f64>(), Some(&2.5));
     }
 
     #[test]

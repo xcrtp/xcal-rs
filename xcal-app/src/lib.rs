@@ -8,13 +8,11 @@
 
 use std::sync::Arc;
 
+pub use xcal_core::Result;
 use xcal_core::errors::Error;
 use xcal_core::resource::Resources;
 use xcal_core::scheduler::{Phase, Scheduler};
-pub use xcal_core::Result;
-use xcal_egui::resources::{
-    AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect,
-};
+use xcal_egui::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 use xcal_egui::systems::{
     AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
     RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
@@ -34,9 +32,12 @@ impl App {
         Self::setup_fonts(&ctx.egui_ctx)?;
 
         let render_ctx = {
-            let rs = ctx.wgpu_render_state.clone().ok_or(Error::InitializationError(
-                "Wgpu render state not available".to_string(),
-            ))?;
+            let rs = ctx
+                .wgpu_render_state
+                .clone()
+                .ok_or(Error::InitializationError(
+                    "Wgpu render state not available".to_string(),
+                ))?;
             RenderContext::from_render_state(&rs)
         };
 
@@ -94,7 +95,10 @@ impl App {
 
         scheduler.add_system(Phase::FrameEnd, RenderSubmitSystem);
 
-        Ok(Self { scheduler, render_ctx })
+        Ok(Self {
+            scheduler,
+            render_ctx,
+        })
     }
 
     pub fn render_context(&self) -> RenderContext {
@@ -131,7 +135,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let dt = ui.input(|i| i.unstable_dt).min(0.1);
 
-        self.scheduler.resources_mut().insert(EguiFrameContext::new(ui));
+        self.scheduler
+            .resources_mut()
+            .insert(EguiFrameContext::new(ui));
 
         self.scheduler.run_frame(dt);
 

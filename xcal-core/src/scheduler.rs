@@ -54,6 +54,7 @@ impl Phase {
 // ─── PhaseSlot ────────────────────────────────────────────────────────────
 
 /// 单个 phase 内注册的 system 与其声明的 `Access`（debug 用）。
+#[derive(Default)]
 struct PhaseSlot {
     systems: Vec<SlotEntry>,
 }
@@ -64,14 +65,6 @@ struct SlotEntry {
     name: &'static str,
     #[cfg(debug_assertions)]
     access: Access,
-}
-
-impl Default for PhaseSlot {
-    fn default() -> Self {
-        Self {
-            systems: Vec::new(),
-        }
-    }
 }
 
 // ─── Scheduler ────────────────────────────────────────────────────────────
@@ -156,7 +149,6 @@ impl Scheduler {
                 name,
                 access: new_access,
             });
-            return;
         }
 
         #[cfg(not(debug_assertions))]
@@ -323,7 +315,7 @@ mod tests {
         sched.add_system(
             Phase::LogicUpdate,
             sys::<(), ()>(|ctx| {
-                assert_eq!((&*ctx.world).query::<&i32>().iter().count(), 1);
+                assert_eq!(ctx.world.query::<&i32>().iter().count(), 1);
             }),
         );
 
@@ -364,10 +356,7 @@ mod tests {
             }),
         );
         // 同 phase 内，新 system 写 i32 与已有 system 读 i32 冲突
-        sched.add_system(
-            Phase::Input,
-            sys::<(), (i32,)>(|_ctx| {}),
-        );
+        sched.add_system(Phase::Input, sys::<(), (i32,)>(|_ctx| {}));
     }
 
     #[cfg(debug_assertions)]
@@ -381,10 +370,7 @@ mod tests {
                 let _ = ctx.get::<i32>();
             }),
         );
-        sched.add_system(
-            Phase::LogicUpdate,
-            sys::<(), (i32,)>(|_ctx| {}),
-        );
+        sched.add_system(Phase::LogicUpdate, sys::<(), (i32,)>(|_ctx| {}));
         // 跨 phase 不算冲突
     }
 

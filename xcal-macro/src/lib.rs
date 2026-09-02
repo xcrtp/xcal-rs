@@ -103,7 +103,9 @@ pub(crate) mod transform2d {
         for (f, &kind) in fields.iter().zip(&kinds) {
             if let FieldKind::Default = kind {
                 let ty = &f.ty;
-                where_clause.predicates.push(parse_quote!(#ty: xcal_core::transform::Transform2DInto));
+                where_clause
+                    .predicates
+                    .push(parse_quote!(#ty: xcal_core::transform::Transform2DInto));
             }
         }
         let (impl_generics, ty_generics, where_clauses) = generics.split_for_impl();
@@ -212,7 +214,7 @@ mod tests {
         };
 
         let res = derive_scene_object(input);
-        println!("{}", res.to_string());
+        println!("{res}");
     }
 
     #[test]
@@ -228,7 +230,7 @@ mod tests {
         };
 
         let res = derive_transform2d_into(input);
-        println!("named struct:\n{}", res.to_string());
+        println!("named struct:\n{res}");
     }
 
     #[test]
@@ -238,7 +240,7 @@ mod tests {
         };
 
         let res = derive_transform2d_into(input);
-        println!("tuple struct:\n{}", res.to_string());
+        println!("tuple struct:\n{res}");
     }
 
     #[test]
@@ -248,7 +250,7 @@ mod tests {
         };
 
         let res = derive_transform2d_into(input);
-        println!("unit struct:\n{}", res.to_string());
+        println!("unit struct:\n{res}");
     }
 
     #[test]
@@ -262,6 +264,6 @@ mod tests {
         };
 
         let res = derive_transform2d_into(input);
-        println!("generic struct:\n{}", res.to_string());
+        println!("generic struct:\n{res}");
     }
 }

@@ -59,11 +59,8 @@ impl<'a> Painter2D for Egui2dRender<'a> {
             }
             (Shape::Line(_), Style::Fill(_)) => {}
             (Shape::Rect(r), Style::Fill(f)) => {
-                self.painter.rect_filled(
-                    (*r).into_egui_rect(),
-                    0.0,
-                    f.color.into_egui_color32(),
-                );
+                self.painter
+                    .rect_filled((*r).into_egui_rect(), 0.0, f.color.into_egui_color32());
             }
             (Shape::Rect(r), Style::Stroke(s)) => {
                 self.painter.rect_stroke(
@@ -80,8 +77,8 @@ impl<'a> Painter2D for Egui2dRender<'a> {
 #[cfg(test)]
 mod egui_tests {
     use super::*;
-    use xcal_render::components::{Circle, FillSolid, Line, Path, StrokeSolid};
     use xcal_core::types::{Rect, Vec3};
+    use xcal_render::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 
     #[test]
     fn test_egui2d_render_paint_all_shapes() {

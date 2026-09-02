@@ -3480,6 +3480,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "xcal-node-editor"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "xcal-node",
+]
+
+[[package]]
+name = "xcal-node-egui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "glam",
+ "xcal-node",
+ "xcal-node-editor",
+]
+
+[[package]]
 name = "xcal-render"
 version = "0.1.0"
 dependencies = [

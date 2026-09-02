@@ -9,11 +9,11 @@
 //   - RenderContext (render_context.rs)
 //   - ResourceCache / GpuResourceCache / CacheKey (resource_cache.rs)
 
+pub mod components;
+pub mod draw;
 pub mod render_backend;
 pub mod render_context;
 pub mod resource_cache;
-pub mod components;
-pub mod draw;
 
 pub use draw::{
     DrawCommand, DrawQueue, Painter2D, SceneRender, Shape, Style, ZIndex, record_scene,
@@ -26,6 +26,6 @@ pub use resource_cache::{CacheKey, GpuResourceCache, ResourceCache};
 // 通过在 scene 根重新导出 components + render 组件。
 pub mod scene {
     pub use crate::components as comp;
-    pub use crate::components as components;
+    pub use crate::components;
     pub use xcal_core::scene::Scene;
 }

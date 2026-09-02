@@ -55,7 +55,7 @@ impl EdgeData for UnitEdge {
         self
     }
     fn dyn_eq(&self, other: &dyn EdgeData) -> bool {
-        matches!(other.as_any().downcast_ref::<Self>(), Some(_))
+        other.as_any().downcast_ref::<Self>().is_some()
     }
 }
 

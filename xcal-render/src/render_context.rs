@@ -77,12 +77,7 @@ impl RenderContext {
     }
 
     #[inline]
-    pub fn write_buffer(
-        &self,
-        buffer: &wgpu::Buffer,
-        offset: wgpu::BufferAddress,
-        data: &[u8],
-    ) {
+    pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: wgpu::BufferAddress, data: &[u8]) {
         self.queue.write_buffer(buffer, offset, data);
     }
 }

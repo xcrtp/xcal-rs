@@ -118,11 +118,7 @@ pub struct EvalError {
 }
 
 impl EvalError {
-    pub fn new(
-        message: impl Into<String>,
-        node: NodeId,
-        socket: Option<OutputSocketId>,
-    ) -> Self {
+    pub fn new(message: impl Into<String>, node: NodeId, socket: Option<OutputSocketId>) -> Self {
         Self {
             message: message.into(),
             source: None,

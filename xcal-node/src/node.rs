@@ -30,7 +30,11 @@ pub struct NodeMeta {
 }
 
 impl NodeMeta {
-    pub fn new(type_name: impl Into<String>, display_name: impl Into<String>, version: u32) -> Self {
+    pub fn new(
+        type_name: impl Into<String>,
+        display_name: impl Into<String>,
+        version: u32,
+    ) -> Self {
         Self {
             type_name: type_name.into(),
             display_name: display_name.into(),

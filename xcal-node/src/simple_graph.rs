@@ -108,17 +108,11 @@ impl Graph for SimpleGraph {
     }
 
     fn upstream(&self, input: InputSocketId) -> Vec<OutputSocketId> {
-        self.upstream
-            .get(&input)
-            .cloned()
-            .unwrap_or_default()
+        self.upstream.get(&input).cloned().unwrap_or_default()
     }
 
     fn downstream(&self, output: OutputSocketId) -> Vec<InputSocketId> {
-        self.downstream
-            .get(&output)
-            .cloned()
-            .unwrap_or_default()
+        self.downstream.get(&output).cloned().unwrap_or_default()
     }
 
     fn all_nodes(&self) -> Box<dyn Iterator<Item = NodeId> + '_> {
@@ -144,7 +138,10 @@ impl Graph for SimpleGraph {
             .collect();
         for s in out_sockets {
             for t in self.downstream.remove(&s).unwrap_or_default() {
-                self.edges.remove(&EdgeId { source: s, target: t });
+                self.edges.remove(&EdgeId {
+                    source: s,
+                    target: t,
+                });
                 if let Some(v) = self.upstream.get_mut(&t) {
                     v.retain(|o| *o != s);
                 }
@@ -158,7 +155,10 @@ impl Graph for SimpleGraph {
             .collect();
         for t in in_sockets {
             for s in self.upstream.remove(&t).unwrap_or_default() {
-                self.edges.remove(&EdgeId { source: s, target: t });
+                self.edges.remove(&EdgeId {
+                    source: s,
+                    target: t,
+                });
                 if let Some(v) = self.downstream.get_mut(&s) {
                     v.retain(|i| *i != t);
                 }
@@ -188,24 +188,19 @@ impl Graph for SimpleGraph {
         }
 
         // Single-connection input.
-        if !in_desc.allow_multi {
-            if self
+        if !in_desc.allow_multi
+            && self
                 .upstream
                 .get(&target)
                 .map(|v| !v.is_empty())
                 .unwrap_or(false)
-            {
-                return Err(ConnectError::InputAlreadyConnected(target));
-            }
+        {
+            return Err(ConnectError::InputAlreadyConnected(target));
         }
 
         // Output connection limit.
         if let Some(max) = out_desc.max_connections {
-            let current = self
-                .downstream
-                .get(&source)
-                .map(|v| v.len())
-                .unwrap_or(0);
+            let current = self.downstream.get(&source).map(|v| v.len()).unwrap_or(0);
             if current >= max as usize {
                 return Err(ConnectError::OutputConnectionLimitReached(source));
             }
@@ -248,22 +243,16 @@ impl Graph for SimpleGraph {
         Some(edge.data.as_mut())
     }
 
-    fn edge_data(
-        &self,
-        source: OutputSocketId,
-        target: InputSocketId,
-    ) -> Option<&dyn EdgeData> {
+    fn edge_data(&self, source: OutputSocketId, target: InputSocketId) -> Option<&dyn EdgeData> {
         let id = EdgeId { source, target };
         let edge = self.edges.get(&id)?;
         Some(edge.data.as_ref())
     }
 
-    fn edge_version(
-        &self,
-        source: OutputSocketId,
-        target: InputSocketId,
-    ) -> Option<u64> {
-        self.edges.get(&EdgeId { source, target }).map(|e| e.version)
+    fn edge_version(&self, source: OutputSocketId, target: InputSocketId) -> Option<u64> {
+        self.edges
+            .get(&EdgeId { source, target })
+            .map(|e| e.version)
     }
 
     fn type_cast(&self) -> &dyn TypeCast {
@@ -313,8 +302,7 @@ mod tests {
 
     impl PassthroughNode {
         fn new() -> Self {
-            let tag: Box<dyn crate::type_tag::TypeTag> =
-                Box::new(NamedTypeTag::new("f32"));
+            let tag: Box<dyn crate::type_tag::TypeTag> = Box::new(NamedTypeTag::new("f32"));
             Self {
                 meta: NodeMeta::new("test.passthrough", "Passthrough", 1),
                 inputs: vec![InputSocket::new(tag.clone()).with_index(0)],
@@ -481,7 +469,8 @@ mod tests {
         let (mut g, a, b, _c) = make_graph();
         let a_out = OutputSocketId::new(a, 0);
         let b_in = InputSocketId::new(b, 0);
-        g.connect_with_data(a_out, b_in, Box::new(UnitEdge)).unwrap();
+        g.connect_with_data(a_out, b_in, Box::new(UnitEdge))
+            .unwrap();
         let data = g.disconnect(a_out, b_in);
         assert!(data.is_some());
         assert!(g.upstream(b_in).is_empty());

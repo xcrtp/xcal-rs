@@ -14,7 +14,9 @@ unsafe impl Sync for EguiFrameContext {}
 
 impl EguiFrameContext {
     pub fn new(ui: &mut egui::Ui) -> Self {
-        Self { ui_ptr: ui as *mut egui::Ui }
+        Self {
+            ui_ptr: ui as *mut egui::Ui,
+        }
     }
 
     pub fn ui_ptr(&self) -> *mut egui::Ui {
@@ -55,11 +57,7 @@ impl AppCamera {
     }
 
     pub fn to_camera_2d(&self, rect: Rect) -> Camera2D {
-        Camera2D::new(
-            (self.center.x, self.center.y).into(),
-            self.scale,
-            rect,
-        )
+        Camera2D::new((self.center.x, self.center.y).into(), self.scale, rect)
     }
 }
 
@@ -80,7 +78,10 @@ pub struct UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { show_grid: true, show_field: false }
+        Self {
+            show_grid: true,
+            show_field: false,
+        }
     }
 }
 

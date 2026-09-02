@@ -8,6 +8,8 @@ members = [
     "xcal-node",
     "xcal-graph-algo",
     "xcal-graph-eval",
+    "xcal-node-editor",
+    "xcal-node-egui",
 ]
 resolver = "2"
 

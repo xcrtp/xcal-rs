@@ -62,11 +62,19 @@ impl Access {
     /// - 仅有 `reads` 重叠时不算冲突（多读者允许）
     pub fn conflicts_with(&self, other: &Access) -> bool {
         // self 写与 other 任何访问冲突
-        if self.writes.iter().any(|w| other.reads.contains(w) || other.writes.contains(w)) {
+        if self
+            .writes
+            .iter()
+            .any(|w| other.reads.contains(w) || other.writes.contains(w))
+        {
             return true;
         }
         // other 写与 self 任何访问冲突
-        if other.writes.iter().any(|w| self.reads.contains(w) || self.writes.contains(w)) {
+        if other
+            .writes
+            .iter()
+            .any(|w| self.reads.contains(w) || self.writes.contains(w))
+        {
             return true;
         }
         false

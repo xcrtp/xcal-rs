@@ -38,6 +38,7 @@ pub struct LazyPullEval {
     policy: EvalErrorPolicy,
     pub(crate) outputs: Mutex<HashMap<OutputSocketId, Box<dyn NodeValue>>>,
     states: Mutex<HashMap<NodeId, Box<dyn NodeValue>>>,
+    #[allow(clippy::type_complexity)]
     snapshots: Mutex<HashMap<NodeId, Vec<(u32, Option<u64>)>>>,
     evaluated: Mutex<HashSet<NodeId>>,
     dirty: Mutex<HashSet<NodeId>>,
@@ -131,7 +132,11 @@ impl LazyPullEval {
         }
     }
 
-    fn run_pass(&self, refs: &EvalRefs<'_>, target: Option<OutputSocketId>) -> Result<(), EvalError> {
+    fn run_pass(
+        &self,
+        refs: &EvalRefs<'_>,
+        target: Option<OutputSocketId>,
+    ) -> Result<(), EvalError> {
         let order = self
             .sorter
             .sort(refs.graph)
@@ -169,9 +174,7 @@ impl xcal_node::executor::EvalStrategy for LazyPullEval {
             EvalErrorPolicy::FailFast => res,
             EvalErrorPolicy::ContinueOtherBranches => res,
             EvalErrorPolicy::CollectAll => {
-                if res.is_err() {
-                    return res;
-                }
+                res?;
                 let n = self.errors.lock().unwrap().len();
                 if n > 0 {
                     Err(EvalError::new(
@@ -342,9 +345,7 @@ mod tests {
     use xcal_node::simple_graph::SimpleGraph;
     use xcal_node::socket::{InputSocket, OutputSocket};
     use xcal_node::type_tag::NamedTypeTag;
-    use xcal_node::{
-        ExecContext, NodeExecutor, OutputSocketId as OutId, TypeTag,
-    };
+    use xcal_node::{ExecContext, NodeExecutor, OutputSocketId as OutId, TypeTag};
 
     use super::*;
 
@@ -475,11 +476,7 @@ mod tests {
         log: Arc<Mutex<Vec<NodeId>>>,
     }
     impl NodeExecutor for TestExecutor {
-        fn execute(
-            &self,
-            node: &dyn Node,
-            ctx: &mut dyn ExecContext,
-        ) -> Result<(), EvalError> {
+        fn execute(&self, node: &dyn Node, ctx: &mut dyn ExecContext) -> Result<(), EvalError> {
             self.log.lock().unwrap().push(ctx.current_node());
             if let Some(c) = node.downcast_ref::<ConstNode>() {
                 ctx.set_output(OutId::new(ctx.current_node(), 0), Box::new(c.value))?;
@@ -679,8 +676,10 @@ mod tests {
         let f2 = g.add_node(Box::new(ConstNode::new(5.0, DirtyPolicy::Always)));
         let log = Arc::new(Mutex::new(Vec::new()));
         let exec = TestExecutor { log: log.clone() };
-        let mut eval =
-            LazyPullEval::new(Box::new(KahnSorter::new()), EvalErrorPolicy::ContinueOtherBranches);
+        let mut eval = LazyPullEval::new(
+            Box::new(KahnSorter::new()),
+            EvalErrorPolicy::ContinueOtherBranches,
+        );
         let res = eval.evaluate(&g, &exec, None);
         assert!(res.is_ok(), "ContinueOtherBranches should not hard-fail");
         let out = eval.cached_output(OutId::new(f2, 0)).unwrap();

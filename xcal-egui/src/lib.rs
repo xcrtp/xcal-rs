@@ -9,8 +9,8 @@
 //   - Egui2dRender（Painter2D 的 egui 实现）
 
 pub mod egui_support;
-pub mod systems;
 pub mod resources;
+pub mod systems;
 
 pub use egui_support::Egui2dRender;
 pub use resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};

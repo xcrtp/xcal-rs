@@ -124,10 +124,16 @@ mod tests {
         let a = g.add_node(Box::new(mk(0, 1)));
         let b = g.add_node(Box::new(mk(1, 1)));
         let c = g.add_node(Box::new(mk(1, 0)));
-        g.quick_connect(xcal_node::OutputSocketId::new(a, 0), xcal_node::InputSocketId::new(b, 0))
-            .unwrap();
-        g.quick_connect(xcal_node::OutputSocketId::new(b, 0), xcal_node::InputSocketId::new(c, 0))
-            .unwrap();
+        g.quick_connect(
+            xcal_node::OutputSocketId::new(a, 0),
+            xcal_node::InputSocketId::new(b, 0),
+        )
+        .unwrap();
+        g.quick_connect(
+            xcal_node::OutputSocketId::new(b, 0),
+            xcal_node::InputSocketId::new(c, 0),
+        )
+        .unwrap();
 
         let mut t = BfsDirtyTracker::new();
         t.mark_socket_dirty(&g, xcal_node::OutputSocketId::new(a, 0));

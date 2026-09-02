@@ -181,7 +181,9 @@ mod tests {
 
     #[test]
     fn test_headless_backend_lifecycle() {
-        let Ok(mut backend) = EframeWgpuBackend::headless() else { return };
+        let Ok(mut backend) = EframeWgpuBackend::headless() else {
+            return;
+        };
 
         assert!(backend.target().is_none());
         assert!(!backend.is_frame_active());
@@ -199,13 +201,16 @@ mod tests {
 
         let tex = backend.create_texture(&wgpu::TextureDescriptor {
             label: Some("test-texture"),
-            size: wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: backend.target_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let texture = tex.downcast_ref::<wgpu::Texture>().expect("texture");
@@ -222,7 +227,9 @@ mod tests {
 
     #[test]
     fn test_headless_backend_create_pipeline() {
-        let Ok(backend) = EframeWgpuBackend::headless() else { return };
+        let Ok(backend) = EframeWgpuBackend::headless() else {
+            return;
+        };
 
         let source = r#"
             @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -233,10 +240,12 @@ mod tests {
                 return vec4f(1.0, 0.0, 0.0, 1.0);
             }
         "#;
-        let shader = backend.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("test-shader"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
+        let shader = backend
+            .device()
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("test-shader"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
 
         let pipeline = backend.create_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("test-pipeline"),

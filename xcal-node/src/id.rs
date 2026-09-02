@@ -46,9 +46,7 @@ impl SocketId {
 }
 
 /// Address of an *input* socket.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct InputSocketId(pub SocketId);
 
 impl InputSocketId {
@@ -67,9 +65,7 @@ impl InputSocketId {
 }
 
 /// Address of an *output* socket.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OutputSocketId(pub SocketId);
 
 impl OutputSocketId {

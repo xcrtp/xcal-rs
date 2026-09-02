@@ -67,7 +67,9 @@ impl<'a> ExecContext for DefaultExecContext<'a> {
             .unwrap()
             .get(&socket)
             .cloned()
-            .ok_or_else(|| EvalError::new("no value at output socket", self.current, Some(socket)))?;
+            .ok_or_else(|| {
+                EvalError::new("no value at output socket", self.current, Some(socket))
+            })?;
         Ok(val)
     }
 

@@ -14,16 +14,9 @@ use crate::executor::NodeExecutor;
 use crate::node::Node;
 
 /// Type-erased executor registry keyed by node `TypeId`.
+#[derive(Default)]
 pub struct ExecutorFactory {
     executors: HashMap<TypeId, Box<dyn NodeExecutor>>,
-}
-
-impl Default for ExecutorFactory {
-    fn default() -> Self {
-        Self {
-            executors: HashMap::new(),
-        }
-    }
 }
 
 impl ExecutorFactory {
