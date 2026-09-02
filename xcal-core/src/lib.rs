@@ -15,6 +15,9 @@ pub mod resource;
 pub mod scene;
 pub mod scheduler;
 pub mod system;
+// 可观测性基础设施（日志 / FrameReport / World 快照），feature = "telemetry"。
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod transform;
 pub mod types;
 pub mod utils;
@@ -25,7 +28,7 @@ pub use context::BorrowTracker;
 pub use context::ExecutorContext;
 pub use errors::Error;
 pub use resource::{Resource, ResourceTuple, ResourceTupleDefault, Resources};
-pub use scene::{Scene, comp, components};
+pub use scene::{Scene, comp, components, primitives};
 pub use scheduler::{Phase, Scheduler};
 pub use system::{ErasedSystem, InitSystem, Sys, System, sys};
 pub use transform::{Transform2D, Transform2DInto};

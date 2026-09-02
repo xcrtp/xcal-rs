@@ -25,8 +25,6 @@ macro_rules! export_vec {
     };
 }
 
-type Tuple4<T> = (T, T, T, T);
-
 export_vec!(Vec2, xcal_macro::Transform2DInto);
 
 impl From<(f32, f32)> for Vec2 {
@@ -78,52 +76,10 @@ impl From<(u8, u8, u8, u8)> for U8Vec4 {
     }
 }
 
-// Color32 总是存在（即使无 egui），以便 xcal-render 中的 StrokeSolid/FillSolid
-// 能在不启用 egui feature 的情况下使用。
-// 仅 egui 相关转换由 feature "egui" 门控。
-export_type!(
-    #[derive(Clone,Copy,Debug)]
-    pub Color32 (U8Vec4)
-);
-
-impl Color32 {
-    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self(glam::U8Vec4::new(r, g, b, a).into())
-    }
-
-    pub fn r(&self) -> u8 {
-        self.x
-    }
-
-    pub fn g(&self) -> u8 {
-        self.y
-    }
-
-    pub fn b(&self) -> u8 {
-        self.z
-    }
-
-    pub fn a(&self) -> u8 {
-        self.w
-    }
-
-    #[cfg(feature = "egui")]
-    pub fn into_egui_color32(self) -> egui::Color32 {
-        egui::Color32::from_rgba_premultiplied(self.x, self.y, self.z, self.w)
-    }
-}
-
-#[cfg(feature = "egui")]
-impl From<egui::Color32> for Color32 {
-    fn from(value: egui::Color32) -> Self {
-        Self::new(value.r(), value.g(), value.b(), value.a())
-    }
-}
-impl From<Tuple4<u8>> for Color32 {
-    fn from((r, g, b, a): Tuple4<u8>) -> Self {
-        Self::new(r, g, b, a)
-    }
-}
+// Color32 的规范定义位于 xcal-geometry（纯数据层），此处再导出，使 ECS 组件、
+// 2D 变换体系与渲染层共用同一类型。egui/wgpu 等后端转换由各后端 crate 负责
+// （孤儿规则：xcal-core 不能为外部类型实现外部 trait）。
+pub use xcal_geometry::Color32;
 
 #[derive(Debug, Clone, Copy, derive_new::new, xcal_macro::Transform2DInto)]
 pub struct Rect {
@@ -244,24 +200,7 @@ mod tests {
         assert_eq!(c.g(), 20);
         assert_eq!(c.b(), 30);
         assert_eq!(c.a(), 40);
-    }
-
-    #[test]
-    fn test_color32_from_egui() {
-        let ec = egui::Color32::from_rgba_premultiplied(10, 20, 30, 40);
-        let c: Color32 = ec.into();
-        assert_eq!(c.r(), 10);
-        assert_eq!(c.g(), 20);
-        assert_eq!(c.b(), 30);
-        assert_eq!(c.a(), 40);
-    }
-
-    #[test]
-    fn test_color32_round_trip() {
-        let original = egui::Color32::from_rgba_premultiplied(100, 150, 200, 255);
-        let xcal_color: Color32 = original.into();
-        let back: egui::Color32 = xcal_color.into_egui_color32();
-        assert_eq!(back, original);
+        assert_eq!(c.r, 10);
     }
 
     #[test]

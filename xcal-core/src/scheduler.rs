@@ -24,6 +24,8 @@ use crate::context::BorrowTracker;
 use crate::context::ExecutorContext;
 use crate::resource::Resources;
 use crate::system::{ErasedSystem, InitSystem, System};
+#[cfg(feature = "telemetry")]
+use crate::telemetry::{FrameReport, SystemTelemetry};
 
 // ─── Phase 枚举 ───────────────────────────────────────────────────────────
 
@@ -67,6 +69,16 @@ struct SlotEntry {
     access: Access,
 }
 
+// ─── Telemetry 状态（feature = "telemetry"）─────────────────────────────
+
+/// 每帧计时数据：帧计数 + 上一帧的 [`FrameReport`]。
+#[cfg(feature = "telemetry")]
+#[derive(Default)]
+struct TelemetryState {
+    tick: u64,
+    last_report: FrameReport,
+}
+
 // ─── Scheduler ────────────────────────────────────────────────────────────
 
 pub struct Scheduler {
@@ -75,6 +87,8 @@ pub struct Scheduler {
     phases: [PhaseSlot; 6],
     #[cfg(debug_assertions)]
     tracker: BorrowTracker,
+    #[cfg(feature = "telemetry")]
+    telemetry: TelemetryState,
 }
 
 impl Scheduler {
@@ -85,6 +99,8 @@ impl Scheduler {
             phases: Default::default(),
             #[cfg(debug_assertions)]
             tracker: BorrowTracker::new(),
+            #[cfg(feature = "telemetry")]
+            telemetry: TelemetryState::default(),
         }
     }
 
@@ -188,6 +204,23 @@ impl Scheduler {
     pub fn run_frame_with_time(&mut self, dt: f32, time: f32) -> usize {
         let mut count = 0;
 
+        // ── telemetry：帧计数 + 帧级 span + 本帧报告 ──────────
+        #[cfg(feature = "telemetry")]
+        let tick = {
+            self.telemetry.tick += 1;
+            self.telemetry.tick
+        };
+        // frame span 为 trace 级：默认过滤器下不产生 span 生命周期日志
+        // （每帧一行太吵），每 60 帧的汇总信息仍在 info 级输出；
+        // `XCAL_LOG=xcal_core=trace` 时展示 frame→system 的完整 span 树。
+        #[cfg(feature = "telemetry")]
+        let _frame_span = tracing::trace_span!("frame", tick).entered();
+        #[cfg(feature = "telemetry")]
+        let mut report = FrameReport {
+            frame: tick,
+            ..Default::default()
+        };
+
         for phase in Phase::all() {
             let phase_idx = phase_index(phase);
             // 每个阶段独立的 CommandBuffer，阶段末 flush 到 World
@@ -201,6 +234,18 @@ impl Scheduler {
                 }
 
                 {
+                    // telemetry：系统名（'static）在可变借用前取出，
+                    // span 覆盖 run_erased，Instant 计时写入本帧报告。
+                    // system span 为 trace 级：默认过滤器不输出其生命周期
+                    // 事件（每帧 11 条），`XCAL_LOG=xcal_core=trace` 时可见。
+                    #[cfg(feature = "telemetry")]
+                    let name = entry.system.name();
+                    #[cfg(feature = "telemetry")]
+                    let _sys_span =
+                        tracing::trace_span!("system", name, phase = ?phase, tick).entered();
+                    #[cfg(feature = "telemetry")]
+                    let start = std::time::Instant::now();
+
                     let mut ctx = ExecutorContext::new(
                         &mut self.world,
                         &mut cmd,
@@ -211,6 +256,17 @@ impl Scheduler {
                         &mut self.tracker,
                     );
                     entry.system.run_erased(&mut ctx);
+
+                    #[cfg(feature = "telemetry")]
+                    report.record(SystemTelemetry {
+                        system_name: name,
+                        phase,
+                        tick,
+                        duration: start.elapsed(),
+                        entities_touched: self.world.len() as usize,
+                        resources_read: Vec::new(),
+                        resources_written: Vec::new(),
+                    });
                 }
 
                 #[cfg(debug_assertions)]
@@ -221,7 +277,31 @@ impl Scheduler {
             cmd.run_on(&mut self.world);
         }
 
+        // ── telemetry：保存报告；debug 构建每 60 帧打印汇总 ─────
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry.last_report = report;
+            #[cfg(debug_assertions)]
+            if tick % 60 == 0 {
+                self.telemetry.last_report.log_summary();
+            }
+        }
+
         count
+    }
+
+    // ─── Telemetry 访问（feature = "telemetry"）──────────────
+
+    /// Scheduler 启动以来执行的帧数（telemetry 关闭时不可用）。
+    #[cfg(feature = "telemetry")]
+    pub fn tick(&self) -> u64 {
+        self.telemetry.tick
+    }
+
+    /// 上一帧的执行报告（System 耗时列表）。
+    #[cfg(feature = "telemetry")]
+    pub fn frame_report(&self) -> &FrameReport {
+        &self.telemetry.last_report
     }
 }
 
@@ -390,6 +470,30 @@ mod tests {
                 let _ = ctx.get::<i32>();
             }),
         );
+    }
+
+    // ─── Telemetry：FrameReport 采集 ─────────────────────────
+
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn test_telemetry_frame_report_records_systems() {
+        let mut sched = Scheduler::new(hecs::World::new(), Resources::new());
+        sched.add_system(Phase::Input, sys::<(), ()>(|_ctx| {}));
+        sched.add_system(Phase::FrameEnd, sys::<(), ()>(|_ctx| {}));
+
+        sched.run_frame(0.016);
+        assert_eq!(sched.tick(), 1);
+        let report = sched.frame_report();
+        assert_eq!(report.frame, 1);
+        assert_eq!(report.system_count(), 2);
+        let phases: Vec<Phase> = report.systems.iter().map(|t| t.phase).collect();
+        assert!(phases.contains(&Phase::Input));
+        assert!(phases.contains(&Phase::FrameEnd));
+        assert!(report.total_duration.as_nanos() > 0);
+
+        sched.run_frame(0.016);
+        assert_eq!(sched.tick(), 2);
+        assert_eq!(sched.frame_report().frame, 2);
     }
 
     // ─── BorrowTracker 跨系统隔离 ────────────────────────────

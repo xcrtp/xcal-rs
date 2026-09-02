@@ -1,31 +1,79 @@
-// xcal-render: wgpu 渲染层
-// 依赖方向：xcal-core ← xcal-render
+// xcal-render: 渲染 trait + 调度 + 资源管理层（三层架构的中间层）
+// 依赖方向：xcal-geometry / xcal-core ← xcal-render ← xcal-render-backends
+//
+// 本 crate 禁止依赖 egui。wgpu 仅通过 feature = "wgpu" 引入
+// （RenderTarget / RenderLayer / RenderBackend / ResourceCache 等 GPU 抽象）。
 //
 // 包含：
-//   - scene::components::render 子模块（StrokeSolid / FillSolid / FillStyle / StrokeStyle）
-//     并从 xcal_core::scene::components 重新导出非 render 部分 + Circle/Path/Line
-//   - Painter2D / DrawQueue / ZIndex / Shape / Style / SceneRender / record_scene
-//   - RenderBackend / GpuHandle / EframeWgpuBackend (render_backend.rs)
-//   - RenderContext (render_context.rs)
-//   - ResourceCache / GpuResourceCache / CacheKey (resource_cache.rs)
+//   - 冻结的 2D 管线（draw.rs：Painter2D / DrawQueue / Shape / Style / record_scene）
+//   - 3D 队列与绘制器 trait（draw_queue_3d.rs / painter_3d.rs）
+//   - 视口/渲染目标/渲染层（viewport.rs / render_target.rs / render_layer.rs）
+//   - 后端 trait 与资源缓存（render_backend.rs / resource_cache.rs，wgpu gate）
+//   - 新图元体系（shape.rs / painter_2d.rs / draw_queue_2d.rs / vector_content.rs）
+//   - 文本渲染抽象（text_engine.rs）
+//
+// 具体后端（wgpu_3d / egui_2d / eframe / 文本引擎实现）位于 xcal-render-backends。
 
 pub mod components;
 pub mod draw;
+pub mod draw_queue_2d;
+pub mod draw_queue_3d;
+pub mod painter_2d;
+pub mod painter_3d;
+pub mod shape;
+pub mod text_engine;
+pub mod vector_content;
+pub mod viewport;
+
+// render_backend 模块始终编译（GpuHandle 无 wgpu 依赖）；
+// RenderBackend / RenderBackend3D trait 在模块内 cfg(feature = "wgpu")。
 pub mod render_backend;
-pub mod render_context;
+#[cfg(feature = "wgpu")]
+pub mod render_layer;
+#[cfg(feature = "wgpu")]
+pub mod render_target;
+#[cfg(feature = "wgpu")]
 pub mod resource_cache;
 
+// ─── 冻结 2D 管线 re-export ───────────────────────────────────────────────
 pub use draw::{
     DrawCommand, DrawQueue, Painter2D, SceneRender, Shape, Style, ZIndex, record_scene,
 };
-pub use render_backend::{EframeWgpuBackend, GpuHandle, RenderBackend};
-pub use render_context::RenderContext;
+
+// ─── 3D 队列 / 绘制器 ─────────────────────────────────────────────────────
+pub use draw_queue_3d::{DrawQueue3D, LineDraw, MeshDraw};
+pub use painter_3d::Painter3D;
+
+// ─── 视口（纯数据） ───────────────────────────────────────────────────────
+pub use viewport::Viewport;
+
+// ─── 新图元体系 ───────────────────────────────────────────────────────────
+pub use draw_queue_2d::{DrawCommand2D, DrawQueue2D};
+pub use painter_2d::{Painter2DTarget, Style2D};
+pub use shape::{CustomShapeData, CustomTypeId, Shape2D};
+pub use text_engine::{
+    BitmapFormat, BitmapOverlay, TextConfig, TextInput, TextRenderEngine, TextRenderError,
+    TextRenderOutput,
+};
+pub use vector_content::VectorContent;
+
+// ─── wgpu 抽象（feature gate） ────────────────────────────────────────────
+#[cfg(feature = "wgpu")]
+pub use render_backend::{RenderBackend, RenderBackend3D};
+#[cfg(feature = "wgpu")]
+pub use render_layer::RenderLayer;
+#[cfg(feature = "wgpu")]
+pub use render_target::RenderTarget;
+#[cfg(feature = "wgpu")]
 pub use resource_cache::{CacheKey, GpuResourceCache, ResourceCache};
+
+// GpuHandle 是纯 Any 包装，无 wgpu 依赖，始终可用。
+pub use render_backend::GpuHandle;
 
 // 为下游用户提供与原 xcal::scene::comp::{StrokeSolid, FillSolid} 一致的访问
 // 通过在 scene 根重新导出 components + render 组件。
 pub mod scene {
-    pub use crate::components as comp;
     pub use crate::components;
+    pub use crate::components as comp;
     pub use xcal_core::scene::Scene;
 }

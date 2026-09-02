@@ -1,4 +1,8 @@
 // render_context.rs
+//
+// WGPU 渲染上下文（具体后端层）：device/queue/target_format 句柄。
+// - headless 构造仅依赖 wgpu + pollster（feature = "wgpu"）；
+// - from_render_state 从 egui_wgpu::RenderState 提取（feature = "egui-wgpu"）。
 
 use xcal_core::errors::Error;
 
@@ -17,6 +21,7 @@ pub struct RenderContext {
 
 impl RenderContext {
     /// 从 egui_wgpu::RenderState 提取上下文。
+    #[cfg(feature = "egui-wgpu")]
     pub fn from_render_state(rs: &egui_wgpu::RenderState) -> Self {
         Self {
             device: rs.device.clone(),
@@ -99,7 +104,7 @@ mod tests {
                 assert_eq!(ctx.target_format, DEFAULT_TARGET_FORMAT);
             }
             Err(Error::InitializationError(_)) => {
-                // 可接受
+                // 无 GPU 环境可接受
             }
             Err(e) => panic!("unexpected error variant: {e:?}"),
         }

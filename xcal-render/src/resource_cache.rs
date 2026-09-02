@@ -1,4 +1,10 @@
 // resource_cache.rs
+//
+// GPU 资源缓存：按 (TypeId, Entity, version) 索引 GpuHandle，
+// 支持脏标记重建、帧时钟、空闲淘汰。仅在 feature = "wgpu" 下编译
+// （upload 回调通过 dyn RenderBackend 创建 GPU 资源）。
+//
+// 具体后端（EframeWgpuBackend）位于 xcal-render-backends。
 
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
@@ -165,6 +171,7 @@ where
     }
 }
 
+/// 无元数据的 GPU 资源缓存（最常用形态）。
 pub type GpuResourceCache = ResourceCache<()>;
 
 #[cfg(test)]
@@ -238,18 +245,8 @@ mod tests {
         let key_v0 = CacheKey::of::<u32>(e, 0);
         let key_v1 = CacheKey::of::<u32>(e, 1);
 
-        cache.get_or_insert(
-            key_v0,
-            (),
-            |_, _| GpuHandle::new(10_u32),
-            &mut StubBackend {},
-        );
-        cache.get_or_insert(
-            key_v1,
-            (),
-            |_, _| GpuHandle::new(20_u32),
-            &mut StubBackend {},
-        );
+        cache.get_or_insert(key_v0, (), |_, _| GpuHandle::new(10_u32), &mut StubBackend {});
+        cache.get_or_insert(key_v1, (), |_, _| GpuHandle::new(20_u32), &mut StubBackend {});
 
         assert_eq!(cache.len(), 2);
         assert_eq!(
@@ -351,47 +348,6 @@ mod tests {
             cache.upload_dirty(&mut StubBackend {}, |_, _, _| GpuHandle::new(0_u32)),
             0
         );
-    }
-
-    #[test]
-    fn test_headless_upload_and_retrieve() {
-        let Ok(mut backend) = crate::render_backend::EframeWgpuBackend::headless() else {
-            return;
-        };
-
-        let mut cache = ResourceCache::<()>::new();
-        cache.begin_frame();
-        let e = dummy_entity(7);
-        let key = CacheKey::of::<()>(e, 0);
-
-        let vertices: [f32; 6] = [0.0, 0.5, -0.5, -0.5, 0.5, -0.5];
-        let handle = cache.get_or_insert(
-            key,
-            (),
-            |_, backend| {
-                let buf = backend.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("cached-mesh"),
-                    size: (vertices.len() * 4) as u64,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                backend.queue().write_buffer(
-                    buf.downcast_ref::<wgpu::Buffer>().unwrap(),
-                    0,
-                    bytemuck_bytes(&vertices),
-                );
-                buf
-            },
-            &mut backend,
-        );
-        assert!(handle.downcast_ref::<wgpu::Buffer>().is_some());
-
-        let again = cache.get(&key).expect("cached");
-        assert!(again.downcast_ref::<wgpu::Buffer>().is_some());
-    }
-
-    fn bytemuck_bytes(f32s: &[f32]) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(f32s.as_ptr() as *const u8, f32s.len() * 4) }
     }
 
     struct StubBackend;

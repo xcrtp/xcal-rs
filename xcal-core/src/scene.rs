@@ -1,189 +1,22 @@
 // scene.rs
 //
 // 纯逻辑组件：marker, mesh, animation + Circle/Path/Line（不含 StrokeSolid/FillSolid，
-// 这些放到 xcal-render） + FunctionX2Y/Sampler/Scene。
+// 这些放到 xcal-render） + FunctionX2Y/Sampler/Scene，以及 3D 类型与图元生成器。
+//
+// 模块组织（文件模块，见 scene/ 目录）：
+// - components：所有 ECS 组件（含 components/3d.rs 的 Camera3D/Mesh3D 等，
+//   以 `three_d` 模块名挂载；components/animation/orbit.rs 的 OrbitAnim）
+// - primitives：内置图元生成器（primitives/cube.rs 的线框/实心立方体）
 
 use std::{any::TypeId, collections::HashMap};
 
 type ResourceMap = HashMap<TypeId, Box<dyn std::any::Any>>;
 
-pub mod components {
-    use std::sync::Arc;
+/// ECS 组件集合（marker / mesh / animation / 2D 图元 / 3D 类型）。
+pub mod components;
 
-    pub mod marker {
-        pub trait Device {}
-        pub struct WGPUDevice;
-        impl Device for WGPUDevice {}
-        pub struct CPUDevice;
-        impl Device for CPUDevice {}
-    }
-
-    pub mod mesh {
-        use crate::types::Vec3;
-
-        pub struct TriangleMesh {
-            pub vertices: Vec<Vec3>,
-            pub indices: Vec<u32>,
-        }
-        pub struct QuadMesh {
-            pub vertices: Vec<Vec3>,
-            pub indices: Vec<u32>,
-        }
-        #[derive(Debug, Clone)]
-        pub struct PathMesh {
-            pub vertices: Vec<Vec3>,
-            pub indices: Vec<u32>,
-        }
-    }
-
-    pub mod animation {
-        #[derive(Clone, Debug)]
-        pub enum ClockState {
-            Step,
-            Suspend,
-            Loop,
-        }
-
-        #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
-        pub struct LocalClock {
-            pub parent: Option<hecs::Entity>,
-            pub parent_offset: f32,
-            pub start: f32,
-            pub speed: f32,
-            pub current: f32,
-            pub state: ClockState,
-        }
-
-        /// 圆形半径 sin 振荡参数：`radius = base + amp * sin(t * omega)`。
-        /// 挂在带 `Circle` 的实体上，由 `AnimationApplySystem` 每帧写入 `Circle.radius`。
-        #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
-        pub struct CircleAnim {
-            pub base: f32,
-            pub amp: f32,
-            pub omega: f32,
-        }
-
-        /// FunctionX2Y 相位滑动参数：`phase = t * omega`，
-        /// 由 `SceneRecordSystem` 采样时取 `x + phase` 实现曲线水平平移。
-        /// `omega` 为常量；`phase` 由 `AnimationApplySystem` 每帧覆盖。
-        #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
-        pub struct PhaseAnim {
-            pub phase: f32,
-            pub omega: f32,
-        }
-    }
-
-    pub use animation::*;
-    pub use marker::*;
-    pub use mesh::*;
-
-    use crate::types::{Vec2, Vec3};
-
-    #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
-    pub struct Circle {
-        #[new(into)]
-        pub center: Vec2,
-        pub radius: f32,
-    }
-
-    #[derive(
-        Debug, Clone, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto,
-    )]
-    pub struct Path {
-        #[new(into_iter = "Vec3")]
-        #[transform(iter)]
-        pub vertices: Vec<Vec3>,
-        #[transform(skip)]
-        pub closed: bool,
-    }
-
-    /// 线段图元：两个端点独立完成坐标转换（派生 [`xcal_core::transform::Transform2DInto`]）。
-    #[derive(
-        Debug, Clone, Copy, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto,
-    )]
-    pub struct Line {
-        #[new(into)]
-        pub a: Vec2,
-        #[new(into)]
-        pub b: Vec2,
-    }
-
-    pub trait SyncSendFn<X, Y>: Sync + Send + Fn(X) -> Y {}
-    impl<X, Y, T: Send + Sync + Fn(X) -> Y> SyncSendFn<X, Y> for T {}
-
-    #[derive(Clone)]
-    pub struct FunctionX2Y<X = f32, Y = f32> {
-        pub f: Arc<dyn SyncSendFn<X, Y>>,
-    }
-    macro_rules! impl_rc_new {
-        ($ty:ident) => {
-            impl<X, Y> $ty<X, Y> {
-                pub fn new(f: impl SyncSendFn<X, Y> + 'static) -> Self {
-                    Self {
-                        f: Arc::new(f) as Arc<dyn SyncSendFn<X, Y>>,
-                    }
-                }
-            }
-        };
-    }
-    impl_rc_new!(FunctionX2Y);
-
-    #[derive(Clone)]
-    pub struct ParameterCurveT2XY<T = f32, XY = (f32, f32)> {
-        pub f: Arc<dyn Fn(T) -> XY>,
-    }
-    impl_rc_new!(ParameterCurveT2XY);
-
-    #[derive(Clone)]
-    pub struct ParameterCurveT2XYZ<T, XYZ = (f32, f32, f32)> {
-        pub f: Arc<dyn Fn(T) -> XYZ>,
-    }
-    impl_rc_new!(ParameterCurveT2XYZ);
-
-    #[derive(Clone, derive_builder::Builder, derive_new::new)]
-    pub struct Sampler1D<T = f32> {
-        pub start: T,
-        pub end: T,
-        pub step: T,
-    }
-    #[derive(Clone, derive_builder::Builder, derive_new::new)]
-    pub struct Sampler2D<T = f32> {
-        pub u_start: T,
-        pub u_end: T,
-        pub u_step: T,
-        pub v_start: T,
-        pub v_end: T,
-        pub v_step: T,
-    }
-
-    #[derive(Clone, derive_builder::Builder, derive_new::new)]
-    pub struct Interpolator<T = f32> {
-        pub f: Arc<dyn Fn(T) -> T>,
-    }
-
-    #[derive(Debug, Clone, derive_builder::Builder)]
-    pub struct Parent {
-        pub parent: hecs::Entity,
-    }
-    #[derive(Debug, Clone, derive_builder::Builder)]
-    pub struct Transform {
-        pub position: glam::Vec3,
-        pub rotation: glam::Quat,
-        pub scale: glam::Vec3,
-    }
-
-    macro_rules! define_comp {
-        ($name:ident, $ty:ty) => {
-            #[derive(
-                derive_more::Deref, derive_more::DerefMut, derive_more::From, derive_more::Into,
-            )]
-            struct $name($ty);
-        };
-    }
-
-    define_comp!(Position2, glam::Vec2);
-    define_comp!(Position3, glam::Vec3);
-}
+/// 内置图元生成器（立方体等）。
+pub mod primitives;
 
 pub mod resource {}
 

@@ -1,11 +1,20 @@
 // render_backend.rs
+//
+// 后端 trait 定义：
+// - GpuHandle：类型擦除的 GPU 资源句柄（无 wgpu 依赖，纯 Any）；
+// - RenderBackend：资源型后端 trait（device/queue/资源创建，wgpu 抽象）；
+// - RenderBackend3D：3D 层提交后端（把 RenderLayer 录制进 command encoder）。
+//
+// 具体实现（EframeWgpuBackend / WgpuBackend3D）位于 xcal-render-backends。
 
 use std::any::{Any, TypeId};
 
-use crate::render_context::RenderContext;
+#[cfg(feature = "wgpu")]
+use crate::render_layer::RenderLayer;
 
 // ─── GpuHandle ────────────────────────────────────────────────────────────
 
+/// 类型擦除的 GPU 资源句柄（buffer / texture / pipeline 等）。
 pub struct GpuHandle(Box<dyn Any + Send + Sync>);
 
 impl GpuHandle {
@@ -34,8 +43,13 @@ impl GpuHandle {
     }
 }
 
-// ─── RenderBackend trait ──────────────────────────────────────────────────
+// ─── RenderBackend trait（资源型，wgpu） ──────────────────────────────────
 
+/// 资源型渲染后端：提供 device/queue 句柄与 GPU 资源创建入口。
+///
+/// 2D/3D 资源缓存（[`crate::ResourceCache`]）通过此 trait 上传资源，
+/// 与具体后端（eframe / headless）解耦。
+#[cfg(feature = "wgpu")]
 pub trait RenderBackend: Send + Sync {
     fn device(&self) -> &wgpu::Device;
 
@@ -62,88 +76,20 @@ pub trait RenderBackend: Send + Sync {
     }
 }
 
-// ─── EframeWgpuBackend ────────────────────────────────────────────────────
+// ─── RenderBackend3D trait ─────────────────────────────────────────────────
 
-pub struct EframeWgpuBackend {
-    ctx: RenderContext,
-    target: Option<wgpu::TextureView>,
-    frame_active: bool,
-}
-
-impl EframeWgpuBackend {
-    pub fn from_render_state(rs: &egui_wgpu::RenderState) -> Self {
-        Self {
-            ctx: RenderContext::from_render_state(rs),
-            target: None,
-            frame_active: false,
-        }
-    }
-
-    pub fn headless() -> crate::render_context::Result<Self> {
-        Ok(Self {
-            ctx: RenderContext::headless()?,
-            target: None,
-            frame_active: false,
-        })
-    }
-
-    pub fn from_context(ctx: RenderContext) -> Self {
-        Self {
-            ctx,
-            target: None,
-            frame_active: false,
-        }
-    }
-
-    pub fn render_context(&self) -> &RenderContext {
-        &self.ctx
-    }
-
-    pub fn is_frame_active(&self) -> bool {
-        self.frame_active
-    }
-}
-
-impl RenderBackend for EframeWgpuBackend {
-    fn device(&self) -> &wgpu::Device {
-        self.ctx.device()
-    }
-
-    fn queue(&self) -> &wgpu::Queue {
-        self.ctx.queue()
-    }
-
-    fn target_format(&self) -> wgpu::TextureFormat {
-        self.ctx.target_format()
-    }
-
-    fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> GpuHandle {
-        GpuHandle::new(self.ctx.device().create_buffer(desc))
-    }
-
-    fn create_texture(&self, desc: &wgpu::TextureDescriptor<'_>) -> GpuHandle {
-        GpuHandle::new(self.ctx.device().create_texture(desc))
-    }
-
-    fn create_pipeline(&self, desc: &wgpu::RenderPipelineDescriptor<'_>) -> GpuHandle {
-        GpuHandle::new(self.ctx.device().create_render_pipeline(desc))
-    }
-
-    fn set_target(&mut self, view: Option<wgpu::TextureView>) {
-        self.target = view;
-    }
-
-    fn target(&self) -> Option<&wgpu::TextureView> {
-        self.target.as_ref()
-    }
-
-    fn begin_frame(&mut self) {
-        self.frame_active = true;
-    }
-
-    fn end_frame(&mut self) {
-        self.frame_active = false;
-    }
+/// 3D 层提交后端：把一个 [`RenderLayer`] 录制进 command encoder。
+///
+/// 与 2D 的 [`RenderBackend`] 独立：3D 路径以「层」为提交单元
+/// （相机 + 视口 + 绘制队列 + 渲染目标），自包含地 begin/end render pass。
+#[cfg(feature = "wgpu")]
+pub trait RenderBackend3D: Send + Sync {
+    /// 将一个 RenderLayer 提交到 GPU：
+    /// begin render pass（目标 = layer.target，clear 黑色）→
+    /// 绘制 `layer.draw_queue` 全部内容 → end pass。
+    ///
+    /// 调用方负责提交 encoder（`queue.submit`）。
+    fn submit_layer(&self, layer: &RenderLayer, encoder: &mut wgpu::CommandEncoder);
 }
 
 #[cfg(test)]
@@ -153,9 +99,8 @@ mod tests {
     fn assert_send_sync<T: Send + Sync>() {}
 
     #[test]
-    fn test_backend_types_are_send_sync() {
+    fn test_handle_types_are_send_sync() {
         assert_send_sync::<GpuHandle>();
-        assert_send_sync::<EframeWgpuBackend>();
     }
 
     #[test]
@@ -177,102 +122,5 @@ mod tests {
     fn test_gpu_handle_into_inner_wrong_type() {
         let handle = GpuHandle::new("hello".to_string());
         assert_eq!(handle.into_inner::<u32>(), None);
-    }
-
-    #[test]
-    fn test_headless_backend_lifecycle() {
-        let Ok(mut backend) = EframeWgpuBackend::headless() else {
-            return;
-        };
-
-        assert!(backend.target().is_none());
-        assert!(!backend.is_frame_active());
-
-        backend.begin_frame();
-        assert!(backend.is_frame_active());
-
-        let buf = backend.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("test-buffer"),
-            size: 16,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        assert!(buf.downcast_ref::<wgpu::Buffer>().is_some());
-
-        let tex = backend.create_texture(&wgpu::TextureDescriptor {
-            label: Some("test-texture"),
-            size: wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: backend.target_format(),
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let texture = tex.downcast_ref::<wgpu::Texture>().expect("texture");
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        backend.set_target(Some(view));
-        assert!(backend.target().is_some());
-
-        backend.end_frame();
-        assert!(!backend.is_frame_active());
-
-        backend.set_target(None);
-        assert!(backend.target().is_none());
-    }
-
-    #[test]
-    fn test_headless_backend_create_pipeline() {
-        let Ok(backend) = EframeWgpuBackend::headless() else {
-            return;
-        };
-
-        let source = r#"
-            @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
-                var p = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-                return vec4f(p[i], 0.0, 1.0);
-            }
-            @fragment fn fs() -> @location(0) vec4f {
-                return vec4f(1.0, 0.0, 0.0, 1.0);
-            }
-        "#;
-        let shader = backend
-            .device()
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("test-shader"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-
-        let pipeline = backend.create_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("test-pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: backend.target_format(),
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        assert!(pipeline.downcast_ref::<wgpu::RenderPipeline>().is_some());
     }
 }

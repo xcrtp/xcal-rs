@@ -1,7 +1,9 @@
 [workspace]
 members = [
     "xcal-core",
+    "xcal-geometry",
     "xcal-render",
+    "xcal-render-backends",
     "xcal-egui",
     "xcal-app",
     "xcal-macro",
@@ -33,9 +35,14 @@ nalgebra = "0.33"
 glam = "0.33.6"
 pollster = "0.3"
 
-serde = { version = "1.0" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
 serde_yaml = { version = "1.0" }
+
+# 可观测性（telemetry feature 下启用）
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 derive_more = { version = "2.1.1", features = ["full"] }
 thiserror = "2.0.20"
 smart-default = "0.7.1"

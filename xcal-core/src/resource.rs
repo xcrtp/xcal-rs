@@ -73,6 +73,11 @@ impl Resources {
         self.data.contains_key(&TypeId::of::<R>())
     }
 
+    /// 枚举当前已插入资源的 `TypeId`（供 telemetry 快照使用）。
+    pub fn type_ids(&self) -> impl Iterator<Item = TypeId> + '_ {
+        self.data.keys().copied()
+    }
+
     pub fn len(&self) -> usize {
         self.data.len()
     }

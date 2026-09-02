@@ -24,8 +24,8 @@ use xcal_render::components::{
     StrokeSolid,
 };
 use xcal_render::{DrawQueue, ZIndex, record_scene};
+use xcal_render_backends::EguiPainter;
 
-use crate::egui_support::Egui2dRender;
 use crate::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 
 // ─── 从 Resources 提取 EguiFrameContext ────────────────────────────────────
@@ -321,6 +321,6 @@ impl System for RenderSubmitSystem {
             return;
         };
         let painter = ui.painter_at(view_rect.into_egui_rect());
-        queue.execute(&Egui2dRender::new(&painter));
+        queue.execute(&EguiPainter::new(&painter));
     }
 }

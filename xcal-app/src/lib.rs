@@ -11,7 +11,10 @@ use std::sync::Arc;
 pub use xcal_core::Result;
 use xcal_core::errors::Error;
 use xcal_core::resource::Resources;
+use xcal_core::scene::components::{Camera3D, OrbitAnim, Projection};
+use xcal_core::scene::primitives::wireframe_cube;
 use xcal_core::scheduler::{Phase, Scheduler};
+use xcal_core::types::Color32;
 use xcal_egui::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 use xcal_egui::systems::{
     AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
@@ -20,11 +23,18 @@ use xcal_egui::systems::{
 use xcal_render::components::{
     Circle, CircleAnim, ClockState, FunctionX2Y, LocalClock, PhaseAnim, Sampler1D, StrokeSolid,
 };
-use xcal_render::{DrawQueue, RenderContext, scene::Scene};
+use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
+use xcal_render_backends::{RenderContext, WgpuBackend3D};
+
+mod health;
+mod systems_3d;
+use health::HealthOverlay;
+use systems_3d::{OrbitApplySystem, RenderSubmit3DSystem, SceneRecord3DSystem};
 
 pub struct App {
     scheduler: Scheduler,
     render_ctx: RenderContext,
+    health: HealthOverlay,
 }
 
 impl App {
@@ -38,10 +48,32 @@ impl App {
                 .ok_or(Error::InitializationError(
                     "Wgpu render state not available".to_string(),
                 ))?;
+
+            // 3D 后端：pipeline 等 GPU 资源存入 egui-wgpu Renderer 的
+            // callback_resources（TypeMap），Layer3DCallback 在 prepare/paint
+            // 阶段按需取用（回调本身为 &self，不能持有重建中的 GPU 资源）。
+            let backend_3d =
+                WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
+            rs.renderer.write().callback_resources.insert(backend_3d);
+
             RenderContext::from_render_state(&rs)
         };
 
         let mut scene = Scene::new();
+
+        // ── 3D 场景：白色线框立方体 ──────────────────────────────
+        scene.spawn((wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),));
+
+        // 3D 相机 + 轨道动画（eye 每帧由 OrbitApplySystem 覆盖，初始值仅占位）。
+        scene.spawn((
+            Camera3D::new(
+                glam::Vec3::new(0.0, 0.0, 5.0),
+                glam::Vec3::ZERO,
+                glam::Vec3::Y,
+                Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
+            ),
+            OrbitAnim::new(0.5, 5.0, glam::Vec3::Y, 0.0),
+        ));
 
         scene.spawn((
             Circle::new((0.0, 0.0), 1.0),
@@ -67,6 +99,7 @@ impl App {
         resources.insert(UiConfig::default());
         resources.insert(ViewRect::default());
         resources.insert(DrawQueue::new());
+        resources.insert(DrawQueue3D::new());
         resources.insert(render_ctx.clone());
 
         let mut scheduler = Scheduler::new(world, resources);
@@ -86,18 +119,27 @@ impl App {
 
         // SceneSync：ViewRectUpdate 写 ViewRect，AnimationApply 只读 TimeState，
         // 两者访问集不相交（writes ∩ reads∪writes = ∅），无冲突。
+        // OrbitApply 同样只读 TimeState（Camera3D/OrbitAnim 是 hecs 组件）。
         scheduler.add_system(Phase::SceneSync, ViewRectUpdateSystem);
         scheduler.add_system(Phase::SceneSync, AnimationApplySystem);
+        scheduler.add_system(Phase::SceneSync, OrbitApplySystem);
 
         scheduler.add_system(Phase::Prepare, GridBuildSystem);
 
+        // RenderCommit：2D SceneRecord 写 DrawQueue(2D)，
+        // 3D SceneRecord3D 写 DrawQueue3D，类型不相交。
         scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
+        scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
 
+        // FrameEnd：2D RenderSubmit 读写 DrawQueue(2D)；
+        // 3D RenderSubmit3D 只读 EguiFrameContext + DrawQueue3D（回调 GPU 提交）。
         scheduler.add_system(Phase::FrameEnd, RenderSubmitSystem);
+        scheduler.add_system(Phase::FrameEnd, RenderSubmit3DSystem);
 
         Ok(Self {
             scheduler,
             render_ctx,
+            health: HealthOverlay::new(),
         })
     }
 
@@ -140,6 +182,39 @@ impl eframe::App for App {
             .insert(EguiFrameContext::new(ui));
 
         self.scheduler.run_frame(dt);
+
+        // ── 可观测性：F1 切换 health overlay，F10 导出 World 快照 ──
+        if ui.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.health.toggle();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::F10)) {
+            let tick = self.scheduler.tick();
+            match self.health.dump_snapshot(
+                self.scheduler.world(),
+                self.scheduler.resources(),
+                tick,
+            ) {
+                Ok(path) => tracing::info!(tick, path = %path.display(), "world snapshot exported"),
+                Err(e) => tracing::error!(%e, tick, "snapshot export failed"),
+            }
+        }
+        let draw_calls = self
+            .scheduler
+            .resources()
+            .get::<DrawQueue>()
+            .map_or(0, |q| q.len())
+            + self
+                .scheduler
+                .resources()
+                .get::<DrawQueue3D>()
+                .map_or(0, |q| q.mesh_count() + q.line_count());
+        self.health.update(
+            dt,
+            self.scheduler.frame_report(),
+            self.scheduler.world().len() as usize,
+            draw_calls,
+        );
+        self.health.show(ui);
 
         self.scheduler.resources_mut().remove::<EguiFrameContext>();
 

@@ -180,6 +180,7 @@ where
 mod tests {
     use super::*;
     use crate::access::Access;
+    #[cfg(debug_assertions)]
     use crate::context::BorrowTracker;
     use crate::scheduler::{Phase, Scheduler};
 
