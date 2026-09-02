@@ -44,6 +44,12 @@ impl UndoStack {
         self.redo.clear();
     }
 
+    /// Peek the most recent inverse without popping it (used to coalesce
+    /// high-frequency commands like per-frame node drags).
+    pub fn last(&self) -> Option<&Command> {
+        self.undo.last()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

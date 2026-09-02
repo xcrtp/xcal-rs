@@ -9,21 +9,27 @@
 //! `xcal-render` / `xcal-app` / `xcal-macro`.
 //!
 //! Module map:
-//! - `view`: `NodeView` / `DefaultNodeView` card appearance (stage 7)
-//! - `edge_render`: `EdgeRenderer`, bezier/orthogonal painters (stage 7)
-//! - `painter`: `GraphPainter` full-scene painting (stage 7)
-//! - `canvas`: `GraphCanvas` pan/zoom viewport transform (stage 8)
-//! - `input`: `InputHandler` pointer/keyboard -> commands (stage 8)
-//! - `app`: `NodeGraphApp` per-frame driver (stage 8)
+//! - `view`: `NodeView` / `DefaultNodeView` card appearance
+//! - `edge_render`: `EdgeRenderer`, bezier/orthogonal painters
+//! - `painter`: `GraphPainter` full-scene painting
+//! - `canvas`: `GraphCanvas` pan/zoom viewport transform
+//! - `input`: `InputHandler` pointer/keyboard -> commands
+//! - `app`: `NodeGraphApp` per-frame driver
 
 #![forbid(unsafe_code)]
 
+pub mod app;
+pub mod canvas;
 pub mod edge_render;
+pub mod input;
 pub mod painter;
 pub mod view;
 
+pub use app::NodeGraphApp;
+pub use canvas::GraphCanvas;
 pub use edge_render::{
     ArrowStyle, BezierRenderer, EdgeRenderer, EdgeStyle, OrthogonalRenderer, StrokeKind,
 };
+pub use input::InputHandler;
 pub use painter::GraphPainter;
 pub use view::{DefaultNodeView, NodeView};

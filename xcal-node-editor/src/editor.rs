@@ -111,9 +111,18 @@ impl Editor {
     pub fn apply(&mut self, cmd: Command) -> Result<(), EditorError> {
         let inverse = self.execute(cmd)?;
         if let Some(inv) = inverse {
-            self.undo_stack.push(inv);
-            self.undo_stack.clear_redo();
-            self.redo_source_hint.clear();
+            // Coalesce a live drag: consecutive MoveNode commands for the
+            // same node keep the first inverse (position before the drag),
+            // so one undo reverts the whole gesture.
+            let coalesced = matches!(&inv, Command::MoveNode { node, .. }
+            if self.undo_stack.last().is_some_and(
+                |c| matches!(c, Command::MoveNode { node: n, .. } if n == node)
+            ));
+            if !coalesced {
+                self.undo_stack.push(inv);
+                self.undo_stack.clear_redo();
+                self.redo_source_hint.clear();
+            }
         }
         Ok(())
     }
