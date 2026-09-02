@@ -30,6 +30,8 @@ pub mod event;
 pub mod geometry;
 pub mod layout;
 pub mod socket_layout;
+pub mod undo;
+pub mod validation;
 
 #[cfg(test)]
 mod test_util;
@@ -42,3 +44,5 @@ pub use event::EditorEvent;
 pub use geometry::{HitTarget, Rect, Vec2};
 pub use layout::{FreeLayout, LayoutStrategy, NodeSizeMap};
 pub use socket_layout::{DefaultSocketLayout, SocketLayout};
+pub use undo::UndoStack;
+pub use validation::ConnectionValidator;

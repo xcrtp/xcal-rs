@@ -8,7 +8,9 @@
 use std::collections::{HashSet, VecDeque};
 
 use glam::Vec2;
-use xcal_node::{EdgeId, Graph, InputSocketId, NodeId, OutputSocketId, SimpleGraph, UnitEdge};
+use xcal_node::{
+    ConnectError, EdgeId, Graph, InputSocketId, NodeId, OutputSocketId, SimpleGraph, UnitEdge,
+};
 
 use crate::command::Command;
 use crate::edge_geom::{EdgeGeometry, EdgePath};
@@ -17,6 +19,8 @@ use crate::event::EditorEvent;
 use crate::geometry::{HitTarget, Rect, SOCKET_HIT_RADIUS};
 use crate::layout::{LayoutStrategy, NodeSizeMap};
 use crate::socket_layout::{DefaultSocketLayout, SocketLayout};
+use crate::undo::UndoStack;
+use crate::validation::ConnectionValidator;
 
 /// Default card size when the UI layer has not measured a node yet.
 pub const DEFAULT_NODE_SIZE: Vec2 = Vec2::new(160.0, 80.0);
@@ -41,12 +45,10 @@ pub struct Editor {
     selection: HashSet<NodeId>,
     pending: Option<PendingConnection>,
     events: VecDeque<EditorEvent>,
-    // Wired up in stage 6 (undo/redo of node add/remove stays out of scope
-    // until stage 10).
-    #[allow(dead_code)]
-    undo: Vec<Command>,
-    #[allow(dead_code)]
-    redo: Vec<Command>,
+    undo_stack: UndoStack,
+    /// Source sockets parallel to the undo stack's redo entries: a replayed
+    /// `CompleteConnection` has no live drag, so its source is carried here.
+    redo_source_hint: Vec<Option<OutputSocketId>>,
 }
 
 impl Editor {
@@ -64,8 +66,8 @@ impl Editor {
             selection: HashSet::new(),
             pending: None,
             events: VecDeque::new(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo_stack: UndoStack::new(),
+            redo_source_hint: Vec::new(),
         }
     }
 
@@ -104,13 +106,85 @@ impl Editor {
         &self.sizes
     }
 
-    /// The single write entry point: apply a command, emit events.
+    /// The single write entry point: apply a command, emit events and record
+    /// the inverse on the undo stack (clearing redo on new actions).
     pub fn apply(&mut self, cmd: Command) -> Result<(), EditorError> {
+        let inverse = self.execute(cmd)?;
+        if let Some(inv) = inverse {
+            self.undo_stack.push(inv);
+            self.undo_stack.clear_redo();
+            self.redo_source_hint.clear();
+        }
+        Ok(())
+    }
+
+    /// Undo the most recent history-worthy action.
+    pub fn undo(&mut self) -> Result<(), EditorError> {
+        let Some(cmd) = self.undo_stack.undo() else {
+            return Ok(());
+        };
+        // Undoing a connect replays a `Disconnect(edge)`; its source feeds
+        // the redo-side CompleteConnection (no live drag available).
+        let connect_source = match &cmd {
+            Command::Disconnect(edge) => Some(edge.source),
+            _ => None,
+        };
+        let inverse = self.execute(cmd)?;
+        if let Some(inv) = inverse {
+            let hint = match &inv {
+                Command::CompleteConnection(_) => connect_source,
+                _ => None,
+            };
+            self.undo_stack.push_redo(inv);
+            self.redo_source_hint.push(hint);
+        }
+        Ok(())
+    }
+
+    /// Redo the most recently undone action.
+    pub fn redo(&mut self) -> Result<(), EditorError> {
+        let Some(cmd) = self.undo_stack.redo() else {
+            return Ok(());
+        };
+        let hint = self.redo_source_hint.pop().flatten();
+        // Replaying a connection has no live drag: re-arm pending with the
+        // original source before executing CompleteConnection.
+        if let Command::CompleteConnection(to) = &cmd
+            && self.pending.is_none()
+            && let Some(from) = hint
+        {
+            self.pending = Some(PendingConnection {
+                from,
+                cursor: self.input_socket_pos(*to).unwrap_or(Vec2::ZERO),
+                hover_target: None,
+            });
+        }
+        let inverse = self.execute(cmd)?;
+        if let Some(inv) = inverse {
+            self.undo_stack.push(inv);
+        }
+        Ok(())
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.undo_stack.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.undo_stack.can_redo()
+    }
+
+    /// Execute a command and return its inverse command (if the command is
+    /// undoable). Connection failures are reported as `ConnectionRejected`
+    /// events rather than errors so the UI never has to panic.
+    fn execute(&mut self, cmd: Command) -> Result<Option<Command>, EditorError> {
         match cmd {
+            // TODO(阶段10): 节点增删撤销需快照 Box<dyn Node> 并处理 NodeIdRemapped
             Command::AddNode { node, at } => {
                 let id = self.graph.add_node(node);
                 self.layout.set_position(id, at);
                 self.events.push_back(EditorEvent::NodeAdded(id));
+                Ok(None)
             }
             Command::RemoveNode(node) => {
                 if self.graph.remove_node(node).is_some() {
@@ -119,13 +193,23 @@ impl Editor {
                     self.selection.remove(&node);
                     self.events.push_back(EditorEvent::NodeRemoved(node));
                 }
+                Ok(None)
             }
             Command::MoveNode { node, to } => {
+                let from = self.layout.position_of(node);
                 self.layout.set_position(node, to);
                 self.events.push_back(EditorEvent::NodeMoved { node, to });
+                // Only record when the position actually changed.
+                Ok(from
+                    .filter(|p| *p != to)
+                    .map(|p| Command::MoveNode { node, to: p }))
             }
             Command::SetNodeSize { node, size } => {
+                let old = self.sizes.get(&node).copied();
                 self.sizes.insert(node, size);
+                Ok(old
+                    .filter(|p| *p != size)
+                    .map(|p| Command::SetNodeSize { node, size: p }))
             }
             Command::BeginConnection(source) => {
                 let exists = self
@@ -141,32 +225,48 @@ impl Editor {
                     cursor: self.output_socket_pos(source).unwrap_or(Vec2::ZERO),
                     hover_target: None,
                 });
+                Ok(None)
             }
             Command::UpdateConnectionDrag(pos) => {
                 if let Some(pending) = self.pending.as_mut() {
                     pending.cursor = pos;
                 }
+                // Highlight a legal drop target under the cursor.
+                let from = self.pending.map(|p| p.from);
+                let hover = from.and_then(|src| {
+                    if let HitTarget::InputSocket(id) = self.hit_test(pos) {
+                        ConnectionValidator::check_types(self.graph.as_ref(), src, id)
+                            .ok()
+                            .map(|_| id)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(pending) = self.pending.as_mut() {
+                    pending.hover_target = hover;
+                }
+                Ok(None)
             }
             Command::CompleteConnection(target) => {
-                let pending = self
+                let from = self
                     .pending
                     .take()
-                    .ok_or(EditorError::NoPendingConnection)?;
-                // Stage 6 inserts type + cycle validation before this call;
-                // failures must surface as `ConnectionRejected` events.
-                self.graph
-                    .connect_with_data(pending.from, target, Box::new(UnitEdge))?;
-                self.events.push_back(EditorEvent::Connected(EdgeId {
-                    source: pending.from,
-                    target,
-                }));
+                    .ok_or(EditorError::NoPendingConnection)?
+                    .from;
+                self.connect_sockets(from, target)
             }
             Command::CancelConnection => {
                 self.pending = None;
+                Ok(None)
             }
             Command::Disconnect(edge) => {
                 if self.graph.disconnect(edge.source, edge.target).is_some() {
                     self.events.push_back(EditorEvent::Disconnected(edge));
+                    // Inverse replays CompleteConnection(edge.target); the
+                    // source is re-armed by the undo/redo driver.
+                    Ok(Some(Command::CompleteConnection(edge.target)))
+                } else {
+                    Ok(None)
                 }
             }
             Command::Select { node, additive } => {
@@ -175,25 +275,58 @@ impl Editor {
                 }
                 self.selection.insert(node);
                 self.events.push_back(EditorEvent::SelectionChanged);
+                Ok(None)
             }
             Command::ClearSelection => {
                 self.selection.clear();
                 self.events.push_back(EditorEvent::SelectionChanged);
+                Ok(None)
             }
             Command::SetLayout(strategy) => {
                 self.layout = strategy;
                 self.events.push_back(EditorEvent::LayoutChanged);
+                Ok(None)
             }
             Command::SetEdgeGeometry(geom) => {
                 self.edge_geom = geom;
                 self.events.push_back(EditorEvent::EdgeGeometryChanged);
+                Ok(None)
             }
             Command::RecomputeLayout => {
                 self.layout.recompute(self.graph.as_ref(), &self.sizes);
                 self.events.push_back(EditorEvent::LayoutChanged);
+                Ok(None)
             }
         }
-        Ok(())
+    }
+
+    /// Validate (type + cycle + graph rules) and commit a connection. Any
+    /// failure emits `ConnectionRejected` and leaves the graph untouched.
+    fn connect_sockets(
+        &mut self,
+        from: OutputSocketId,
+        to: InputSocketId,
+    ) -> Result<Option<Command>, EditorError> {
+        let reject = |reason: ConnectError| EditorEvent::ConnectionRejected { from, to, reason };
+
+        if let Err(reason) = ConnectionValidator::check_types(self.graph.as_ref(), from, to) {
+            self.events.push_back(reject(reason));
+            return Ok(None);
+        }
+        if let Err(reason) = ConnectionValidator::check_no_cycle(self.graph.as_mut(), from, to) {
+            self.events.push_back(reject(reason));
+            return Ok(None);
+        }
+        if let Err(reason) = self.graph.connect_with_data(from, to, Box::new(UnitEdge)) {
+            self.events.push_back(reject(reason));
+            return Ok(None);
+        }
+        let edge = EdgeId {
+            source: from,
+            target: to,
+        };
+        self.events.push_back(EditorEvent::Connected(edge));
+        Ok(Some(Command::Disconnect(edge)))
     }
 
     /// Drain queued events (typically once per UI frame).
@@ -493,5 +626,236 @@ mod tests {
         }
         editor.apply(Command::CancelConnection).unwrap();
         assert!(editor.pending_path().is_none());
+    }
+
+    // ---------- Stage 6: validation + undo/redo ----------
+
+    /// Helper: connect output 0 of `from` to input 0 of `to` via the full
+    /// drag command sequence, draining events.
+    fn connect(editor: &mut Editor, from: NodeId, to: NodeId) {
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(from, 0)))
+            .unwrap();
+        editor
+            .apply(Command::CompleteConnection(InputSocketId::new(to, 0)))
+            .unwrap();
+        editor.drain_events().for_each(drop);
+    }
+
+    fn rejection_reason(events: &[EditorEvent]) -> Option<&ConnectError> {
+        events.iter().find_map(|e| match e {
+            EditorEvent::ConnectionRejected { reason, .. } => Some(reason),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn connect_compatible_types_succeeds() {
+        let mut editor = make_editor();
+        let a = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let b = add_node(&mut editor, Vec2::new(400.0, 0.0));
+        connect(&mut editor, a, b);
+        assert_eq!(editor.all_edges().len(), 1);
+    }
+
+    #[test]
+    fn connect_type_mismatch_is_rejected() {
+        let mut editor = make_editor();
+        // f32 source: 1 input + 1 output.
+        let src_id = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        // vec2 sink: 1 input, no output.
+        editor
+            .apply(Command::AddNode {
+                node: Box::new(TestNode::new("vec2", 1, 0)),
+                at: Vec2::new(400.0, 0.0),
+            })
+            .unwrap();
+        let sink_id = editor
+            .drain_events()
+            .find_map(|e| match e {
+                EditorEvent::NodeAdded(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(src_id, 0)))
+            .unwrap();
+        editor
+            .apply(Command::CompleteConnection(InputSocketId::new(sink_id, 0)))
+            .unwrap();
+
+        let events: Vec<_> = editor.drain_events().collect();
+        match rejection_reason(&events) {
+            Some(ConnectError::TypeIncompatible { from, to }) => {
+                assert_eq!(from, "f32");
+                assert_eq!(to, "vec2");
+            }
+            other => panic!("expected TypeIncompatible, got {other:?}"),
+        }
+        assert!(editor.all_edges().is_empty());
+    }
+
+    #[test]
+    fn connect_creating_cycle_is_rejected() {
+        let mut editor = make_editor();
+        let a = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let b = add_node(&mut editor, Vec2::new(300.0, 0.0));
+        let c = add_node(&mut editor, Vec2::new(600.0, 0.0));
+        connect(&mut editor, a, b);
+        connect(&mut editor, b, c);
+        assert_eq!(editor.all_edges().len(), 2);
+
+        // c -> a would close the loop a -> b -> c -> a.
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(c, 0)))
+            .unwrap();
+        editor
+            .apply(Command::CompleteConnection(InputSocketId::new(a, 0)))
+            .unwrap();
+        let events: Vec<_> = editor.drain_events().collect();
+        assert!(matches!(
+            rejection_reason(&events),
+            Some(ConnectError::CycleDetected)
+        ));
+        assert_eq!(editor.all_edges().len(), 2);
+    }
+
+    #[test]
+    fn second_connection_into_single_input_is_rejected() {
+        let mut editor = make_editor();
+        let a = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let b = add_node(&mut editor, Vec2::new(300.0, 0.0));
+        let c = add_node(&mut editor, Vec2::new(600.0, 0.0));
+        connect(&mut editor, a, b);
+
+        // c -> b: b's input already carries a -> b.
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(c, 0)))
+            .unwrap();
+        editor
+            .apply(Command::CompleteConnection(InputSocketId::new(b, 0)))
+            .unwrap();
+        let events: Vec<_> = editor.drain_events().collect();
+        assert!(matches!(
+            rejection_reason(&events),
+            Some(ConnectError::InputAlreadyConnected(_))
+        ));
+        // The original edge must survive the trial rollback.
+        let edges = editor.all_edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, OutputSocketId::new(a, 0));
+        assert_eq!(edges[0].target, InputSocketId::new(b, 0));
+    }
+
+    #[test]
+    fn drag_hover_highlights_only_compatible_inputs() {
+        let mut editor = make_editor();
+        let src = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let f32_sink = add_node(&mut editor, Vec2::new(300.0, 200.0));
+        editor
+            .apply(Command::AddNode {
+                node: Box::new(TestNode::new("vec2", 1, 0)),
+                at: Vec2::new(0.0, 300.0),
+            })
+            .unwrap();
+        let vec2_sink = editor
+            .drain_events()
+            .find_map(|e| match e {
+                EditorEvent::NodeAdded(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(src, 0)))
+            .unwrap();
+
+        // Over the f32 input → hover armed.
+        let p = editor
+            .input_socket_pos(InputSocketId::new(f32_sink, 0))
+            .unwrap();
+        editor.apply(Command::UpdateConnectionDrag(p)).unwrap();
+        assert_eq!(
+            editor.pending().unwrap().hover_target,
+            Some(InputSocketId::new(f32_sink, 0))
+        );
+
+        // Over the vec2 input → no hover (type mismatch).
+        let p = editor
+            .input_socket_pos(InputSocketId::new(vec2_sink, 0))
+            .unwrap();
+        editor.apply(Command::UpdateConnectionDrag(p)).unwrap();
+        assert_eq!(editor.pending().unwrap().hover_target, None);
+    }
+
+    #[test]
+    fn undo_redo_move_node_restores_positions() {
+        let mut editor = make_editor();
+        let id = add_node(&mut editor, Vec2::new(30.0, 40.0));
+        let new_pos = Vec2::new(150.0, 90.0);
+        editor
+            .apply(Command::MoveNode {
+                node: id,
+                to: new_pos,
+            })
+            .unwrap();
+        assert_eq!(editor.node_rect(id).unwrap().min, new_pos);
+        assert!(editor.can_undo());
+
+        editor.undo().unwrap();
+        assert_eq!(editor.node_rect(id).unwrap().min, Vec2::new(30.0, 40.0));
+        assert!(editor.can_redo());
+
+        editor.redo().unwrap();
+        assert_eq!(editor.node_rect(id).unwrap().min, new_pos);
+    }
+
+    #[test]
+    fn undo_redo_connection_removes_and_restores_edge() {
+        let mut editor = make_editor();
+        let a = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let b = add_node(&mut editor, Vec2::new(400.0, 0.0));
+        connect(&mut editor, a, b);
+        assert_eq!(editor.all_edges().len(), 1);
+
+        editor.undo().unwrap();
+        editor.drain_events().for_each(drop);
+        assert!(editor.all_edges().is_empty());
+        assert!(editor.can_redo());
+
+        editor.redo().unwrap();
+        let edges = editor.all_edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source, OutputSocketId::new(a, 0));
+        assert_eq!(edges[0].target, InputSocketId::new(b, 0));
+        assert!(
+            editor
+                .drain_events()
+                .any(|e| matches!(e, EditorEvent::Connected(_)))
+        );
+    }
+
+    #[test]
+    fn new_action_clears_redo_stack() {
+        let mut editor = make_editor();
+        let a = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        editor
+            .apply(Command::MoveNode {
+                node: a,
+                to: Vec2::new(10.0, 10.0),
+            })
+            .unwrap();
+        editor.undo().unwrap();
+        assert!(editor.can_redo());
+        // A new move (not the redone one) invalidates redo history.
+        editor
+            .apply(Command::MoveNode {
+                node: a,
+                to: Vec2::new(20.0, 20.0),
+            })
+            .unwrap();
+        assert!(!editor.can_redo());
+        assert!(editor.can_undo());
     }
 }

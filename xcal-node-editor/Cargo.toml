@@ -7,6 +7,7 @@ description = "Pure-logic node editor state machine for xcal-node (no UI depende
 
 [dependencies]
 xcal-node = { path = "../xcal-node" }
+xcal-graph-algo = { path = "../xcal-graph-algo" }
 glam = { workspace = true }
 thiserror.workspace = true
 
