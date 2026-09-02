@@ -12,3 +12,6 @@ egui = { workspace = true }
 glam = { workspace = true }
 
 [dev-dependencies]
+eframe = { workspace = true, features = ["default_fonts"] }
+xcal-node = { path = "../xcal-node" }
+glam = { workspace = true }
