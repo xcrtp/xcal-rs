@@ -4,9 +4,10 @@
 // System 之间只通过 World 组件和 Resources 通信，不直接互调。
 //
 // 设计说明：
-// ExecutorContext 把所有字段平铺（world / commands / resources / ui / dt / time），
-// 这样 Rust 的 split borrow 机制允许 System 同时 &mut 多个不同字段
-// （如 ui_mut + resources_mut 同时存在）。
+// ExecutorContext 把所有字段平铺（world / commands / resources / dt / time），
+// 这样 Rust 的 split borrow 机制允许 System 同时 &mut 多个不同字段。
+// egui UI 已降级为 Resource（EguiFrameContext），不再出现在 ExecutorContext 中，
+// 使 executor 模块不再直接依赖 egui。
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -43,6 +44,14 @@ impl Resources {
             .and_then(|boxed| boxed.downcast_mut::<T>())
     }
 
+    /// 移除并返回指定类型的资源。
+    pub fn remove<T: 'static>(&mut self) -> Option<T> {
+        self.data
+            .remove(&TypeId::of::<T>())
+            .and_then(|boxed| boxed.downcast::<T>().ok())
+            .map(|b| *b)
+    }
+
     pub fn len(&self) -> usize {
         self.data.len()
     }
@@ -60,40 +69,21 @@ impl Resources {
 /// 同一个 `&mut ExecutorContext` 上可以同时独立地 &mut 不同字段。
 ///
 /// 借用规则（Rust 编译器会自动检查）：
-/// - 同时 `&mut resources` + `&mut ui` ✓（不同字段）
 /// - 同时 `&mut resources` + `&mut world` ✓（不同字段）
 /// - 同类型 Resource 不能同时 & 和 &mut —— 自行按顺序管理
+///
+/// egui UI 不再直接出现在此结构中，而是作为 `EguiFrameContext` Resource
+/// 存储在 `Resources` 里，System 通过 `ctx.resources.borrow_mut::<EguiFrameContext>()`
+/// 获取。
 pub struct ExecutorContext<'frame> {
     pub world: &'frame mut hecs::World,
     pub commands: &'frame mut hecs::CommandBuffer,
     pub resources: &'frame mut Resources,
-    #[cfg(feature = "egui")]
-    pub ui: Option<&'frame mut egui::Ui>,
     pub dt: f32,
     pub time: f32,
 }
 
 impl<'frame> ExecutorContext<'frame> {
-    #[cfg(feature = "egui")]
-    pub fn new(
-        world: &'frame mut hecs::World,
-        commands: &'frame mut hecs::CommandBuffer,
-        resources: &'frame mut Resources,
-        dt: f32,
-        time: f32,
-        ui: Option<&'frame mut egui::Ui>,
-    ) -> Self {
-        Self {
-            world,
-            commands,
-            resources,
-            dt,
-            time,
-            ui,
-        }
-    }
-
-    #[cfg(not(feature = "egui"))]
     pub fn new(
         world: &'frame mut hecs::World,
         commands: &'frame mut hecs::CommandBuffer,
@@ -212,8 +202,6 @@ mod tests {
             &mut resources,
             0.016,
             0.0,
-            #[cfg(feature = "egui")]
-            None,
         );
 
         // split borrow：同时 &mut world 和 &mut resources

@@ -3,10 +3,10 @@
 // App 只负责初始化：构建 World、注册 Resources、按阶段挂载 System，
 // 然后每帧调用 Scheduler。业务逻辑全部下沉到各个 System 实现中。
 //
-// 借用规则：ExecutorContext 所有字段平铺，Rust split borrow 允许
-// 同时 &mut ctx.ui + &mut ctx.resources + &mut ctx.world（不同字段）。
-// System 内必须直接访问平铺字段（如 ctx.resources.borrow_mut::<T>()），
-// 不能通过 &mut self 方法间接访问，否则编译器无法追踪到具体字段。
+// egui UI 已降级为 Resource（EguiFrameContext），不再出现在 ExecutorContext 中。
+// System 通过 ctx.resources.borrow::<EguiFrameContext>() 提取原始指针，
+// 不可变借用在提取后立即释放，随后可以安全地 borrow_mut 其他 Resource。
+// 这种模式绕过了"同一个 HashMap 不能同时 & 和 &mut"的限制。
 
 use std::sync::Arc;
 
@@ -24,6 +24,48 @@ use crate::{
     types::{Camera2D, Rect, Vec3},
     Error, Result,
 };
+
+// ─── EguiFrameContext：UI 降级为 Resource ──────────────────────────────────
+
+/// egui 帧上下文，作为 Resource 存储在 [`Resources`] 中。
+///
+/// 使用原始指针实现 `'static + Send + Sync`，安全由以下不变式保证：
+/// - 仅在 `App::ui()` 调用期间存入 Resources，帧末移除
+/// - `run_frame()` 为同步顺序执行，无并发访问
+/// - 指针指向的 `egui::Ui` 在整个 `ui()` 调用期间存活
+///
+/// System 提取模式：
+/// ```ignore
+/// let ui_ptr = ctx.resources
+///     .borrow::<EguiFrameContext>()
+///     .map(|c| c.ui_ptr())
+///     .unwrap_or(std::ptr::null_mut());
+/// if ui_ptr.is_null() { return; }
+/// let ui = unsafe { &mut *ui_ptr };
+/// // 不可变借用已释放，可以继续 borrow_mut 其他 Resource
+/// ```
+pub struct EguiFrameContext {
+    ui_ptr: *mut egui::Ui,
+}
+
+// SAFETY: EguiFrameContext 仅在单线程调度器中使用，
+// 指针在 run_frame() 期间有效，无并发访问。
+unsafe impl Send for EguiFrameContext {}
+unsafe impl Sync for EguiFrameContext {}
+
+impl EguiFrameContext {
+    pub fn new(ui: &mut egui::Ui) -> Self {
+        Self { ui_ptr: ui as *mut egui::Ui }
+    }
+
+    /// 返回底层 `egui::Ui` 原始指针。
+    ///
+    /// 调用者应在提取指针后立即释放 `EguiFrameContext` 的借用，
+    /// 再通过 `unsafe { &mut *ptr }` 构造引用，避免与 Resources 的其他借用冲突。
+    pub fn ui_ptr(&self) -> *mut egui::Ui {
+        self.ui_ptr
+    }
+}
 
 // ─── 全局 Resource 类型 ────────────────────────────────────────────────────
 
@@ -102,38 +144,50 @@ impl Default for ViewRect {
 
 // ─── System 实现 ───────────────────────────────────────────────────────────
 
+/// 从 Resources 提取 EguiFrameContext 的原始指针。
+/// 不可变借用在 `.map()` 返回后立即释放，之后可安全 borrow_mut 其他 Resource。
+/// 返回 null 表示无 egui UI（headless 模式），调用者应 early return。
+fn extract_ui_ptr(ctx: &ExecutorContext<'_>) -> *mut egui::Ui {
+    ctx.resources
+        .borrow::<EguiFrameContext>()
+        .map(|c| c.ui_ptr())
+        .unwrap_or(std::ptr::null_mut())
+}
+
 /// 时间累加 System。
 struct TimeUpdateSystem;
 impl crate::executor::System for TimeUpdateSystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let dt = ctx.dt.min(0.1);
-        // 直接字段访问 ctx.resources，split borrow 允许同时操作其他字段
         if let Some(state) = ctx.resources.borrow_mut::<TimeState>() {
             state.elapsed += dt;
         }
     }
 }
 
-/// 相机输入 System：ctx.ui + ctx.resources —— 不同字段，split borrow 允许。
+/// 相机输入 System：从 EguiFrameContext 提取 UI 指针，再 borrow_mut AppCamera。
 struct CameraInputSystem;
 impl crate::executor::System for CameraInputSystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let Some(ui) = ctx.ui.as_deref_mut() else { return };
-        // 直接字段访问，编译器知道只借用 self.resources
+        let ui_ptr = extract_ui_ptr(ctx);
+        if ui_ptr.is_null() { return; }
+
         let Some(camera) = ctx.resources.borrow_mut::<AppCamera>() else { return };
+        // SAFETY: ui_ptr 在 run_frame 期间有效（由 App::ui 保证）
+        let ui = unsafe { &mut *ui_ptr };
         camera.handle_input(ui);
     }
 }
 
 /// 控制面板绘制 System。
-/// 闭包内不能使用 ctx（会触发 &mut ctx.ui 和 &mut ctx.resources 冲突），
-/// 所以在闭包外预先 clone 所有需要的值，闭包结束后再写回 Resource。
 struct ControlPanelSystem;
 impl crate::executor::System for ControlPanelSystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let Some(ui) = ctx.ui.as_deref_mut() else { return };
+        let ui_ptr = extract_ui_ptr(ctx);
+        if ui_ptr.is_null() { return; }
+        let ui = unsafe { &mut *ui_ptr };
 
-        // ── Phase 1：闭包外预先提取/clone 所有只读值 ──
+        // 闭包外预先提取/clone 所有只读值
         let time = ctx
             .resources
             .borrow::<TimeState>()
@@ -150,7 +204,7 @@ impl crate::executor::System for ControlPanelSystem {
             .cloned()
             .unwrap_or_default();
 
-        // ── Phase 2：Panel show 闭包内只操作 clone 的值 ──
+        // Panel show 闭包内只操作 clone 的值
         Panel::left("controls")
             .resizable(true)
             .default_size(200.0)
@@ -171,7 +225,7 @@ impl crate::executor::System for ControlPanelSystem {
                 ui.label(format!("scale: {:.1}", camera.scale));
             });
 
-        // ── Phase 3：闭包结束后写回 UiConfig ──
+        // 闭包结束后写回 UiConfig
         if let Some(cfg) = ctx.resources.borrow_mut::<UiConfig>() {
             *cfg = ui_config;
         }
@@ -181,12 +235,13 @@ impl crate::executor::System for ControlPanelSystem {
 /// 视口矩形提取 System。
 /// 必须在 ControlPanelSystem 之后运行：SidePanel 显示后 cursor 右移，
 /// available_rect_before_wrap() 返回面板右侧的剩余区域（即 2D 渲染区）。
-/// 用 max_rect() 会返回整个窗口区域，导致网格背景覆盖面板。
 struct ViewRectUpdateSystem;
 impl crate::executor::System for ViewRectUpdateSystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let Some(ui) = ctx.ui.as_deref_mut() else { return };
-        // 直接字段访问 resources，split borrow 不冲突
+        let ui_ptr = extract_ui_ptr(ctx);
+        if ui_ptr.is_null() { return; }
+        let ui = unsafe { &mut *ui_ptr };
+
         if let Some(vr) = ctx.resources.borrow_mut::<ViewRect>() {
             vr.rect = Rect::from(ui.available_rect_before_wrap());
         }
@@ -299,7 +354,6 @@ impl crate::executor::System for SceneRecordSystem {
         let camera = cam.to_camera_2d(rect);
 
         // Phase 2：可变借用 DrawQueue + 不可变借用 World
-        // 直接用 &*ctx.world 避免经过 &self 方法，编译器知道只是 &self.world
         let Some(queue) = ctx.resources.borrow_mut::<DrawQueue>() else { return };
         let world: &hecs::World = &*ctx.world;
 
@@ -327,20 +381,21 @@ impl crate::executor::System for SceneRecordSystem {
 /// 渲染提交 System：DrawQueue.execute() → Egui2dRender。
 /// 必须用带 clip 的 painter_at(rect) 替换 ui.painter()，
 /// 否则函数曲线/circle 等图元会画到视口外部覆盖面板。
-/// 借用顺序：先取 ViewRect（Copy，立即释放），再 borrow_mut DrawQueue。
 struct RenderSubmitSystem;
 impl crate::executor::System for RenderSubmitSystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let Some(ui) = ctx.ui.as_deref_mut() else { return };
+        let ui_ptr = extract_ui_ptr(ctx);
+        if ui_ptr.is_null() { return; }
+        let ui = unsafe { &mut *ui_ptr };
 
-        // Phase 1：只读提取 ViewRect 值（Copy 类型，immutable borrow 立即释放）
+        // 只读提取 ViewRect 值（Copy 类型，immutable borrow 立即释放）
         let view_rect = ctx
             .resources
             .borrow::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
 
-        // Phase 2：可变借用 DrawQueue + 用带 clip 的 Painter 绘制
+        // 可变借用 DrawQueue + 用带 clip 的 Painter 绘制
         let Some(queue) = ctx.resources.borrow_mut::<DrawQueue>() else { return };
         let painter = ui.painter_at(view_rect.into_egui_rect());
         queue.execute(&Egui2dRender::new(&painter));
@@ -438,7 +493,15 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let dt = ui.input(|i| i.unstable_dt).min(0.1);
-        self.scheduler.run_frame(dt, Some(ui));
+
+        // 将 EguiFrameContext 插入 Resources（帧前）
+        self.scheduler.resources_mut().insert(EguiFrameContext::new(ui));
+
+        // 执行调度器
+        self.scheduler.run_frame(dt);
+
+        // 移除 EguiFrameContext（帧末，避免悬垂指针残留）
+        self.scheduler.resources_mut().remove::<EguiFrameContext>();
 
         // 帧末清空 DrawQueue
         if let Some(queue) = self.scheduler.resources_mut().borrow_mut::<DrawQueue>() {
@@ -463,5 +526,15 @@ mod tests {
         let cfg = UiConfig::default();
         assert!(cfg.show_grid);
         assert!(!cfg.show_field);
+    }
+
+    #[test]
+    fn test_resources_remove() {
+        let mut r = Resources::new();
+        r.insert(42_i32);
+        assert!(r.borrow::<i32>().is_some());
+        let removed = r.remove::<i32>();
+        assert_eq!(removed, Some(42));
+        assert!(r.borrow::<i32>().is_none());
     }
 }
