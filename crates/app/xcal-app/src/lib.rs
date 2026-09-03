@@ -26,9 +26,7 @@ use xcal_egui::systems::{
     ViewRectUpdateSystem,
 };
 use xcal_egui::TimeControlSystem;
-use xcal_render::components::{
-    Circle, CircleAnim, ClockState, FunctionX2Y, LocalClock, PhaseAnim, Sampler1D, StrokeSolid,
-};
+use xcal_render::components::{Circle, FunctionX2Y, PhaseAnim, Sampler1D, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
 

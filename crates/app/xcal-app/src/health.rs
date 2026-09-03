@@ -15,9 +15,9 @@ use std::path::PathBuf;
 use xcal_core::resource::Resources;
 use xcal_core::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use xcal_core::scene::components::{Camera3D, Mesh3D, OrbitAnim};
+use xcal_core::scene::components::{Camera3D, Mesh3D};
 use xcal_egui::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
-use xcal_render::components::{Circle, CircleAnim, LocalClock, PhaseAnim, StrokeSolid};
+use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::RenderContext;
 
