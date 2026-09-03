@@ -22,9 +22,7 @@ pub enum PlayMode {
     Loop,
     /// 在 span 边界三角波反弹。
     PingPong,
-    /// 暂停（eval 返回 0）。
-    Suspend,
-    /// 冻结在 span 起点。
+    /// 冻结在 span 内：clamp 到 [lo, hi]（纯函数可表达；"暂停"由 Director.playing 负责）。
     Hold,
 }
 
@@ -156,8 +154,7 @@ impl ClockForest {
                     }
                 }
             }
-            (Some(_), PlayMode::Suspend) => 0.0,
-            (Some(_), PlayMode::Hold) => 0.0,
+            (Some((lo, hi)), PlayMode::Hold) => raw.clamp(lo.min(hi), lo.max(hi)),
         };
 
         Some(local)
@@ -235,6 +232,20 @@ mod tests {
         // 反弹边界连续
         assert!((forest.eval_local(id, 0.99) - 0.99).abs() < 1e-6);
         assert!((forest.eval_local(id, 1.01) - 0.99).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hold_mode_clamps_to_span() {
+        let mut forest = ClockForest::new();
+        let mut node = ClockNode::new(None);
+        node.span = Some((1.0, 3.0));
+        node.mode = PlayMode::Hold;
+        let id = forest.insert(node).unwrap();
+
+        // span 外钳到边界，span 内原样通过
+        assert!((forest.eval_local(id, 0.5) - 1.0).abs() < 1e-6);
+        assert!((forest.eval_local(id, 2.0) - 2.0).abs() < 1e-6);
+        assert!((forest.eval_local(id, 5.0) - 3.0).abs() < 1e-6);
     }
 
     #[test]
