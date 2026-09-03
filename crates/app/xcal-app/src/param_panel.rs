@@ -5,7 +5,7 @@
 // 完整节点图（xc-node-schema + xcal-node-egui）时上层逻辑不动。
 
 use egui::Panel;
-use xcal_core::animation::BindingTable;
+use xcal_core::animation::{BindingTable, BindingTarget};
 use xcal_core::context::ExecutorContext;
 use xcal_core::system::System;
 use xcal_core::TimeState;
@@ -40,35 +40,40 @@ impl System for ParamPanelSystem {
                 ui.heading("动画参数");
                 ui.separator();
 
-                // 找 Circle 的 Sin 曲线（index 0）
-                if let Some(binding) = table.bindings.get_mut(0) {
-                    if let Curve::Sin { base, amp, omega } = &mut binding.curve {
-                        ui.label("圆半径");
-                        ui.add(egui::Slider::new(base, 0.0..=3.0).text("base").step_by(0.1));
-                        ui.add(egui::Slider::new(amp, 0.0..=2.0).text("amp").step_by(0.05));
-                        ui.add(egui::Slider::new(omega, 0.0..=8.0).text("omega").step_by(0.1));
-                    }
-                }
-
-                ui.separator();
-
-                // 找 sin 曲线的 Phase（index 1）
-                if let Some(binding) = table.bindings.get_mut(1) {
-                    if let Curve::Phase { omega } = &mut binding.curve {
-                        ui.label("函数曲线相位");
-                        ui.add(egui::Slider::new(omega, 0.0..=5.0).text("omega").step_by(0.1));
-                    }
-                }
-
-                ui.separator();
-
-                // 找 3D 轨道相机（index 2）
-                if let Some(binding) = table.bindings.get_mut(2) {
-                    if let Curve::Orbit { radius, speed, initial_angle, .. } = &mut binding.curve {
-                        ui.label("3D 轨道相机");
-                        ui.add(egui::Slider::new(radius, 1.0..=20.0).text("radius").step_by(0.5));
-                        ui.add(egui::Slider::new(speed, -2.0..=2.0).text("speed").step_by(0.1));
-                        ui.add(egui::Slider::new(initial_angle, -3.14..=3.14).text("angle").step_by(0.1));
+                // 按 (curve, target) 类型匹配定位绑定，不依赖插入顺序。
+                for binding in table.bindings.iter_mut() {
+                    match (&mut binding.curve, &binding.target) {
+                        (Curve::Sin { base, amp, omega }, BindingTarget::CircleRadius(_)) => {
+                            ui.label("圆半径");
+                            ui.add(egui::Slider::new(base, 0.0..=3.0).text("base").step_by(0.1));
+                            ui.add(egui::Slider::new(amp, 0.0..=2.0).text("amp").step_by(0.05));
+                            ui.add(egui::Slider::new(omega, 0.0..=8.0).text("omega").step_by(0.1));
+                            ui.separator();
+                        }
+                        (Curve::Phase { omega }, BindingTarget::Phase(_)) => {
+                            ui.label("函数曲线相位");
+                            ui.add(egui::Slider::new(omega, 0.0..=5.0).text("omega").step_by(0.1));
+                            ui.separator();
+                        }
+                        (
+                            Curve::Orbit { radius, speed, initial_angle, .. },
+                            BindingTarget::CameraEye(_),
+                        ) => {
+                            ui.label("3D 轨道相机");
+                            ui.add(
+                                egui::Slider::new(radius, 1.0..=20.0).text("radius").step_by(0.5),
+                            );
+                            ui.add(
+                                egui::Slider::new(speed, -2.0..=2.0).text("speed").step_by(0.1),
+                            );
+                            ui.add(
+                                egui::Slider::new(initial_angle, -3.14..=3.14)
+                                    .text("angle")
+                                    .step_by(0.1),
+                            );
+                            ui.separator();
+                        }
+                        _ => {}
                     }
                 }
             });
