@@ -19,7 +19,7 @@ use crate::socket::{InputSocket, OutputSocket};
 use crate::type_tag::TypeTag;
 
 /// Static, human-facing metadata for a node type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeMeta {
     /// Stable, unique type identifier (e.g. `"math.constant.f32"`).
     pub type_name: String,
@@ -27,6 +27,11 @@ pub struct NodeMeta {
     pub display_name: String,
     /// Schema version of this node type.
     pub version: u32,
+    /// Editor interaction policy for this node type (draggable / selectable /
+    /// resizable + size bounds). Defaults are permissive; old serialized
+    /// metadata without this field gets `NodeInteraction::default()`.
+    #[serde(default)]
+    pub interaction: NodeInteraction,
 }
 
 impl NodeMeta {
@@ -39,7 +44,90 @@ impl NodeMeta {
             type_name: type_name.into(),
             display_name: display_name.into(),
             version,
+            interaction: NodeInteraction::default(),
         }
+    }
+
+    /// Builder: override the interaction policy.
+    pub fn with_interaction(mut self, interaction: NodeInteraction) -> Self {
+        self.interaction = interaction;
+        self
+    }
+}
+
+/// Per-node-type editor interaction policy, carried in [`NodeMeta`] so the
+/// UI/hit-test layer can be data-driven instead of hard-coded. Sizes are in
+/// graph-local units (1 unit = 1 pixel at zoom 1.0); this crate stays free of
+/// vector-math dependencies by storing them as `[width, height]` pairs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeInteraction {
+    /// The card can be dragged by grabbing its title band.
+    pub draggable: bool,
+    /// Clicking the card adds it to the selection.
+    pub selectable: bool,
+    /// The card exposes a resize grip and accepts resize gestures.
+    pub resizable: bool,
+    /// Minimum card size `[width, height]`.
+    pub min_size: [f32; 2],
+    /// Maximum card size `[width, height]`.
+    pub max_size: [f32; 2],
+}
+
+impl Default for NodeInteraction {
+    fn default() -> Self {
+        Self {
+            draggable: true,
+            selectable: true,
+            resizable: true,
+            min_size: [120.0, 64.0],
+            max_size: [1200.0, 900.0],
+        }
+    }
+}
+
+impl NodeInteraction {
+    /// A fully locked node: no drag, no selection, no resize (fixed card).
+    pub const fn locked() -> Self {
+        Self {
+            draggable: false,
+            selectable: false,
+            resizable: false,
+            min_size: [120.0, 64.0],
+            max_size: [1200.0, 900.0],
+        }
+    }
+
+    pub fn draggable(mut self, draggable: bool) -> Self {
+        self.draggable = draggable;
+        self
+    }
+
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
+        self
+    }
+
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+
+    pub fn min_size(mut self, width: f32, height: f32) -> Self {
+        self.min_size = [width, height];
+        self
+    }
+
+    pub fn max_size(mut self, width: f32, height: f32) -> Self {
+        self.max_size = [width, height];
+        self
+    }
+
+    /// Clamp a proposed card size into `[min_size, max_size]` (componentwise).
+    pub fn clamp_size(&self, width: f32, height: f32) -> [f32; 2] {
+        [
+            width.clamp(self.min_size[0], self.max_size[0]),
+            height.clamp(self.min_size[1], self.max_size[1]),
+        ]
     }
 }
 
