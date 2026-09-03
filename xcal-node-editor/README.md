@@ -23,16 +23,18 @@ xcal-node + xcal-graph-algo
 ## 模块架构
 
 ```
-geometry       Rect / HitTarget / 命中常量 (SOCKET_HIT_RADIUS, SOCKET_SNAP_RADIUS)
+geometry       Rect / HitTarget / 命中常量 (SOCKET_HIT_RADIUS, SOCKET_SNAP_RADIUS,
+               RESIZE_HIT_RADIUS)
+hit_test       HitTestPolicy trait + HitTestContext + DefaultHitTestPolicy（可插拔命中策略）
 layout         LayoutStrategy / FreeLayout / NodeSizeMap
 socket_layout  SocketLayout / DefaultSocketLayout + 卡片几何常量
 edge_geom      EdgePath / EdgeGeometry { BezierGeometry, OrthogonalGeometry }
-command        Command (MoveNode / Connect / Disconnect / Delete / SetProperty / Batch…)
-event          EditorEvent (NodeAdded / EdgeAdded / NodeMoved / UndoRedo / …)
+command        Command (MoveNode / ResizeNode / Connect / Disconnect / Delete / …)
+event          EditorEvent (NodeAdded / EdgeAdded / NodeMoved / NodeResized / UndoRedo / …)
 error          EditorError (Cycle / TypeMismatch / UnknownNode / SocketMissing)
 editor         Editor 状态机
 validation     ConnectionValidator（类型兼容 + 环检测）
-undo           UndoStack<T: Command> (向量栈 + cursor, 支持 drop tail on 新分支)
+undo           UndoStack（向量栈 + cursor，支持 drop tail on 新分支）
 ```
 
 ---
@@ -54,9 +56,13 @@ impl Editor {
     pub fn graph_mut(&mut self) -> &mut dyn Graph;
     pub fn node_rect(&self, id: NodeId) -> Option<Rect>;
 
-    // ── 命中测试 ──
+    // ── 命中测试（委托给可插拔 HitTestPolicy）──
     pub fn hit_test(&self, pos: Vec2) -> HitTarget;
-    // HitTarget::{None, Node(NodeId), Socket(SocketId), Edge(EdgeId), Empty}
+    // HitTarget::{Node(NodeId), InputSocket(InputSocketId),
+    //             OutputSocket(OutputSocketId), ResizeHandle(NodeId),
+    //             Edge(EdgeId), Nothing}
+    pub fn hit_policy(&self) -> &dyn HitTestPolicy;
+    pub fn set_hit_policy(&mut self, policy: Box<dyn HitTestPolicy>);
 
     // ── 状态：选择 / 悬停 / 待连线 ──
     pub fn select(&mut self, id: NodeId);
@@ -83,7 +89,9 @@ impl Editor {
 |---------|------|
 | `AddNode { node, pos }` | 插入节点并放初始位置；undo = `RemoveNode` |
 | `RemoveNode { id }` | 删除节点 + 所有连线；undo 时恢复节点 + 每条边 |
-| `MoveNode { id, from, to }` | 平移；undo 用 `from/to` 对调 |
+| `MoveNode { id, from, to }` | 平移；undo 用 `from/to` 对调；同节点连续移动合并为一次撤销 |
+| `SetNodeSize { node, size }` | UI 层首次绘制节点时播种 `size_hint` 初始卡片尺寸；此时无旧值、不产生逆命令，故不进撤销栈 |
+| `ResizeNode { node, size }` | 用户拖拽握把 resize；执行时按 `NodeInteraction::clamp_size` 钳到 min/max；同节点连续 resize 与 MoveNode 一样合并为一次撤销，发出 `NodeResized` 事件 |
 | `Batch(Vec<Command>)` | 多命令打包；undo 时反向执行 |
 | `Connect { from, to }` | 建立连线；校验类型 + 环不通过 → `EditorError` 不提交 |
 | `Disconnect { edge_id }` | 断连 |
@@ -133,15 +141,43 @@ let result: Result<EdgeId, EditorError> = v.validate(
 - `LayoutStrategy::layout(&mut self, graph: &dyn Graph, sizes: &NodeSizeMap) -> HashMap<NodeId, Vec2>`
   - `FreeLayout`：保持用户位置不动（默认）。
   - `#[feature = "auto-layout"]`（Stage 10 可选）：基于 Kahn 拓扑的分层布局。
-- `SocketLayout::port_offset(node, input_or_output_idx) -> Vec2`：
+- `SocketLayout::input_offset / output_offset(idx, count, card_size) -> Vec2`：
   返回**节点卡片局部坐标**下的端口像素位置，UI 层用它绘制连线端点。
+  pin 全部位于 **header 下方的专用 pin 区域**（不在 header 上），输入左缘、
+  输出右缘，按索引逐行排布；UI 层在 pin 内侧绘制等宽字体的类型标签。
 - 默认常量（保证 UI 层与编辑器 hit-test 一致）：
-  - `CARD_HEADER_HEIGHT = 32`
-  - `SOCKET_ROW_HEIGHT   = 22`
-  - `SOCKET_TOP_MARGIN   = 12`
-  - `SOCKET_BOTTOM_GAP   = 8`
-  - `SOCKET_HIT_RADIUS   = 8.0`
-  - `SOCKET_SNAP_RADIUS  = 14.0`
+  - `CARD_HEADER_HEIGHT = 24.0`
+  - `SOCKET_ROW_HEIGHT  = 24.0`
+  - `SOCKET_TOP_MARGIN  = 8.0`
+  - `SOCKET_BOTTOM_GAP  = 6.0`
+  - `SOCKET_HIT_RADIUS  = 12.0`（pin 点击/连线拾取半径）
+  - `SOCKET_SNAP_RADIUS = 22.0`（拖线时类型兼容 pin 的磁吸半径）
+  - `RESIZE_HIT_RADIUS  = 14.0`（右下角 resize 握把拾取半径）
+
+---
+
+## HitTestPolicy（可插拔命中策略）
+
+命中检测不再是 `Editor` 的硬编码逻辑，而是策略对象，宿主可整体替换：
+
+```rust
+pub trait HitTestPolicy: Send + Sync + 'static {
+    fn hit_test(&self, ctx: &HitTestContext<'_>, pos: Vec2) -> HitTarget;
+}
+
+// 注册自定义策略（如自定义命中区、调整优先级、按全局开关禁用交互）：
+editor.set_hit_policy(Box::new(MyPolicy));
+```
+
+- `HitTestContext` 通过闭包暴露 graph / 卡片矩形 / socket 位置 / 边路径与
+  各命中半径，策略与状态机解耦、可独立单测。
+- `DefaultHitTestPolicy` 为优先级链（每级 miss 才进入下一级）：
+  **输出 pin → 输入 pin → resize 握把 → 卡片 → 边**；
+  其中 resize 握把只对 `meta.interaction.resizable == true` 的节点类型生效，
+  后插入的节点（NodeId 更大）在重叠时优先命中（与绘制顺序一致）。
+- 磁吸：`Editor::snap_target(cursor, from) -> Option<(InputSocketId, Vec2)>`
+  在 `SOCKET_SNAP_RADIUS` 内返回距光标最近的**类型兼容**输入 pin 及其位置；
+  UI 层把线端点落在 pin 上并显示金色高亮 halo，松手即使指针略偏也能连上。
 
 > 这些常量同时被 `xcal-node-egui::socket_layout` 重新导出，方便 UI 层依赖。
 

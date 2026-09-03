@@ -1,10 +1,16 @@
 //! Translates egui pointer/keyboard input into editor `Command`s.
 //!
 //! State machine:
-//! - press: socket → connection drag; card header → select + node drag;
+//! - press: socket → connection drag; resize grip → card resize;
+//!   card header → select + node drag (if `interaction.draggable`);
 //!   middle/right button → canvas pan; empty area → clear selection
-//! - motion: apply MoveNode / UpdateConnectionDrag / adjust canvas pan
+//! - motion: MoveNode / ResizeNode / UpdateConnectionDrag / canvas pan
 //! - release: finish or cancel the pending connection
+//!
+//! Which interactions a node accepts comes from its
+//! [`xcal_node::NodeMeta::interaction`] metadata (non-draggable cards ignore
+//! header drags, non-resizable cards expose no grip); the hit policy itself
+//! is pluggable via `Editor::set_hit_policy`.
 
 use glam::Vec2;
 use xcal_node::{EdgeId, NodeId};
@@ -12,14 +18,13 @@ use xcal_node_editor::{Command, Editor, HitTarget};
 
 use crate::canvas::GraphCanvas;
 
-/// Header band height; matches `GraphPainter` /
-/// `DefaultSocketLayout::default().header_height`.
-const HEADER_HEIGHT: f32 = 24.0;
-
 #[derive(Debug, Clone, Copy)]
 enum DragState {
     /// Dragging a card by its header.
     Node { node: NodeId, grab_offset: Vec2 },
+    /// Dragging the bottom-right resize grip; `anchor` is the card's top-left
+    /// corner (fixed for the whole gesture).
+    Resize { node: NodeId, anchor: Vec2 },
     /// Dragging a connection out of an output socket.
     Connection,
     /// Panning the canvas with the middle / right mouse button.
@@ -118,13 +123,41 @@ impl InputHandler {
                         }
                     }
                 }
+                HitTarget::ResizeHandle(id) => {
+                    // Grab the resize grip: select the card and start a resize
+                    // gesture. The grip only exists for interaction-resizable
+                    // nodes (the hit policy already filtered them), this is
+                    // the defense-in-depth check.
+                    let resizable = editor
+                        .graph()
+                        .get_node(id)
+                        .is_some_and(|n| n.meta().interaction.resizable);
+                    if resizable && let Some(rect) = editor.node_rect(id) {
+                        let additive = ui.input(|i| i.modifiers.shift);
+                        let _ = editor.apply(Command::Select { node: id, additive });
+                        self.drag = Some(DragState::Resize {
+                            node: id,
+                            anchor: rect.min,
+                        });
+                    }
+                }
                 HitTarget::Node(id) => {
-                    let additive = ui.input(|i| i.modifiers.shift);
-                    let _ = editor.apply(Command::Select { node: id, additive });
-                    // Only the header band starts a drag; body clicks fall
-                    // through to the card's body widgets.
-                    if let Some(rect) = editor.node_rect(id)
-                        && graph_pos.y <= rect.min.y + HEADER_HEIGHT
+                    let interaction = editor
+                        .graph()
+                        .get_node(id)
+                        .map(|n| n.meta().interaction.clone());
+                    let selectable = interaction.as_ref().is_none_or(|i| i.selectable);
+                    let draggable = interaction.as_ref().is_none_or(|i| i.draggable);
+                    if selectable {
+                        let additive = ui.input(|i| i.modifiers.shift);
+                        let _ = editor.apply(Command::Select { node: id, additive });
+                    }
+                    // Only the header band of a draggable card starts a move;
+                    // body clicks fall through to the card's body widgets.
+                    let header_height = editor.socket_layout().header_height();
+                    if draggable
+                        && let Some(rect) = editor.node_rect(id)
+                        && graph_pos.y <= rect.min.y + header_height
                     {
                         self.drag = Some(DragState::Node {
                             node: id,
@@ -141,6 +174,14 @@ impl InputHandler {
             }
         }
 
+        // --- hover cursor feedback (no button pressed) ---
+        if !ui.input(|i| i.pointer.any_down())
+            && canvas.viewport().contains(pos)
+            && matches!(editor.hit_test(graph_pos), HitTarget::ResizeHandle(_))
+        {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeNwSe);
+        }
+
         // --- active drag motion ---
         if ui.input(|i| i.pointer.any_down()) {
             match self.drag {
@@ -148,6 +189,14 @@ impl InputHandler {
                     let _ = editor.apply(Command::MoveNode {
                         node,
                         to: graph_pos - grab_offset,
+                    });
+                }
+                Some(DragState::Resize { node, anchor }) => {
+                    // Card's top-left stays anchored; size tracks the pointer.
+                    // The editor clamps to the node's min/max bounds.
+                    let _ = editor.apply(Command::ResizeNode {
+                        node,
+                        size: graph_pos - anchor,
                     });
                 }
                 Some(DragState::Connection) => {
@@ -169,11 +218,20 @@ impl InputHandler {
         });
         if released {
             if matches!(self.drag, Some(DragState::Connection)) && canvas.viewport().contains(pos) {
-                match editor.hit_test(graph_pos) {
-                    HitTarget::InputSocket(target) => {
+                // Prefer the magnetic snap target (the pin the wire is locked
+                // onto); fall back to a direct hit test for a precise drop.
+                let target = editor
+                    .pending()
+                    .and_then(|p| p.hover_target)
+                    .or_else(|| match editor.hit_test(graph_pos) {
+                        HitTarget::InputSocket(id) => Some(id),
+                        _ => None,
+                    });
+                match target {
+                    Some(target) => {
                         let _ = editor.apply(Command::CompleteConnection(target));
                     }
-                    _ => {
+                    None => {
                         let _ = editor.apply(Command::CancelConnection);
                     }
                 }

@@ -56,6 +56,14 @@ pub fn draw_property(
 写回——把写操作外置，能保证 `PropertyNodeView` 本身不需要 `&mut dyn NodeSpec`
 （避免再引入一次 trait upcast 问题）。
 
+**宽度自适应**：所有滑块在绘制前设置
+`ui.spacing_mut().slider_width = ui.available_width()`（egui 0.36 的 Slider
+没有宽度 setter，默认固定 100px），文本框用
+`TextEdit::desired_width(ui.available_width())`，横排 VecN 多滑块按
+`available_width / 剩余滑块数` 均分行宽。配合宿主用 `scope_builder +
+Layout::top_down(Align::Min)` 绑定 body 区域，卡片 resize 时所有控件
+实时拉伸/回流；卡片最小尺寸由节点 `NodeInteraction.min_size` 兜底。
+
 ---
 
 ## 2. `PropertyNodeView`：通用 `NodeView` 实现

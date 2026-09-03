@@ -109,6 +109,13 @@ impl AddF32 {
 | `outputs`   | `["x"]`    | ❌ | OutputSocket TypeTag.name |
 | `dirty`     | `"always"` \| `"never"` \| `"on_input_change"` | ❌ 默认 `always` |
 | `state`     | `"()"`     | ❌ | `state_type()` 返回的 NamedTypeTag |
+| `draggable` | `true` \| `false` | ❌ 默认 `true` | 写入 `NodeMeta.interaction.draggable`；`false` 时标题栏不可拖拽 |
+| `selectable`| `true` \| `false` | ❌ 默认 `true` | 写入 `NodeMeta.interaction.selectable`；`false` 时点击卡片不进选择集 |
+| `resizable` | `true` \| `false` | ❌ 默认 `true` | 写入 `NodeMeta.interaction.resizable`；`false` 时卡片无 resize 握把、尺寸固定（如只读 Display 节点） |
+
+> 交互属性只影响编辑器 UI（由命中策略/输入层读取元数据），不改变求值语义。
+> 尺寸边界（`min_size/max_size`）如需自定义，手动构造 meta：
+> `NodeMeta::new(..).with_interaction(NodeInteraction::default().min_size(200.0, 100.0))`。
 
 ## `#[property(...)]` 参数
 

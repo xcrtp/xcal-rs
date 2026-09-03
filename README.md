@@ -52,7 +52,13 @@ WgpuBackend3D）。
 | `xcal-egui` | egui UI overlay System：控制面板、网格背景、相机输入等 2D 交互 |
 | `xcal-app` | 应用组装：创建 Scheduler、注入 Resource、注册 System，通过 egui-wgpu paint callback 在主 render pass 内合成 2D/3D |
 | `xcal-macro` | `Transform2DInto` 派生过程宏 |
-| `xcal-node` / `xcal-graph-algo` / `xcal-graph-eval` / `xcal-node-editor` / `xcal-node-egui` | 节点编辑器独立技术栈（图数据、拓扑算法、惰性求值、编辑器状态机、egui 视图） |
+| `xcal-node` | 节点图内核（Node/Graph/Socket trait 与数据模型，零内部依赖）；`NodeMeta.interaction` 携带每节点类型的交互策略（可拖拽/可选中/可 resize + min/max 尺寸） |
+| `xcal-graph-algo` / `xcal-graph-eval` | 图拓扑算法（TopoSort / 环检测 / 脏标记）与惰性拉取求值 |
+| `xcal-node-ui` | 属性模型（Property / NodeSpec / NodeRegistry），不依赖 egui |
+| `xcal-node-ui-macros` | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable` 交互属性）+ `#[property(...)]` 零样板生成 |
+| `xcal-node-editor` | 纯逻辑编辑器状态机（Command/Undo/Validation）；命中检测为可插拔 `HitTestPolicy`，默认链：输出 pin→输入 pin→resize 握把→卡片→边 |
+| `xcal-node-egui` | egui 画布（pan/zoom、卡片/连线绘制、pointer→Command 输入状态机、可拖拽 resize 握把、连线磁吸） |
+| `xcal-node-egui-ui` | 属性 → egui 控件映射（`PropertyNodeView` / `draw_property` / `spawn_menu`）；控件随卡片 resize 实时拉伸 |
 
 ## 3D 帧流水线
 
@@ -76,6 +82,9 @@ cargo run -p xcal-app
 
 # 独立 3D demo（不依赖 xcal-app / scheduler，直接演示 WgpuBackend3D）
 cargo run -p xcal-render --example cube_3d
+
+# 节点编辑器 demo（多输入/多输出 pin、卡片 resize、连线磁吸、撤销重做）
+cargo run -p xcal-node-egui --example node_editor_demo
 
 # 全量测试 / 文档
 cargo test --workspace

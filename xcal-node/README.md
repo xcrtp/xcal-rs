@@ -36,7 +36,8 @@ xcal-node (trait + 数据模型 kernel)
 |------|------|
 | `InputSocket { tag, index }` + `OutputSocket { tag, index }` | 带 TypeTag 的端口声明；以 `SocketId(NodeId, u32)` 标识实例 |
 | `Node` trait | `meta / inputs / outputs / dirty_policy / state_type / as_any / as_any_mut`；可选 `DirtyFn` + `DirtyPolicy::{Always, Never, OnInputChange}` |
-| `NodeMeta` | `{ type_name, display_name, version }`；`type_name` 是跨序列化稳定标识 |
+| `NodeMeta` | `{ type_name, display_name, version, interaction }`；`type_name` 是跨序列化稳定标识；`interaction: NodeInteraction` 携带该节点类型的编辑器交互策略 |
+| `NodeInteraction` | `{ draggable, selectable, resizable, min_size, max_size }`（`min/max_size` 为 `[f32; 2]` 图本地尺寸，避免引入向量依赖）；`Default` 全开（120×64 ~ 1200×900），提供 `locked()`、链式 builder（`resizable(false)` 等）与 `clamp_size(w, h)`；`#[serde(default)]` 兼容旧数据。派生宏可用 `#[node(resizable = false, …)]` 声明 |
 | `Edge { id, from, to }` | 连接 `OutputSocketId → InputSocketId`；`UnitEdge` 简化单输出形式 |
 | `NodeId / InputSocketId / OutputSocketId / SocketId` | 全局唯一 id 封装（支持 serde） |
 

@@ -33,3 +33,9 @@ pub use edge_render::{
 pub use input::InputHandler;
 pub use painter::GraphPainter;
 pub use view::{DefaultNodeView, NodeView};
+
+/// Re-export of the editor's card geometry constants so downstream UI
+/// crates (e.g. `xcal-node-egui-ui`) can size node cards consistently with
+/// where the editor/painter place pins and widgets, without depending on
+/// `xcal-node-editor` directly.
+pub use xcal_node_editor::socket_layout;

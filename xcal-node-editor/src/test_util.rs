@@ -2,13 +2,15 @@
 
 use std::any::Any;
 
-use xcal_node::{DirtyPolicy, InputSocket, NamedTypeTag, Node, NodeMeta, OutputSocket, TypeTag};
+use xcal_node::{
+    DirtyPolicy, InputSocket, NamedTypeTag, Node, NodeInteraction, NodeMeta, OutputSocket, TypeTag,
+};
 
 /// Configurable test node: `n_in` inputs and `n_out` outputs, all carrying
 /// the same named type tag.
 #[derive(Debug)]
 pub(crate) struct TestNode {
-    meta: NodeMeta,
+    pub(crate) meta: NodeMeta,
     inputs: Vec<InputSocket>,
     outputs: Vec<OutputSocket>,
 }
@@ -31,6 +33,12 @@ impl TestNode {
     /// One f32 input, one f32 output.
     pub fn f32_passthrough() -> Self {
         Self::new("f32", 1, 1)
+    }
+
+    /// Override the interaction policy of this test node.
+    pub(crate) fn with_interaction(mut self, interaction: NodeInteraction) -> Self {
+        self.meta = self.meta.with_interaction(interaction);
+        self
     }
 }
 

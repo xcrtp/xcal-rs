@@ -28,6 +28,7 @@ pub mod editor;
 pub mod error;
 pub mod event;
 pub mod geometry;
+pub mod hit_test;
 pub mod layout;
 pub mod socket_layout;
 pub mod undo;
@@ -41,8 +42,17 @@ pub use edge_geom::{BezierGeometry, EdgeGeometry, EdgePath, OrthogonalGeometry};
 pub use editor::{Editor, PendingConnection};
 pub use error::EditorError;
 pub use event::EditorEvent;
-pub use geometry::{HitTarget, Rect, Vec2};
+pub use geometry::{
+    HitTarget, RESIZE_HIT_RADIUS, Rect, SOCKET_HIT_RADIUS, SOCKET_SNAP_RADIUS, Vec2,
+};
+pub use hit_test::{
+    DEFAULT_RESIZE_HIT_RADIUS, DEFAULT_SOCKET_HIT_RADIUS, DefaultHitTestPolicy, HitTestContext,
+    HitTestPolicy,
+};
 pub use layout::{FreeLayout, LayoutStrategy, NodeSizeMap};
-pub use socket_layout::{DefaultSocketLayout, SocketLayout};
+pub use socket_layout::{
+    CARD_HEADER_HEIGHT, DefaultSocketLayout, SOCKET_BOTTOM_GAP, SOCKET_ROW_HEIGHT,
+    SOCKET_TOP_MARGIN, SocketLayout,
+};
 pub use undo::UndoStack;
 pub use validation::ConnectionValidator;

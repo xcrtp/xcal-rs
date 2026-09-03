@@ -14,4 +14,9 @@ glam = { workspace = true }
 [dev-dependencies]
 eframe = { workspace = true, features = ["default_fonts"] }
 xcal-node = { path = "../xcal-node" }
+xcal-node-ui = { path = "../xcal-node-ui" }
+xcal-node-ui-macros = { path = "../xcal-node-ui-macros" }
+xcal-node-egui-ui = { path = "../xcal-node-egui-ui" }
+xcal-graph-eval = { path = "../xcal-graph-eval" }
+xcal-graph-algo = { path = "../xcal-graph-algo" }
 glam = { workspace = true }

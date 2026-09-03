@@ -13,6 +13,11 @@ pub enum EditorEvent {
         node: NodeId,
         to: Vec2,
     },
+    /// A node card was user-resized (already clamped to interaction bounds).
+    NodeResized {
+        node: NodeId,
+        size: Vec2,
+    },
     Connected(EdgeId),
     Disconnected(EdgeId),
     /// A connection attempt was rejected (type mismatch, cycle, ...); no

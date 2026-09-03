@@ -3851,8 +3851,51 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
+ "xcal-graph-algo",
+ "xcal-graph-eval",
  "xcal-node",
  "xcal-node-editor",
+ "xcal-node-egui-ui",
+ "xcal-node-ui",
+ "xcal-node-ui-macros",
+]
+
+[[package]]
+name = "xcal-node-egui-ui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "glam",
+ "xcal-node",
+ "xcal-node-egui",
+ "xcal-node-ui",
+]
+
+[[package]]
+name = "xcal-node-ui"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "xcal-graph-algo",
+ "xcal-graph-eval",
+ "xcal-node",
+ "xcal-node-ui-macros",
+]
+
+[[package]]
+name = "xcal-node-ui-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "xcal-graph-algo",
+ "xcal-graph-eval",
+ "xcal-node",
+ "xcal-node-ui",
 ]
 
 [[package]]

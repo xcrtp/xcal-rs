@@ -30,6 +30,13 @@ pub enum Command {
         node: NodeId,
         size: Vec2,
     },
+    /// User-driven resize of a node card via the grip. The editor clamps
+    /// `size` to the node type's `NodeInteraction` min/max bounds; live
+    /// drags are coalesced onto one undo entry.
+    ResizeNode {
+        node: NodeId,
+        size: Vec2,
+    },
 
     /// Start dragging a connection out of an output socket.
     BeginConnection(OutputSocketId),
@@ -73,6 +80,11 @@ impl std::fmt::Debug for Command {
                 .finish(),
             Command::SetNodeSize { node, size } => f
                 .debug_struct("SetNodeSize")
+                .field("node", node)
+                .field("size", size)
+                .finish(),
+            Command::ResizeNode { node, size } => f
+                .debug_struct("ResizeNode")
                 .field("node", node)
                 .field("size", size)
                 .finish(),

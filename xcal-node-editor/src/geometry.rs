@@ -50,18 +50,32 @@ impl Rect {
 }
 
 /// Result of a hit test. Variants are ordered by z-priority: sockets are
-/// tested before nodes, nodes before edges; callers match top-down.
+/// tested before resize grips, grips before cards, cards before edges;
+/// callers match top-down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitTarget {
     Node(NodeId),
     InputSocket(InputSocketId),
     OutputSocket(OutputSocketId),
+    /// The bottom-right resize grip of a node card.
+    ResizeHandle(NodeId),
     Edge(EdgeId),
     Nothing,
 }
 
 /// Hit radius (graph-local units / pixels at zoom 1.0) for socket picking.
-pub const SOCKET_HIT_RADIUS: f32 = 6.0;
+/// Generous on purpose: the on-screen dot is small, but clicks anywhere in
+/// this disk grab the pin.
+pub const SOCKET_HIT_RADIUS: f32 = 12.0;
+
+/// Snap radius (graph-local units): while dragging a connection, the cursor
+/// is attracted to the nearest type-compatible input socket within this
+/// distance (edge endpoint snaps to the pin and releasing completes the
+/// connection even if the pointer is slightly off).
+pub const SOCKET_SNAP_RADIUS: f32 = 22.0;
+
+/// Hit radius (graph-local units) for the bottom-right resize grip.
+pub const RESIZE_HIT_RADIUS: f32 = 14.0;
 
 #[cfg(test)]
 mod tests {

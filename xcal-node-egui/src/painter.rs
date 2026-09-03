@@ -4,7 +4,7 @@
 //! Everything is drawn through a transformed `to_screen` closure so this
 //! layer stays unaware of pan/zoom state (owned by `GraphCanvas`).
 
-use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use glam::Vec2;
 use xcal_node::{InputSocketId, NodeId, OutputSocketId};
 use xcal_node_editor::{Command, EdgePath, Editor};
@@ -12,11 +12,10 @@ use xcal_node_editor::{Command, EdgePath, Editor};
 use crate::edge_render::{EdgeRenderer, EdgeStyle};
 use crate::view::NodeView;
 
-/// Header band height; must match
-/// `xcal_node_editor::DefaultSocketLayout::default().header_height`.
-const HEADER_HEIGHT: f32 = 24.0;
 const CARD_ROUNDING: f32 = 6.0;
 const SOCKET_RADIUS: f32 = 5.0;
+/// Horizontal gap between a pin dot and its type label (screen pixels).
+const SOCKET_LABEL_GAP: f32 = 7.0;
 /// Screen-space grid spacing. Zoom is fixed at 1.0 in this stage; stage 8
 /// scales this by the canvas zoom factor.
 const GRID_SPACING: f32 = 32.0;
@@ -67,18 +66,38 @@ impl<'a> GraphPainter<'a> {
             };
             let screen_rect =
                 Rect::from_two_pos(to_screen(graph_rect.min), to_screen(graph_rect.max));
-            let (header_color, title) = editor
-                .graph()
-                .get_node(id)
-                .map(|n| (self.view.header_color(n), self.view.title(n)))
-                .unwrap_or((Color32::GRAY, String::new()));
+            let Some(node) = editor.graph().get_node(id) else {
+                continue;
+            };
+            let header_color = self.view.header_color(node);
+            let title = self.view.title(node);
             let selected = editor.selection().contains(&id);
 
-            painter.rect_filled(screen_rect, CARD_ROUNDING, ui.visuals().window_fill);
-            let header_rect = Rect::from_min_size(
+            // Card geometry is authored in graph space and mapped through the
+            // viewport transform, so everything stays aligned at any zoom.
+            let n_in = node.inputs().len() as u32;
+            let n_out = node.outputs().len() as u32;
+            let header_h = editor.socket_layout().header_height();
+            let region_h = editor.socket_layout().socket_region_height(n_in, n_out);
+
+            let header_bottom =
+                to_screen(graph_rect.min + Vec2::new(graph_rect.size().x, header_h));
+            let header_rect = Rect::from_min_max(
                 screen_rect.min,
-                egui::Vec2::new(screen_rect.width(), HEADER_HEIGHT),
+                Pos2::new(screen_rect.right(), header_bottom.y),
             );
+            // Pin rows live in the band below the header; body widgets start
+            // under that band so sliders never collide with pins/labels.
+            let widgets_top = to_screen(graph_rect.min + Vec2::new(4.0, header_h + region_h));
+            let widgets_bottom = to_screen(graph_rect.max - Vec2::new(4.0, 6.0));
+            let body_rect = Rect::from_two_pos(
+                Pos2::new(screen_rect.left() + 4.0, widgets_top.y),
+                Pos2::new(screen_rect.right() - 4.0, widgets_bottom.y),
+            );
+            // Separator between the pin band and the property-widget band.
+            let sep_y = widgets_top.y - 2.0;
+
+            painter.rect_filled(screen_rect, CARD_ROUNDING, ui.visuals().window_fill);
             painter.rect_filled(
                 header_rect,
                 egui::CornerRadius {
@@ -96,6 +115,15 @@ impl<'a> GraphPainter<'a> {
                 FontId::proportional(13.0),
                 Color32::WHITE,
             );
+            if n_in + n_out > 0 {
+                painter.line_segment(
+                    [
+                        Pos2::new(screen_rect.left() + 4.0, sep_y),
+                        Pos2::new(screen_rect.right() - 4.0, sep_y),
+                    ],
+                    Stroke::new(1.0, ui.visuals().window_stroke().color.gamma_multiply(0.5)),
+                );
+            }
             if selected {
                 painter.rect_stroke(
                     screen_rect,
@@ -105,20 +133,45 @@ impl<'a> GraphPainter<'a> {
                 );
             }
 
+            // Resize grip: three diagonal strokes tucked into the bottom-right
+            // corner (only for interaction-resizable node types).
+            if node.meta().interaction.resizable {
+                let corner = to_screen(graph_rect.max);
+                let grip_color = ui.visuals().weak_text_color();
+                let stroke = Stroke::new(1.5, grip_color);
+                for (i, &inset) in [4.0_f32, 8.0, 12.0].iter().enumerate() {
+                    let tail = i as f32 * 3.0 + 4.0;
+                    painter.line_segment(
+                        [
+                            corner - egui::Vec2::new(inset, tail),
+                            corner - egui::Vec2::new(tail, inset),
+                        ],
+                        stroke,
+                    );
+                }
+            }
+
             // Interactive body: host egui widgets inside the card. Widget
             // state lives in the nodes themselves (egui rebuilds every
-            // frame), so direct mutation is the source of truth.
-            let body_rect = Rect::from_min_max(
-                header_rect.left_bottom() + egui::Vec2::new(4.0, 2.0),
-                screen_rect.right_bottom() - egui::Vec2::new(4.0, 4.0),
-            );
-            let view = self.view;
-            ui.put(body_rect, |ui: &mut egui::Ui| {
-                if let Some(node) = editor.graph_mut().get_node_mut(id) {
-                    view.body_ui(ui, node);
-                }
-                ui.allocate_response(egui::Vec2::ZERO, Sense::hover())
-            });
+            // frame), so direct mutation is the source of truth. The body
+            // Ui is bound exactly to the widget band and clips to it, so
+            // nothing is ever painted outside the card; a plain top-down
+            // left-aligned layout lets property widgets stretch to (and fill)
+            // the whole band width, reflowing live when the card is resized.
+            if body_rect.height() > 0.0 {
+                let view = self.view;
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(body_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui: &mut egui::Ui| {
+                        ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+                        if let Some(node) = editor.graph_mut().get_node_mut(id) {
+                            view.body_ui(ui, node);
+                        }
+                    },
+                );
+            }
         }
 
         // --- sockets (on top of cards) ---
@@ -127,6 +180,7 @@ impl<'a> GraphPainter<'a> {
             .map(|p| (Some(p.from), p.hover_target))
             .unwrap_or((None, None));
         let highlight = Color32::from_rgb(250, 200, 90);
+        let label_color = ui.visuals().weak_text_color();
         for id in &node_ids {
             let Some(node) = editor.graph().get_node(*id) else {
                 continue;
@@ -154,8 +208,23 @@ impl<'a> GraphPainter<'a> {
                     SOCKET_RADIUS,
                     Stroke::new(1.5, Color32::from_gray(25)),
                 );
+                // Type label just inside the card edge.
+                painter.text(
+                    center + egui::Vec2::new(SOCKET_RADIUS + SOCKET_LABEL_GAP, 0.0),
+                    Align2::LEFT_CENTER,
+                    *tag,
+                    FontId::monospace(11.0),
+                    label_color,
+                );
                 if pending_hover == Some(socket) {
-                    painter.circle_stroke(center, SOCKET_RADIUS + 3.0, Stroke::new(2.0, highlight));
+                    // Magnetic snap: the wire is locked onto this pin —
+                    // halo + bright ring make the target obvious.
+                    painter.circle_filled(
+                        center,
+                        SOCKET_RADIUS + 5.0,
+                        highlight.gamma_multiply(0.25),
+                    );
+                    painter.circle_stroke(center, SOCKET_RADIUS + 4.0, Stroke::new(2.0, highlight));
                 }
             }
             for (i, tag) in outputs.iter().enumerate() {
@@ -170,8 +239,16 @@ impl<'a> GraphPainter<'a> {
                     SOCKET_RADIUS,
                     Stroke::new(1.5, Color32::from_gray(25)),
                 );
+                // Type label just inside the card edge (right-aligned).
+                painter.text(
+                    center - egui::Vec2::new(SOCKET_RADIUS + SOCKET_LABEL_GAP, 0.0),
+                    Align2::RIGHT_CENTER,
+                    *tag,
+                    FontId::monospace(11.0),
+                    label_color,
+                );
                 if pending_from == Some(socket) {
-                    painter.circle_stroke(center, SOCKET_RADIUS + 3.0, Stroke::new(2.0, highlight));
+                    painter.circle_stroke(center, SOCKET_RADIUS + 4.0, Stroke::new(2.0, highlight));
                 }
             }
         }

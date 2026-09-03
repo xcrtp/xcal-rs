@@ -12,6 +12,9 @@ members = [
     "xcal-graph-eval",
     "xcal-node-editor",
     "xcal-node-egui",
+    "xcal-node-ui",
+    "xcal-node-ui-macros",
+    "xcal-node-egui-ui",
 ]
 resolver = "2"
 

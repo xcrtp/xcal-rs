@@ -21,23 +21,31 @@ xcal-node  ──►  xcal-node-editor  ──►  xcal-node-egui  ← 本 crate
 cargo run -p xcal-node-egui --example node_editor_demo
 ```
 
-示例预置了 `Constant → Add → Sin → Display` 四节点链路，打开即可见贝塞尔连线
-与实时求值预览。
+示例预置了 Constant/Add/Sin/Mul/Display 等节点：既有单 pin 的
+`Constant → Sin → Display` 链路，也有两进两出的 `AddMulF32` 演示节点
+（两个输入 pin 汇入、sum/product 两个输出 pin 扇出到两个 Display），
+打开即可见贝塞尔连线与实时求值预览。
 
 ### 操作方式
 
 | 操作 | 效果 |
 |------|------|
-| 拖拽节点标题栏 | 移动节点（连线跟随） |
-| 从输出端口拖到输入端口 | 建立连线；拖到空白处取消 |
-| 类型不匹配 / 连成环时 | 光标变红 → 拒绝连接 |
+| 拖拽节点标题栏 | 移动节点（连线跟随）；`interaction.draggable = false` 的节点类型不响应 |
+| 拖拽卡片右下角握把 | resize 卡片（光标变为斜向 ↔）；`interaction.resizable = false` 的类型无握把，如 demo 的 Display |
+| 从输出端口拖到输入端口 | 建立连线；接近类型兼容的输入 pin 时自动磁吸（金色 halo）；拖到空白处取消 |
+| 类型不匹配 / 连成环时 | 光标变红 → 拒绝连接（不参与磁吸） |
 | 右键空白处 | 弹出"添加节点"菜单（`xcal-node-egui-ui::spawn_menu` 增强版） |
 | 滚轮 | 以鼠标为锚点缩放（0.2× ~ 5×） |
 | 中键 / 右键拖拽 | 平移画布 |
 | 选中节点后 `Delete` / `Backspace` | 删除节点及其连线 |
-| `Ctrl+Z` | 撤销 |
+| `Ctrl+Z` | 撤销（移动/resize 整段手势合并为一次） |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | 重做 |
-| 顶部按钮栏 | 重置示例图 / 适配视图 / 导出图 JSON |
+| 顶部按钮栏 | 重置示例图 / 适配视图 |
+
+> **防抖动约定**：画布视口每帧取面板剩余空间（`ui.max_rect()`），因此
+> 任何**条件渲染的 UI 元素都不要放在画布上方的布局面板里**（如按图状态
+> 显示/隐藏的错误标签会改变面板高度、导致整个画布跳一帧）。状态类信息
+> 应在画布内以 `painter` 覆盖绘制（demo 的 eval 错误提示即如此处理）。
 
 ---
 
@@ -97,17 +105,20 @@ pub fn handle(&mut self, ui: &egui::Ui, editor: &mut Editor,
               canvas: &mut GraphCanvas, view: &mut dyn NodeView) -> Vec<EditorEvent>;
 ```
 
-状态机：
+状态机（命中目标来自 editor 的可插拔 `HitTestPolicy`）：
 ```
-Idle ── left_down(Node) ──► DraggingNode
-Idle ── left_down(Socket, output=true) ──► PendingConnect(from)
-PendingConnect ── left_up(Socket, input=true) ──► execute(Connect)
-DraggingNode ── left_up ──► execute(Batch(MoveNode*))
-Idle ── middle_down ──► Panning
+Idle ── left_down(Node header, draggable) ──► DraggingNode → MoveNode
+Idle ── left_down(ResizeHandle) ────────────► Resizing     → ResizeNode（按元数据钳制）
+Idle ── left_down(Socket, output=true) ─────► PendingConnect(from)
+PendingConnect ── motion ──► snap_target：22px 内吸附最近兼容输入 pin
+PendingConnect ── left_up(input pin) ───────► execute(Connect)
+Idle ── middle/right_down ──► Panning
 Idle ── wheel ──► canvas.zoom_at
 Idle ── Ctrl+Z / Ctrl+Y ──► undo / redo
-Selected ── Delete ──► execute(Batch([RemoveNode, ...]))
+Selected ── Delete ──► execute(RemoveNode ×N)
 ```
+卡片点击是否可选中/可拖拽、握把是否存在，均读节点
+`meta.interaction`（`selectable / draggable / resizable`）。
 
 ### `GraphPainter` —— 整图绘制
 
@@ -122,7 +133,11 @@ pub fn paint(&self, painter: &egui::Painter,
 1. 背景网格（基于 canvas.zoom 三档）
 2. 所有 edges（包括悬停 / pending_connection 预览线）
 3. 所有 node cards（按 graph node 顺序）
-   - shadow → frame → header → body footer → 左右 sockets
+   - frame → header 标题 → pin 区（header 下方逐行排布，pin 内侧绘类型标签，
+     输入左缘/输出右缘）→ 分隔线 → body 属性控件（左上角对齐、宽度填满卡片，
+     随 resize 实时回流）→ 右下角 resize 握把三道斜杠（仅 resizable 节点）
+   - body 子 Ui 用 `scope_builder(UiBuilder::new().max_rect(body_rect)
+     .layout(Layout::top_down(Align::Min)))` 绑定，并把 clip rect 钳在卡片内
 
 ### `NodeGraphApp` —— eframe 驱动
 

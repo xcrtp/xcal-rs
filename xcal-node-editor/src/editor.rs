@@ -16,14 +16,15 @@ use crate::command::Command;
 use crate::edge_geom::{EdgeGeometry, EdgePath};
 use crate::error::EditorError;
 use crate::event::EditorEvent;
-use crate::geometry::{HitTarget, Rect, SOCKET_HIT_RADIUS};
+use crate::geometry::{HitTarget, RESIZE_HIT_RADIUS, Rect, SOCKET_HIT_RADIUS, SOCKET_SNAP_RADIUS};
+use crate::hit_test::{DefaultHitTestPolicy, HitTestContext, HitTestPolicy};
 use crate::layout::{LayoutStrategy, NodeSizeMap};
 use crate::socket_layout::{DefaultSocketLayout, SocketLayout};
 use crate::undo::UndoStack;
 use crate::validation::ConnectionValidator;
 
 /// Default card size when the UI layer has not measured a node yet.
-pub const DEFAULT_NODE_SIZE: Vec2 = Vec2::new(160.0, 80.0);
+pub const DEFAULT_NODE_SIZE: Vec2 = Vec2::new(190.0, 110.0);
 
 /// A connection currently being dragged from an output socket.
 #[derive(Debug, Clone, Copy)]
@@ -41,6 +42,7 @@ pub struct Editor {
     layout: Box<dyn LayoutStrategy>,
     edge_geom: Box<dyn EdgeGeometry>,
     socket_layout: Box<dyn SocketLayout>,
+    hit_policy: Box<dyn HitTestPolicy>,
     sizes: NodeSizeMap,
     selection: HashSet<NodeId>,
     pending: Option<PendingConnection>,
@@ -62,6 +64,7 @@ impl Editor {
             layout,
             edge_geom,
             socket_layout: Box::new(DefaultSocketLayout::default()),
+            hit_policy: Box::new(DefaultHitTestPolicy::new()),
             sizes: NodeSizeMap::new(),
             selection: HashSet::new(),
             pending: None,
@@ -93,6 +96,16 @@ impl Editor {
         self.socket_layout.as_ref()
     }
 
+    /// Active hit-test strategy.
+    pub fn hit_policy(&self) -> &dyn HitTestPolicy {
+        self.hit_policy.as_ref()
+    }
+
+    /// Replace the hit-test strategy (e.g. a policy with custom hit regions).
+    pub fn set_hit_policy(&mut self, policy: Box<dyn HitTestPolicy>) {
+        self.hit_policy = policy;
+    }
+
     pub fn selection(&self) -> &HashSet<NodeId> {
         &self.selection
     }
@@ -111,13 +124,20 @@ impl Editor {
     pub fn apply(&mut self, cmd: Command) -> Result<(), EditorError> {
         let inverse = self.execute(cmd)?;
         if let Some(inv) = inverse {
-            // Coalesce a live drag: consecutive MoveNode commands for the
-            // same node keep the first inverse (position before the drag),
-            // so one undo reverts the whole gesture.
-            let coalesced = matches!(&inv, Command::MoveNode { node, .. }
-            if self.undo_stack.last().is_some_and(
-                |c| matches!(c, Command::MoveNode { node: n, .. } if n == node)
-            ));
+            // Coalesce a live drag: consecutive MoveNode/ResizeNode commands
+            // for the same node keep the first inverse (state before the
+            // gesture), so one undo reverts the whole drag.
+            let same_node_drag = |inv: &Command, last: &Command| match (inv, last) {
+                (Command::MoveNode { node: a, .. }, Command::MoveNode { node: b, .. }) => a == b,
+                (Command::ResizeNode { node: a, .. }, Command::ResizeNode { node: b, .. }) => {
+                    a == b
+                }
+                _ => false,
+            };
+            let coalesced = self
+                .undo_stack
+                .last()
+                .is_some_and(|last| same_node_drag(&inv, last));
             if !coalesced {
                 self.undo_stack.push(inv);
                 self.undo_stack.clear_redo();
@@ -220,6 +240,26 @@ impl Editor {
                     .filter(|p| *p != size)
                     .map(|p| Command::SetNodeSize { node, size: p }))
             }
+            Command::ResizeNode { node, size } => {
+                // Clamp to the node type's interaction bounds.
+                let clamped = self
+                    .graph
+                    .get_node(node)
+                    .map(|n| {
+                        let [w, h] = n.meta().interaction.clamp_size(size.x, size.y);
+                        Vec2::new(w, h)
+                    })
+                    .unwrap_or(size);
+                let old = self.sizes.get(&node).copied();
+                self.sizes.insert(node, clamped);
+                self.events.push_back(EditorEvent::NodeResized {
+                    node,
+                    size: clamped,
+                });
+                Ok(old
+                    .filter(|p| *p != clamped)
+                    .map(|p| Command::ResizeNode { node, size: p }))
+            }
             Command::BeginConnection(source) => {
                 let exists = self
                     .graph
@@ -240,17 +280,12 @@ impl Editor {
                 if let Some(pending) = self.pending.as_mut() {
                     pending.cursor = pos;
                 }
-                // Highlight a legal drop target under the cursor.
+                // Snap the dragged wire to the nearest type-compatible input
+                // within the snap radius; the snapped socket is the legal drop
+                // target (highlighted, and completing the drag connects even
+                // when the pointer is a few pixels off).
                 let from = self.pending.map(|p| p.from);
-                let hover = from.and_then(|src| {
-                    if let HitTarget::InputSocket(id) = self.hit_test(pos) {
-                        ConnectionValidator::check_types(self.graph.as_ref(), src, id)
-                            .ok()
-                            .map(|_| id)
-                    } else {
-                        None
-                    }
-                });
+                let hover = from.and_then(|src| self.snap_target(pos, src).map(|(id, _)| id));
                 if let Some(pending) = self.pending.as_mut() {
                     pending.hover_target = hover;
                 }
@@ -421,64 +456,69 @@ impl Editor {
     }
 
     /// Path of the in-flight dragged connection, if any.
+    ///
+    /// While the cursor is within snap range of a compatible input pin, the
+    /// edge endpoint is drawn *on that pin* (magnetic snap); otherwise it
+    /// follows the cursor.
     pub fn pending_path(&self) -> Option<EdgePath> {
         let pending = self.pending.as_ref()?;
         let from = self.output_socket_pos(pending.from)?;
-        Some(self.edge_geom.build_path(from, pending.cursor))
+        let to = match pending.hover_target {
+            Some(id) => self.input_socket_pos(id).unwrap_or(pending.cursor),
+            None => pending.cursor,
+        };
+        Some(self.edge_geom.build_path(from, to))
     }
 
-    /// Hit test in graph-local coordinates. Priority (high to low):
-    /// output sockets → input sockets → node cards → edges.
-    pub fn hit_test(&self, pos: Vec2) -> HitTarget {
-        // Newest node on top: iterate ids in descending order.
-        let mut nodes: Vec<NodeId> = self.graph.all_nodes().collect();
-        nodes.sort_unstable_by(|a, b| b.cmp(a));
-
-        for &node in &nodes {
-            let Some(n) = self.graph.get_node(node) else {
+    /// Nearest type-compatible input socket within [`SOCKET_SNAP_RADIUS`] of
+    /// `cursor`, with its graph-local position. Sockets on the source node
+    /// itself are excluded (self-loops are rejected by validation anyway and
+    /// would make the wire fold back on the card).
+    pub fn snap_target(&self, cursor: Vec2, from: OutputSocketId) -> Option<(InputSocketId, Vec2)> {
+        let mut best: Option<(InputSocketId, Vec2, f32)> = None;
+        for node in self.graph.all_nodes() {
+            if node == from.node() {
                 continue;
-            };
-            for i in 0..n.outputs().len() {
-                let id = OutputSocketId::new(node, i as u32);
-                if let Some(p) = self.output_socket_pos(id)
-                    && (p - pos).length() <= SOCKET_HIT_RADIUS
-                {
-                    return HitTarget::OutputSocket(id);
-                }
             }
-        }
-
-        for &node in &nodes {
             let Some(n) = self.graph.get_node(node) else {
                 continue;
             };
             for i in 0..n.inputs().len() {
                 let id = InputSocketId::new(node, i as u32);
-                if let Some(p) = self.input_socket_pos(id)
-                    && (p - pos).length() <= SOCKET_HIT_RADIUS
-                {
-                    return HitTarget::InputSocket(id);
+                let Some(pos) = self.input_socket_pos(id) else {
+                    continue;
+                };
+                let dist = (pos - cursor).length();
+                if dist > SOCKET_SNAP_RADIUS {
+                    continue;
+                }
+                if ConnectionValidator::check_types(self.graph.as_ref(), from, id).is_err() {
+                    continue;
+                }
+                if best.is_none_or(|b: (InputSocketId, Vec2, f32)| dist < b.2) {
+                    best = Some((id, pos, dist));
                 }
             }
         }
+        best.map(|(id, pos, _)| (id, pos))
+    }
 
-        for &node in &nodes {
-            if let Some(rect) = self.node_rect(node)
-                && rect.contains(pos)
-            {
-                return HitTarget::Node(node);
-            }
-        }
-
-        for edge in self.all_edges() {
-            if let Some(path) = self.connection_path(edge.source, edge.target)
-                && path.distance_to(pos) < SOCKET_HIT_RADIUS
-            {
-                return HitTarget::Edge(edge);
-            }
-        }
-
-        HitTarget::Nothing
+    /// Hit test in graph-local coordinates. Delegates to the configurable
+    /// [`HitTestPolicy`]; the built-in policy resolves (high → low priority):
+    /// output sockets → input sockets → resize grips → node cards → edges,
+    /// honoring each node type's `NodeMeta::interaction` metadata.
+    pub fn hit_test(&self, pos: Vec2) -> HitTarget {
+        let ctx = HitTestContext {
+            graph: self.graph.as_ref(),
+            socket_hit_radius: SOCKET_HIT_RADIUS,
+            edge_hit_radius: SOCKET_HIT_RADIUS,
+            resize_hit_radius: RESIZE_HIT_RADIUS,
+            node_rect: &|id| self.node_rect(id),
+            input_socket_pos: &|id| self.input_socket_pos(id),
+            output_socket_pos: &|id| self.output_socket_pos(id),
+            edge_path: &|src, dst| self.connection_path(src, dst),
+        };
+        self.hit_policy.hit_test(&ctx, pos)
     }
 }
 
@@ -596,26 +636,61 @@ mod tests {
         let mut editor = make_editor();
         let id = add_node(&mut editor, Vec2::new(100.0, 100.0));
 
-        // Output socket: right edge, first row → (260, 140) with default size.
+        // Output socket: right edge (default width 190), first pin row below
+        // the header: y = 100 + header 24 + margin 8 + half-row 12 = 144.
         let out = OutputSocketId::new(id, 0);
         let out_pos = editor.output_socket_pos(out).unwrap();
-        assert_eq!(out_pos, Vec2::new(260.0, 140.0));
+        assert_eq!(out_pos, Vec2::new(290.0, 144.0));
         assert_eq!(editor.hit_test(out_pos), HitTarget::OutputSocket(out));
 
         // Input socket: left edge.
         let inp = InputSocketId::new(id, 0);
         let in_pos = editor.input_socket_pos(inp).unwrap();
-        assert_eq!(in_pos, Vec2::new(100.0, 140.0));
+        assert_eq!(in_pos, Vec2::new(100.0, 144.0));
         assert_eq!(editor.hit_test(in_pos), HitTarget::InputSocket(inp));
 
         // Card interior → node.
         assert_eq!(
-            editor.hit_test(Vec2::new(180.0, 150.0)),
+            editor.hit_test(Vec2::new(180.0, 160.0)),
             HitTarget::Node(id)
         );
 
         // Empty space → nothing.
         assert_eq!(editor.hit_test(Vec2::new(0.0, 0.0)), HitTarget::Nothing);
+    }
+
+    #[test]
+    fn connection_drag_snaps_to_nearby_compatible_input() {
+        let mut editor = make_editor();
+        let src = add_node(&mut editor, Vec2::new(0.0, 0.0));
+        let sink = add_node(&mut editor, Vec2::new(400.0, 0.0));
+        let target = InputSocketId::new(sink, 0);
+        let pin_pos = editor.input_socket_pos(target).unwrap();
+
+        editor
+            .apply(Command::BeginConnection(OutputSocketId::new(src, 0)))
+            .unwrap();
+
+        // Cursor inside the snap radius but OUTSIDE the click hit radius:
+        // the wire still locks onto the pin (hover armed) and its path
+        // endpoint snaps to the pin position.
+        let near = pin_pos + Vec2::new(18.0, 4.0);
+        editor.apply(Command::UpdateConnectionDrag(near)).unwrap();
+        assert_eq!(editor.pending().unwrap().hover_target, Some(target));
+        let EdgePath::Bezier { to, .. } = editor.pending_path().unwrap() else {
+            panic!("pending path must be bezier");
+        };
+        assert_eq!(to, pin_pos);
+
+        // Far away → no snap, path follows the cursor.
+        editor
+            .apply(Command::UpdateConnectionDrag(Vec2::new(0.0, 900.0)))
+            .unwrap();
+        assert_eq!(editor.pending().unwrap().hover_target, None);
+        let EdgePath::Bezier { to, .. } = editor.pending_path().unwrap() else {
+            panic!("pending path must be bezier");
+        };
+        assert_eq!(to, Vec2::new(0.0, 900.0));
     }
 
     #[test]
@@ -866,5 +941,61 @@ mod tests {
             .unwrap();
         assert!(!editor.can_redo());
         assert!(editor.can_undo());
+    }
+
+    #[test]
+    fn resize_node_clamps_to_interaction_bounds_and_undoes_as_one_gesture() {
+        let mut editor = make_editor();
+        let node = TestNode::f32_passthrough().with_interaction(
+            xcal_node::NodeInteraction::default()
+                .min_size(100.0, 50.0)
+                .max_size(300.0, 200.0),
+        );
+        editor
+            .apply(Command::AddNode {
+                node: Box::new(node),
+                at: Vec2::new(0.0, 0.0),
+            })
+            .unwrap();
+        let id = editor
+            .drain_events()
+            .find_map(|e| match e {
+                EditorEvent::NodeAdded(n) => Some(n),
+                _ => None,
+            })
+            .unwrap();
+        // Measured baseline size.
+        editor
+            .apply(Command::SetNodeSize {
+                node: id,
+                size: Vec2::new(160.0, 120.0),
+            })
+            .unwrap();
+
+        // Below minimum → clamped up to min.
+        editor
+            .apply(Command::ResizeNode {
+                node: id,
+                size: Vec2::new(50.0, 10.0),
+            })
+            .unwrap();
+        assert_eq!(editor.sizes()[&id], Vec2::new(100.0, 50.0));
+
+        // Above maximum → clamped down to max (same gesture: coalesced undo).
+        editor
+            .apply(Command::ResizeNode {
+                node: id,
+                size: Vec2::new(900.0, 900.0),
+            })
+            .unwrap();
+        assert_eq!(editor.sizes()[&id], Vec2::new(300.0, 200.0));
+
+        // One undo reverts the whole coalesced drag to the pre-resize size.
+        editor.undo().unwrap();
+        assert_eq!(editor.sizes()[&id], Vec2::new(160.0, 120.0));
+
+        // Resize grip is hit-testable at the card's bottom-right corner.
+        let grip = editor.node_rect(id).unwrap().max;
+        assert_eq!(editor.hit_test(grip), HitTarget::ResizeHandle(id));
     }
 }
