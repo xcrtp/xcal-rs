@@ -15,6 +15,7 @@
 // 具体后端（wgpu_3d / egui_2d / eframe / 文本引擎实现）位于 xcal-render-backends。
 
 pub mod components;
+pub mod content_ir;
 pub mod draw;
 pub mod draw_queue_2d;
 pub mod draw_queue_3d;
@@ -23,6 +24,7 @@ pub mod painter_3d;
 pub mod shape;
 pub mod text_engine;
 pub mod vector_content;
+pub mod vertex;
 pub mod viewport;
 
 // render_backend 模块始终编译（GpuHandle 无 wgpu 依赖）；
@@ -48,14 +50,26 @@ pub use painter_3d::Painter3D;
 pub use viewport::Viewport;
 
 // ─── 新图元体系 ───────────────────────────────────────────────────────────
+pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};
 pub use draw_queue_2d::{DrawCommand2D, DrawQueue2D};
 pub use painter_2d::{Painter2DTarget, Style2D};
 pub use shape::{CustomShapeData, CustomTypeId, Shape2D};
+// text_engine 已由新的 ContentIR 两阶段管线取代（见 text_engine.rs 各条目的 #[deprecated]）。
+// 这里保留 re-export 以免下游直接从 xcal-render:: 取类型时 break；
+// 导入侧显式 allow，避免 crate 自己 re-export 就触发 deprecated warning。
+#[allow(deprecated)]
 pub use text_engine::{
     BitmapFormat, BitmapOverlay, TextConfig, TextInput, TextRenderEngine, TextRenderError,
     TextRenderOutput,
 };
 pub use vector_content::VectorContent;
+
+// ─── 顶点格式契约（纯数据，无 wgpu 依赖；翻译层在 xcal-render-backends） ──
+pub use vertex::{
+    hash_bytes, hash_bytes_sampled, AaModel, AaSlotSemantics, AttribSemantic, AttribType,
+    CacheStrategy, StaticConsistencyChecker, StepMode, VertexAttrib, VertexInputDesc,
+    VertexLayout, VertexLayoutError,
+};
 
 // ─── wgpu 抽象（feature gate） ────────────────────────────────────────────
 #[cfg(feature = "wgpu")]
@@ -65,10 +79,12 @@ pub use render_layer::RenderLayer;
 #[cfg(feature = "wgpu")]
 pub use render_target::RenderTarget;
 #[cfg(feature = "wgpu")]
-pub use resource_cache::{CacheKey, GpuResourceCache, ResourceCache};
+pub use resource_cache::{
+    CacheKey, DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey,
+};
 
-// GpuHandle 是纯 Any 包装，无 wgpu 依赖，始终可用。
-pub use render_backend::GpuHandle;
+// GpuHandle / GpuResourceId / AccessError 是纯 Any 包装 + 类型，无 wgpu 依赖，始终可用。
+pub use render_backend::{AccessError, GpuHandle, GpuResourceId};
 
 // 为下游用户提供与原 xcal::scene::comp::{StrokeSolid, FillSolid} 一致的访问
 // 通过在 scene 根重新导出 components + render 组件。

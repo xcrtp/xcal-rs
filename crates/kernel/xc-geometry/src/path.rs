@@ -7,6 +7,7 @@ use crate::rect::Rect2D;
 use crate::vec::Vec2;
 
 /// 路径绘制命令。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PathCommand {
     /// 抬笔移动到点（开始新子路径）。
@@ -30,6 +31,7 @@ pub enum PathCommand {
 }
 
 /// 2D 路径：命令序列 + 懒计算包围盒缓存。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Path2D {
     pub commands: Vec<PathCommand>,

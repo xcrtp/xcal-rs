@@ -12,6 +12,7 @@ license.workspace = true
 [dependencies]
 xcal-core = { path = "../xcal-core", default-features = false }
 xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-content = { path = "../../kernel/xc-content" }
 
 glam.workspace = true
 derive_more.workspace = true
@@ -19,12 +20,15 @@ derive-new.workspace = true
 derive_builder.workspace = true
 hecs.workspace = true
 thiserror.workspace = true
+# 顶点格式契约（vertex 模块）：VertexLayout 需可序列化（V4，pipeline 变体缓存 key 前置）
+serde.workspace = true
 
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 glam.workspace = true
 hecs.workspace = true
+serde_json.workspace = true
 
 [features]
 default = ["wgpu"]

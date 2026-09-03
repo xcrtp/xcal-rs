@@ -33,7 +33,9 @@ name = "cube_3d"
 required-features = ["egui-wgpu"]
 
 [features]
-default = []
+# 默认启用 wgpu：让 `cargo test -p xcal-render-backends`（顶点契约 V6 验收命令）
+# 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
+default = ["wgpu"]
 wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
 egui = ["dep:egui", "xcal-core/egui"]
 # egui + wgpu 集成（egui_wgpu 回调、EframeWgpuBackend、RenderContext）。

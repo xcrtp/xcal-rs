@@ -1,0 +1,12 @@
+// xc-content: 内容中间表示（Content IR）内核。
+// 层次：kernel（纯数据 + 纯函数，无 egui / 无渲染 / 无后端）。
+// 依赖方向：xc-content（xc-geometry）← xc-prerender ← xcal-render。
+
+pub mod ir;
+pub mod normalize;
+pub mod placeholder;
+pub mod svg;
+
+pub use ir::{ContentIR, ContentSource, Span, StyledPath};
+pub use normalize::{hash_source, normalize_source};
+pub use svg::{to_svg, SvgOptions};

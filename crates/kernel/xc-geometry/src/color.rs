@@ -7,6 +7,7 @@ use crate::vec::Vec4;
 /// 32 位颜色：r/g/b/a 各 8 位。
 ///
 /// 与后端无关的纯数据类型；后端（egui/wgpu）的转换由各后端 crate 负责。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Color32 {
     pub r: u8,

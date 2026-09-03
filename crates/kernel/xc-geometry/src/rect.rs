@@ -5,6 +5,7 @@
 use crate::vec::Vec2;
 
 /// 2D 轴对齐矩形（AABB），由 `min`（左下）与 `max`（右上）角点定义。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect2D {
     pub min: Vec2,

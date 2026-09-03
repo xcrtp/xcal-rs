@@ -8,7 +8,7 @@
 
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
-| kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染、无领域）|
+| kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；可含通用能力领域，如几何、排版）|
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
 | render | `crates/render/` | `xcal-` | 渲染抽象 + 后端（含 ECS/场景）|
 | ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 + proc-macro |
@@ -22,6 +22,9 @@
 graph TD
     subgraph kernel[crates/kernel]
         xc_geometry["xc-geometry"]
+        xc_content["xc-content"]
+        xc_prerender["xc-prerender"]
+        xc_time["xc-time"]
     end
 
     subgraph graph[crates/graph]
@@ -52,15 +55,19 @@ graph TD
 
     %% kernel
     xc_geometry
+    xc_content --> xc_geometry
+    xc_prerender --> xc_content
+    xc_prerender --> xc_geometry
 
     %% graph → kernel
     xc_graph_algo --> xc_node
     xc_graph_eval --> xc_node
-    xc_graph_eval --> xc_graph_algo
 
     %% render → kernel + graph + UI sibling
     xcal_core --> xc_geometry
+    xcal_core --> xc_time
     xcal_core --> xcal_macro
+    xcal_render --> xc_content
     xcal_render --> xc_geometry
     xcal_render --> xcal_core
     xcal_render_backends --> xc_geometry
@@ -98,25 +105,28 @@ graph TD
 | NoGraphDomainTypes | ✅ 通过 | crates/graph 无领域类型引用 |
 | NoCycles | ✅ 通过 | 生产依赖为 DAG（dev-deps 不计入） |
 
-**依赖分析（cargo-workspace-analyzer 输出）：**
+**依赖分析（cargo-workspace-analyzer 输出；本次数据由 `cargo metadata` 等价重算，见文末说明）：**
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
 | xcal-app | 0 | 5 | 1.00 |
+| xcal-node-egui-ui | 0 | 3 | 1.00 |
+| xc-prerender | 0 | 2 | 1.00 |
+| xc-graph-eval | 0 | 1 | 1.00 |
 | xcal-egui | 1 | 4 | 0.80 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
-| xc-graph-eval | 0 | 1 | 1.00 |
-| xcal-node-egui-ui | 0 | 3 | 1.00 |
-| xc-node | 6 | 0 | 0.00 |
-| xcal-core | 4 | 2 | 0.33 |
-| xc-graph-algo | 1 | 1 | 0.50 |
-| xcal-render | 3 | 2 | 0.40 |
 | xcal-render-backends | 2 | 3 | 0.60 |
-| xcal-macro | 3 | 0 | 0.00 |
-| xc-geometry | 3 | 0 | 0.00 |
+| xcal-render | 3 | 3 | 0.50 |
+| xc-graph-algo | 1 | 1 | 0.50 |
+| xcal-core | 4 | 3 | 0.43 |
+| xc-content | 2 | 1 | 0.33 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
+| xc-node | 6 | 0 | 0.00 |
+| xc-geometry | 5 | 0 | 0.00 |
+| xcal-macro | 3 | 0 | 0.00 |
+| xc-time | 1 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -156,11 +166,31 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
 - ExecutorContext `resources` 字段私有，仅通过 `get<T>()` / `get_mut<T>()` 访问
 - DrawQueue 使用稳定排序保留同 ZIndex 的插入顺序
 
+### 两阶段内容管线（xc-content / xc-prerender）
+
+```
+源码字符串 → xc-prerender（engine: typst [feature] / placeholder）
+           → xc-content::ContentIR（StyledPath + fill/stroke + Span 锚点，pt，Y-up）
+           → xcal-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
+                                          Shape2D::Path + Style2D + Transform2D）
+```
+
+- **铁律**：`typst` 仅允许出现在 `xc-prerender` 且 feature-gated；`xcal-render`
+  只依赖 `xc-content`（验收：`cargo tree -p xcal-render` 无 typst）。
+- 锚点两级映射：`Glyph.span` → `WorldExt::range`（main source 字节区间）
+  → 原始归一化源码 `find`；归一化/哈希统一由 `xc-content` 实现，保证跨引擎一致。
+
 ### cargo-archtest 适配状态
 
 `cargo-archtest v0.2.3` 的架构模型是「单 crate 内按 `src/` 子目录分层」，
 不适用于本 workspace 的「workspace 级 crate 分层」。当前 CI 流程：
 - `cargo check --workspace --all-targets`（编译自然拦截反向依赖）
 - `cargo-workspace-analyzer -d .`（依赖分析 + 循环检测）
+
+> 备注（2026-09-03）：本次刷新时 `cargo-workspace-analyzer` 在本机连续
+> 挂起（CPU 空转、无文件输出；正常时会生成 `workspace-analyzer.mmd` /
+> `architecture.json`），故图与 FanIn/FanOut 表改用
+> `cargo metadata --format-version 1`（仅生产依赖，`kind != dev`）等价重算。
+> 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

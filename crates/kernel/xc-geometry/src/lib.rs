@@ -17,6 +17,7 @@ pub mod mat;
 pub mod path;
 pub mod primitives;
 pub mod rect;
+pub mod stroke;
 pub mod transform;
 pub mod vec;
 
@@ -25,5 +26,6 @@ pub use mat::{Mat3, Mat4, Quat};
 pub use path::{Path2D, PathCommand};
 pub use primitives::{Line3D, Point3D, Triangle2D};
 pub use rect::Rect2D;
+pub use stroke::Stroke2D;
 pub use transform::{Transform2D, Transform3D};
 pub use vec::{Vec2, Vec3, Vec4};

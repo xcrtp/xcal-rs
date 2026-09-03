@@ -1,14 +1,20 @@
-// text_engine.rs
+// text_engine.rs — 旧 TextRenderEngine trait（保留以便现有调用无痛迁移）。
 //
-// 文本渲染引擎抽象（预留）：公式/文本后端（Typst、LaTeX）实现 TextRenderEngine，
-// 将 TextInput 排版为 TextRenderOutput（位图覆盖层 或 三角化矢量）。
-//
-// MVE 阶段只定义 trait 与数据类型，具体实现在 xcal-render-backends（feature = "text"）。
+// ⚠️ 已由新的"两阶段内容管线"取代：
+//     kernel::xc-prerender::ContentEngine（placeholder + typst）→
+//     kernel::xc-content::ContentIR →
+//     xcal-render::ir_to_draw_cmds → Shape2D + Style2D + Transform2D。
+// 本模块不再有实现；未来版本将直接删除。下游请迁移到 ContentIR 管线。
 
 use xc_geometry::{Rect2D, Vec2};
 
 /// 文本渲染错误。
 #[derive(Debug, Clone, thiserror::Error)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub enum TextRenderError {
     #[error("文本引擎编译失败: {0}")]
     CompileFailed(String),
@@ -20,6 +26,11 @@ pub enum TextRenderError {
 
 /// 位图像素格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub enum BitmapFormat {
     /// 8-bit 灰度（仅 alpha）。
     A8,
@@ -29,6 +40,11 @@ pub enum BitmapFormat {
 
 /// 位图覆盖层：排版结果作为一张 2D 位图，叠加到画布的 `offset` 位置。
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub struct BitmapOverlay {
     /// 像素数据（按 `format` 解释）。
     pub pixels: Vec<u8>,
@@ -41,6 +57,11 @@ pub struct BitmapOverlay {
 
 /// 排版配置。
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub struct TextConfig {
     /// 字体大小（逻辑像素）。
     pub font_size: f32,
@@ -50,6 +71,7 @@ pub struct TextConfig {
     pub color: xc_geometry::Color32,
 }
 
+#[allow(deprecated)]
 impl Default for TextConfig {
     fn default() -> Self {
         Self {
@@ -62,6 +84,11 @@ impl Default for TextConfig {
 
 /// 文本/公式输入。
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub struct TextInput {
     /// 源码（Typst/LaTeX 语法，由具体引擎解释）。
     pub source: String,
@@ -69,6 +96,7 @@ pub struct TextInput {
     pub config: TextConfig,
 }
 
+#[allow(deprecated)]
 impl TextInput {
     pub fn new(source: impl Into<String>) -> Self {
         Self {
@@ -85,6 +113,11 @@ impl TextInput {
 
 /// 排版输出。
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub enum TextRenderOutput {
     /// 位图覆盖（栅格化路径）。
     Bitmap(BitmapOverlay),
@@ -99,10 +132,17 @@ pub enum TextRenderOutput {
 ///
 /// 引擎负责把 [`TextInput`] 编译为 [`TextRenderOutput`]；调用方
 /// （渲染层）负责把输出提交给 2D 后端绘制。
+#[allow(deprecated)]
+#[deprecated(
+    since = "0.1.0",
+    note = "已由 kernel::xc-prerender（ContentEngine）+ xc-content（ContentIR）+ xcal_render::ir_to_draw_cmds 取代。\
+            实现不再放在 render 层，避免 render 层依赖 typst。下游请迁移。"
+)]
 pub trait TextRenderEngine: Send + Sync {
     /// 引擎名称（调试/日志用）。
     fn name(&self) -> &str;
 
     /// 同步排版（MVE 阶段足够；后续可扩展异步缓存版本）。
+    #[allow(deprecated)]
     fn render(&self, input: &TextInput) -> Result<TextRenderOutput, TextRenderError>;
 }

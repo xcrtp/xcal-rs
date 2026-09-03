@@ -1,0 +1,38 @@
+[package]
+name = "xc-prerender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# kernel 层重 crate：内容排版引擎实现（Typst / LaTeX 等）。
+# 注意：所有重型引擎依赖必须放在 feature 后；未启用 feature 时应零重依赖。
+# kernel 铁律：禁止依赖 graph / render / ui / app（xc-* / xcal-* 上层）。
+
+[dependencies]
+xc-geometry = { path = "../xc-geometry" }
+xc-content = { path = "../xc-content" }
+thiserror = { workspace = true }
+derive_more = { workspace = true }
+
+# Typst 引擎依赖（全部 optional，由 feature = "typst" 打开）。
+typst = { version = "0.14", optional = true }
+typst-library = { version = "0.14", optional = true }
+ecow = { version = "0.2", optional = true }
+fontdb = { version = "0.16", optional = true }
+ttf-parser = { version = "0.25", optional = true }
+
+[dev-dependencies]
+xc-content = { path = "../xc-content" }
+
+[features]
+default = []
+# Typst 排版引擎。打开时会引入 typst workspace 共 ~15 个 crate。
+typst = [
+    "dep:typst",
+    "dep:typst-library",
+    "dep:ecow",
+    "dep:fontdb",
+    "dep:ttf-parser",
+]
+# 占位引擎（用 xc-content placeholder；默认可用，不需要额外依赖）。
+placeholder = []
