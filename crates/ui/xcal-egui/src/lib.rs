@@ -11,10 +11,12 @@
 
 pub mod resources;
 pub mod systems;
+pub mod time_control;
 
 pub use resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 pub use systems::{
     AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
     RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
 };
+pub use time_control::TimeControlSystem;
 pub use xcal_render_backends::EguiPainter;

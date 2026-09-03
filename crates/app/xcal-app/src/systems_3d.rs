@@ -1,39 +1,17 @@
-// systems_3d.rs
+// systems_3d.rs — 3D 渲染的两个 System
 //
-// 3D 渲染的三个 System：
-// - OrbitApplySystem   (SceneSync)：OrbitAnim 驱动 Camera3D 轨道运动
 // - SceneRecord3DSystem(RenderCommit)：遍历 Mesh3D 组件录制到 DrawQueue3D
 // - RenderSubmit3DSystem(FrameEnd)：把相机+队列快照封装为 egui_wgpu 回调，
 //   绘制进 eframe 主 render pass（中央视口，clip 自动排除侧边栏）。
 //
-// 组件（Camera3D / OrbitAnim / Mesh3D / Transform）走 hecs World，
-// 只有 DrawQueue3D / EguiFrameContext / ViewRect / TimeState 是 Resource。
+// OrbitApplySystem 在 P3 已废弃（由 BindingApplySystem 统一驱动 Camera3D.eye）。
 
 use xcal_core::context::ExecutorContext;
-use xcal_core::scene::components::{Camera3D, Mesh3D, OrbitAnim, Transform};
+use xcal_core::scene::components::{Camera3D, Mesh3D, Transform};
 use xcal_core::system::System;
-use xcal_egui::resources::{EguiFrameContext, TimeState, ViewRect};
+use xcal_egui::resources::{EguiFrameContext, ViewRect};
 use xcal_render::DrawQueue3D;
 use xcal_render_backends::Layer3DCallback;
-
-// ─── OrbitApplySystem ──────────────────────────────────────────────────────
-
-/// 驱动挂有 [`OrbitAnim`] 的 [`Camera3D`] 做轨道运动。
-pub struct OrbitApplySystem;
-
-impl System for OrbitApplySystem {
-    type Reads = (TimeState,);
-    type Writes = ();
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let t = ctx.get::<TimeState>().map(|s| s.elapsed).unwrap_or(0.0);
-        for (orbit, camera) in ctx.world.query::<(&OrbitAnim, &mut Camera3D)>().iter() {
-            orbit.apply(t, camera);
-        }
-    }
-}
-
-// ─── SceneRecord3DSystem ───────────────────────────────────────────────────
 
 /// 每帧清空 [`DrawQueue3D`]，把世界中的全部 [`Mesh3D`]（带可选 [`Transform`]）
 /// 录制进队列。

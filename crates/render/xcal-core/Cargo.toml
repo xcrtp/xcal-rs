@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 xcal-macro = { path = "../../ui/xcal-macro" }
 xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-time = { path = "../../kernel/xc-time" }
 
 glam.workspace = true
 derive_more.workspace = true

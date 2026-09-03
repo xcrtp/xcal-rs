@@ -1049,6 +1049,9 @@ name = "glam"
 version = "0.33.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21fef0953c54fd3de2f44b743fbf77e044c81a25faee03636dfccc0d35135e23"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "glifo"
@@ -3796,6 +3799,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-time"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "xcal-app"
 version = "0.1.0"
 dependencies = [
@@ -3833,6 +3846,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xc-geometry",
+ "xc-time",
  "xcal-macro",
 ]
 

@@ -12,7 +12,8 @@ workspace 采用分层目录结构 `crates/<layer>/`，通用基础 crate 用 `x
 ```text
 crates/
 ├── kernel/          # 纯数据层
-│   └── xc-geometry       纯几何数据（Color32 / Rect2D / Path2D / Transform2D）
+│   ├── xc-geometry       纯几何数据（Color32 / Rect2D / Path2D / Transform2D）
+│   └── xc-time           时钟树 + 曲线 + 导演（Director 唯一时间源，纯数据纯函数）
 │
 ├── graph/           # 节点图契约层（禁止依赖 egui / xcal-* / 领域类型）
 │   ├── xc-node           节点图内核（Node / Graph / Socket trait + NodeInteraction）
@@ -47,25 +48,51 @@ crates/
 | Crate | 层 | 职责 |
 |-------|----|------|
 | `xc-geometry` | kernel | 纯几何数据（Color32 / Rect2D / Path2D / Transform2D / Point3D） |
+| `xc-time` | kernel | 纯逻辑时间内核：ClockForest（时钟树+环检测+eval_local）/ Curve（Const/Sin/Orbit/Phase/Sampled 纯函数 sample）/ Director（global_t + speed + playing，唯一时间源） |
 | `xc-node` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `xc-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
 | `xc-graph-eval` | graph | 惰性拉取求值（LazyPullEval） |
 | `xc-node-schema` | graph | 属性模型（Property / NodeSpec / DynamicObject / NodeRegistry），不依赖 egui |
 | `xc-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
-| `xcal-core` | render | ECS（hecs World / Resources / System trait / 六阶段 Scheduler）；Transform2D 体系；3D 场景类型（Camera3D / Mesh3D / OrbitAnim） |
+| `xcal-core` | render | ECS（hecs World / Resources / System trait / 六阶段 Scheduler）；Transform2D 体系；3D 场景类型；**动画绑定层**（Binding / BindingTable / BindingApplySystem，取代组件组合查询）；DirectorState + DirectorAdvanceSystem；TimeState |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer / Viewport） |
 | `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / EguiPainter / Layer3DCallback） |
 | `xcal-macro` | ui | `Transform2DInto` 派生过程宏 |
-| `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入） |
+| `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
 | `xcal-node-editor` | ui | 纯逻辑节点编辑器状态机（Command / Undo / 可插拔 HitTestPolicy） |
 | `xcal-node-egui` | ui | egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸） |
 | `xcal-node-egui-ui` | ui | 属性→egui 控件映射（PropertyNodeView / draw_property / spawn_menu） |
 | `xcal-app` | app | 应用组装：Scheduler 构建 / Resource 注入 / System 注册 / egui-wgpu 回调 |
 
+## 动画架构（Director 唯一时间源）
+
+旧：`TimeUpdateSystem` 直接累积 `elapsed` → `AnimationApplySystem` 组件组合查询写动画字段。
+新：**时间单向管道**，全部纯函数，不依赖渲染帧率：
+
+```
+墙钟 Instant::now()
+  → DirectorAdvanceSystem (Input 阶段, Writes=DirectorState+TimeState)
+      director.advance(dt)     // global_t = (global_t + speed*dt) 或 seek
+      TimeState.elapsed = global_t
+  → BindingApplySystem (SceneSync 阶段, Reads=TimeState+ClockForest+BindingTable)
+      对每条 Binding:
+        local_t = ClockForest.eval_local(clock, global_t)   // 纯函数，支持 Loop/PingPong 等
+        value   = Curve.sample(local_t)                      // Const/Sin/Orbit/Phase/Sampled
+        写入目标组件字段 (Circle.radius / Camera3D.eye / ...)
+  → SceneRecord → 渲染
+```
+
+铁律：
+- 动画纯函数：永不累积状态 → seek/倒放免费正确
+- Binding 表取代组件耦合：新增动画 = 加一行 Binding，不改 System 源码
+- 时钟树纯数据 + 纯函数：脱离 hecs，可序列化可测试
+- 墙钟时间：`Instant::now()` 算 dt，帧率波动不影响时间流速
+- UI slider 的 seek 只在 `drag_stopped()` 触发，step_by 会把 global_t 对齐到网格导致卡死
+
 ## 3D 帧流水线
 
-1. **SceneSync**：`OrbitApplySystem` 根据 `TimeState` 更新带 `OrbitAnim` 的
-   `Camera3D`（eye 绕 target 轨道运动）。
+1. **SceneSync**：`BindingApplySystem` 根据 `BindingTable` 把动画值写入
+   `Camera3D.eye`（轨道）等组件，取代旧的 `OrbitAnim` 组件 + `OrbitApplySystem`。
 2. **RenderCommit**：`SceneRecord3DSystem` 遍历 World 中的 `Mesh3D`
    （+ 可选 `Transform`），清空并填充 `DrawQueue3D`。
 3. **FrameEnd**：`RenderSubmit3DSystem` 取中央视口矩形，构造

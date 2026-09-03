@@ -7,19 +7,25 @@
 //   - 实现 eframe::App trait（ui 每帧调度）
 
 use std::sync::Arc;
+use std::time::Instant;
 
 pub use xcal_core::Result;
+use xcal_core::animation::{BindingApplySystem, Binding, BindingTarget, BindingTable, SeekKind};
+use xcal_core::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_core::errors::Error;
 use xcal_core::resource::Resources;
-use xcal_core::scene::components::{Camera3D, OrbitAnim, Projection};
+use xcal_core::scene::components::{Camera3D, Projection};
 use xcal_core::scene::primitives::wireframe_cube;
 use xcal_core::scheduler::{Phase, Scheduler};
+use xcal_core::TimeState;
 use xcal_core::types::Color32;
-use xcal_egui::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
+use xcal_core::{ClockForest, ClockNode, Curve};
+use xcal_egui::resources::{AppCamera, EguiFrameContext, UiConfig, ViewRect};
 use xcal_egui::systems::{
-    AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
-    RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
+    CameraInputSystem, ControlPanelSystem, GridBuildSystem, RenderSubmitSystem, SceneRecordSystem,
+    ViewRectUpdateSystem,
 };
+use xcal_egui::TimeControlSystem;
 use xcal_render::components::{
     Circle, CircleAnim, ClockState, FunctionX2Y, LocalClock, PhaseAnim, Sampler1D, StrokeSolid,
 };
@@ -27,19 +33,25 @@ use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
 
 mod health;
+mod param_panel;
 mod systems_3d;
 use health::HealthOverlay;
-use systems_3d::{OrbitApplySystem, RenderSubmit3DSystem, SceneRecord3DSystem};
+use param_panel::ParamPanelSystem;
+use systems_3d::{RenderSubmit3DSystem, SceneRecord3DSystem};
 
 pub struct App {
     scheduler: Scheduler,
     render_ctx: RenderContext,
     health: HealthOverlay,
+    /// 墙钟时间基准：每帧用 Instant::now() - last_frame 算 dt，
+    /// 不依赖渲染帧间隔（帧率波动、卡顿都不影响 Director 时间流速）。
+    last_frame: Instant,
 }
 
 impl App {
     pub fn new(ctx: &eframe::CreationContext) -> Result<Self> {
         Self::setup_fonts(&ctx.egui_ctx)?;
+        Self::setup_visuals(&ctx.egui_ctx);
 
         let render_ctx = {
             let rs = ctx
@@ -64,18 +76,17 @@ impl App {
         // ── 3D 场景：白色线框立方体 ──────────────────────────────
         scene.spawn((wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),));
 
-        // 3D 相机 + 轨道动画（eye 每帧由 OrbitApplySystem 覆盖，初始值仅占位）。
-        scene.spawn((
+        // 3D 相机（eye 由 BindingApplySystem 驱动，旧 OrbitAnim 组件已移除）。
+        let camera_entity = scene.spawn((
             Camera3D::new(
                 glam::Vec3::new(0.0, 0.0, 5.0),
                 glam::Vec3::ZERO,
                 glam::Vec3::Y,
                 Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
             ),
-            OrbitAnim::new(0.5, 5.0, glam::Vec3::Y, 0.0),
         ));
 
-        scene.spawn((
+        let circle_entity = scene.spawn((
             Circle::new((0.0, 0.0), 1.0),
             StrokeSolid::new(2.0, (100, 255, 0, 255)),
             // 动画驱动：start=0, speed=1；base=1.0, amp=0.4, omega=2.0 → radius 在 0.6~1.4 间 sin 振荡
@@ -83,7 +94,7 @@ impl App {
             CircleAnim::new(1.0, 0.4, 2.0),
         ));
 
-        scene.spawn((
+        let func_entity = scene.spawn((
             FunctionX2Y::new(|x: f32| x.sin()),
             Sampler1D::new(-10.0f32, 10.0, 0.1),
             StrokeSolid::new(2.0, (0, 200, 200, 255)),
@@ -93,6 +104,41 @@ impl App {
         ));
 
         let world = scene.into_world();
+
+        // ── 时钟树 + 绑定表（P2：新旧双跑）────────────────────────────
+        let mut forest = ClockForest::new();
+        let root_circle = forest.insert(ClockNode::new(None)).unwrap();
+        let root_phase = forest.insert(ClockNode::new(None)).unwrap();
+        let root_orbit = forest.insert(ClockNode::new(None)).unwrap();
+
+        let mut bindings = BindingTable::new();
+        // 振动圆半径：radius = base + amp * sin(t * omega)，base=1, amp=0.4, omega=2
+        bindings.add(Binding {
+            clock: root_circle,
+            curve: Curve::Sin { base: 1.0, amp: 0.4, omega: 2.0 },
+            target: BindingTarget::CircleRadius(circle_entity),
+            seek_kind: SeekKind::O1,
+        });
+        // sin 曲线相位滑动：phase = t * omega，omega=1.5
+        bindings.add(Binding {
+            clock: root_phase,
+            curve: Curve::Phase { omega: 1.5 },
+            target: BindingTarget::Phase(func_entity),
+            seek_kind: SeekKind::O1,
+        });
+        // 3D 轨道相机：eye = radius * rotate_y(speed * t)，radius=5, speed=0.5
+        bindings.add(Binding {
+            clock: root_orbit,
+            curve: Curve::Orbit {
+                radius: 5.0,
+                axis: glam::Vec3::Y,
+                speed: 0.5,
+                initial_angle: 0.0,
+            },
+            target: BindingTarget::CameraEye(camera_entity),
+            seek_kind: SeekKind::O1,
+        });
+
         let mut resources = Resources::new();
         resources.insert(AppCamera::default());
         resources.insert(TimeState::default());
@@ -101,28 +147,25 @@ impl App {
         resources.insert(DrawQueue::new());
         resources.insert(DrawQueue3D::new());
         resources.insert(render_ctx.clone());
+        resources.insert(forest);
+        resources.insert(bindings);
+        resources.insert(DirectorState::new());
 
         let mut scheduler = Scheduler::new(world, resources);
 
-        // 新阶段分配以避开同 phase 内 read/write 冲突：
-        // - Input:        TimeUpdate (W=TimeState), CameraInput (R=EguiFrameContext, W=AppCamera)
-        // - LogicUpdate:  ControlPanel (R=TimeState, AppCamera, EguiFrameContext, W=UiConfig)
-        // - SceneSync:    ViewRectUpdate (R=EguiFrameContext, W=ViewRect)
-        //                 AnimationApply (R=TimeState, W=())
-        // - Prepare:      GridBuild (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
-        // - RenderCommit: SceneRecord (R=ViewRect, AppCamera, W=DrawQueue)
-        // - FrameEnd:     RenderSubmit (R=ViewRect, EguiFrameContext, DrawQueue, W=())
-        scheduler.add_system(Phase::Input, TimeUpdateSystem);
+        // P3：Director 是唯一时间源。
+        // - Input:        DirectorAdvance（W=DirectorState, TimeState），CameraInput
+        // - LogicUpdate:  ControlPanel + TimeControl（新：播放/暂停/速度/seek）
+        // - SceneSync:    ViewRectUpdate + BindingApply（统一驱动 2D+3D 动画，读 TimeState + ClockForest + BindingTable）
+        scheduler.add_system(Phase::Input, DirectorAdvanceSystem);
         scheduler.add_system(Phase::Input, CameraInputSystem);
 
         scheduler.add_system(Phase::LogicUpdate, ControlPanelSystem);
+        scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
+        scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
 
-        // SceneSync：ViewRectUpdate 写 ViewRect，AnimationApply 只读 TimeState，
-        // 两者访问集不相交（writes ∩ reads∪writes = ∅），无冲突。
-        // OrbitApply 同样只读 TimeState（Camera3D/OrbitAnim 是 hecs 组件）。
         scheduler.add_system(Phase::SceneSync, ViewRectUpdateSystem);
-        scheduler.add_system(Phase::SceneSync, AnimationApplySystem);
-        scheduler.add_system(Phase::SceneSync, OrbitApplySystem);
+        scheduler.add_system(Phase::SceneSync, BindingApplySystem);
 
         scheduler.add_system(Phase::Prepare, GridBuildSystem);
 
@@ -140,6 +183,7 @@ impl App {
             scheduler,
             render_ctx,
             health: HealthOverlay::new(),
+            last_frame: Instant::now(),
         })
     }
 
@@ -171,11 +215,23 @@ impl App {
         }
         Ok(())
     }
+
+    /// 调亮 UI 文字颜色：默认 dark theme 的 weak_text_color 偏灰，
+    /// 把 hint / inactive 都提亮。
+    fn setup_visuals(ctx: &egui::Context) {
+        let mut visuals = egui::Visuals::dark();
+        visuals.weak_text_color = Some(egui::Color32::from_rgb(210, 210, 210));
+        visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_rgb(200, 200, 200);
+        ctx.set_visuals(visuals);
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let dt = ui.input(|i| i.unstable_dt).min(0.1);
+        // 墙钟 dt：用单调时钟算，不随渲染帧率波动。
+        let now = Instant::now();
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+        self.last_frame = now;
 
         self.scheduler
             .resources_mut()

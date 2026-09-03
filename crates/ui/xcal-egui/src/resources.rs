@@ -63,10 +63,7 @@ impl AppCamera {
 
 // ─── TimeState ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Default)]
-pub struct TimeState {
-    pub elapsed: f32,
-}
+pub use xcal_core::TimeState;
 
 // ─── UiConfig ──────────────────────────────────────────────────────────────
 

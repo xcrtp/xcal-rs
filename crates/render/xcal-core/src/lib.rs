@@ -9,7 +9,9 @@
 //      utils 宏
 
 pub mod access;
+pub mod animation;
 pub mod context;
+pub mod director_state;
 pub mod errors;
 pub mod resource;
 pub mod scene;
@@ -19,6 +21,7 @@ pub mod system;
 #[cfg(feature = "telemetry")]
 pub mod telemetry;
 pub mod transform;
+pub mod time_state;
 pub mod types;
 pub mod utils;
 
@@ -32,6 +35,10 @@ pub use scene::{Scene, comp, components, primitives};
 pub use scheduler::{Phase, Scheduler};
 pub use system::{ErasedSystem, InitSystem, Sys, System, sys};
 pub use transform::{Transform2D, Transform2DInto};
+pub use time_state::TimeState;
+pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, PlayMode};
+pub use animation::{BindingTable, Binding, BindingTarget, SeekKind};
+pub use director_state::{DirectorAdvanceSystem, DirectorState};
 pub use types::{Camera2D, Color32, I8Vec4, Rect, U8Vec4, Vec2, Vec3, Vec4};
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），
 // 下游通过 `#[macro_use]` 或 `xcal_core::auto_into!` 访问。
