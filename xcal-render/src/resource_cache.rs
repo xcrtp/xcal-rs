@@ -245,8 +245,18 @@ mod tests {
         let key_v0 = CacheKey::of::<u32>(e, 0);
         let key_v1 = CacheKey::of::<u32>(e, 1);
 
-        cache.get_or_insert(key_v0, (), |_, _| GpuHandle::new(10_u32), &mut StubBackend {});
-        cache.get_or_insert(key_v1, (), |_, _| GpuHandle::new(20_u32), &mut StubBackend {});
+        cache.get_or_insert(
+            key_v0,
+            (),
+            |_, _| GpuHandle::new(10_u32),
+            &mut StubBackend {},
+        );
+        cache.get_or_insert(
+            key_v1,
+            (),
+            |_, _| GpuHandle::new(20_u32),
+            &mut StubBackend {},
+        );
 
         assert_eq!(cache.len(), 2);
         assert_eq!(

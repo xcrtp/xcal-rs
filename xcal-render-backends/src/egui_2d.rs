@@ -72,11 +72,8 @@ impl<'a> Painter2D for EguiPainter<'a> {
             }
             (Shape::Line(_), Style::Fill(_)) => {}
             (Shape::Rect(r), Style::Fill(f)) => {
-                self.painter.rect_filled(
-                    (*r).into_egui_rect(),
-                    0.0,
-                    color_to_egui(f.color),
-                );
+                self.painter
+                    .rect_filled((*r).into_egui_rect(), 0.0, color_to_egui(f.color));
             }
             (Shape::Rect(r), Style::Stroke(s)) => {
                 self.painter.rect_stroke(

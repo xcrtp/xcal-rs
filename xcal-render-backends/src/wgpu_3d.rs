@@ -215,11 +215,7 @@ impl WgpuBackend3D {
     }
 
     /// 为一次绘制创建 uniform buffer + bind group。
-    fn create_uniform_binding(
-        &self,
-        mvp: Mat4,
-        color: Color32,
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+    fn create_uniform_binding(&self, mvp: Mat4, color: Color32) -> (wgpu::Buffer, wgpu::BindGroup) {
         let buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -310,11 +306,7 @@ impl WgpuBackend3D {
     }
 
     /// 把已准备的绘制命令录制进外部 render pass（egui 回调路径）。
-    pub fn record_prepared<'a>(
-        &self,
-        draws: &[PreparedDraw3D],
-        rpass: &mut wgpu::RenderPass<'a>,
-    ) {
+    pub fn record_prepared<'a>(&self, draws: &[PreparedDraw3D], rpass: &mut wgpu::RenderPass<'a>) {
         for d in draws {
             match d.topology {
                 PrimitiveTopology::Triangles => rpass.set_pipeline(&self.pipeline_triangles),
@@ -398,8 +390,8 @@ mod tests {
     use super::*;
     use crate::render_context::RenderContext;
     use xcal_core::scene::components::{Camera3D, Projection};
-    use xcal_geometry::Vec3;
     use xcal_core::scene::primitives::wireframe_cube;
+    use xcal_geometry::Vec3;
     use xcal_render::{DrawQueue3D, Viewport};
 
     fn headless_backend() -> Option<(WgpuBackend3D, RenderContext)> {
@@ -473,11 +465,7 @@ mod tests {
             Mat4::IDENTITY,
             Color32::new(255, 255, 255, 255),
         );
-        queue.draw_line(
-            Vec3::ZERO,
-            Vec3::X,
-            Color32::new(255, 0, 0, 255),
-        );
+        queue.draw_line(Vec3::ZERO, Vec3::X, Color32::new(255, 0, 0, 255));
         let frame = backend.prepare_draws(
             ctx.device(),
             ctx.queue(),

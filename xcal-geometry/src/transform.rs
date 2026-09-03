@@ -150,10 +150,7 @@ mod tests {
     #[test]
     fn test_3d_translate_and_compose() {
         let t = Transform3D::translate(Vec3::new(1.0, 2.0, 3.0));
-        assert_eq!(
-            t.apply_point(Vec3::ZERO),
-            Vec3::new(1.0, 2.0, 3.0)
-        );
+        assert_eq!(t.apply_point(Vec3::ZERO), Vec3::new(1.0, 2.0, 3.0));
         let t2 = t.compose(Transform3D::scale(Vec3::new(2.0, 2.0, 2.0)));
         assert_eq!(
             t2.apply_point(Vec3::new(0.0, 0.0, 0.0)),

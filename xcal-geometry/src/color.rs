@@ -138,7 +138,10 @@ mod tests {
 
     #[test]
     fn test_from_rgb_and_hex() {
-        assert_eq!(Color32::from_rgb(0x112233).to_array(), [0x11, 0x22, 0x33, 255]);
+        assert_eq!(
+            Color32::from_rgb(0x112233).to_array(),
+            [0x11, 0x22, 0x33, 255]
+        );
         assert_eq!(
             Color32::from_hex(0x11223344).to_array(),
             [0x11, 0x22, 0x33, 0x44]

@@ -181,7 +181,10 @@ mod tests {
             children: vec![
                 Shape2D::Rect(Rect2D::from_min_size(Vec2::ZERO, Vec2::new(2.0, 2.0))),
                 Shape2D::Empty,
-                Shape2D::Rect(Rect2D::from_min_size(Vec2::new(1.0, 1.0), Vec2::new(3.0, 3.0))),
+                Shape2D::Rect(Rect2D::from_min_size(
+                    Vec2::new(1.0, 1.0),
+                    Vec2::new(3.0, 3.0),
+                )),
             ],
         };
         let b = g.bounds().unwrap();

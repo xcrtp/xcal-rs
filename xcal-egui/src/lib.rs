@@ -12,9 +12,9 @@
 pub mod resources;
 pub mod systems;
 
-pub use xcal_render_backends::EguiPainter;
 pub use resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 pub use systems::{
     AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
     RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
 };
+pub use xcal_render_backends::EguiPainter;

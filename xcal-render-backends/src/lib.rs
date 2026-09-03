@@ -31,7 +31,7 @@ pub mod text;
 // ─── re-export ────────────────────────────────────────────────────────────
 
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
-pub use render_context::{RenderContext, DEFAULT_TARGET_FORMAT};
+pub use render_context::{DEFAULT_TARGET_FORMAT, RenderContext};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use wgpu_3d::{Frame3DData, PreparedDraw3D, WgpuBackend3D};
 

@@ -14,16 +14,9 @@ pub enum PathCommand {
     /// 直线到点。
     LineTo(Vec2),
     /// 二次贝塞尔曲线。
-    QuadTo {
-        ctrl: Vec2,
-        end: Vec2,
-    },
+    QuadTo { ctrl: Vec2, end: Vec2 },
     /// 三次贝塞尔曲线。
-    CubicTo {
-        ctrl1: Vec2,
-        ctrl2: Vec2,
-        end: Vec2,
-    },
+    CubicTo { ctrl1: Vec2, ctrl2: Vec2, end: Vec2 },
     /// 椭圆弧：中心 + 半径 + 旋转角 + 起止角（弧度）。
     Arc {
         center: Vec2,
@@ -211,11 +204,7 @@ impl Path2D {
                     include(ctrl2);
                     include(end);
                 }
-                PathCommand::Arc {
-                    center,
-                    radii,
-                    ..
-                } => {
+                PathCommand::Arc { center, radii, .. } => {
                     // 保守包围：中心 ± 半径分量。
                     include(center - radii);
                     include(center + radii);
@@ -330,7 +319,11 @@ mod tests {
     #[test]
     fn test_polyline_and_close() {
         let path = Path2D::from_polyline(
-            &[Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)],
+            &[
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 1.0),
+            ],
             true,
         );
         let pts = path.flatten(0.1);
