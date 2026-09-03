@@ -1,0 +1,16 @@
+[package]
+name = "xcal-node-egui-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "egui widget mappings for xc-node-schema property nodes (draw_property / PropertyNodeView / spawn menu)"
+
+[dependencies]
+xc-node = { path = "../../graph/xc-node" }
+xc-node-schema = { path = "../../graph/xc-node-schema" }
+xcal-node-egui = { path = "../xcal-node-egui" }
+egui = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+eframe = { workspace = true, features = ["default_fonts"] }

@@ -3738,6 +3738,64 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
+name = "xc-geometry"
+version = "0.1.0"
+dependencies = [
+ "glam",
+]
+
+[[package]]
+name = "xc-graph-algo"
+version = "0.1.0"
+dependencies = [
+ "xc-node",
+]
+
+[[package]]
+name = "xc-graph-eval"
+version = "0.1.0"
+dependencies = [
+ "xc-graph-algo",
+ "xc-node",
+]
+
+[[package]]
+name = "xc-node"
+version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "xc-node-schema"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "xc-graph-algo",
+ "xc-graph-eval",
+ "xc-node",
+ "xc-node-schema-macros",
+]
+
+[[package]]
+name = "xc-node-schema-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "xc-graph-algo",
+ "xc-graph-eval",
+ "xc-node",
+ "xc-node-schema",
+]
+
+[[package]]
 name = "xcal-app"
 version = "0.1.0"
 dependencies = [
@@ -3774,7 +3832,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
- "xcal-geometry",
+ "xc-geometry",
  "xcal-macro",
 ]
 
@@ -3794,28 +3852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "xcal-geometry"
-version = "0.1.0"
-dependencies = [
- "glam",
-]
-
-[[package]]
-name = "xcal-graph-algo"
-version = "0.1.0"
-dependencies = [
- "xcal-node",
-]
-
-[[package]]
-name = "xcal-graph-eval"
-version = "0.1.0"
-dependencies = [
- "xcal-graph-algo",
- "xcal-node",
-]
-
-[[package]]
 name = "xcal-macro"
 version = "0.1.0"
 dependencies = [
@@ -3825,23 +3861,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "xcal-node"
-version = "0.1.0"
-dependencies = [
- "derive_more",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "xcal-node-editor"
 version = "0.1.0"
 dependencies = [
  "glam",
  "thiserror 2.0.20",
- "xcal-graph-algo",
- "xcal-node",
+ "xc-graph-algo",
+ "xc-node",
 ]
 
 [[package]]
@@ -3851,13 +3877,13 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
- "xcal-graph-algo",
- "xcal-graph-eval",
- "xcal-node",
+ "xc-graph-algo",
+ "xc-graph-eval",
+ "xc-node",
+ "xc-node-schema",
+ "xc-node-schema-macros",
  "xcal-node-editor",
  "xcal-node-egui-ui",
- "xcal-node-ui",
- "xcal-node-ui-macros",
 ]
 
 [[package]]
@@ -3867,35 +3893,9 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
- "xcal-node",
+ "xc-node",
+ "xc-node-schema",
  "xcal-node-egui",
- "xcal-node-ui",
-]
-
-[[package]]
-name = "xcal-node-ui"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "xcal-graph-algo",
- "xcal-graph-eval",
- "xcal-node",
- "xcal-node-ui-macros",
-]
-
-[[package]]
-name = "xcal-node-ui-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "xcal-graph-algo",
- "xcal-graph-eval",
- "xcal-node",
- "xcal-node-ui",
 ]
 
 [[package]]
@@ -3909,8 +3909,8 @@ dependencies = [
  "hecs",
  "thiserror 2.0.20",
  "wgpu",
+ "xc-geometry",
  "xcal-core",
- "xcal-geometry",
 ]
 
 [[package]]
@@ -3925,8 +3925,8 @@ dependencies = [
  "pollster 0.3.0",
  "thiserror 2.0.20",
  "wgpu",
+ "xc-geometry",
  "xcal-core",
- "xcal-geometry",
  "xcal-render",
 ]
 

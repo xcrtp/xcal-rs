@@ -1,0 +1,23 @@
+[package]
+name = "xcal-egui"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
+# 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
+xcal-render = { path = "../../render/xcal-render", default-features = false }
+# Painter2D 的 egui 实现（EguiPainter）位于 backends crate。
+xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui"] }
+xcal-macro = { path = "../xcal-macro" }
+
+egui.workspace = true
+hecs.workspace = true
+derive-new.workspace = true
+derive_builder.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+egui.workspace = true

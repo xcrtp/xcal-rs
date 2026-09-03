@@ -1,0 +1,11 @@
+[package]
+name = "xc-graph-algo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Graph algorithms (topo sort, dirty propagation, SCC) for xc-node"
+
+[dependencies]
+xc-node = { path = "../xc-node" }
+
+[dev-dependencies]

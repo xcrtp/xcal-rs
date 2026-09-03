@@ -1,0 +1,49 @@
+[package]
+name = "xcal-render-backends"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xcal-core = { path = "../xcal-core", default-features = false }
+xcal-render = { path = "../xcal-render", default-features = false }
+xc-geometry = { path = "../../kernel/xc-geometry" }
+
+glam.workspace = true
+hecs.workspace = true
+thiserror.workspace = true
+pollster = { workspace = true, optional = true }
+
+# wgpu / egui 均为可选：按 feature 组合提供后端实现。
+wgpu = { workspace = true, optional = true }
+egui = { workspace = true, optional = true }
+egui-wgpu = { workspace = true, optional = true }
+
+[dev-dependencies]
+egui.workspace = true
+eframe.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+glam.workspace = true
+
+[[example]]
+name = "cube_3d"
+required-features = ["egui-wgpu"]
+
+[features]
+default = []
+wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
+egui = ["dep:egui", "xcal-core/egui"]
+# egui + wgpu 集成（egui_wgpu 回调、EframeWgpuBackend、RenderContext）。
+egui-wgpu = [
+    "dep:egui",
+    "dep:egui-wgpu",
+    "dep:wgpu",
+    "dep:pollster",
+    "xcal-render/wgpu",
+    "xcal-core/egui",
+]
+# 文本引擎（Typst/LaTeX）预留。
+text = []
