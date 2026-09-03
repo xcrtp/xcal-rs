@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "description": "xcal-rs workspace architecture declaration. Used for documentation; cargo-archtest (single-crate module tool) does not yet support workspace-level crate layers. See ARCHITECTURE.md for the canonical rules.",
+  "layers": [
+    {
+      "name": "kernel",
+      "path": "crates/kernel",
+      "prefix": "xc-",
+      "description": "纯计算/数据，无 egui/渲染/领域依赖",
+      "crates": ["xc-geometry"]
+    },
+    {
+      "name": "graph",
+      "path": "crates/graph",
+      "prefix": "xc-",
+      "description": "图论 + 节点结构契约，禁止依赖 egui/xcal-*/领域类型",
+      "crates": [
+        "xc-node",
+        "xc-graph-algo",
+        "xc-graph-eval",
+        "xc-node-schema",
+        "xc-node-schema-macros"
+      ]
+    },
+    {
+      "name": "render",
+      "path": "crates/render",
+      "prefix": "xcal-",
+      "description": "ECS + 渲染抽象 + 具体后端实现",
+      "crates": [
+        "xcal-core",
+        "xcal-render",
+        "xcal-render-backends"
+      ]
+    },
+    {
+      "name": "ui",
+      "path": "crates/ui",
+      "prefix": "xcal-",
+      "description": "egui 前端 + 编辑器状态机 + proc-macro",
+      "crates": [
+        "xcal-macro",
+        "xcal-egui",
+        "xcal-node-editor",
+        "xcal-node-egui",
+        "xcal-node-egui-ui"
+      ]
+    },
+    {
+      "name": "app",
+      "path": "crates/app",
+      "prefix": "xcal-",
+      "description": "应用组装层（唯一可执行入口）",
+      "crates": ["xcal-app"]
+    }
+  ],
+  "rules": [
+    {
+      "rule": "NoReverseDependency",
+      "description": "xc-* crate 禁止依赖任何 xcal-* crate 或 egui/wgpu",
+      "enforced_by": "cargo check + 人工 review（cargo-archtest 暂未适配 workspace 级）"
+    },
+    {
+      "rule": "NoAppDependency",
+      "description": "xcal-* crate 禁止依赖 xcal-app",
+      "enforced_by": "cargo check（Cargo.toml 依赖声明禁止即可）"
+    },
+    {
+      "rule": "NoGraphDomainTypes",
+      "description": "crates/graph 层 crate 禁止引用领域类型（FunctionDef, AST, AnimationClip 等）",
+      "enforced_by": "人工 review + grep 扫描"
+    },
+    {
+      "rule": "NoCycles",
+      "description": "workspace 内 crate 依赖必须形成 DAG（dev-deps 不算生产边）",
+      "enforced_by": "cargo-workspace-analyzer --check-cycles"
+    }
+  ]
+}

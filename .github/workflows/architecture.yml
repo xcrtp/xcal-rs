@@ -1,0 +1,54 @@
+name: Architecture
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Cargo Check + Workspace Analyzer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-workspace-analyzer
+        run: cargo install cargo-workspace-analyzer
+
+      - name: Cargo Check Workspace
+        run: cargo check --workspace --all-targets
+        shell: bash
+
+      - name: Workspace Analyzer (cycles + DAG)
+        run: |
+          # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边
+          # 退出码非零 = 检测到循环或解析失败
+          cargo-workspace-analyzer -d . 2>&1 | tee workspace-analysis.txt
+          echo "exit_code=$?"
+          # 分析表中的 Instability 列 = FanOut/(FanIn+FanOut)；
+          # 循环依赖表现为多个 crate FanOut/FanIn 互相指向；
+          # 工具本身会打印循环警告
+        shell: bash
+
+      # cargo-archtest TBD: 当前版本 (v0.2.3) 为单 crate 内 src/ 模块分层设计,
+      # 不支持 workspace 级 crate 分层。待上游提供 workspace 模式后接入。
+      #
+      # - name: Archtest (TBD)
+      #   run: cargo archtest
+      #   shell: bash
+
+      - name: Upload Analysis Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-analysis
+          path: workspace-analysis.txt
+          if-no-files-found: ignore
