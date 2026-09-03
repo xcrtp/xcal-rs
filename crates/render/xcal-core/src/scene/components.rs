@@ -1,8 +1,11 @@
 // components.rs
 //
-// 场景组件集合（文件模块）：marker / mesh / animation / 3D 核心类型，
-// 以及 Circle/Path/Line 等纯逻辑 2D 组件。
+// 场景组件集合（文件模块）：marker / mesh / 3D 核心类型，
+// 以及 Circle/Path/Line/PhaseAnim 等纯逻辑 2D 组件。
 // 渲染相关样式组件（StrokeSolid/FillSolid）在 xcal-render 中。
+//
+// 注：旧动画组件（ClockState / LocalClock / CircleAnim / OrbitAnim）已删除，
+// 动画统一由 Binding 表 + xc-time::Curve 纯函数驱动。
 
 use std::sync::Arc;
 
@@ -32,15 +35,11 @@ pub mod mesh {
     }
 }
 
-/// 动画组件（ClockState / LocalClock / CircleAnim / PhaseAnim / OrbitAnim）。
-pub mod animation;
-
 /// 3D 核心类型（PrimitiveTopology / Mesh3D / Projection / Camera3D）。
 /// 文件名以数字开头，无法直接作为 Rust 标识符，通过 `#[path]` 挂载为 `three_d`。
 #[path = "components/3d.rs"]
 pub mod three_d;
 
-pub use animation::*;
 pub use marker::*;
 pub use mesh::*;
 pub use three_d::*;
@@ -52,6 +51,15 @@ pub struct Circle {
     #[new(into)]
     pub center: Vec2,
     pub radius: f32,
+}
+
+/// FunctionX2Y 相位滑动参数：`phase = t * omega`，
+/// 由 `SceneRecordSystem` 采样时取 `x + phase` 实现曲线水平平移。
+/// `omega` 为常量；`phase` 由 `BindingApplySystem` 每帧覆盖。
+#[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
+pub struct PhaseAnim {
+    pub phase: f32,
+    pub omega: f32,
 }
 
 #[derive(Debug, Clone, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto)]

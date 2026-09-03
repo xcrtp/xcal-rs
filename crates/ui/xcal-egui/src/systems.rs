@@ -5,13 +5,15 @@
 // 已废弃。
 //
 // Phase 分配（避开同 phase 内 read/write 冲突）：
-// - Input:        TimeUpdate   (W=TimeState)
-//                 CameraInput  (R=EguiFrameContext, W=AppCamera)
+// - Input:        CameraInput  (R=EguiFrameContext, W=AppCamera)
 // - LogicUpdate:  ControlPanel (R=TimeState, AppCamera, EguiFrameContext, W=UiConfig)
 // - SceneSync:    ViewRectUpdate (R=EguiFrameContext, W=ViewRect)
 // - Prepare:      GridBuild    (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
 // - RenderCommit: SceneRecord  (R=ViewRect, AppCamera, W=DrawQueue)
 // - FrameEnd:     RenderSubmit (R=ViewRect, EguiFrameContext, DrawQueue, W=())
+//
+// 注：时间推进由 DirectorAdvanceSystem（xcal-core）负责，动画由 BindingApplySystem
+// （xcal-core::animation）驱动；旧的 TimeUpdateSystem / AnimationApplySystem 已删除。
 
 use egui::Panel;
 
@@ -20,8 +22,7 @@ use xcal_core::system::System;
 use xcal_core::transform::Transform2D;
 use xcal_core::types::{Camera2D, Rect, Vec3};
 use xcal_render::components::{
-    Circle, CircleAnim, FillSolid, FunctionX2Y, Line, LocalClock, Path, PhaseAnim, Sampler1D,
-    StrokeSolid,
+    FillSolid, FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
 use xcal_render::{DrawQueue, ZIndex, record_scene};
 use xcal_render_backends::EguiPainter;
@@ -34,21 +35,6 @@ fn extract_ui_ptr(ctx: &mut ExecutorContext<'_>) -> *mut egui::Ui {
     ctx.get::<EguiFrameContext>()
         .map(|c| c.ui_ptr())
         .unwrap_or(std::ptr::null_mut())
-}
-
-// ─── TimeUpdateSystem ──────────────────────────────────────────────────────
-
-pub struct TimeUpdateSystem;
-impl System for TimeUpdateSystem {
-    type Reads = ();
-    type Writes = (TimeState,);
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let dt = ctx.dt.min(0.1);
-        if let Some(state) = ctx.get_mut::<TimeState>() {
-            state.elapsed += dt;
-        }
-    }
 }
 
 // ─── CameraInputSystem ─────────────────────────────────────────────────────
@@ -134,39 +120,6 @@ impl System for ViewRectUpdateSystem {
 
         if let Some(vr) = ctx.get_mut::<ViewRect>() {
             vr.rect = Rect::from(ui.available_rect_before_wrap());
-        }
-    }
-}
-
-// ─── AnimationApplySystem ───────────────────────────────────────────────────
-// Phase::SceneSync：读 TimeState.elapsed 作全局时间，按实体 LocalClock 的
-// start/speed 映射为本地时间 t，驱动 Circle 半径 sin 振荡与 FunctionX2Y 相位滑动。
-// Reads=(TimeState,)（LocalClock/CircleAnim/PhaseAnim 是 hecs 组件，不进 Resource 关联类型）；
-// Writes=()（组件通过 ctx.world 直接 query 修改，不经 Resource）。
-// LocalClock 在本系统只读（不更新 current），避免与自身 Reads 声明冲突。
-
-pub struct AnimationApplySystem;
-impl System for AnimationApplySystem {
-    type Reads = (TimeState,);
-    type Writes = ();
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        // 先取出 Copy 值释放 &mut ctx 借用，再 split-borrow world 字段做 query。
-        let t_global = ctx.get::<TimeState>().map(|s| s.elapsed).unwrap_or(0.0);
-
-        // 圆半径振荡：radius = base + amp * sin(t * omega)
-        for (clock, anim, circle) in ctx
-            .world
-            .query::<(&LocalClock, &CircleAnim, &mut Circle)>()
-            .iter()
-        {
-            let t = clock.start + t_global * clock.speed;
-            circle.radius = anim.base + anim.amp * (t * anim.omega).sin();
-        }
-        // sin 曲线相位滑动：phase = t * omega（SceneRecordSystem 采样 x + phase）
-        for (clock, phase) in ctx.world.query::<(&LocalClock, &mut PhaseAnim)>().iter() {
-            let t = clock.start + t_global * clock.speed;
-            phase.phase = t * phase.omega;
         }
     }
 }
@@ -280,7 +233,7 @@ impl System for SceneRecordSystem {
                 )>()
                 .iter()
             {
-                // AnimationApplySystem 写入的相位偏移：让 sin 曲线随时间水平滑动。
+                // BindingApplySystem 写入的相位偏移：让 sin 曲线随时间水平滑动。
                 let phase = phase.map(|p| p.phase).unwrap_or(0.0);
                 let mut pts: Vec<Vec3> = Vec::new();
                 let mut x = sampler.start;

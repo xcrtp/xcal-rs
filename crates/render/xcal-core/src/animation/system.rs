@@ -125,11 +125,27 @@ mod tests {
         }
     }
 
-    /// 真等价性测试：新 Curve::Orbit vs 旧 OrbitAnim 公式。
+    /// 真等价性测试：新 Curve::Orbit vs 旧 OrbitAnim 公式（参考实现内联保留）。
     /// t ∈ [0, 10] 采 1000 点逐点比对（不只是"轨迹是圆"，起点也必须一致）。
     #[test]
     fn equivalence_orbit_matches_legacy_orbit_anim() {
-        use xcal_core::scene::components::{Camera3D, OrbitAnim, Projection};
+        // 参考（旧 OrbitAnim）实现：
+        // eye_offset = Quat::from_axis_angle(axis, angle) * Vec3::new(0, 0, radius)
+        fn legacy_orbit_offset(
+            radius: f32,
+            axis: Vec3,
+            speed: f32,
+            initial_angle: f32,
+            t: f64,
+        ) -> Vec3 {
+            let angle = initial_angle + (t as f32) * speed;
+            let axis = if axis.length_squared() > f32::EPSILON {
+                axis.normalize()
+            } else {
+                Vec3::Y
+            };
+            glam::Quat::from_axis_angle(axis, angle) * Vec3::new(0.0, 0.0, radius)
+        }
 
         let mut forest = XcClockForest::new();
         let root = forest.insert(ClockNode::new(None)).unwrap();
@@ -140,21 +156,11 @@ mod tests {
             speed: 0.5,
             initial_angle: 0.0,
         };
-        let orbit = OrbitAnim::new(0.5, 5.0, Vec3::Y, 0.0);
 
         for i in 0..1000 {
             let t_global = (i as f64) * 0.01; // t ∈ [0, 10)
             let new_v = curve.sample(forest.eval_local(root, t_global)).vec3();
-
-            // 旧链路：OrbitAnim.apply 写入 eye；target=0 → eye 即轨道偏移。
-            let mut cam = Camera3D::new(
-                Vec3::ZERO,
-                Vec3::ZERO,
-                Vec3::Y,
-                Projection::perspective(1.0, 1.0, 0.1, 100.0),
-            );
-            orbit.apply(t_global as f32, &mut cam);
-            let old_v = cam.eye;
+            let old_v = legacy_orbit_offset(5.0, Vec3::Y, 0.5, 0.0, t_global);
 
             assert!(
                 (new_v - old_v).length() < 1e-5,

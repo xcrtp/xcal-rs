@@ -4,7 +4,7 @@
 // 包含：
 //   - EguiFrameContext (UI 降级为 Resource)
 //   - 全局 Resource 类型：AppCamera, TimeState, UiConfig, ViewRect
-//   - egui System 实现：TimeUpdate, CameraInput, ControlPanel, ViewRectUpdate,
+//   - egui System 实现：CameraInput, ControlPanel, ViewRectUpdate,
 //                       GridBuild, SceneRecord, RenderSubmit
 //
 // Painter2D 的 egui 实现（EguiPainter）位于 xcal-render-backends。
@@ -15,8 +15,8 @@ pub mod time_control;
 
 pub use resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
 pub use systems::{
-    AnimationApplySystem, CameraInputSystem, ControlPanelSystem, GridBuildSystem,
-    RenderSubmitSystem, SceneRecordSystem, TimeUpdateSystem, ViewRectUpdateSystem,
+    CameraInputSystem, ControlPanelSystem, GridBuildSystem, RenderSubmitSystem, SceneRecordSystem,
+    ViewRectUpdateSystem,
 };
 pub use time_control::TimeControlSystem;
 pub use xcal_render_backends::EguiPainter;

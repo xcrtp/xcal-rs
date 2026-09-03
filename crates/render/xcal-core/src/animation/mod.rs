@@ -2,8 +2,9 @@
 //
 // 设计原则：
 // 1. 动画是纯函数 f(t) → 值，永不累积状态（由 xc-time::Curve::sample 保证）。
-// 2. Binding 表取代组件组合查询（query::<(&LocalClock, &CircleAnim, &mut Circle)>()）。
-// 3. BindingApplySystem 是唯一的动画驱动入口，与旧 AnimationApplySystem/OrbitApplySystem 并存（P2 双跑）。
+// 2. Binding 表取代旧的组件组合查询（query::<(&LocalClock, &CircleAnim, &mut Circle)>()，
+//    旧动画组件已删除）。
+// 3. BindingApplySystem 是唯一的动画驱动入口。
 
 pub mod binding;
 pub mod system;

@@ -89,23 +89,20 @@ impl App {
         let circle_entity = scene.spawn((
             Circle::new((0.0, 0.0), 1.0),
             StrokeSolid::new(2.0, (100, 255, 0, 255)),
-            // 动画驱动：start=0, speed=1；base=1.0, amp=0.4, omega=2.0 → radius 在 0.6~1.4 间 sin 振荡
-            LocalClock::new(None, 0.0, 0.0, 1.0, 0.0, ClockState::Loop),
-            CircleAnim::new(1.0, 0.4, 2.0),
+            // 半径振荡由 BindingApplySystem 驱动（Binding 表：base=1.0, amp=0.4, omega=2.0）
         ));
 
         let func_entity = scene.spawn((
             FunctionX2Y::new(|x: f32| x.sin()),
             Sampler1D::new(-10.0f32, 10.0, 0.1),
             StrokeSolid::new(2.0, (0, 200, 200, 255)),
-            // 相位滑动：start=0, speed=1；omega=1.5 → sin 曲线随时间水平平移
-            LocalClock::new(None, 0.0, 0.0, 1.0, 0.0, ClockState::Loop),
+            // 相位滑动由 BindingApplySystem 驱动（Binding 表：omega=1.5）
             PhaseAnim::new(0.0, 1.5),
         ));
 
         let world = scene.into_world();
 
-        // ── 时钟树 + 绑定表（P2：新旧双跑）────────────────────────────
+        // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
         let mut forest = ClockForest::new();
         let root_circle = forest.insert(ClockNode::new(None)).unwrap();
         let root_phase = forest.insert(ClockNode::new(None)).unwrap();

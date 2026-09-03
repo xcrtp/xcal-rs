@@ -12,7 +12,7 @@ use std::{any::TypeId, collections::HashMap};
 
 type ResourceMap = HashMap<TypeId, Box<dyn std::any::Any>>;
 
-/// ECS 组件集合（marker / mesh / animation / 2D 图元 / 3D 类型）。
+/// ECS 组件集合（marker / mesh / 2D 图元 / 3D 类型）。
 pub mod components;
 
 /// 内置图元生成器（立方体等）。

@@ -51,11 +51,8 @@ impl HealthOverlay {
         // ── 组件注册（未注册者仍会以 <unregistered> 出现在快照结构中）──
         registry.register_component::<Mesh3D>("Mesh3D");
         registry.register_component::<Camera3D>("Camera3D");
-        registry.register_component::<OrbitAnim>("OrbitAnim");
         registry.register_component::<Circle>("Circle");
         registry.register_component::<StrokeSolid>("StrokeSolid");
-        registry.register_component::<LocalClock>("LocalClock");
-        registry.register_component::<CircleAnim>("CircleAnim");
         registry.register_component::<PhaseAnim>("PhaseAnim");
 
         // ── Resource 注册（仅记录存在性）──
