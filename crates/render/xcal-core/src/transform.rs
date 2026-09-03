@@ -49,6 +49,12 @@ impl<T: Transform2DInto + Clone> Transform2D for T {
 }
 
 // ─── 底层 glam 类型的 Transform2DInto 实现 ─────────────────────────────────
+//
+// Y 翻转单点约定：世界空间统一 Y-up（数学惯例），屏幕空间 Y-down。
+// 两者之间的翻转（rect_center.y - (y - center.y) * scale）只在下面
+// glam::Vec2 的实现中存在**一份**；Vec3 / Circle / 其他类型一律委托到
+// Vec2（取 xy 分量），不得各自再写翻转。Camera2D::screen_to_world /
+// world_to_screen 也只是薄封装，不另造换算。
 
 impl Transform2DInto for glam::Vec2 {
     fn to_logical_into(self, camera: &Camera2D) -> Self {

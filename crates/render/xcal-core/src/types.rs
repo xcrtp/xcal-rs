@@ -127,16 +127,37 @@ impl Rect {
 
 /// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
 ///
-/// - 屏幕坐标系：以视口左上角为原点，y 向下，单位为像素。
-/// - 逻辑坐标系：以 `center` 为相机中心，y 向上，单位为世界单位。
+/// - 屏幕坐标系：以视口左上角为原点，y 向下（Y-down），单位为像素。
+/// - 逻辑坐标系：以 `center` 为相机中心，y 向上（Y-up，数学惯例），单位为世界单位。
+///
+/// `scale` 方向约定（易踩坑）：**1 世界单位 = `scale` 像素**，scale 越大
+/// 物体越大；这与未来统一相机的正交投影 `extent`（垂直半高，越大看到越多、
+/// 物体**越小**）方向**相反**——薄壳层（Camera2D = Camera3D + Orthographic）
+/// 负责两者换算。屏幕 Y-down ↔ 世界 Y-up 的翻转只在 Transform2D 的
+/// glam::Vec2 实现中存在一份，本类型不另造换算。
 #[derive(Debug, Clone, Copy, derive_new::new)]
 pub struct Camera2D {
     /// 逻辑坐标系中相机中心位置
     pub center: Vec2,
-    /// 缩放系数：1 单位逻辑 = `scale` 像素
+    /// 缩放系数：1 世界单位 = `scale` 像素（越大物体越大）
     pub scale: f32,
     /// 屏幕视口矩形（像素）
     pub rect: Rect,
+}
+
+impl Camera2D {
+    /// 屏幕坐标 → 场景（逻辑）坐标。UI 适配器把原生指针事件换算为
+    /// 场景语义事件时使用。
+    pub fn screen_to_world(&self, p: Vec2) -> Vec2 {
+        use crate::transform::Transform2D;
+        p.to_logical(self)
+    }
+
+    /// 场景（逻辑）坐标 → 屏幕坐标。
+    pub fn world_to_screen(&self, p: Vec2) -> Vec2 {
+        use crate::transform::Transform2D;
+        p.to_screen(self)
+    }
 }
 
 #[cfg(test)]
@@ -250,5 +271,41 @@ mod tests {
         let er: egui::Rect = r.into_egui_rect();
         assert_eq!(er.min, egui::pos2(0.0, 0.0));
         assert_eq!(er.max, egui::pos2(10.0, 20.0));
+    }
+
+    /// 坐标换算往返：screen_to_world(to_screen(p)) == p（误差 < 1e-5）。
+    #[test]
+    fn test_camera2d_screen_world_roundtrip() {
+        let camera = Camera2D::new(
+            (-3.5, 7.25).into(),
+            12.0,
+            Rect::new((0.0, 0.0).into(), (800.0, 600.0).into()),
+        );
+
+        for wp in [
+            (0.0, 0.0).into(),
+            (-100.0, 42.0).into(),
+            (3.7, -9.9).into(),
+        ] {
+            let sp = camera.world_to_screen(wp);
+            let back = camera.screen_to_world(sp);
+            assert!(
+                (back.x - wp.x).abs() < 1e-5 && (back.y - wp.y).abs() < 1e-5,
+                "world roundtrip failed: {wp:?} -> {sp:?} -> {back:?}"
+            );
+        }
+
+        for sp in [
+            (10.0, 590.0).into(),
+            (400.0, 300.0).into(),
+            (795.0, 3.0).into(),
+        ] {
+            let wp = camera.screen_to_world(sp);
+            let back = camera.world_to_screen(wp);
+            assert!(
+                (back.x - sp.x).abs() < 1e-5 && (back.y - sp.y).abs() < 1e-5,
+                "screen roundtrip failed: {sp:?} -> {wp:?} -> {back:?}"
+            );
+        }
     }
 }

@@ -9,11 +9,13 @@ license.workspace = true
 xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
 xcal-render = { path = "../../render/xcal-render", default-features = false }
-# Painter2D 的 egui 实现（EguiPainter）位于 backends crate。
-xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui"] }
+# Painter2D 的 egui 实现（EguiPainter）+ 3D egui_wgpu 回调（Layer3DCallback）位于 backends crate。
+xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui", "egui-wgpu"] }
 xcal-macro = { path = "../xcal-macro" }
 
 egui.workspace = true
+# EguiSceneHost::present 把 3D 内容封装为 egui_wgpu 回调提交（原 RenderSubmit3DSystem 职责）。
+egui-wgpu.workspace = true
 hecs.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true

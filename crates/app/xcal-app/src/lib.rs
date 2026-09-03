@@ -14,18 +14,16 @@ use xcal_core::animation::{BindingApplySystem, Binding, BindingTarget, BindingTa
 use xcal_core::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_core::errors::Error;
 use xcal_core::resource::Resources;
+use xcal_core::domain::InputEvents;
 use xcal_core::scene::components::{Camera3D, Projection};
 use xcal_core::scene::primitives::wireframe_cube;
 use xcal_core::scheduler::{Phase, Scheduler};
 use xcal_core::TimeState;
 use xcal_core::types::Color32;
 use xcal_core::{ClockForest, ClockNode, Curve};
-use xcal_egui::resources::{AppCamera, EguiFrameContext, UiConfig, ViewRect};
-use xcal_egui::systems::{
-    CameraInputSystem, ControlPanelSystem, GridBuildSystem, RenderSubmitSystem, SceneRecordSystem,
-    ViewRectUpdateSystem,
-};
-use xcal_egui::TimeControlSystem;
+use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
+use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
+use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, PhaseAnim, Sampler1D, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
@@ -35,7 +33,7 @@ mod param_panel;
 mod systems_3d;
 use health::HealthOverlay;
 use param_panel::ParamPanelSystem;
-use systems_3d::{RenderSubmit3DSystem, SceneRecord3DSystem};
+use systems_3d::SceneRecord3DSystem;
 
 pub struct App {
     scheduler: Scheduler,
@@ -139,6 +137,7 @@ impl App {
         resources.insert(TimeState::default());
         resources.insert(UiConfig::default());
         resources.insert(ViewRect::default());
+        resources.insert(InputEvents::default());
         resources.insert(DrawQueue::new());
         resources.insert(DrawQueue3D::new());
         resources.insert(render_ctx.clone());
@@ -148,18 +147,22 @@ impl App {
 
         let mut scheduler = Scheduler::new(world, resources);
 
-        // P3：Director 是唯一时间源。
-        // - Input:        DirectorAdvance（W=DirectorState, TimeState），CameraInput
-        // - LogicUpdate:  ControlPanel + TimeControl（新：播放/暂停/速度/seek）
-        // - SceneSync:    ViewRectUpdate + BindingApply（统一驱动 2D+3D 动画，读 TimeState + ClockForest + BindingTable）
+        // P3：Director 是唯一时间源。B 阶段（UI 解耦）后的 Phase 分配：
+        // - Input:        DirectorAdvance（W=DirectorState, TimeState）
+        //                 CameraInput（R=InputEvents, W=AppCamera，消费视口事件）
+        // - LogicUpdate:  TimeControl（R=InputEvents, W=DirectorState）
+        //                 ParamPanel（R=InputEvents, W=BindingTable）
+        // - SceneSync:    BindingApply（统一驱动 2D+3D 动画）
+        // - Prepare:      GridBuild
+        // - RenderCommit: SceneRecord（2D）+ SceneRecord3D
+        // - FrameEnd:     无——内容提交由 host.present 承担（原 RenderSubmit 职责）。
+        //                 面板 chrome 与 ViewRect 由 host.begin_frame 承担（run_frame 前）。
         scheduler.add_system(Phase::Input, DirectorAdvanceSystem);
         scheduler.add_system(Phase::Input, CameraInputSystem);
 
-        scheduler.add_system(Phase::LogicUpdate, ControlPanelSystem);
         scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
         scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
 
-        scheduler.add_system(Phase::SceneSync, ViewRectUpdateSystem);
         scheduler.add_system(Phase::SceneSync, BindingApplySystem);
 
         scheduler.add_system(Phase::Prepare, GridBuildSystem);
@@ -168,11 +171,6 @@ impl App {
         // 3D SceneRecord3D 写 DrawQueue3D，类型不相交。
         scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
         scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
-
-        // FrameEnd：2D RenderSubmit 读写 DrawQueue(2D)；
-        // 3D RenderSubmit3D 只读 EguiFrameContext + DrawQueue3D（回调 GPU 提交）。
-        scheduler.add_system(Phase::FrameEnd, RenderSubmitSystem);
-        scheduler.add_system(Phase::FrameEnd, RenderSubmit3DSystem);
 
         Ok(Self {
             scheduler,
@@ -228,11 +226,22 @@ impl eframe::App for App {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
-        self.scheduler
-            .resources_mut()
-            .insert(EguiFrameContext::new(ui));
+        // ── B 阶段帧流程（UI 与场景只经 SceneView / SceneEvent 契约交互）──
+        //
+        // 1. 场景 → UI：构建本帧视图声明（2D/3D 图层 + 相机）。
+        //    相机取上一帧末状态——视口事件换算对该滞后不敏感
+        //    （缩放因子/平移量只依赖 scale，不依赖 rect）。
+        let view =
+            EguiSceneHost::build_scene_view(self.scheduler.world(), self.scheduler.resources());
+
+        // 2. UI → 场景：收集输入事件、绘制面板 chrome、写 ViewRect。
+        //    必须在 run_frame 之前：System 消费 InputEvents，GridBuild 当帧读 ViewRect。
+        EguiSceneHost::begin_frame(ui, &view, self.scheduler.resources_mut());
 
         self.scheduler.run_frame(dt);
+
+        // 3. 内容提交：2D 队列 + 3D 队列 → painter（原 RenderSubmit 职责）。
+        EguiSceneHost::present(ui, &view, self.scheduler.resources_mut());
 
         // ── 可观测性：F1 切换 health overlay，F10 导出 World 快照 ──
         if ui.input(|i| i.key_pressed(egui::Key::F1)) {
@@ -267,8 +276,7 @@ impl eframe::App for App {
         );
         self.health.show(ui);
 
-        self.scheduler.resources_mut().remove::<EguiFrameContext>();
-
+        // 每帧清空 2D 队列（present 已消费其内容；SceneRecord 下帧重新录制）。
         if let Some(queue) = self.scheduler.resources_mut().get_mut::<DrawQueue>() {
             queue.clear();
         }

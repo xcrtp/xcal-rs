@@ -12,6 +12,7 @@ pub mod access;
 pub mod animation;
 pub mod context;
 pub mod director_state;
+pub mod domain;
 pub mod errors;
 pub mod resource;
 pub mod scene;

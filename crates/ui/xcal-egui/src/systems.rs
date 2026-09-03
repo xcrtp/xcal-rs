@@ -1,23 +1,25 @@
-// systems.rs: egui 层 System 实现（新架构）
+// systems.rs: 场景侧 System（新架构，B 阶段 UI 解耦后）
 //
 // 每个 System 显式声明 `Reads` / `Writes` 关联类型，使用
-// `ctx.get` / `ctx.get_mut` 访问 Resource。旧 `ctx.resources.borrow*`
-// 已废弃。
+// `ctx.get` / `ctx.get_mut` 访问 Resource。
+//
+// B 阶段迁移（计划 §6.4）：
+// - CameraInput 消费 `InputEvents`（UI 适配器 host.rs 翻译的 SceneEvent），
+//   不再直接读 egui 输入——可 headless 测试。
+// - ControlPanel（纯 UI chrome）移出 ECS → host.rs::draw_control_panel；
+// - ViewRectUpdate（布局信息本就属 UI）→ host.rs::update_view_rect；
+// - RenderSubmit（内容提交）→ host.rs::present。
 //
 // Phase 分配（避开同 phase 内 read/write 冲突）：
-// - Input:        CameraInput  (R=EguiFrameContext, W=AppCamera)
-// - LogicUpdate:  ControlPanel (R=TimeState, AppCamera, EguiFrameContext, W=UiConfig)
-// - SceneSync:    ViewRectUpdate (R=EguiFrameContext, W=ViewRect)
+// - Input:        CameraInput  (R=InputEvents, W=AppCamera)
 // - Prepare:      GridBuild    (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
 // - RenderCommit: SceneRecord  (R=ViewRect, AppCamera, W=DrawQueue)
-// - FrameEnd:     RenderSubmit (R=ViewRect, EguiFrameContext, DrawQueue, W=())
 //
 // 注：时间推进由 DirectorAdvanceSystem（xcal-core）负责，动画由 BindingApplySystem
-// （xcal-core::animation）驱动；旧的 TimeUpdateSystem / AnimationApplySystem 已删除。
-
-use egui::Panel;
+// （xcal-core::animation）驱动。
 
 use xcal_core::context::ExecutorContext;
+use xcal_core::domain::{CameraCommand, InputEvents, SceneEvent};
 use xcal_core::system::System;
 use xcal_core::transform::Transform2D;
 use xcal_core::types::{Camera2D, Rect, Vec3};
@@ -25,101 +27,44 @@ use xcal_render::components::{
     FillSolid, FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
 use xcal_render::{DrawQueue, ZIndex, record_scene};
-use xcal_render_backends::EguiPainter;
 
-use crate::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
-
-// ─── 从 Resources 提取 EguiFrameContext ────────────────────────────────────
-
-fn extract_ui_ptr(ctx: &mut ExecutorContext<'_>) -> *mut egui::Ui {
-    ctx.get::<EguiFrameContext>()
-        .map(|c| c.ui_ptr())
-        .unwrap_or(std::ptr::null_mut())
-}
+use crate::resources::{AppCamera, UiConfig, ViewRect};
 
 // ─── CameraInputSystem ─────────────────────────────────────────────────────
 
+/// 相机输入（Input 阶段）：消费相机语义命令，驱动 [`AppCamera`]。
+///
+/// 只依赖 [`InputEvents`] 纯数据契约——可 headless 构造命令并驱动。
+/// 本 System 不解释命令语义：翻译（egui→CameraCommand）在 host，
+/// 命令→状态的控制器纯函数在 [`AppCamera::apply_command`]（PanZoom 模式）。
+/// 当前只有 2D 视口产生相机命令，故全部路由到 AppCamera；
+/// 3D Orbit 控制器接入后按 `layer` 分发。
 pub struct CameraInputSystem;
 impl System for CameraInputSystem {
-    type Reads = (EguiFrameContext,);
+    type Reads = (InputEvents,);
     type Writes = (AppCamera,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() {
+        // 先拷贝命令（释放对 resources 的共享借用），再可变访问相机。
+        let commands: Vec<CameraCommand> = match ctx.get::<InputEvents>() {
+            Some(e) => e
+                .iter()
+                .filter_map(|ev| match ev {
+                    SceneEvent::Camera { command, .. } => Some(*command),
+                    _ => None,
+                })
+                .collect(),
+            None => return,
+        };
+        if commands.is_empty() {
             return;
         }
 
         let Some(camera) = ctx.get_mut::<AppCamera>() else {
             return;
         };
-        let ui = unsafe { &mut *ui_ptr };
-        camera.handle_input(ui);
-    }
-}
-
-// ─── ControlPanelSystem ────────────────────────────────────────────────────
-
-pub struct ControlPanelSystem;
-impl System for ControlPanelSystem {
-    type Reads = (TimeState, AppCamera, EguiFrameContext);
-    type Writes = (UiConfig,);
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() {
-            return;
-        }
-        let ui = unsafe { &mut *ui_ptr };
-
-        // 三阶段闭包模式：先克隆只读值，再在闭包内修改本地副本，
-        // 闭包结束后写回 Resources。避免 BorrowTracker 同时持有多份 &mut。
-        let time = ctx.get::<TimeState>().map(|t| t.elapsed).unwrap_or(0.0);
-        let camera = ctx.get::<AppCamera>().cloned().unwrap_or_default();
-        let mut ui_config = ctx.get::<UiConfig>().cloned().unwrap_or_default();
-
-        Panel::left("controls")
-            .resizable(true)
-            .default_size(200.0)
-            .show(ui, |ui| {
-                ui.heading("数学可视化");
-                ui.label(format!("t = {:.3}", time));
-                ui.separator();
-
-                ui.checkbox(&mut ui_config.show_grid, "显示网格");
-                ui.checkbox(&mut ui_config.show_field, "显示向量场");
-
-                ui.separator();
-                ui.label("Camera");
-                ui.label(format!(
-                    "center: ({:.2}, {:.2})",
-                    camera.center.x, camera.center.y
-                ));
-                ui.label(format!("scale: {:.1}", camera.scale));
-            });
-
-        if let Some(cfg) = ctx.get_mut::<UiConfig>() {
-            *cfg = ui_config;
-        }
-    }
-}
-
-// ─── ViewRectUpdateSystem ──────────────────────────────────────────────────
-
-pub struct ViewRectUpdateSystem;
-impl System for ViewRectUpdateSystem {
-    type Reads = (EguiFrameContext,);
-    type Writes = (ViewRect,);
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() {
-            return;
-        }
-        let ui = unsafe { &mut *ui_ptr };
-
-        if let Some(vr) = ctx.get_mut::<ViewRect>() {
-            vr.rect = Rect::from(ui.available_rect_before_wrap());
+        for command in commands {
+            camera.apply_command(command);
         }
     }
 }
@@ -251,29 +196,107 @@ impl System for SceneRecordSystem {
     }
 }
 
-// ─── RenderSubmitSystem ────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xcal_core::domain::LayerId;
+    use xcal_core::resource::Resources;
+    use xcal_core::scheduler::{Phase, Scheduler};
 
-pub struct RenderSubmitSystem;
-impl System for RenderSubmitSystem {
-    type Reads = (ViewRect, EguiFrameContext);
-    type Writes = (DrawQueue,);
-
-    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let ui_ptr = extract_ui_ptr(ctx);
-        if ui_ptr.is_null() {
-            return;
+    fn zoom_event(factor: f32) -> SceneEvent {
+        SceneEvent::Camera {
+            layer: LayerId(0),
+            command: CameraCommand::Zoom { factor },
         }
-        let ui = unsafe { &mut *ui_ptr };
+    }
 
-        let view_rect = ctx
-            .get::<ViewRect>()
-            .map(|v| v.rect)
-            .unwrap_or_else(|| ViewRect::default().rect);
+    fn pan_event(dx: f32, dy: f32) -> SceneEvent {
+        SceneEvent::Camera {
+            layer: LayerId(0),
+            command: CameraCommand::Pan {
+                delta: (dx, dy).into(),
+            },
+        }
+    }
 
-        let Some(queue) = ctx.get_mut::<DrawQueue>() else {
-            return;
-        };
-        let painter = ui.painter_at(view_rect.into_egui_rect());
-        queue.execute(&EguiPainter::new(&painter));
+    /// headless 决定性测试（B 阶段验收）：构造含 Zoom 命令的 InputEvents，
+    /// 直接跑 CameraInputSystem，断言 AppCamera.scale 按预期变化。
+    #[test]
+    fn camera_input_applies_zoom_event_headless() {
+        let mut resources = Resources::new();
+        resources.insert(AppCamera::default());
+        resources.insert(InputEvents::from_events(vec![zoom_event(1.1)]));
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::Input, CameraInputSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let scale = sched.resources().get::<AppCamera>().unwrap().scale;
+        assert!((scale - 44.0).abs() < 1e-4, "scale = {scale}");
+    }
+
+    /// 缩放 clamp：factor 过大时 scale 不超过上限 500。
+    #[test]
+    fn camera_input_zoom_is_clamped() {
+        let mut resources = Resources::new();
+        resources.insert(AppCamera::default());
+        resources.insert(InputEvents::from_events(vec![zoom_event(1000.0)]));
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::Input, CameraInputSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let scale = sched.resources().get::<AppCamera>().unwrap().scale;
+        assert!((scale - 500.0).abs() < 1e-4, "scale = {scale}");
+    }
+
+    /// 平移：Pan 命令直接叠加到取景中心（世界坐标，Y-up）。
+    #[test]
+    fn camera_input_applies_drag_event_headless() {
+        let mut resources = Resources::new();
+        resources.insert(AppCamera::default());
+        resources.insert(InputEvents::from_events(vec![pan_event(2.0, -1.0)]));
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::Input, CameraInputSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let cam = sched.resources().get::<AppCamera>().unwrap();
+        assert!((cam.center.x - 2.0).abs() < 1e-5, "x = {}", cam.center.x);
+        assert!((cam.center.y - (-1.0)).abs() < 1e-5, "y = {}", cam.center.y);
+    }
+
+    /// 无事件帧不改变相机状态。
+    #[test]
+    fn camera_input_noop_without_events() {
+        let mut resources = Resources::new();
+        resources.insert(AppCamera::default());
+        resources.insert(InputEvents::default());
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::Input, CameraInputSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let cam = sched.resources().get::<AppCamera>().unwrap();
+        assert_eq!(cam.center.x, 0.0);
+        assert_eq!(cam.scale, 40.0);
+    }
+
+    /// 控制器纯函数：Orbit/Dolly 在 PanZoom 模式下被忽略，状态不变。
+    #[test]
+    fn panzoom_controller_ignores_orbit_and_dolly() {
+        let mut cam = AppCamera::default();
+        cam.apply_command(CameraCommand::Orbit {
+            delta_yaw: 1.0,
+            delta_pitch: 0.5,
+        });
+        cam.apply_command(CameraCommand::Dolly { delta: 3.0 });
+        assert_eq!(cam.center.x, 0.0);
+        assert_eq!(cam.center.y, 0.0);
+        assert_eq!(cam.scale, 40.0);
     }
 }

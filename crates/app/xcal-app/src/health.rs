@@ -16,7 +16,7 @@ use xcal_core::resource::Resources;
 use xcal_core::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
 use xcal_core::scene::components::{Camera3D, Mesh3D};
-use xcal_egui::resources::{AppCamera, EguiFrameContext, TimeState, UiConfig, ViewRect};
+use xcal_egui::resources::{AppCamera, TimeState, UiConfig, ViewRect};
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::RenderContext;
@@ -60,7 +60,6 @@ impl HealthOverlay {
         registry.register_resource::<TimeState>("TimeState");
         registry.register_resource::<UiConfig>("UiConfig");
         registry.register_resource::<ViewRect>("ViewRect");
-        registry.register_resource::<EguiFrameContext>("EguiFrameContext");
         registry.register_resource::<DrawQueue>("DrawQueue");
         registry.register_resource::<DrawQueue3D>("DrawQueue3D");
         registry.register_resource::<RenderContext>("RenderContext");
