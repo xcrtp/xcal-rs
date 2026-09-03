@@ -4,7 +4,7 @@
 // 纯 Resource 读、组件（ctx.world）写。
 // 等价性单测：新链路 vs 旧 AnimationApplySystem 公式，误差 < 1e-5。
 
-use xc_time::ClockForest;
+use xc_time::{AnimValue, ClockForest};
 use xcal_core::context::ExecutorContext;
 use xcal_core::scene::components::{Camera3D, Circle, PhaseAnim};
 use xcal_core::system::System;
@@ -42,20 +42,27 @@ impl System for BindingApplySystem {
 
 impl BindingApplySystem {
     fn apply_target(&self, target: &BindingTarget, value: xc_time::AnimValue, world: &mut hecs::World) {
+        // 模式匹配取值：曲线输出类型与目标不符时跳过本帧写入（不 panic）。
         match target {
             BindingTarget::CircleRadius(entity) => {
-                if let Ok(mut circle) = world.get::<&mut Circle>(*entity) {
-                    circle.radius = value.scalar();
+                if let (Ok(mut circle), AnimValue::Scalar(v)) =
+                    (world.get::<&mut Circle>(*entity), value)
+                {
+                    circle.radius = v;
                 }
             }
             BindingTarget::Phase(entity) => {
-                if let Ok(mut phase) = world.get::<&mut PhaseAnim>(*entity) {
-                    phase.phase = value.scalar();
+                if let (Ok(mut phase), AnimValue::Scalar(v)) =
+                    (world.get::<&mut PhaseAnim>(*entity), value)
+                {
+                    phase.phase = v;
                 }
             }
             BindingTarget::CameraEye(entity) => {
-                if let Ok(mut camera) = world.get::<&mut Camera3D>(*entity) {
-                    camera.eye = value.vec3();
+                if let (Ok(mut camera), AnimValue::Vec3(v)) =
+                    (world.get::<&mut Camera3D>(*entity), value)
+                {
+                    camera.eye = v;
                 }
             }
         }

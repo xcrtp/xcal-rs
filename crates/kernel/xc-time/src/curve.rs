@@ -15,16 +15,48 @@ pub enum AnimValue {
 }
 
 impl AnimValue {
+    /// 取 Scalar 值。仅用于已确认类型的热路径：
+    /// debug 构建下类型不匹配会 panic（尽早暴露 bug），
+    /// release 构建下返回 0.0。类型不确定时请用 [`AnimValue::try_scalar`]。
     pub fn scalar(&self) -> f32 {
         match self {
             AnimValue::Scalar(s) => *s,
-            _ => panic!("AnimValue::scalar called on non-Scalar variant"),
+            other => {
+                debug_assert!(
+                    false,
+                    "AnimValue::scalar called on non-Scalar variant: {other:?}"
+                );
+                0.0
+            }
         }
     }
+    /// 取 Vec3 值。仅用于已确认类型的热路径：
+    /// debug 构建下类型不匹配会 panic（尽早暴露 bug），
+    /// release 构建下返回 Vec3::ZERO。类型不确定时请用 [`AnimValue::try_vec3`]。
     pub fn vec3(&self) -> Vec3 {
         match self {
             AnimValue::Vec3(v) => *v,
-            _ => panic!("AnimValue::vec3 called on non-Vec3 variant"),
+            other => {
+                debug_assert!(
+                    false,
+                    "AnimValue::vec3 called on non-Vec3 variant: {other:?}"
+                );
+                Vec3::ZERO
+            }
+        }
+    }
+    /// 类型安全取 Scalar：不匹配返回 `None`，不 panic。
+    pub fn try_scalar(&self) -> Option<f32> {
+        match self {
+            AnimValue::Scalar(s) => Some(*s),
+            _ => None,
+        }
+    }
+    /// 类型安全取 Vec3：不匹配返回 `None`，不 panic。
+    pub fn try_vec3(&self) -> Option<Vec3> {
+        match self {
+            AnimValue::Vec3(v) => Some(*v),
+            _ => None,
         }
     }
 }
@@ -127,19 +159,30 @@ impl Curve {
                     return v1;
                 }
                 let alpha = (t - t0) / (t1 - t0);
-                return lerp(v0, v1, alpha as f32);
+                // 类型不匹配（非法数据）退化为取区间起点，行为等同 Step；
+                // lerp 本身不静默 fallback。
+                return lerp(v0, v1, alpha as f32).unwrap_or(v0);
             }
         }
         points.last().unwrap().1
     }
 }
 
-fn lerp(a: AnimValue, b: AnimValue, alpha: f32) -> AnimValue {
+/// 同类型 AnimValue 线性插值；类型不匹配返回 `None`（不静默 fallback）。
+fn lerp(a: AnimValue, b: AnimValue, alpha: f32) -> Option<AnimValue> {
     match (a, b) {
-        (AnimValue::Scalar(a), AnimValue::Scalar(b)) => AnimValue::Scalar(a + (b - a) * alpha),
-        (AnimValue::Vec2(a), AnimValue::Vec2(b)) => AnimValue::Vec2(a + (b - a) * alpha),
-        (AnimValue::Vec3(a), AnimValue::Vec3(b)) => AnimValue::Vec3(a + (b - a) * alpha),
-        _ => a, // fallback: return first value
+        (AnimValue::Scalar(a), AnimValue::Scalar(b)) => {
+            Some(AnimValue::Scalar(a + (b - a) * alpha))
+        }
+        (AnimValue::Vec2(a), AnimValue::Vec2(b)) => Some(AnimValue::Vec2(a + (b - a) * alpha)),
+        (AnimValue::Vec3(a), AnimValue::Vec3(b)) => Some(AnimValue::Vec3(a + (b - a) * alpha)),
+        (AnimValue::Color(a), AnimValue::Color(b)) => Some(AnimValue::Color([
+            a[0] + (b[0] - a[0]) * alpha,
+            a[1] + (b[1] - a[1]) * alpha,
+            a[2] + (b[2] - a[2]) * alpha,
+            a[3] + (b[3] - a[3]) * alpha,
+        ])),
+        _ => None,
     }
 }
 
@@ -222,5 +265,53 @@ mod tests {
         for t in [0.0, 1.0, -1.5, 5.2] {
             assert_eq!(curve.sample(t), restored.sample(t));
         }
+    }
+
+    #[test]
+    fn try_scalar_returns_none_on_mismatch() {
+        // 类型不匹配返回 None，不 panic
+        assert_eq!(AnimValue::Scalar(1.5).try_scalar(), Some(1.5));
+        assert_eq!(AnimValue::Vec3(Vec3::ONE).try_scalar(), None);
+        assert_eq!(AnimValue::Color([0.0; 4]).try_scalar(), None);
+    }
+
+    #[test]
+    fn try_vec3_returns_none_on_mismatch() {
+        assert_eq!(AnimValue::Vec3(Vec3::ONE).try_vec3(), Some(Vec3::ONE));
+        assert_eq!(AnimValue::Scalar(1.5).try_vec3(), None);
+        assert_eq!(AnimValue::Color([0.0; 4]).try_vec3(), None);
+    }
+
+    #[test]
+    fn sampled_color_curve_interpolates() {
+        let curve = Curve::Sampled {
+            points: vec![
+                (0.0, AnimValue::Color([0.0, 0.0, 0.0, 1.0])),
+                (1.0, AnimValue::Color([1.0, 0.5, 0.25, 0.0])),
+            ],
+            interpolation: Interp::Linear,
+        };
+        let mid = curve.sample(0.5);
+        let AnimValue::Color(c) = mid else {
+            panic!("expected Color, got {mid:?}");
+        };
+        assert!((c[0] - 0.5).abs() < 1e-5);
+        assert!((c[1] - 0.25).abs() < 1e-5);
+        assert!((c[2] - 0.125).abs() < 1e-5);
+        assert!((c[3] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sampled_mismatched_types_hold_previous_point() {
+        // 相邻采样点类型不一致：lerp 返回 None，退化为取区间起点（不静默编造插值）
+        let curve = Curve::Sampled {
+            points: vec![
+                (0.0, AnimValue::Scalar(7.0)),
+                (1.0, AnimValue::Vec3(Vec3::ONE)),
+            ],
+            interpolation: Interp::Linear,
+        };
+        let mid = curve.sample(0.5);
+        assert_eq!(mid, AnimValue::Scalar(7.0));
     }
 }
