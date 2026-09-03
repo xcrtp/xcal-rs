@@ -81,10 +81,11 @@ impl Curve {
             } => {
                 let angle = (*speed as f64) * t + (*initial_angle as f64);
                 let axis = axis.normalize_or_zero();
-                // Rodrigues 旋转轴角 → 旋转初始 Vec3::new(*radius, 0, 0)
+                // Rodrigues 旋转轴角 → 旋转初始 Vec3::new(0, 0, *radius)
+                // （与旧 OrbitAnim 一致：t=0 时偏移在 +Z，eye = target + (0,0,radius)）
                 let cos_a = angle.cos() as f32;
                 let sin_a = angle.sin() as f32;
-                let base = Vec3::new(*radius, 0.0, 0.0);
+                let base = Vec3::new(0.0, 0.0, *radius);
                 let rotated = base * cos_a
                     + axis.cross(base) * sin_a
                     + axis * axis.dot(base) * (1.0 - cos_a);
@@ -177,12 +178,12 @@ mod tests {
             speed: 1.0,
             initial_angle: 0.0,
         };
-        // t=0 → (5, 0, 0)
+        // t=0 → (0, 0, 5)（与旧 OrbitAnim 起点一致）
         let v0 = curve.sample(0.0).vec3();
-        assert!((v0 - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-5);
-        // t=π/2 → (0, 0, -5)（右手坐标绕 Y 轴 +π/2 旋转：x→-z）
+        assert!((v0 - Vec3::new(0.0, 0.0, 5.0)).length() < 1e-5);
+        // t=π/2 → (5, 0, 0)（右手坐标绕 Y 轴 +π/2 旋转：z→x）
         let vq = curve.sample(std::f64::consts::PI / 2.0).vec3();
-        assert!((vq - Vec3::new(0.0, 0.0, -5.0)).length() < 1e-5);
+        assert!((vq - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-5);
     }
 
     #[test]
