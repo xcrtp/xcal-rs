@@ -70,25 +70,47 @@ impl ClockForest {
         }
     }
 
-    /// 构造期插入：做一次环检测再落盘。
+    /// 插入新节点并分配 id。
+    ///
+    /// parent 只能引用已存在的节点（新 id 不会出现在任何已有节点的祖先链上），
+    /// 因此 insert 天然不可能成环；环检测由 [`ClockForest::set_parent`] 承担。
     pub fn insert(&mut self, node: ClockNode) -> Result<ClockId, TimeError> {
         let id = ClockId(self.next_id);
         self.next_id += 1;
-        // 先插入以便环检测能遍历到（暂时；环检测完再最终确定）。
-        self.nodes.insert(id, node.clone());
-
-        // 环检测：沿 parent 链向上，若在到达根之前再次遇到 id 则成环。
-        let mut cur = id;
-        let mut visited = std::collections::HashSet::new();
-        visited.insert(cur);
-        while let Some(pid) = self.nodes.get(&cur).and_then(|n| n.parent) {
-            if !visited.insert(pid) {
-                self.nodes.remove(&id);
-                return Err(TimeError::CycleDetected(id));
-            }
-            cur = pid;
-        }
+        self.nodes.insert(id, node);
         Ok(id)
+    }
+
+    /// 重新挂载父节点（re-parent）。
+    ///
+    /// 沿 `new_parent` 的祖先链向上检测，若遇到 `id` 自身则成环，
+    /// 返回 [`TimeError::CycleDetected`] 且林结构保持不变。
+    pub fn set_parent(
+        &mut self,
+        id: ClockId,
+        new_parent: Option<ClockId>,
+    ) -> Result<(), TimeError> {
+        if !self.nodes.contains_key(&id) {
+            return Err(TimeError::ClockNotFound(id));
+        }
+        if let Some(p) = new_parent {
+            if !self.nodes.contains_key(&p) {
+                return Err(TimeError::ClockNotFound(p));
+            }
+            // 沿 new_parent 的祖先链向上走，遇到 id 即成环。
+            let mut cur = p;
+            loop {
+                if cur == id {
+                    return Err(TimeError::CycleDetected(id));
+                }
+                match self.nodes.get(&cur).and_then(|n| n.parent) {
+                    Some(next) => cur = next,
+                    None => break,
+                }
+            }
+        }
+        self.nodes.get_mut(&id).unwrap().parent = new_parent;
+        Ok(())
     }
 
     pub fn get(&self, id: ClockId) -> Option<&ClockNode> {
@@ -260,20 +282,50 @@ mod tests {
     }
 
     #[test]
-    fn cycle_detection_rejects_cyclic_insert() {
-        // 先插入 A、B 成 A→B
+    fn set_parent_rejects_cycle_and_preserves_forest() {
+        // 构造 A→B（B.parent = A），再尝试 set_parent(A, Some(B)) 使 A→B→A 成环
         let mut forest = ClockForest::new();
         let a = forest.insert(ClockNode::new(None)).unwrap();
         let b = forest.insert(ClockNode::new(Some(a))).unwrap();
 
-        // 尝试让 A.parent = B（形成环）→ 应该返回 Err
-        // 注意：ClockForest.insert 总是先创建一个"新 id"，要测试环需要手工构造
-        // 直接修改：重新插入一个 parent=B 的节点，让 insert 时检测到环
-        let c = ClockNode::new(Some(b));
-        let _cid = forest.insert(c.clone()).unwrap(); // c.parent=b, b.parent=a, a.parent=None → 无环
+        assert_eq!(
+            forest.set_parent(a, Some(b)),
+            Err(TimeError::CycleDetected(a))
+        );
 
-        // 手工修改让 b.parent = cid —— 但这需要暴露内部接口；更简单的方式是直接测试手工构造 forest 的环
-        // 实际上我们已经验证 insert 时做了检测；这里补充手工构造 HashMap 后 eval_local 不 panic
+        // 林结构未被破坏：A 仍为根，B 仍挂在 A 下，求值正常
+        assert_eq!(forest.get(a).unwrap().parent, None);
+        assert_eq!(forest.get(b).unwrap().parent, Some(a));
+        assert!((forest.eval_local(b, 7.5) - 7.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_parent_self_and_missing_are_rejected() {
+        let mut forest = ClockForest::new();
+        let a = forest.insert(ClockNode::new(None)).unwrap();
+
+        // 自挂载成环
+        assert_eq!(
+            forest.set_parent(a, Some(a)),
+            Err(TimeError::CycleDetected(a))
+        );
+        // 不存在的节点
+        assert!(matches!(
+            forest.set_parent(ClockId(999), None),
+            Err(TimeError::ClockNotFound(_))
+        ));
+        assert!(matches!(
+            forest.set_parent(a, Some(ClockId(999))),
+            Err(TimeError::ClockNotFound(_))
+        ));
+
+        // 合法 re-parent 仍然可用
+        let b = forest.insert(ClockNode::new(None)).unwrap();
+        forest.set_parent(b, Some(a)).unwrap();
+        assert_eq!(forest.get(b).unwrap().parent, Some(a));
+        // 挂回根
+        forest.set_parent(b, None).unwrap();
+        assert_eq!(forest.get(b).unwrap().parent, None);
     }
 
     #[test]

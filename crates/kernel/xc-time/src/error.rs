@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::clock::ClockId;
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TimeError {
     #[error("clock {0:?} not found")]
     ClockNotFound(ClockId),
