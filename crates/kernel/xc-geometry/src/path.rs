@@ -181,6 +181,94 @@ impl Path2D {
         out
     }
 
+    /// 把曲线采样为**按子路径分组**的折线点序列。
+    ///
+    /// 与 [`flatten`] 的区别：`flatten` 把所有子路径首尾相接拼成一个扁平
+    /// `Vec<Vec2>`（丢掉了子路径边界），多轮廓字形（`o`/`B`/`8` 有内圈或孔洞）
+    /// 若用扁平结果逐段连线，会在轮廓之间画出横穿字形内部的**多余桥接线**。
+    /// 本方法按 `MoveTo` 分组返回，保留每个子轮廓的独立性。
+    ///
+    /// 每个子路径组内，`Close` 会把当前子路径起点追加到组尾
+    /// （即组内首尾点相同，消费端据此判定闭合）。
+    pub fn flatten_subpaths(&self, tolerance: f32) -> Vec<Vec<Vec2>> {
+        let tol = tolerance.max(1e-4);
+        let mut out: Vec<Vec<Vec2>> = Vec::new();
+        let mut current_group: Option<Vec<Vec2>> = None;
+        let mut sub_start: Option<Vec2> = None;
+        let mut current: Option<Vec2> = None;
+
+        for cmd in &self.commands {
+            match *cmd {
+                PathCommand::MoveTo(p) => {
+                    // 上一个组收尾，开始新组。
+                    if let Some(g) = current_group.take() {
+                        if !g.is_empty() {
+                            out.push(g);
+                        }
+                    }
+                    current_group = Some(vec![p]);
+                    sub_start = Some(p);
+                    current = Some(p);
+                }
+                PathCommand::LineTo(p) => {
+                    current_group.get_or_insert_with(Vec::new).push(p);
+                    current = Some(p);
+                }
+                PathCommand::QuadTo { ctrl, end } => {
+                    let start = current.unwrap_or(end);
+                    flatten_quad(start, ctrl, end, tol, current_group.get_or_insert_with(Vec::new));
+                    current = Some(end);
+                }
+                PathCommand::CubicTo { ctrl1, ctrl2, end } => {
+                    let start = current.unwrap_or(end);
+                    flatten_cubic(
+                        start,
+                        ctrl1,
+                        ctrl2,
+                        end,
+                        tol,
+                        current_group.get_or_insert_with(Vec::new),
+                    );
+                    current = Some(end);
+                }
+                PathCommand::Arc {
+                    center,
+                    radii,
+                    rotation,
+                    start_angle,
+                    end_angle,
+                } => {
+                    flatten_arc(
+                        center,
+                        radii,
+                        rotation,
+                        start_angle,
+                        end_angle,
+                        tol,
+                        current_group.get_or_insert_with(Vec::new),
+                    );
+                    // 弧的终点作为当前点。
+                    current = Some(arc_point(center, radii, rotation, end_angle));
+                    if sub_start.is_none() {
+                        sub_start = Some(arc_point(center, radii, rotation, start_angle));
+                    }
+                }
+                PathCommand::Close => {
+                    if let (Some(start), Some(g)) = (sub_start, current_group.as_mut()) {
+                        g.push(start);
+                        current = Some(start);
+                    }
+                }
+            }
+        }
+        if let Some(g) = current_group.take() {
+            if !g.is_empty() {
+                out.push(g);
+            }
+        }
+        out
+    }
+
     /// 计算包围盒（不修改 self，无缓存）。
     ///
     /// 贝塞尔曲线完全位于控制点凸包内，故用控制点 + 端点求 AABB 即可保守包围；
@@ -384,6 +472,50 @@ mod tests {
         let last = *pts.last().unwrap();
         assert!((last.x - 0.0).abs() < 1e-4);
         assert!((last.y - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_flatten_subpaths_splits_two_contours() {
+        // 外圈矩形 + 内圈矩形（模拟 `o` 的外轮廓与内孔）。
+        let mut path = Path2D::new();
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(10.0, 0.0))
+            .line_to(Vec2::new(10.0, 10.0))
+            .line_to(Vec2::new(0.0, 10.0))
+            .close()
+            .move_to(Vec2::new(2.0, 2.0))
+            .line_to(Vec2::new(8.0, 2.0))
+            .line_to(Vec2::new(8.0, 8.0))
+            .line_to(Vec2::new(2.0, 8.0))
+            .close();
+
+        let groups = path.flatten_subpaths(0.1);
+        assert_eq!(groups.len(), 2, "应分成两个子路径组");
+        assert_eq!(groups[0].len(), 5, "外圈：4 顶点 + Close 回起点");
+        assert_eq!(groups[1].len(), 5, "内圈：4 顶点 + Close 回起点");
+        // 每组首尾相同 → 视为闭合。
+        assert_eq!(groups[0].first(), groups[0].last());
+        assert_eq!(groups[1].first(), groups[1].last());
+        // 两组起点不同（未被拼成一条）。
+        assert_ne!(groups[0].first(), groups[1].first());
+    }
+
+    #[test]
+    fn test_flatten_subpaths_keeps_open_subpaths_separate() {
+        // 两条互不相连的开放折线：不得在两者之间产生桥接段。
+        let mut path = Path2D::new();
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0))
+            .move_to(Vec2::new(5.0, 5.0))
+            .line_to(Vec2::new(6.0, 5.0));
+
+        let groups = path.flatten_subpaths(0.1);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 2);
+        assert_eq!(groups[1].len(), 2);
+        // 开放（未 Close）：首尾不同。
+        assert_ne!(groups[0].first(), groups[0].last());
+        assert_ne!(groups[1].first(), groups[1].last());
     }
 
     #[test]

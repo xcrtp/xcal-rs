@@ -24,10 +24,11 @@ use xcal_core::{ClockForest, ClockNode, Curve};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
-use xcal_render::components::{Circle, FunctionX2Y, PhaseAnim, Sampler1D, StrokeSolid};
+use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
 
+mod formula;
 mod health;
 mod param_panel;
 mod systems_3d;
@@ -95,6 +96,27 @@ impl App {
             // 相位滑动由 BindingApplySystem 驱动（Binding 表：omega=1.5）
             PhaseAnim::new(0.0, 1.5),
         ));
+
+        // ── 公式接入：Typst 内容管线 → 旧 2D 描边路径（空心字）──────────
+        // 静态一条公式，启动时烘焙一次并 spawn 实体；rebuild() 已留口，
+        // 将来接交互只需加 UI 工作量。零 System 改动：公式作为普通
+        // (Path, StrokeSolid) 实体参与现有 record_scene 录制。
+        // 位置选在上方空白区域，避开 sin 曲线 / 圆 / 网格轴线；
+        // 字号按"窄窗口也能完整看到"取值（默认视口 x∈[-10,10]，但面板会压缩视口）。
+        let engine = formula::build_engine();
+        let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
+        match formula::rebuild(&engine, &spec) {
+            Some(ir) => {
+                for (vertices, color, width, closed) in formula::compile_to_stroke_paths(&ir, &spec)
+                {
+                    scene.spawn((
+                        Path::new(vertices, closed),
+                        StrokeSolid::new(width, color),
+                    ));
+                }
+            }
+            None => eprintln!("[xcal-app] 公式编译失败，跳过公式实体"),
+        }
 
         let world = scene.into_world();
 

@@ -30,7 +30,7 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 | `mat` | `Mat3` / `Mat4` / `Quat` | 3×3、4×4 矩阵与四元数 |
 | `color` | `Color32` | RGBA8888（`u8` 四通道），`From<(u8,u8,u8,u8)>` / `From<[u8;4]>` / 透明度混色 |
 | `rect` | [`Rect2D`](#rect2d-轴对齐矩形) | 2D 轴对齐矩形，交/并/包含/扩展 |
-| `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样 |
+| `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样（`flatten` 扁平 / `flatten_subpaths` 按子轮廓分组） |
 | `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（平移 × 旋转 × 缩放），可与 `Mat3`/`Mat4` 互转 |
 | `primitives` | `Point3D` / `Line3D` / `Triangle2D` | 基础图元数据结构 |
 
@@ -77,22 +77,28 @@ let i: Option<Rect2D> = r.intersect(r2); // None
 ### Path2D — 路径 + 折线采样
 
 ```rust
-use xc_geometry::{Path2D, PathCommand};
+use xc_geometry::{Path2D, Vec2};
 
 let mut p = Path2D::new();
-p.move_to((0.0, 0.0))
- .line_to((1.0, 0.0))
- .cubic_to((1.0, 0.55), (0.55, 1.0), (0.0, 1.0))
- .arc((0.0, 0.0), 1.0, 0.0, std::f32::consts::FRAC_PI_2)
+p.move_to(Vec2::new(0.0, 0.0))
+ .line_to(Vec2::new(1.0, 0.0))
+ .cubic_to(Vec2::new(1.0, 0.55), Vec2::new(0.55, 1.0), Vec2::new(0.0, 1.0))
+ .arc_to(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0), 0.0, 0.0, std::f32::consts::FRAC_PI_2)
  .close();
 
-// 按弦高误差 ≤ 0.001 展开成折线点列
-let samples: Vec<[f32; 2]> = p.flatten(0.001).collect();
+// 按弦高误差 ≤ 0.001 展开成折线点列（扁平：所有子路径首尾相接拼成一条）
+let samples: Vec<Vec2> = p.flatten(0.001);
+
+// 需要保留子轮廓边界时（如多轮廓字形 o / B / 8 的描边）：
+// flatten_subpaths 按 MoveTo 分组返回，避免在轮廓之间画出横穿的桥接线。
+let contours: Vec<Vec<Vec2>> = p.flatten_subpaths(0.001);
 ```
 
 - Bézier 段使用 **de Casteljau 自适应细分**，在拐点处保持精度、在直线段收敛更快；
 - `Arc` 通过弦误差控制生成多段 `LineTo`，避免 `sin`/`cos` 过多；
-- 迭代器零拷贝、无堆分配（细分栈用小 `ArrayVec`）。
+- 迭代器零拷贝、无堆分配（细分栈用小 `ArrayVec`）；
+- `flatten_subpaths` 保留每个子轮廓的独立性：`Close` 会把子路径起点追加到该组尾部
+  （组内首尾点相同 = 闭合），消费端据此逐轮廓 `closed` 标记。
 
 ---
 
@@ -122,7 +128,7 @@ let inv = t.inverse();       // 仿射逆（平移+旋转+正交缩放时解析�
 ## 测试
 
 ```bash
-cargo test -p xc-geometry           # 运行 26 个单元测试
+cargo test -p xc-geometry           # 运行 29 个单元测试
 cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
 ```
 
@@ -130,7 +136,8 @@ cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
 
 - `Color32` — round-trip 转换、`with_alpha`、预设值
 - `Rect2D` — 并/交退化、包含边界、split 系列、缩放偏移
-- `Path2D` — flatten 闭合/开放路径、圆弧弦误差、Cubic/Quad 端点一致
+- `Path2D` — flatten 闭合/开放路径、`flatten_subpaths` 双轮廓分组
+  （外圈 + 内孔各自成组，两组不互相拼线）、圆弧弦误差、Cubic/Quad 端点一致
   （历史：修复过 de Casteljau 切分时 NaN 传播 bug）
 - `Transform2D/3D` — 逆矩阵精度、点/方向向量变换、与 `Mat*` 互转
 

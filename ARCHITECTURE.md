@@ -173,12 +173,28 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
            → xc-content::ContentIR（StyledPath + fill/stroke + Span 锚点，pt，Y-up）
            → xcal-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
                                           Shape2D::Path + Style2D + Transform2D）
+           → xcal-app::formula（接线桥：flatten_subpaths + apply_point
+                               → 旧 Path 组件 + StrokeSolid，每个子轮廓一条实体）
 ```
 
 - **铁律**：`typst` 仅允许出现在 `xc-prerender` 且 feature-gated；`xcal-render`
   只依赖 `xc-content`（验收：`cargo tree -p xcal-render` 无 typst）。
 - 锚点两级映射：`Glyph.span` → `WorldExt::range`（main source 字节区间）
   → 原始归一化源码 `find`；归一化/哈希统一由 `xc-content` 实现，保证跨引擎一致。
+- **消费侧接线**（`crates/app/xcal-app/src/formula.rs`）：复用 `ir_to_draw_cmds` 的
+  缩放/平移，不另写变换；用 `Path2D::flatten_subpaths` 按子轮廓分组，每个子轮廓
+  单独 spawn 一条 `(Path, StrokeSolid)`（多轮廓字形 `o`/`B`/`8` 因此不会出现横穿
+  字形内部的桥接线）。零 System 改动——复用现有 `record_scene` 的 `(Path, StrokeSolid)`
+  分支。
+- **字号解耦**：`FormulaSpec.nominal_font_size`（Typst 编译标称字号，默认 12.0）决定
+  曲线提取精度与 IR 本地点尺度；`FormulaSpec.font_size` 是目标显示大小，仅经
+  `ir_to_draw_cmds` 的 `scale = target / nominal` 生效。展平容差是相对标称尺度的绝对值，
+  故显示尺寸缩小不会放大折线误差。
+- **空心字口径（当前）**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，
+  因此公式暂走 Stroke（轮廓）路径；实心填充待 S3 引入三角化后接管
+  （挂在 `CustomShapeData::to_triangles`）。
+- feature：`xcal-app` 默认 `typst`；`--no-default-features` 时回退 `placeholder` 引擎
+  （显示方块，链路仍可跑通）。
 
 ### cargo-archtest 适配状态
 

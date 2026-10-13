@@ -16,6 +16,11 @@ xcal-render = { path = "../../render/xcal-render" }
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
 xcal-egui = { path = "../../ui/xcal-egui" }
 xcal-macro = { path = "../../ui/xcal-macro" }
+# 内容管线接线：xc-content（IR 类型）+ xc-prerender（Typst/占位引擎）。
+# 铁律：xcal-render 只能依赖轻的 xc-content，不得依赖 xc-prerender——
+# 这里是 app 层，可以直连两者。
+xc-content = { path = "../../kernel/xc-content" }
+xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 
 eframe.workspace = true
 egui.workspace = true
@@ -26,3 +31,13 @@ glam.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
 tracing.workspace = true
+
+[features]
+# typst 默认开：否则看不见真公式，demo 无意义。
+# 关闭时 xc-prerender 用 placeholder 引擎兜底（显示方块），链路照样跑通。
+default = ["typst"]
+typst = ["xc-prerender/typst"]
+
+[dev-dependencies]
+# 仅在 formula.rs 单测中构造 IR 夹具（Path2D / Stroke2D）时使用。
+xc-geometry = { path = "../../kernel/xc-geometry" }

@@ -16,81 +16,104 @@ cargo run -p xcal-app
    - 线框立方体（white, `wireframe_cube(1.0)`）持续绕 Y 轴做轨道相机运动
    - 振动的 2D 绿色圆（`radius ∈ [0.6, 1.4]`，sin 振荡驱动）
    - 一条青色 `sin(x + φ)` 曲线（`φ` 随时间平移）
+   - 一条白描边 Typst 公式 `x² + 1`（**空心字轮廓**；由 `formula.rs` 把
+     `ContentIR` 烘焙成旧 `(Path, StrokeSolid)` 实体，见下方"公式接入"）
    - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
-2. **左侧控制面板（egui）**：时间、相机、网格、调试切换
+2. **egui 面板**：左侧时间/相机/网格，右侧动画参数
+   （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
 3. **右上角 Health Overlay（F1 切换）**：FPS、tick、实体数、绘制调用数
 4. **快捷键**：
    - `F1` — 切换性能面板
    - `F10` — 导出当前 `hecs::World + Resources` 快照到 `snapshots/tick_{n}.json`
-   - 滚轮缩放、中键/右键拖拽平移、方向键 pan（CameraInputSystem）
+   - 滚轮缩放、拖拽平移（host 翻译为 `CameraCommand` → `CameraInputSystem`）
 
 ---
 
 ## App::new 初始化流程（关键代码）
 
 ```rust
-// ── 1. 字体：尝试加载微软雅黑，否则用 egui 默认（中文会变成方框） ──
-Self::setup_fonts(&ctx.egui_ctx);
+// ── 1. 字体 / 视觉：微软雅黑优先，否则 egui 默认（中文变方框） ──
+Self::setup_fonts(&ctx.egui_ctx)?;
+Self::setup_visuals(&ctx.egui_ctx);
 
 // ── 2. RenderContext + WgpuBackend3D（回调资源） ──
 let rs = ctx.wgpu_render_state.clone().unwrap();
 let backend_3d = WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
-rs.renderer.write().callback_resources.insert(backend_3d);  // &self 访问
+rs.renderer.write().callback_resources.insert(backend_3d);  // 回调为 &self，资源存 TypeMap
 let render_ctx = RenderContext::from_render_state(&rs);
 
-// ── 3. Scene 填充 hecs World ──
+// ── 3. Scene 填充 hecs World（纯逻辑组件） ──
 let mut scene = Scene::new();
-scene.spawn((wireframe_cube(1.0, Color32::WHITE),));
-scene.spawn((Camera3D::new(...), OrbitAnim::new(0.5, 5.0, Vec3::Y, 0.0)));
-scene.spawn((Circle, StrokeSolid, LocalClock, CircleAnim));      // 振动圆
-scene.spawn((FunctionX2Y::new(|x| x.sin()), Sampler1D, ...));    // sin 曲线
+scene.spawn((wireframe_cube(1.0, Color32::WHITE),));            // 3D 线框立方体
+scene.spawn((Camera3D::new(...),));                            // 3D 相机（eye 由 Binding 驱动）
+scene.spawn((Circle::new((0.,0.),1.0), StrokeSolid));          // 振动圆（半径由 Binding 驱动）
+scene.spawn((FunctionX2Y::new(|x| x.sin()), Sampler1D,
+             StrokeSolid, PhaseAnim));                         // sin 曲线（相位由 Binding 驱动）
+// 公式：IR → 旧 (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"
+let engine = formula::build_engine();
+let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
+if let Some(ir) = formula::rebuild(&engine, &spec) {
+    for (vertices, color, width, closed) in formula::compile_to_stroke_paths(&ir, &spec) {
+        scene.spawn((Path::new(vertices, closed), StrokeSolid::new(width, color)));
+    }
+}
 
-// ── 4. Resources 注入 ──
+// ── 4. 动画唯一驱动链路：ClockForest + BindingTable ──
+let mut forest = ClockForest::new();      // 3 个 root：振动圆 / 曲线相位 / 3D 轨道
+let mut bindings = BindingTable::new();   // Curve::Sin / Phase / Orbit → BindingTarget
+
+// ── 5. Resources 注入 ──
 let mut r = Resources::new();
 r.insert(AppCamera::default());
 r.insert(TimeState::default());
 r.insert(UiConfig::default());
 r.insert(ViewRect::default());
+r.insert(InputEvents::default());   // 每帧由 host 整帧替换
 r.insert(DrawQueue::new());
 r.insert(DrawQueue3D::new());
 r.insert(render_ctx.clone());
+r.insert(forest);
+r.insert(bindings);
+r.insert(DirectorState::new());
 
-// ── 5. Scheduler 注册 System（参见"阶段分配"） ──
+// ── 6. Scheduler 注册 System（参见"阶段分配"） ──
 let mut sched = Scheduler::new(scene.into_world(), r);
-sched.add_system(Phase::Input,        TimeUpdateSystem);
+sched.add_system(Phase::Input,        DirectorAdvanceSystem);
 sched.add_system(Phase::Input,        CameraInputSystem);
-sched.add_system(Phase::LogicUpdate,  ControlPanelSystem);
-sched.add_system(Phase::SceneSync,    ViewRectUpdateSystem);
-sched.add_system(Phase::SceneSync,    AnimationApplySystem);
-sched.add_system(Phase::SceneSync,    OrbitApplySystem);         // 3D 专用
+sched.add_system(Phase::LogicUpdate,  TimeControlSystem);
+sched.add_system(Phase::LogicUpdate,  ParamPanelSystem);        // App 层
+sched.add_system(Phase::SceneSync,    BindingApplySystem);
 sched.add_system(Phase::Prepare,      GridBuildSystem);
-sched.add_system(Phase::RenderCommit, SceneRecordSystem);
-sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);      // 3D 专用
-sched.add_system(Phase::FrameEnd,     RenderSubmitSystem);
-sched.add_system(Phase::FrameEnd,     RenderSubmit3DSystem);     // 3D 专用
+sched.add_system(Phase::RenderCommit, SceneRecordSystem);       // 2D
+sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（App 层）
+// FrameEnd 为空——内容提交由 host.present 承担（原 RenderSubmit 职责）
 ```
+
+> UI 与场景只经 `SceneView` / `SceneEvent` 契约交互：相机与面板 chrome 全部收敛在
+> `EguiSceneHost`（`build_scene_view` / `begin_frame` / `present`），System 侧不再有 egui 类型。
 
 ---
 
 ## 阶段分配（完整）
 
-| Phase          | System                     | 资源写集                 | 资源读集 |
-|----------------|----------------------------|--------------------------|----------|
-| **Input**      | TimeUpdate                 | TimeState                | —        |
-|                | CameraInput                | AppCamera                | EguiFrameContext |
-| **LogicUpdate**| ControlPanel               | UiConfig                 | TimeState, AppCamera, EguiFrameContext |
-| **SceneSync**  | ViewRectUpdate             | ViewRect                 | EguiFrameContext |
-|                | AnimationApply (2D)        | hecs 组件 (无 Resource)  | TimeState |
-|                | OrbitApply (3D)            | hecs Camera3D + OrbitAnim| TimeState |
-| **Prepare**    | GridBuild                  | DrawQueue (2D)           | ViewRect, AppCamera, UiConfig |
-| **RenderCommit**| SceneRecord (2D)          | DrawQueue (2D)           | ViewRect, AppCamera |
-|                | SceneRecord3D (3D)         | DrawQueue3D              | hecs::World 组件 |
-| **FrameEnd**   | RenderSubmit (2D)          | —  (consume DrawQueue)   | ViewRect, EguiFrameContext, DrawQueue |
-|                | RenderSubmit3D (3D)        | —  (提交 egui 回调)      | EguiFrameContext, DrawQueue3D, ViewRect |
+| Phase | System | 资源写集 | 资源读集 |
+|-------|--------|----------|----------|
+| **Input**       | DirectorAdvance | DirectorState, TimeState | — |
+|                 | CameraInput     | AppCamera                | InputEvents |
+| **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
+|                 | ParamPanel      | BindingTable             | InputEvents |
+| **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
+| **Prepare**     | GridBuild       | DrawQueue (2D)           | ViewRect, AppCamera, UiConfig |
+| **RenderCommit**| SceneRecord (2D)| DrawQueue (2D)           | ViewRect, AppCamera |
+|                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
+| **FrameEnd**    | —（空）         | —                        | — |
 
-同 phase 中 `ViewRectUpdate` / `AnimationApply` / `OrbitApply` 读写集互不相交；
-`SceneRecord` 写 `DrawQueue` vs `SceneRecord3D` 写 `DrawQueue3D`（类型无交集）
+同 phase 内 `TimeControl` / `ParamPanel` 同读 `InputEvents`（合法）；
+`SceneRecord` 写 `DrawQueue` 与 `SceneRecord3D` 写 `DrawQueue3D` 类型无交集
 ——debug 模式下 `BorrowTracker` 不会触发冲突。
+
+`FrameEnd` 为空：内容提交（2D + 3D）由 `EguiSceneHost::present` 在 `run_frame` 之后承担，
+面板 chrome 与 `ViewRect` 写入由 `begin_frame` 在 `run_frame` 之前完成。
 
 ---
 
@@ -98,18 +121,24 @@ sched.add_system(Phase::FrameEnd,     RenderSubmit3DSystem);     // 3D 专用
 
 ```rust
 fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-    let dt = ui.input(|i| i.unstable_dt).min(0.1);
+    // 墙钟 dt：用 Instant 单调时钟算，不随渲染帧率波动。
+    let now = Instant::now();
+    let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+    self.last_frame = now;
 
-    // ── 注入临时资源（每帧都换，因为 &egui::Ui 生命周期短暂） ──
-    self.scheduler.resources_mut().insert(EguiFrameContext::new(ui));
+    // 1. 场景 → UI：构建本帧视图声明（2D/3D 图层 + 相机）。
+    let view = EguiSceneHost::build_scene_view(self.scheduler.world(), self.scheduler.resources());
 
-    // ── 六阶段主循环 ──
+    // 2. UI → 场景：收集事件、画面板 chrome、写 ViewRect。
+    //    必须在 run_frame 之前：System 消费 InputEvents，GridBuild 当帧读 ViewRect。
+    EguiSceneHost::begin_frame(ui, &view, self.scheduler.resources_mut());
+
     self.scheduler.run_frame(dt);
 
-    // ── 快捷键：F1/F10；健康面板更新；清理 EguiFrameContext ──
-    // ... (health.toggle + dump_snapshot + health.update + health.show)
+    // 3. 内容提交：2D 队列 + 3D 队列 → painter（原 RenderSubmit 职责）。
+    EguiSceneHost::present(ui, &view, self.scheduler.resources_mut());
 
-    self.scheduler.resources_mut().remove::<EguiFrameContext>();
+    // ── 快捷键 F1（性能面板）/ F10（导出快照）+ health.update/show ──
 
     // ── 清空 DrawQueue(2D)（3D 队列由回调内部 take_snapshot 清空） ──
     if let Some(q) = self.scheduler.resources_mut().get_mut::<DrawQueue>() {
@@ -117,10 +146,42 @@ fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
     }
 
     // ⚠️ egui 默认是"事件驱动"，无输入时不重画 → 动画停住。
-    //    每帧主动请求，保证 TimeState.elapsed 持续增长。
+    //    每帧主动请求，保证时间推进与 repaint 持续。
     ui.ctx().request_repaint();
 }
 ```
+
+---
+
+## 公式接入（`src/formula.rs`）
+
+把已完成的 Typst 内容管线（`xc-content` IR + `xc-prerender` 引擎）接进主应用，
+让公式以**普通 2D 图元**出现在场景里。**不新增任何 System**，只做接线。
+
+```
+Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
+           → xc-content::ContentIR（StyledPath，pt，Y-up）
+           → xcal-render::ir_to_draw_cmds（scale = font_size / nominal_font_size）
+           → formula::compile_to_stroke_paths（flatten_subpaths + apply_point）
+           → 每个子轮廓一条 (Path, StrokeSolid) 实体
+           → 现有 SceneRecordSystem::record_scene → DrawQueue → EguiPainter
+```
+
+关键点：
+
+- **复用 `ir_to_draw_cmds`**：缩放与平移全部由它完成，桥接层不另写变换。
+- **每个子轮廓单独一条路径**：用 `Path2D::flatten_subpaths` 按 `MoveTo` 分组
+  （`flatten` 会把所有子路径拼成一条，多轮廓字形 `o`/`B`/`8` 会出现横穿字形内部
+  的桥接线）；组内首尾点重合即传 `closed=true`。
+- **字号解耦**：`FormulaSpec.nominal_font_size`（默认 12.0）是 Typst 编译标称字号，
+  决定曲线提取精度与 IR 本地点尺度；`FormulaSpec.font_size` 是目标显示大小。
+  展平容差是相对标称尺度的绝对值，显示尺寸缩小不会放大折线误差。
+- **空心字**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，因此公式
+  暂走 Stroke（轮廓）路径；实心填充待 S3 三角化后接管（挂 `CustomShapeData::to_triangles`）。
+- **静态烘焙**：启动时编译一次并 spawn 实体；保留 `rebuild()`，将来接交互只需加 UI。
+
+> 公式源在 `App::new` 里硬编码为 `"x^2 + 1"`。注意 Typst 0.14 数学模式下连续字母
+> （如 `abcde`）会被解析为**单个未定义标识符**，多字母需空格分隔（`a b c d e`）。
 
 ---
 
@@ -161,20 +222,32 @@ xcal-render                             # 默认 feature="wgpu"
 xcal-render-backends   = { features = ["egui-wgpu"] }
 xcal-egui
 xcal-macro
+xc-content                              # 公式 IR 类型
+xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
 
 eframe = { version = "0.36", default-features = false, features = ["wgpu","x11","wayland"] }
 egui / egui-wgpu / wgpu 30
 hecs / glam
-derive-new / derive-builder
+derive-new / derive_builder
 tracing 0.1
+
+[features]
+default = ["typst"]
+typst   = ["xc-prerender/typst"]        # 关闭时回退 placeholder 引擎
 ```
+
+> **铁律**：`xcal-render` 只能依赖轻的 `xc-content`，**不得**依赖 `xc-prerender`
+> （否则关掉 feature 也会把 typst 拖进渲染层）。验收：
+> `cargo tree -p xcal-render | grep -c typst` 结果为 0。
 
 ---
 
 ## 运行 / 测试
 
 ```bash
-cargo run   -p xcal-app                               # 启动主 GUI（桌面环境）
-cargo test  -p xcal-app                               # health.rs 单元测试
+cargo run   -p xcal-app                               # 启动主 GUI（桌面环境，真公式）
+cargo run   -p xcal-app --no-default-features         # placeholder 兜底（显示方块）
+cargo test  -p xcal-app                               # formula.rs / param_panel.rs 单测
+cargo build -p xcal-app --no-default-features         # 两种 feature 组合都需通过
 cargo clippy -p xcal-app --all-targets -- -D warnings # 严格检查
 ```
