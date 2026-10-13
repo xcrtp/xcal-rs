@@ -35,6 +35,7 @@ xcal-render（ir_to_draw_cmds → Shape2D + Style2D + Transform2D）
 | `normalize` | `normalize_source` / `hash_source` | 去 `//`、`/* */` 注释 + 折叠空白 + trim；归一化哈希做缓存键 |
 | `svg` | `to_svg` / `SvgOptions` | IR → 确定性 SVG（固定浮点精度 + `data-span` 锚点属性），快照/人工核验量具 |
 | `placeholder` | `generate_placeholder` / `PlaceholderOptions` | 零依赖占位排版：每个 UTF-8 字符一个矩形，锚点字节边界准确 |
+| `pair` | `pair_by_anchor` / `degenerate_at` | 语义配对：按源码锚点把两个 IR 的路径配成 `(from, to)` 对（形变用） |
 
 ---
 
@@ -91,15 +92,32 @@ let ir = generate_placeholder("x^2 + 1", &PlaceholderOptions::default());
 
 ---
 
+## 语义配对（形变用）
+
+`x^2 → x^3` 的 `x` 应该变到 `x^3` 的 `x`，而不是按位置变到 `3`。
+「对应关系」的知识留在本层（路线甲：**不进 `xc-time`**）：
+
+```rust
+use xc_content::pair_by_anchor;
+// 优先级：锚点相同 → 配对；仅单侧存在 → 淡入/淡出（退化为包围盒中心点）；
+// 无锚点 / 剩余项 → 按索引顺序配对。
+let pairs: Vec<(Path2D, Path2D)> = pair_by_anchor(&from_ir, &to_ir);
+```
+
+产出的路径对交给下层 `Path2D::morph` / `Curve::PathMorph` 逐对插值。
+
+---
+
 ## 测试
 
 ```bash
-cargo test -p xc-content          # 18 个单元测试
+cargo test -p xc-content          # 25 个单元测试
 cargo tree -p xc-content          # 依赖卫生：不含 typst / egui / wgpu / hecs
 ```
 
 覆盖点：IR bounds 合并、归一化（注释/空白/哈希幂等）、SVG 确定性与锚点
-属性、占位生成器（空白布局、多字节字符、bounds）。
+属性、占位生成器（空白布局、多字节字符、bounds）、锚点配对
+（乱序仍按锚点配对 / 淡入淡出 / 无锚点退化索引）。
 
 ---
 

@@ -58,6 +58,7 @@ graph TD
     xc_content --> xc_geometry
     xc_prerender --> xc_content
     xc_prerender --> xc_geometry
+    xc_time --> xc_geometry
 
     %% graph → kernel
     xc_graph_algo --> xc_node
@@ -94,6 +95,9 @@ graph TD
     xcal_app --> xcal_egui
     xcal_app --> xcal_render
     xcal_app --> xcal_render_backends
+    xcal_app --> xc_content
+    xcal_app --> xc_prerender
+    xcal_app --> xc_geometry
 ```
 
 ## 合规校验
@@ -109,24 +113,24 @@ graph TD
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xcal-app | 0 | 5 | 1.00 |
+| xcal-app | 0 | 8 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
-| xc-prerender | 0 | 2 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
 | xcal-egui | 1 | 4 | 0.80 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
+| xc-prerender | 1 | 2 | 0.67 |
 | xcal-render-backends | 2 | 3 | 0.60 |
 | xcal-render | 3 | 3 | 0.50 |
 | xc-graph-algo | 1 | 1 | 0.50 |
+| xc-time | 1 | 1 | 0.50 |
 | xcal-core | 4 | 3 | 0.43 |
-| xc-content | 2 | 1 | 0.33 |
+| xc-content | 3 | 1 | 0.25 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
-| xc-geometry | 5 | 0 | 0.00 |
+| xc-geometry | 7 | 0 | 0.00 |
 | xcal-macro | 3 | 0 | 0.00 |
-| xc-time | 1 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -196,6 +200,30 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
 - feature：`xcal-app` 默认 `typst`；`--no-default-features` 时回退 `placeholder` 引擎
   （显示方块，链路仍可跑通）。
 
+### S1 插值内核与形变（路线甲）
+
+```
+xc-geometry：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
+xc-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
+xc-content ：pair_by_anchor（语义配对，按源码锚点）
+xcal-core  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（SceneSync）
+```
+
+- **路线甲**：`xc-time` 依赖 `xc-geometry`（插值原语），但**不得**依赖 `xc-content`
+  （语义配对知识留外层）。验收：`cargo tree -p xc-time | grep -c xc-content` = 0。
+- 对齐按**弧长**（非索引）：`flatten` 输出点分布不均，按索引配对会让直线段被拉伸、
+  曲线段被压缩，形变过程"抽动"。
+- 输出顶点数**恒为 `samples`**（默认 128）→ 稳定开销，与输入复杂度无关。
+- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `BindingTarget::MorphT`），
+  `MorphApplySystem` 每帧把 `Path2D::morph_points` 的结果写进同实体的 `Path`
+  —— render 层复用现有 `record_scene`，零录制改动。from/to 不每帧重建
+  （为 S3 上 GPU 预留：上传一次 + 每帧一个 float）。
+- **语义配对（S1b）**：`xc_content::pair_by_anchor` 按源码 `Span` 锚点配对
+  （`x^2 → x^3` 的 `x` 配到 `x`，而非按位置配到 `3`）；单侧存在 → 淡入/淡出
+  （退化为包围盒中心的一个点）；无锚点 → 退化为索引配对。
+- 已知限制：旋转对齐（起点不一致会"绕圈"，原型期约定起点对齐）、
+  Color 线性空间非感知均匀、当前为 CPU 插值。
+
 ### cargo-archtest 适配状态
 
 `cargo-archtest v0.2.3` 的架构模型是「单 crate 内按 `src/` 子目录分层」，
@@ -208,5 +236,8 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
 > `architecture.json`），故图与 FanIn/FanOut 表改用
 > `cargo metadata --format-version 1`（仅生产依赖，`kind != dev`）等价重算。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
+>
+> 备注（2026-10-13）：S1 引入 `xc-time → xc-geometry` 边后按同一口径再次重算
+> FanIn/FanOut（`xc-time` FanOut 0→1、`xc-geometry` FanIn 5→7、`xcal-app` FanOut 5→8）。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

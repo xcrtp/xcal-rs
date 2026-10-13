@@ -6,7 +6,7 @@
 
 use xc_time::{AnimValue, ClockForest};
 use xcal_core::context::ExecutorContext;
-use xcal_core::scene::components::{Camera3D, Circle, PhaseAnim};
+use xcal_core::scene::components::{Camera3D, Circle, MorphShape, PhaseAnim};
 use xcal_core::system::System;
 use xcal_core::TimeState;
 
@@ -63,6 +63,13 @@ impl BindingApplySystem {
                     (world.get::<&mut Camera3D>(*entity), value)
                 {
                     camera.eye = v;
+                }
+            }
+            BindingTarget::MorphT(entity) => {
+                if let (Ok(mut morph), AnimValue::Scalar(v)) =
+                    (world.get::<&mut MorphShape>(*entity), value)
+                {
+                    morph.t = v;
                 }
             }
         }

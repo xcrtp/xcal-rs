@@ -21,8 +21,10 @@ xcal-rs 动画架构的时间单向管道中，本 crate 承担全部「时间 �
 seek（跳转）、倒放（负 rate/speed）、循环回绕因此**免费且必然正确**，
 且与渲染帧率完全解耦。
 
-**硬约束**：仅依赖 `glam` / `serde` / `thiserror`；
+**硬约束**：仅依赖 `glam` / `xc-geometry` / `serde` / `thiserror`；
 `hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止。
+**路线甲**：可依赖 `xc-geometry`（插值原语），但**不得**依赖 `xc-content`——
+语义配对（按源码锚点）的知识留在外层。
 
 ---
 
@@ -31,7 +33,8 @@ seek（跳转）、倒放（负 rate/speed）、循环回绕因此**免费且必
 | 模块 | 关键类型 | 说明 |
 |------|----------|------|
 | `clock` | `ClockForest` / `ClockNode` / `ClockId` / `PlayMode` | 多根时钟森林；`eval_local` 纯函数求值；`set_parent` 构造期环检测 |
-| `curve` | `Curve` / `AnimValue` / `Interp` | 动画曲线（Const/Sin/Orbit/Phase/Sampled），`sample(t)` 纯函数 |
+| `curve` | `Curve` / `AnimValue` / `Interp` | 动画曲线（Const/Sin/Orbit/Phase/Sampled/Morph/PathMorph/Keyframes），`sample(t)` 纯函数 |
+| `easing` | `Easing` | 时间重映射 `f(t)→t'`（Linear/EaseIn/EaseOut/EaseInOut/Cubic/Step） |
 | `director` | `Director` | 唯一时间源：`global_t` + `speed` + `playing` |
 | `error` | `TimeError` | `ClockNotFound` / `CycleDetected` / `ReverseNotSeekable` |
 
@@ -94,14 +97,35 @@ let v = eye.try_vec3().unwrap();           // 类型安全取值：不匹配返�
 | `Const(v)` | 常量 | 静态绑定 |
 | `Sin { base, amp, omega }` | `Scalar` | `base + amp·sin(ωt)` |
 | `Orbit { radius, axis, speed, initial_angle }` | `Vec3` | 3D 轨道相机偏移（Rodrigues 轴角旋转） |
-| `Phase { omega }` | `Scalar` | 线性相位 `ωt`（供 FunctionX2Y 水平滑动） |
-| `Sampled { points, interpolation }` | 任意 | 兜底采样点数组，`Linear`/`Step` 插值 |
+| `Phase { omega }` | `Scalar` | 线性相位 `ωt`（供 FunctionX2Y 水平滑动 / 形变参数 t） |
+| `Sampled { points, interpolation }` | 任意 | 兜底采样点数组（**外部数据**），`Linear`/`Step` 插值 |
+| `Morph { from, to, span, easing }` | 任意 | 两条曲线按 `span` 归一化时间经 `easing` 混合（span 外取端点） |
+| `PathMorph { from, to, easing, samples }` | `Path` | Path→Path 形变（弧长对齐），顶点数恒为 `samples`（**已就绪未接线**，见下） |
+| `Keyframes { keys, interpolation }` | 任意 | 用户编排的关键帧（帧间按 `Interp` 插值） |
 
-`AnimValue` 支持 `Scalar` / `Vec2` / `Vec3` / `Color([f32;4])`：
+> `Sampled` 与 `Keyframes` 数据结构一致，分工是**语义**（外部数据 vs 用户编排），
+> 共享同一套采样逻辑；若后续确认无差别，优先合并（S1 计划 §3.2 / §6）。
+
+> **`PathMorph` 状态：已就绪、未接线。** 已实现并有单测覆盖，但当前**无生产接线**
+> （`render/`、`app/` 无引用）。场景侧 demo 走的是
+> `BindingTarget::MorphT` + `MorphShape` 路线 —— 持有 from/to、只写 `t`，为 S3 上
+> GPU 预留（from/to 上传一次、每帧一个 float）；`PathMorph` 是"路径对**直接**插值、
+> 一次性 CPU 产出路径"的另一条用法，供将来按需接线。
+
+`AnimValue` 支持 `Scalar` / `Vec2` / `Vec3` / `Color([f32;4])` / `Path(Path2D)`：
 
 - 热路径取值 `scalar()` / `vec3()`：类型不匹配在 **debug panic**（尽早暴露 bug）、
-  release 返回零值；类型不确定时用 `try_scalar()` / `try_vec3()`；
+  release 返回零值；类型不确定时用 `try_scalar()` / `try_vec3()` / `try_path()`（返回引用）；
+- 自引入 `Path` 后 `AnimValue` **不再是 `Copy`**；
 - `Sampled` 相邻点类型不一致时退化为取区间起点值（**不静默编造插值**）。
+
+`Easing`（时间重映射，纯函数）：
+
+```rust
+use xc_time::Easing;
+assert_eq!(Easing::EaseInOut.apply(0.5), 0.5);
+let e = Easing::Cubic([0.25, 0.1, 0.25, 1.0]);  // CSS cubic-bezier（二分求根，确定性）
+```
 
 ---
 
@@ -134,8 +158,8 @@ round-trip 测试锁定：**反序列化后在相同时刻采样结果完全相�
 ## 测试
 
 ```bash
-cargo test -p xc-time          # 25 个单元测试
-cargo tree -p xc-time          # 依赖卫生：不含 hecs / egui / wgpu / xcal-*
+cargo test -p xc-time          # 37 个单元测试
+cargo tree -p xc-time          # 依赖卫生：不含 xc-content / hecs / egui / wgpu / xcal-*
 ```
 
 覆盖点：
@@ -144,7 +168,11 @@ cargo tree -p xc-time          # 依赖卫生：不含 hecs / egui / wgpu / xcal
   Hold 钳制、负 rate 倒放、`set_parent` 成环拒绝且结构不被破坏、
   求值无状态确定性（同一 t 同一结果）、serde round-trip
 - 曲线 — Sin 公式千点扫描、Orbit 起点/四分之一周期、Phase 线性、
-  Sampled 线性插值、Color 插值、类型不匹配退化、try_* 安全取值、serde round-trip
+  Sampled 线性插值、Color 插值、类型不匹配退化、try_* 安全取值、
+  `PathMorph` 端点与稳定顶点数、`Morph` span 内混合 / span 外取端点、
+  `Keyframes` 关键帧精确 + 帧间插值、Path 值参与 lerp、serde round-trip
+- 缓动 — 各曲线端点精确、单调不减、`Step` 量化、`Cubic` 等价直线控制点、
+  serde round-trip
 - Director — advance 累积 / seek 覆盖 / pause 停止 / 负速倒放 / serde round-trip
 
 ---
@@ -153,9 +181,12 @@ cargo tree -p xc-time          # 依赖卫生：不含 hecs / egui / wgpu / xcal
 
 ```toml
 [dependencies]
-glam = { workspace = true, features = ["serde"] }   # 数学类型 + 可序列化
-serde.workspace = true                              # ClockForest / Curve 可导出
-thiserror.workspace = true                          # 错误类型
+glam = { workspace = true, features = ["serde"] }            # 数学类型 + 可序列化
+xc-geometry = { path = "../xc-geometry", features = ["serde"] }  # 插值原语（Lerp / Path2D 形变）
+serde.workspace = true                                       # ClockForest / Curve 可导出
+thiserror.workspace = true                                   # 错误类型
 ```
 
-仅此而已。`hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止。
+`hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止；
+`xc-content` 亦禁止（路线甲：语义配对不进时间内核）。
+验收：`cargo tree -p xc-time | grep -c xc-content` = 0。

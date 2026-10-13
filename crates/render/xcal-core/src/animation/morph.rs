@@ -1,0 +1,101 @@
+// morph.rs — MorphApplySystem：把 `MorphShape{from,to,t}` 插值成可渲染的 `Path`。
+//
+// 阶段：SceneSync（必须在 BindingApply 之后——后者写 `MorphShape.t`）。
+// 纯组件读写（`ctx.world`），不读写任何 Resource。
+//
+// 与 S3 的接口：本 System 现在每帧 CPU 算 N 个顶点；上 GPU 时改的只是
+// "谁来做 lerp"（shader 读 from/to + t），`MorphShape` 的数据结构不动。
+
+use xc_geometry::Path2D;
+use xcal_core::context::ExecutorContext;
+use xcal_core::scene::components::{MorphShape, Path};
+use xcal_core::system::System;
+use xcal_core::types::Vec3;
+
+/// 形变应用：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的 `Path.vertices`
+/// （`closed = true`）。render 层由 `record_scene` 消费 `(Path, StrokeSolid)`。
+pub struct MorphApplySystem;
+
+impl System for MorphApplySystem {
+    type Reads = ();
+    type Writes = ();
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        for (morph, path) in ctx.world.query::<(&MorphShape, &mut Path)>().iter() {
+            let samples = morph.samples.max(1) as usize;
+            let pts = Path2D::morph_points(&morph.from, &morph.to, morph.t, samples);
+            path.vertices = pts
+                .iter()
+                .map(|p| Vec3::new(glam::Vec3::new(p.x, p.y, 0.0)))
+                .collect();
+            path.closed = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::binding::{Binding, BindingTarget, BindingTable, SeekKind};
+    use crate::animation::system::BindingApplySystem;
+    use crate::resource::Resources;
+    use crate::scheduler::{Phase, Scheduler};
+    use crate::TimeState;
+    use xc_time::{ClockForest, ClockNode, Curve};
+
+    fn square(half: f32) -> Path2D {
+        Path2D::from_polyline(
+            &[
+                glam::Vec2::new(-half, -half),
+                glam::Vec2::new(half, -half),
+                glam::Vec2::new(half, half),
+                glam::Vec2::new(-half, half),
+            ],
+            true,
+        )
+    }
+
+    /// headless：Binding 驱动 `MorphShape.t`，MorphApplySystem 把插值结果写进 `Path`。
+    #[test]
+    fn binding_drives_t_and_morph_writes_path() {
+        let mut world = hecs::World::new();
+        let entity = world.spawn((
+            MorphShape::new(square(1.0), square(2.0)),
+            Path::new(Vec::<Vec3>::new(), false),
+        ));
+
+        let mut forest = ClockForest::new();
+        let root = forest.insert(ClockNode::new(None)).unwrap();
+
+        let mut table = BindingTable::new();
+        table.add(Binding {
+            clock: root,
+            // Phase：sample(t) = omega * t = 0.5 → 形变参数 0.5
+            curve: Curve::Phase { omega: 1.0 },
+            target: BindingTarget::MorphT(entity),
+            seek_kind: SeekKind::O1,
+        });
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.5 });
+        resources.insert(forest);
+        resources.insert(table);
+
+        let mut scheduler = Scheduler::new(world, resources);
+        // SceneSync 内 BindingApply 先写 t，MorphApply 再消费。
+        scheduler.add_system(Phase::SceneSync, BindingApplySystem);
+        scheduler.add_system(Phase::SceneSync, MorphApplySystem);
+        scheduler.run_frame(0.0);
+
+        let t = scheduler.world().get::<&MorphShape>(entity).unwrap().t;
+        assert!((t - 0.5).abs() < 1e-5, "t 未被写入: {t}");
+
+        let path = scheduler.world().get::<&Path>(entity).unwrap();
+        assert_eq!(path.vertices.len(), 128, "顶点数应恒为 samples");
+        assert!(path.closed);
+        let max_x = path.vertices.iter().map(|v| v.x).fold(f32::MIN, f32::max);
+        let min_x = path.vertices.iter().map(|v| v.x).fold(f32::MAX, f32::min);
+        assert!((max_x - 1.5).abs() < 1e-3, "max_x={max_x}");
+        assert!((min_x + 1.5).abs() < 1e-3, "min_x={min_x}");
+    }
+}

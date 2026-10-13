@@ -21,6 +21,8 @@ xcal-macro = { path = "../../ui/xcal-macro" }
 # 这里是 app 层，可以直连两者。
 xc-content = { path = "../../kernel/xc-content" }
 xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
+# 几何原语：S1 形变 demo 需要直接构造 Path2D（MorphShape 的 from/to）。
+xc-geometry = { path = "../../kernel/xc-geometry" }
 
 eframe.workspace = true
 egui.workspace = true
@@ -37,7 +39,3 @@ tracing.workspace = true
 # 关闭时 xc-prerender 用 placeholder 引擎兜底（显示方块），链路照样跑通。
 default = ["typst"]
 typst = ["xc-prerender/typst"]
-
-[dev-dependencies]
-# 仅在 formula.rs 单测中构造 IR 夹具（Path2D / Stroke2D）时使用。
-xc-geometry = { path = "../../kernel/xc-geometry" }

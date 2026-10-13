@@ -62,6 +62,34 @@ pub struct PhaseAnim {
     pub omega: f32,
 }
 
+/// 可变形形状：持有 `from` / `to` 与目标参数 `t`，由 [`crate::animation::MorphApplySystem`]
+/// 每帧插值进同实体的 [`Path`]（render 层由 `record_scene` 消费 `(Path, StrokeSolid)`）。
+///
+/// 设计（S1 计划 §3.3）：**只写 `t`**（一个 f32），不每帧重建 `from`/`to` —— 为 S3
+/// 上 GPU 预留（from/to 上传一次，t 每帧一个 float）。描边样式（`StrokeSolid`）
+/// 由 xcal-render 提供，作为同一实体上的独立组件，本组件只管几何。
+#[derive(Debug, Clone)]
+pub struct MorphShape {
+    pub from: xc_geometry::Path2D,
+    pub to: xc_geometry::Path2D,
+    /// 形变参数 ∈ [0, 1]，由 `BindingApplySystem`（`BindingTarget::MorphT`）写入。
+    pub t: f32,
+    /// 输出顶点数（恒定；与 from/to 复杂度无关）。
+    pub samples: u32,
+}
+
+impl MorphShape {
+    /// 用默认顶点数（[`xc_geometry::DEFAULT_MORPH_SAMPLES`]）构造，`t = 0`（= from）。
+    pub fn new(from: xc_geometry::Path2D, to: xc_geometry::Path2D) -> Self {
+        Self {
+            from,
+            to,
+            t: 0.0,
+            samples: xc_geometry::DEFAULT_MORPH_SAMPLES as u32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, derive_builder::Builder, derive_new::new, xcal_macro::Transform2DInto)]
 pub struct Path {
     #[new(into_iter = "Vec3")]

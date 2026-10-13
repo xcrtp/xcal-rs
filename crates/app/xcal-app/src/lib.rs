@@ -10,23 +10,26 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub use xcal_core::Result;
-use xcal_core::animation::{BindingApplySystem, Binding, BindingTarget, BindingTable, SeekKind};
+use xcal_core::animation::{
+    Binding, BindingApplySystem, BindingTable, BindingTarget, MorphApplySystem, SeekKind,
+};
 use xcal_core::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_core::errors::Error;
 use xcal_core::resource::Resources;
 use xcal_core::domain::InputEvents;
-use xcal_core::scene::components::{Camera3D, Projection};
+use xcal_core::scene::components::{Camera3D, MorphShape, Projection};
 use xcal_core::scene::primitives::wireframe_cube;
 use xcal_core::scheduler::{Phase, Scheduler};
 use xcal_core::TimeState;
-use xcal_core::types::Color32;
-use xcal_core::{ClockForest, ClockNode, Curve};
+use xcal_core::types::{Color32, Vec3};
+use xcal_core::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
+use xc_geometry::Path2D;
 
 mod formula;
 mod health;
@@ -118,6 +121,59 @@ impl App {
             None => eprintln!("[xcal-app] 公式编译失败，跳过公式实体"),
         }
 
+        // ── S1 形变 demo：圆 → 方（弧长对齐的 Path 形变）────────────────
+        // MorphShape 只持有 from/to（System 只写 t）；MorphApplySystem 每帧把
+        // 插值结果写进同实体的 Path，由现有 record_scene 消费（零录制改动）。
+        let morph_center = glam::Vec2::new(-6.0, -2.5);
+        let morph_radius = 1.2;
+        // 起点对齐（原型约定，见 S1 计划已知限制"旋转对齐"）：圆的起笔方向与
+        // 方的首个顶点方向一致（均指向 -45° 的右下角），避免形变过程中"绕圈"旋转。
+        let start_angle = -std::f32::consts::FRAC_PI_4;
+        let circle_pts: Vec<glam::Vec2> = (0..64)
+            .map(|i| {
+                let a = start_angle + std::f32::consts::TAU * (i as f32) / 64.0;
+                morph_center + glam::Vec2::new(a.cos(), a.sin()) * morph_radius
+            })
+            .collect();
+        let square_pts: Vec<glam::Vec2> = [
+            glam::Vec2::new(morph_radius, -morph_radius),
+            glam::Vec2::new(morph_radius, morph_radius),
+            glam::Vec2::new(-morph_radius, morph_radius),
+            glam::Vec2::new(-morph_radius, -morph_radius),
+        ]
+        .iter()
+        .map(|p| morph_center + *p)
+        .collect();
+        let morph_entity = scene.spawn((
+            MorphShape::new(
+                Path2D::from_polyline(&circle_pts, true),
+                Path2D::from_polyline(&square_pts, true),
+            ),
+            // Path 是形变输出目标（首帧由 MorphApplySystem 填充）。
+            Path::new(Vec::<Vec3>::new(), true),
+            StrokeSolid::new(2.0, (255, 180, 0, 255)),
+        ));
+
+        // ── S1b 语义形变 demo：x^2 ↔ x^3（按源码锚点配对）──────────────
+        // `pair_by_anchor` 保证 `x` 配对到 `x`（而非按位置配到 `2`/`3`）。
+        // 每对路径 spawn 一个 MorphShape 实体，由同一个形变时钟同步驱动。
+        let anchor_spec = formula::FormulaSpec::new("x^2", 1.0, glam::Vec2::new(1.5, 3.0));
+        let mut semantic_morph_entities: Vec<hecs::Entity> = Vec::new();
+        let from_ir = formula::rebuild(&engine, &anchor_spec);
+        let to_ir = formula::rebuild(
+            &engine,
+            &formula::FormulaSpec::new("x^3", 1.0, glam::Vec2::new(1.5, 3.0)),
+        );
+        if let (Some(f), Some(t)) = (from_ir, to_ir) {
+            for (from_path, to_path) in formula::compile_morph_pairs(&f, &t, &anchor_spec) {
+                semantic_morph_entities.push(scene.spawn((
+                    MorphShape::new(from_path, to_path),
+                    Path::new(Vec::<Vec3>::new(), true),
+                    StrokeSolid::new(1.0, (255, 120, 220, 255)),
+                )));
+            }
+        }
+
         let world = scene.into_world();
 
         // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
@@ -125,6 +181,11 @@ impl App {
         let root_circle = forest.insert(ClockNode::new(None)).unwrap();
         let root_phase = forest.insert(ClockNode::new(None)).unwrap();
         let root_orbit = forest.insert(ClockNode::new(None)).unwrap();
+        // 形变时钟：PingPong 在 [0,1] 来回 → t 平滑往返。
+        let mut morph_clock = ClockNode::new(None);
+        morph_clock.span = Some((0.0, 1.0));
+        morph_clock.mode = PlayMode::PingPong;
+        let root_morph = forest.insert(morph_clock).unwrap();
 
         let mut bindings = BindingTable::new();
         // 振动圆半径：radius = base + amp * sin(t * omega)，base=1, amp=0.4, omega=2
@@ -153,6 +214,22 @@ impl App {
             target: BindingTarget::CameraEye(camera_entity),
             seek_kind: SeekKind::O1,
         });
+        // 形变参数：t = 局部时间 ∈ [0,1]（PingPong 来回）→ MorphShape.t
+        bindings.add(Binding {
+            clock: root_morph,
+            curve: Curve::Phase { omega: 1.0 },
+            target: BindingTarget::MorphT(morph_entity),
+            seek_kind: SeekKind::O1,
+        });
+        // S1b 语义形变：每个配对实体一条 MorphT 绑定（共用同一形变时钟）。
+        for &entity in &semantic_morph_entities {
+            bindings.add(Binding {
+                clock: root_morph,
+                curve: Curve::Phase { omega: 1.0 },
+                target: BindingTarget::MorphT(entity),
+                seek_kind: SeekKind::O1,
+            });
+        }
 
         let mut resources = Resources::new();
         resources.insert(AppCamera::default());
@@ -186,6 +263,8 @@ impl App {
         scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
 
         scheduler.add_system(Phase::SceneSync, BindingApplySystem);
+        // MorphApply 必须在 BindingApply 之后：后者写 MorphShape.t，前者消费。
+        scheduler.add_system(Phase::SceneSync, MorphApplySystem);
 
         scheduler.add_system(Phase::Prepare, GridBuildSystem);
 

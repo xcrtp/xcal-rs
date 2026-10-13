@@ -29,8 +29,9 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 | `vec` | `Vec2` / `Vec3` / `Vec4` | glam `Vec2/Vec3A/Vec4` 的再导出 |
 | `mat` | `Mat3` / `Mat4` / `Quat` | 3×3、4×4 矩阵与四元数 |
 | `color` | `Color32` | RGBA8888（`u8` 四通道），`From<(u8,u8,u8,u8)>` / `From<[u8;4]>` / 透明度混色 |
+| `lerp` | `Lerp` | 线性插值 trait（`f32` / `Vec2` / `Vec3` / `Color32` / `Path2D`）；纯函数、零 trait object |
 | `rect` | [`Rect2D`](#rect2d-轴对齐矩形) | 2D 轴对齐矩形，交/并/包含/扩展 |
-| `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样（`flatten` 扁平 / `flatten_subpaths` 按子轮廓分组） |
+| `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样；弧长重采样 / 形变 / 变换 |
 | `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（平移 × 旋转 × 缩放），可与 `Mat3`/`Mat4` 互转 |
 | `primitives` | `Point3D` / `Line3D` / `Triangle2D` | 基础图元数据结构 |
 
@@ -100,6 +101,24 @@ let contours: Vec<Vec<Vec2>> = p.flatten_subpaths(0.001);
 - `flatten_subpaths` 保留每个子轮廓的独立性：`Close` 会把子路径起点追加到该组尾部
   （组内首尾点相同 = 闭合），消费端据此逐轮廓 `closed` 标记。
 
+**弧长 / 形变 / 变换**（S1 插值内核）：
+
+```rust
+// 1. 累积弧长表（按 flatten 折线；closed 时补闭合段）
+let lens: Vec<f32> = p.arc_lengths(0.05, true);
+// 2. 按弧长均匀重采样为 n 点——形变对齐的基础（flatten 的点分布不均）
+let pts: Vec<Vec2> = p.resample_arc_length(128, 0.05, true);
+// 3. 两条路径按弧长对齐逐点插值：顶点数恒为 samples（与输入复杂度无关）
+let q: Path2D = Path2D::morph(&from, &to, /*t=*/0.5, 128);
+let pts_mid: Vec<Vec2> = Path2D::morph_points(&from, &to, 0.5, 128);
+// 4. 路径整体仿射变换（Arc 会退化为 32 段折线，其余命令保持类型）
+let moved: Path2D = p.transformed(&t2d);
+```
+
+> 约定：`morph` 输出**闭合折线**，`morph_points` 返回 `samples` 个不同顶点
+> （不含重复尾点）。`Lerp` 对 glam 类型需用 UFCS（`<Vec2 as Lerp>::lerp(...)`，
+> 因 glam 自带同名固有方法）。
+
 ---
 
 ### Transform2D / Transform3D
@@ -128,16 +147,19 @@ let inv = t.inverse();       // 仿射逆（平移+旋转+正交缩放时解析�
 ## 测试
 
 ```bash
-cargo test -p xc-geometry           # 运行 29 个单元测试
+cargo test -p xc-geometry           # 运行 40 个单元测试
 cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
 ```
 
 覆盖点：
 
 - `Color32` — round-trip 转换、`with_alpha`、预设值
+- `Lerp` — 各类型端点/中点、区间外线性外插（不 clamp）
 - `Rect2D` — 并/交退化、包含边界、split 系列、缩放偏移
 - `Path2D` — flatten 闭合/开放路径、`flatten_subpaths` 双轮廓分组
-  （外圈 + 内孔各自成组，两组不互相拼线）、圆弧弦误差、Cubic/Quad 端点一致
+  （外圈 + 内孔各自成组，两组不互相拼线）、圆弧弦误差、Cubic/Quad 端点一致、
+  弧长重采样等距（直线 / 圆周误差 < 1e-3）、`morph` 顶点数恒为 samples 且中点不越界、
+  `transformed` 端点、空/单点路径不 panic
   （历史：修复过 de Casteljau 切分时 NaN 传播 bug）
 - `Transform2D/3D` — 逆矩阵精度、点/方向向量变换、与 `Mat*` 互转
 

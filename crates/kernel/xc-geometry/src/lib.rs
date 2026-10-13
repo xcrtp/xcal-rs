@@ -13,6 +13,7 @@
 // 约束：不依赖 egui / wgpu / hecs，不定义 trait object。
 
 pub mod color;
+pub mod lerp;
 pub mod mat;
 pub mod path;
 pub mod primitives;
@@ -22,8 +23,9 @@ pub mod transform;
 pub mod vec;
 
 pub use color::Color32;
+pub use lerp::Lerp;
 pub use mat::{Mat3, Mat4, Quat};
-pub use path::{Path2D, PathCommand};
+pub use path::{DEFAULT_MORPH_SAMPLES, MORPH_TOLERANCE, Path2D, PathCommand};
 pub use primitives::{Line3D, Point3D, Triangle2D};
 pub use rect::Rect2D;
 pub use stroke::Stroke2D;

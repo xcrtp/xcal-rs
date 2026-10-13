@@ -4,6 +4,7 @@
 // 纯数据结构 + flatten（曲线采样为折线）与 bounds 计算，无后端逻辑。
 
 use crate::rect::Rect2D;
+use crate::transform::Transform2D;
 use crate::vec::Vec2;
 
 /// 路径绘制命令。
@@ -38,6 +39,11 @@ pub struct Path2D {
     /// 懒计算缓存（由 [`Path2D::bounds`] 填充）。
     pub bounds: Option<Rect2D>,
 }
+
+/// 形变采样的默认顶点数。恒定输出点数 = 稳定开销（与输入路径复杂度无关）。
+pub const DEFAULT_MORPH_SAMPLES: usize = 128;
+/// 形变重采样时曲线展平的容差。
+pub const MORPH_TOLERANCE: f32 = 0.05;
 
 impl Path2D {
     pub fn new() -> Self {
@@ -269,6 +275,164 @@ impl Path2D {
         out
     }
 
+    /// 累积弧长表（按 `flatten` 后的折线计算）。
+    ///
+    /// 返回长度与折线点数相同，首元素恒为 `0.0`；`closed = true` 时若首尾点
+    /// 不重合，会在末尾补上起点（闭合段计入总长）。
+    pub fn arc_lengths(&self, tolerance: f32, closed: bool) -> Vec<f32> {
+        let pts = self.flatten_closed_points(tolerance, closed);
+        cumulative_lengths(&pts)
+    }
+
+    /// 按弧长均匀重采样为 `n` 个点——形变对齐的基础。
+    ///
+    /// `flatten` 输出的点沿曲线分布不均（曲率大处更密）；按索引配对会让
+    /// 直线段被拉伸、曲线段被压缩，形变过程视觉上"抽动"。本方法把点变成
+    /// 沿周长/长度**均匀分布**，配对才有意义。
+    ///
+    /// - `closed = true`：沿闭合环取 `n` 个点（首点即起点，不含重复的尾点）；
+    /// - `closed = false`：沿开放折线取 `n` 个点，含两端点（`n == 1` 时取起点）；
+    /// - 空路径返回空；单点路径或零长路径返回 `n` 个相同点（不 panic）。
+    pub fn resample_arc_length(&self, n: usize, tolerance: f32, closed: bool) -> Vec<Vec2> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let pts = self.flatten_closed_points(tolerance, closed);
+        if pts.is_empty() {
+            return Vec::new();
+        }
+        if pts.len() == 1 {
+            return vec![pts[0]; n];
+        }
+        let cum = cumulative_lengths(&pts);
+        let total = *cum.last().unwrap();
+        if total <= 1e-9 {
+            // 退化（所有点重合）：返回同一点，形状有意义但无长度。
+            return vec![pts[0]; n];
+        }
+
+        let mut out = Vec::with_capacity(n);
+        let mut j = 0usize; // 段索引游标：target 单调不减 → 单遍推进
+        for i in 0..n {
+            let target = if closed {
+                total * (i as f32) / (n as f32)
+            } else if n == 1 {
+                0.0
+            } else {
+                total * (i as f32) / ((n as f32) - 1.0)
+            };
+            while j + 2 < pts.len() && cum[j + 1] < target {
+                j += 1;
+            }
+            let (a, b) = (pts[j], pts[j + 1]);
+            let seg = cum[j + 1] - cum[j];
+            let local = if seg > 1e-9 {
+                ((target - cum[j]) / seg).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            out.push(a + (b - a) * local);
+        }
+        out
+    }
+
+    /// 形变后的顶点列表：按弧长对齐后逐点插值。
+    ///
+    /// 长度恒为 `samples`（闭合环，**不含**重复的尾点）——这是"稳定开销"的
+    /// 核心保证：与输入路径复杂度无关。任一侧为空时退化为另一侧（仍补齐到
+    /// `samples` 点）；两侧皆空返回空。
+    pub fn morph_points(from: &Path2D, to: &Path2D, t: f32, samples: usize) -> Vec<Vec2> {
+        let n = samples.max(1);
+        let a = from.resample_arc_length(n, MORPH_TOLERANCE, true);
+        let b = to.resample_arc_length(n, MORPH_TOLERANCE, true);
+        match (a.is_empty(), b.is_empty()) {
+            (true, true) => Vec::new(),
+            (true, false) => b,
+            (false, true) => a,
+            (false, false) => a
+                .iter()
+                .zip(b.iter())
+                .map(|(p, q)| *p + (*q - *p) * t)
+                .collect(),
+        }
+    }
+
+    /// 两条路径按弧长对齐后逐点插值，输出**闭合折线**（含 `samples` 个不同顶点）。
+    ///
+    /// 对齐按弧长（非索引），因此不同复杂度 / 不同点数的路径也能平滑过渡。
+    pub fn morph(from: &Path2D, to: &Path2D, t: f32, samples: usize) -> Path2D {
+        let pts = Path2D::morph_points(from, to, t, samples);
+        if pts.is_empty() {
+            return Path2D::new();
+        }
+        Path2D::from_polyline(&pts, true)
+    }
+
+    /// 返回把所有点应用 `transform` 后的新路径。
+    ///
+    /// - `MoveTo` / `LineTo` / `QuadTo` / `CubicTo` / `Close` 的端点与控制点逐点变换
+    ///   （仿射变换下贝塞尔保持形状）；
+    /// - `Arc` 在一般仿射变换下不再是标准弧，按 32 段采样成折线（已知近似）。
+    pub fn transformed(&self, transform: &Transform2D) -> Path2D {
+        let mut out = Path2D::with_capacity(self.commands.len());
+        for cmd in &self.commands {
+            match *cmd {
+                PathCommand::MoveTo(p) => {
+                    out.move_to(transform.apply_point(p));
+                }
+                PathCommand::LineTo(p) => {
+                    out.line_to(transform.apply_point(p));
+                }
+                PathCommand::QuadTo { ctrl, end } => {
+                    out.quad_to(transform.apply_point(ctrl), transform.apply_point(end));
+                }
+                PathCommand::CubicTo { ctrl1, ctrl2, end } => {
+                    out.cubic_to(
+                        transform.apply_point(ctrl1),
+                        transform.apply_point(ctrl2),
+                        transform.apply_point(end),
+                    );
+                }
+                PathCommand::Arc {
+                    center,
+                    radii,
+                    rotation,
+                    start_angle,
+                    end_angle,
+                } => {
+                    const STEPS: usize = 32;
+                    for k in 0..=STEPS {
+                        let a = start_angle
+                            + (end_angle - start_angle) * (k as f32 / STEPS as f32);
+                        let p = transform.apply_point(arc_point(center, radii, rotation, a));
+                        if out.commands.is_empty() {
+                            out.move_to(p);
+                        } else {
+                            out.line_to(p);
+                        }
+                    }
+                }
+                PathCommand::Close => {
+                    out.close();
+                }
+            }
+        }
+        out
+    }
+
+    /// `flatten` 后（可选）补上闭合段起点。
+    fn flatten_closed_points(&self, tolerance: f32, closed: bool) -> Vec<Vec2> {
+        let mut pts = self.flatten(tolerance);
+        if closed && pts.len() >= 2 {
+            let first = pts[0];
+            let last = *pts.last().unwrap();
+            if (first - last).length() > 1e-6 {
+                pts.push(first);
+            }
+        }
+        pts
+    }
+
     /// 计算包围盒（不修改 self，无缓存）。
     ///
     /// 贝塞尔曲线完全位于控制点凸包内，故用控制点 + 端点求 AABB 即可保守包围；
@@ -402,6 +566,21 @@ fn flatten_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, tol: f32, out: &mut Vec
     flatten_cubic(p0123, p123, p23, p3, tol, out);
 }
 
+/// 折线的累积弧长表：与点数等长，首元素 `0.0`，末元素为总长。
+fn cumulative_lengths(pts: &[Vec2]) -> Vec<f32> {
+    if pts.is_empty() {
+        return Vec::new();
+    }
+    let mut cum = Vec::with_capacity(pts.len());
+    let mut acc = 0.0f32;
+    cum.push(0.0);
+    for w in pts.windows(2) {
+        acc += (w[1] - w[0]).length();
+        cum.push(acc);
+    }
+    cum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,6 +695,133 @@ mod tests {
         // 开放（未 Close）：首尾不同。
         assert_ne!(groups[0].first(), groups[0].last());
         assert_ne!(groups[1].first(), groups[1].last());
+    }
+
+    // ── 弧长重采样 / 形变 ────────────────────────────────────────────
+
+    /// 逼近单位圆的 512 边形（弧长测试基准）。
+    fn unit_circle_poly() -> Vec<Vec2> {
+        let n = 512;
+        (0..n)
+            .map(|i| {
+                let a = std::f32::consts::TAU * (i as f32) / (n as f32);
+                Vec2::new(a.cos(), a.sin())
+            })
+            .collect()
+    }
+
+    /// 闭合折线的"不同顶点数"（flatten 末尾会重复起点）。
+    fn distinct_len(p: &Path2D) -> usize {
+        let f = p.flatten(0.0);
+        if f.len() >= 2 && f.first() == f.last() {
+            f.len() - 1
+        } else {
+            f.len()
+        }
+    }
+
+    /// 开放直线：重采样后点等距，含两端点。
+    #[test]
+    fn resample_open_line_is_evenly_spaced() {
+        let path = Path2D::from_polyline(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false);
+        let pts = path.resample_arc_length(11, 0.01, false);
+        assert_eq!(pts.len(), 11);
+        for (i, p) in pts.iter().enumerate() {
+            assert!((p.x - i as f32).abs() < 1e-4, "i={i}: {p:?}");
+            assert!(p.y.abs() < 1e-6);
+        }
+    }
+
+    /// 圆周：闭合重采样后相邻点距离近似相等（误差 < 1e-3）。
+    #[test]
+    fn resample_closed_circle_is_evenly_spaced() {
+        let circle = Path2D::from_polyline(&unit_circle_poly(), true);
+
+        let m = 64usize;
+        let pts = circle.resample_arc_length(m, 0.001, true);
+        assert_eq!(pts.len(), m);
+        let expected = std::f32::consts::TAU / (m as f32); // 单位圆周长均分
+        for i in 0..m {
+            let d = (pts[(i + 1) % m] - pts[i]).length();
+            assert!(
+                (d - expected).abs() < 1e-3,
+                "i={i}: d={d}, expected={expected}"
+            );
+        }
+    }
+
+    /// 不同 n 都逼近同一形状（都在单位圆上）。
+    #[test]
+    fn resample_count_invariant_shape() {
+        let circle = Path2D::from_polyline(&unit_circle_poly(), true);
+        for &m in &[32usize, 128] {
+            let pts = circle.resample_arc_length(m, 0.001, true);
+            assert_eq!(pts.len(), m);
+            for p in &pts {
+                assert!((p.length() - 1.0).abs() < 1e-3, "r={}", p.length());
+            }
+        }
+    }
+
+    /// 空 / 单点 / 零长度路径不 panic。
+    #[test]
+    fn resample_edge_cases_do_not_panic() {
+        assert!(Path2D::new().resample_arc_length(8, 0.1, true).is_empty());
+        assert!(Path2D::new().arc_lengths(0.1, true).is_empty());
+
+        let single = Path2D::from_polyline(&[Vec2::new(3.0, 4.0)], false);
+        let pts = single.resample_arc_length(8, 0.1, false);
+        assert_eq!(pts.len(), 8);
+        assert!(pts.iter().all(|p| (*p - Vec2::new(3.0, 4.0)).length() < 1e-6));
+
+        // n = 0 → 空
+        assert!(single.resample_arc_length(0, 0.1, false).is_empty());
+    }
+
+    /// 圆 → 方：t=0.5 时不同顶点数 == samples，且包围盒介于两者之间。
+    #[test]
+    fn morph_circle_to_square_midpoint() {
+        let circle = Path2D::from_polyline(&unit_circle_poly(), true);
+        // 方比圆大，便于断言"中点介于两者之间"。
+        let square = Path2D::from_polyline(
+            &[
+                Vec2::new(-1.5, -1.5),
+                Vec2::new(1.5, -1.5),
+                Vec2::new(1.5, 1.5),
+                Vec2::new(-1.5, 1.5),
+            ],
+            true,
+        );
+
+        let samples = 128;
+        let m0 = Path2D::morph(&circle, &square, 0.0, samples);
+        let m1 = Path2D::morph(&circle, &square, 1.0, samples);
+        let mm = Path2D::morph(&circle, &square, 0.5, samples);
+
+        assert_eq!(distinct_len(&m0), samples);
+        assert_eq!(distinct_len(&m1), samples);
+        assert_eq!(distinct_len(&mm), samples);
+
+        let bb = |p: &Path2D| p.compute_bounds().unwrap();
+        let (bs, bm) = (bb(&square), bb(&mm));
+        // 端点精确：t=0 → 圆（±1），t=1 → 方（±1.5）。
+        assert!((bb(&m0).min.x + 1.0).abs() < 1e-3 && (bb(&m0).max.x - 1.0).abs() < 1e-3);
+        assert!((bb(&m1).min.x + 1.5).abs() < 1e-3 && (bb(&m1).max.x - 1.5).abs() < 1e-3);
+        // 中点不越界：逐点是两端的凸组合 → 包围盒落在二者并集内（无过冲）。
+        assert!(bm.min.x >= bs.min.x - 1e-4 && bm.max.x <= bs.max.x + 1e-4);
+        assert!(bm.min.y >= bs.min.y - 1e-4 && bm.max.y <= bs.max.y + 1e-4);
+    }
+
+    /// 变换后端点正确（缩放 + 平移）。
+    #[test]
+    fn transformed_applies_scale_and_translate() {
+        let p = Path2D::from_polyline(&[Vec2::new(0.0, 0.0), Vec2::new(2.0, 1.0)], false);
+        let t = Transform2D::scale(Vec2::splat(2.0)).compose(Transform2D::translate(Vec2::new(1.0, -1.0)));
+        let out = p.transformed(&t);
+        let b = out.compute_bounds().unwrap();
+        // (0,0)→(1,-1)，(2,1)→(5,1)
+        assert!((b.min.x - 1.0).abs() < 1e-5 && (b.min.y + 1.0).abs() < 1e-5);
+        assert!((b.max.x - 5.0).abs() < 1e-5 && (b.max.y - 1.0).abs() < 1e-5);
     }
 
     #[test]

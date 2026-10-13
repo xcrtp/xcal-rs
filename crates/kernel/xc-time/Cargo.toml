@@ -9,11 +9,14 @@ description = "Pure-logic clock tree + animation curves + director (zero render/
 
 # 依赖铁律：xc-time 在 kernel 层
 #   ✅ glam — 数学类型（Vec2/Vec3）+ serde feature 让 Vec2/Vec3 可序列化
+#   ✅ xc-geometry — 几何插值原语（Lerp / Path2D 形变）；同层 kernel，合法
+#      （serde feature 让 Path2D 可随 AnimValue::Path 序列化）
 #   ✅ serde — 序列化（ClockForest / Curve 可导出）
 #   ✅ thiserror — 错误类型
-#   ❌ hecs / egui / wgpu / 任何 xcal-* — 绝对禁止
+#   ❌ xc-content（语义配对不得下沉） / hecs / egui / wgpu / 任何 xcal-* — 绝对禁止
 [dependencies]
 glam = { workspace = true, features = ["serde"] }
+xc-geometry = { path = "../xc-geometry", features = ["serde"] }
 serde.workspace = true
 thiserror.workspace = true
 

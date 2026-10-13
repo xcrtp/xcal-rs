@@ -7,7 +7,9 @@
 // 3. BindingApplySystem 是唯一的动画驱动入口。
 
 pub mod binding;
+pub mod morph;
 pub mod system;
 
 pub use binding::{Binding, BindingTarget, BindingTable, SeekKind};
+pub use morph::MorphApplySystem;
 pub use system::BindingApplySystem;

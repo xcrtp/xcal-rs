@@ -16,6 +16,8 @@ pub enum BindingTarget {
     Phase(Entity),
     /// 写 `Camera3D.eye`（3D 轨道相机）。
     CameraEye(Entity),
+    /// 写 `MorphShape.t`（形状形变参数；值取 `Curve::sample` 的 `Scalar`）。
+    MorphT(Entity),
 }
 
 /// seek 语义：当前全为 O1（纯函数、无记忆），弹簧等有记忆演化器需要 Replay 模式。

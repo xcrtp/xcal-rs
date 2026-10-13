@@ -18,6 +18,8 @@ cargo run -p xcal-app
    - 一条青色 `sin(x + φ)` 曲线（`φ` 随时间平移）
    - 一条白描边 Typst 公式 `x² + 1`（**空心字轮廓**；由 `formula.rs` 把
      `ContentIR` 烘焙成旧 `(Path, StrokeSolid)` 实体，见下方"公式接入"）
+   - 一个橙色**形变形状**：圆 ↔ 方 平滑来回（S1a；`MorphShape` + `MorphApplySystem`）
+   - 一段粉色**语义形变公式**：`x²` ↔ `x³`（S1b；按源码锚点配对 —— `x` 配到 `x`）
    - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
 2. **egui 面板**：左侧时间/相机/网格，右侧动画参数
    （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
@@ -103,6 +105,7 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（A
 | **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
 |                 | ParamPanel      | BindingTable             | InputEvents |
 | **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
+|                 | MorphApply      | hecs `Path`（无 Resource）| hecs `MorphShape`（读组件） |
 | **Prepare**     | GridBuild       | DrawQueue (2D)           | ViewRect, AppCamera, UiConfig |
 | **RenderCommit**| SceneRecord (2D)| DrawQueue (2D)           | ViewRect, AppCamera |
 |                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
@@ -185,6 +188,27 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 ---
 
+## 形变（S1 插值内核）
+
+两段 demo 共用同一条形变时钟 + `MorphT` 绑定链路（均落在 `SceneSync`）：
+
+- **S1a 几何形变**：橙色形状 `MorphShape(圆, 方)`。`BindingTarget::MorphT` 写 `t`，
+  `MorphApplySystem`（BindingApply 之后）每帧把
+  `Path2D::morph_points(from, to, t, samples)` 写进同实体的 `Path`（`closed = true`），
+  再由现有 `record_scene` 消费 —— **零录制改动**。
+- **S1b 语义形变**：`formula::compile_morph_pairs("x^2", "x^3")` 用
+  `xc_content::pair_by_anchor` 按**源码锚点**配对（`x` 配到 `x`，而非按位置配到 `3`），
+  每对路径 spawn 一个 `MorphShape` 实体，共用同一形变时钟同步形变。
+
+时钟：`PlayMode::PingPong` span `(0, 1)` + `Curve::Phase { omega: 1.0 }`
+→ 形变参数 `t` 在 `[0, 1]` 平滑往返。**起点对齐**（原型约定）：圆的起笔方向与方的
+首顶点方向取一致（均指向 -45°），避免形变过程"绕圈"。
+
+> 铁律（路线甲）：`xc-time` 可依赖 `xc-geometry`，但**不得**依赖 `xc-content`——
+> 语义配对留在 `xc-content`，`xc-time` 只提供插值原语。
+
+---
+
 ## 3D 合成关键：为什么在 Layer3DCallback 里
 
 `egui-wgpu` 的 paint callback 有两个重要特性：
@@ -224,6 +248,7 @@ xcal-egui
 xcal-macro
 xc-content                              # 公式 IR 类型
 xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
+xc-geometry                             # 形变 demo：直接构造 Path2D（MorphShape 的 from/to）
 
 eframe = { version = "0.36", default-features = false, features = ["wgpu","x11","wayland"] }
 egui / egui-wgpu / wgpu 30

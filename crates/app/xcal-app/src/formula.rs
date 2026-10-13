@@ -13,6 +13,7 @@
 use xcal_core::types::{Color32, Vec3};
 use xcal_render::{ContentDrawCmd, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
+use xc_geometry::Path2D;
 use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
 
 /// 曲线展平容差（pt，相对 **标称字号** 尺度）。
@@ -118,6 +119,44 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
         }
     }
     out
+}
+
+/// 语义形变（S1b）：按源码锚点配对两个公式的路径，并把每对路径变换到世界坐标。
+///
+/// - 配对规则见 [`xc_content::pair_by_anchor`]（锚点相同 → 配对；单侧 → 淡入/淡出；
+///   无锚点 → 索引配对）；
+/// - 变换**复用** `ir_to_draw_cmds` 的 transform（缩放 + 平移），不另写一套。
+///
+/// **前提**：`from_ir` 与 `to_ir` 必须用**相同标称字号**编译 —— transform 的
+/// `scale = target / nominal_font_size` 只取自 `from_ir`，两端 nominal 不同则 `to`
+/// 的路径会被错误缩放（不报错，只画错）。
+///
+/// 产出交给 `Path2D::morph` / `Curve::PathMorph` 逐对插值（配对知识不进 xc-time）。
+pub fn compile_morph_pairs(
+    from_ir: &ContentIR,
+    to_ir: &ContentIR,
+    spec: &FormulaSpec,
+) -> Vec<(Path2D, Path2D)> {
+    // 防护：两端 nominal 必须一致（见上方"前提"）。
+    // 注意：**不要**改成"各用各的 transform"——那会让两端锚点位置各被平移一次，反而错位。
+    debug_assert!(
+        (from_ir.nominal_font_size - to_ir.nominal_font_size).abs() < 1e-3,
+        "形变两端必须用相同标称字号编译（from={}, to={}）",
+        from_ir.nominal_font_size,
+        to_ir.nominal_font_size
+    );
+
+    // ir_to_draw_cmds 对所有 item 使用同一个 transform（scale ∘ translate）。
+    let Some(transform) = ir_to_draw_cmds(from_ir, spec.font_size, spec.world_pos)
+        .next()
+        .map(|c| c.transform)
+    else {
+        return Vec::new();
+    };
+    xc_content::pair_by_anchor(from_ir, to_ir)
+        .into_iter()
+        .map(|(a, b)| (a.transformed(&transform), b.transformed(&transform)))
+        .collect()
 }
 
 /// 描边色 / 宽度回退规则（计划 §3.3）：

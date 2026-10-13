@@ -95,7 +95,8 @@ ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, dq| {
 | [`scheduler`] | `Phase` (6 阶段 enum), `Scheduler { phases: Vec<Vec<Box<dyn ErasedSystem>>> }` |
 | [`transform`] | `Transform2D` / `Transform2DInto` trait 系统（配合 `xcal-macro` 派生）|
 | [`types`] | `Camera2D`, `Rect`, `Vec2/3/4`, `Color32`, `U8Vec4 / I8Vec4` (与 xc-geometry 再导出一致) |
-| [`scene`] | `Scene`(hecs World 包装), `components::{Camera3D, Projection, Mesh3D, OrbitAnim, Circle, Path, Line, FunctionX2Y, ...}`, `primitives::{wireframe_cube, solid_cube}` |
+| [`animation`] | `Binding` / `BindingTarget` / `BindingTable` / `SeekKind` + `BindingApplySystem`（时钟+曲线→组件字段）/ `MorphApplySystem`（形变插值） |
+| [`scene`] | `Scene`(hecs World 包装), `components::{Camera3D, Projection, Mesh3D, Circle, Path, MorphShape, Line, FunctionX2Y, ...}`, `primitives::{wireframe_cube, solid_cube}` |
 | [`errors`] | `Error { ... }` + `pub type Result<T> = Result<T, Error>` |
 | [`telemetry`] `feature="telemetry"` | `FrameReport`, `SnapshotRegistry`, `init_tracing` (Scheduler 埋点 + World 快照导出) |
 | [`utils`] | `auto_into!` 等宏工具 |
@@ -161,7 +162,7 @@ for _ in 0..100 { sched.run_frame(1.0 / 60.0); }
 ## 测试
 
 ```bash
-cargo test  -p xcal-core            # ~91 个单元测试
+cargo test  -p xcal-core            # 96 个单元测试（+1 个 headless 形变接缝测试）
 cargo bench -p xcal-core            # criterion 基准
 cargo doc   -p xcal-core --no-deps  # API 文档
 ```
