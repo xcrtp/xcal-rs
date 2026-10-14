@@ -8,14 +8,15 @@
 //   而是用 Transform2D::from_scale 统一应用到 transform。
 // - 填充/描边：StyledPath.fill → Style2D.fill；
 //   StyledPath.stroke: Stroke2D.color → Style2D.stroke；
-//   Stroke2D.width (pt) 直接作为 Style2D.stroke_width 传入（不乘 scale，
-//   因为"逻辑像素=pt"是当前 xcal-render 2D 管线约定；
-//   如果后端要独立像素，再自行按 dpi_scale 缩放即可）。
+//   Stroke2D.width (pt，标称尺度) **乘以与几何相同的 scale**
+//   （target_font_size / nominal_font_size）换算为世界单位，
+//   并标记 Style2D.space = MeasureSpace::World —— 使描边与字形一起随缩放变化。
+//   若不乘 scale，1.0pt 会被当成 1.0 世界单位，在 scale=40 下渲染成 40px（粗得离谱）。
 // - 锚点 (anchor/Span) 不送入渲染（后端不需要）；调用方会在 UI 层
 //   通过 ContentIR + hit-test 自己处理选中高亮。
 
 use xc_content::{ContentIR, StyledPath};
-use xc_geometry::{Stroke2D, Transform2D};
+use xc_geometry::{MeasureSpace, Stroke2D, Transform2D};
 
 use crate::painter_2d::Style2D;
 use crate::shape::Shape2D;
@@ -57,15 +58,21 @@ pub fn ir_to_draw_cmds<'a>(
     // compose: self 之后再应用 other。这里先 scale，再 translate ⇒ s.compose(t)。
     let combined = s.compose(t);
 
-    Box::new(ir.items.iter().map(move |item| styled_path_to_cmd(item, combined)))
+    Box::new(
+        ir.items
+            .iter()
+            .map(move |item| styled_path_to_cmd(item, combined, scale)),
+    )
 }
 
-fn styled_path_to_cmd(p: &StyledPath, transform: Transform2D) -> ContentDrawCmd {
+fn styled_path_to_cmd(p: &StyledPath, transform: Transform2D, scale: f32) -> ContentDrawCmd {
     let shape = Shape2D::Path(p.path.clone());
     let style = Style2D {
         fill: p.fill,
         stroke: p.stroke.as_ref().map(|s: &Stroke2D| s.color),
-        stroke_width: p.stroke.as_ref().map(|s| s.width).unwrap_or(0.0),
+        // pt（标称尺度）→ 世界单位：与几何共用同一系数，使描边随字形一同缩放。
+        stroke_width: p.stroke.as_ref().map(|s| s.width * scale).unwrap_or(0.0),
+        space: MeasureSpace::World,
     };
     ContentDrawCmd { shape, style, transform }
 }
@@ -128,7 +135,52 @@ mod tests {
         let s = &cmds[0].style;
         assert_eq!(s.fill, Some(fill));
         assert_eq!(s.stroke, Some(stroke.color));
+        // 此处 nominal = target = 10 → scale = 1，宽度数值不变；
+        // 换算效果在 scale ≠ 1 时体现，见 `stroke_width_scales_to_world_units`。
         assert!((s.stroke_width - stroke.width).abs() < 1e-6);
+        assert_eq!(s.space, MeasureSpace::World);
+    }
+
+    /// 描边宽度与几何共用同一 scale（pt → 世界单位），并标记为 `World`。
+    #[test]
+    fn stroke_width_scales_to_world_units() {
+        let mut path = Path2D::new();
+        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(2.0, 0.0));
+        let p = StyledPath::stroked(path, Stroke2D::new(Color32::BLACK, 2.0));
+        let ir = make_ir(12.0, vec![p]);
+
+        // target = 6 → scale = 0.5 → 2.0pt × 0.5 = 1.0 世界单位
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 6.0, Vec2::ZERO).collect();
+        let s = &cmds[0].style;
+        assert!((s.stroke_width - 1.0).abs() < 1e-6, "got {}", s.stroke_width);
+        assert_eq!(s.space, MeasureSpace::World);
+
+        // 数值校验（计划 §3.6）：nominal=12 / target=1.3 → s≈0.1083；
+        // 1.0pt × 0.1083 = 0.1083 世界单位；camera.scale=40 → 约 4.3px。
+        let p2 = StyledPath::stroked(
+            {
+                let mut q = Path2D::new();
+                q.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(1.0, 0.0));
+                q
+            },
+            Stroke2D::new(Color32::BLACK, 1.0),
+        );
+        let ir2 = make_ir(12.0, vec![p2]);
+        let cmds2: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir2, 1.3, Vec2::ZERO).collect();
+        let world_w = cmds2[0].style.stroke_width;
+        assert!((world_w - 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
+        let px = xc_geometry::resolve_width(world_w, MeasureSpace::World, 40.0);
+        assert!((px - 4.333).abs() < 0.01, "屏幕宽度应约 4.3px，实际 {px}");
+    }
+
+    /// 无 stroke 时 stroke_width 为 0（不受 scale 影响）。
+    #[test]
+    fn no_stroke_yields_zero_width() {
+        let mut path = Path2D::new();
+        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(2.0, 0.0));
+        let ir = make_ir(12.0, vec![StyledPath::filled(path, Color32::BLACK)]);
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
+        assert_eq!(cmds[0].style.stroke_width, 0.0);
     }
 
     /// nominal_font_size 为 0 的退化情况 → scale = 1.0（不 NaN）。

@@ -25,12 +25,18 @@ xcal-render 同时承载两套渲染抽象：
   相同 ZIndex 的命令保留插入顺序（ECS 查询遍历的天然顺序）
 - `SceneRender` / `record_scene`：把 hecs World 的 `Circle/Path/Line/...`
   组件拍平到 `DrawQueue`
+- **描边宽度的度量空间**（`StrokeSolid.space: MeasureSpace`，默认 `Screen`）：
+  `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_geometry::resolve_width`
+  解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
+  `StrokeSolid::new(w, c)` 两参保持（默认 `Screen`），显式声明用 `new_in(w, c, space)`。
+  `World` = 随缩放变化（如公式描边），`Screen` = 恒定（网格 / 轴 / 曲线 / 圆 / 形变）。
 
 ### ② 新版图元体系（`shape.rs` / `painter_2d.rs` / `draw_queue_2d.rs` / `vector_content.rs`）
 面向未来的渲染后端抽象（可替换 SVG / PDF / TikZ）：
 - `Shape2D` enum：`Rect / RoundedRect / Circle / Line / Polyline / Polygon /
   Path / Text / Image` + `Custom(CustomShapeData)` 钩子
-- `Style2D`：独立的 stroke + fill，支持 line_width / cap / join / miter_limit
+- `Style2D`：独立的 stroke + fill，支持 line_width / cap / join / miter_limit；
+  含 `space: MeasureSpace`（声明式，`ir_to_draw_cmds` 产出 `World`）
 - `Painter2DTrait`（新）：按 `Shape2D` 逐个 dispatch
 - `DrawQueue2D`：指令级队列，配合 `VectorContent` 做无损矢量描述
 

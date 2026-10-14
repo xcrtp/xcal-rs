@@ -26,7 +26,7 @@ use xcal_core::types::{Camera2D, Rect, Vec3};
 use xcal_render::components::{
     FillSolid, FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
-use xcal_render::{DrawQueue, ZIndex, record_scene};
+use xcal_render::{DrawQueue, MeasureSpace, ZIndex, record_scene};
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 
@@ -83,8 +83,9 @@ impl GridBuildSystem {
         let y0 = center.y - half_h;
         let y1 = center.y + half_h;
 
-        let grid = StrokeSolid::new(1.0, (50, 50, 50, 255));
-        let axis = StrokeSolid::new(2.0, (255, 255, 255, 255));
+        // 网格与坐标轴都是"观测工具"→ 屏幕空间：缩放时粗细恒定。
+        let grid = StrokeSolid::new_in(1.0, (50, 50, 50, 255), MeasureSpace::Screen);
+        let axis = StrokeSolid::new_in(2.0, (255, 255, 255, 255), MeasureSpace::Screen);
         let z_grid = ZIndex::new(-100);
         let z_axis = ZIndex::new(-90);
         let unit = scale.max(10.0) / scale;

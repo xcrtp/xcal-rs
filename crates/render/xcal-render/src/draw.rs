@@ -6,6 +6,7 @@
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 use xcal_core::transform::Transform2D;
 use xcal_core::types::{Camera2D, Rect};
+use xc_geometry::{MeasureSpace, resolve_width};
 
 /// 2D 绘制器 Trait。
 pub trait Painter2D {
@@ -196,10 +197,36 @@ pub struct SceneRender<T: Painter2D> {
     painter: T,
 }
 
+/// 把样式组件解析为**屏幕空间**的 [`Style`]。
+///
+/// ⚠️ **本任务是唯一换算点**：描边宽度在此经 [`resolve_width`] 结合
+/// `camera.scale` 解析为屏幕像素。项目中其它任何地方都**不得**再乘除 `scale`——
+/// 否则会出现"某些描边乘过、某些没乘"的不一致。
+trait ResolveStyle {
+    fn resolve_style(&self, scale: f32) -> Style;
+}
+
+impl ResolveStyle for StrokeSolid {
+    fn resolve_style(&self, scale: f32) -> Style {
+        Style::Stroke(StrokeSolid::new_in(
+            resolve_width(self.width, self.space, scale),
+            self.color,
+            // 已解析为屏幕像素，不再是世界度量。
+            MeasureSpace::Screen,
+        ))
+    }
+}
+
+impl ResolveStyle for FillSolid {
+    fn resolve_style(&self, _scale: f32) -> Style {
+        Style::Fill(self.clone())
+    }
+}
+
 macro_rules! for_each_scene_primitive {
-    ($w:ident $cma:ident $paint:expr; $(($shape:ident, $sty:ty, $cmd:ident))*) => {
+    ($w:ident $cma:ident $paint:expr; $(($shape:ident, $sty:ty))*) => {
         $(for (s, c) in $w.query::<(&$shape, &$sty)>().iter() {
-            $paint(&Shape::$shape(s.to_screen($cma)), &Style::$cmd(c.clone()));
+            $paint(&Shape::$shape(s.to_screen($cma)), &c.resolve_style($cma.scale));
         })*
     };
 }
@@ -213,29 +240,31 @@ impl<T: Painter2D> SceneRender<T> {
         for_each_scene_primitive!(
             world camera
             |sh: &Shape, st: &Style| self.painter.paint(sh, st);
-            (Circle, StrokeSolid,Stroke)
-            (Circle, FillSolid,Fill)
-            (Path, StrokeSolid,Stroke)
-            (Path, FillSolid,Fill)
-            (Line, StrokeSolid,Stroke)
-            (Rect, FillSolid,Fill)
-            (Rect, StrokeSolid,Stroke)
+            (Circle, StrokeSolid)
+            (Circle, FillSolid)
+            (Path, StrokeSolid)
+            (Path, FillSolid)
+            (Line, StrokeSolid)
+            (Rect, FillSolid)
+            (Rect, StrokeSolid)
         );
     }
 }
 
 /// 把场景实体录制进 [`DrawQueue`]（z=0）。
+///
+/// 描边宽度在此按 `camera.scale` 解析（**唯一换算点**，见 [`ResolveStyle`]）。
 pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueue) {
     for_each_scene_primitive!(
         world camera
         |sh: &Shape, st: &Style| queue.push(DrawCommand::new(ZIndex::new(0), sh.clone(), st.clone()));
-        (Circle, StrokeSolid,Stroke)
-        (Circle, FillSolid,Fill)
-        (Path, StrokeSolid,Stroke)
-        (Path, FillSolid,Fill)
-        (Line, StrokeSolid,Stroke)
-        (Rect, FillSolid,Fill)
-        (Rect, StrokeSolid,Stroke)
+        (Circle, StrokeSolid)
+        (Circle, FillSolid)
+        (Path, StrokeSolid)
+        (Path, FillSolid)
+        (Line, StrokeSolid)
+        (Rect, FillSolid)
+        (Rect, StrokeSolid)
     );
 }
 
@@ -416,6 +445,68 @@ mod tests {
         renderer.render(&world, &test_camera());
         let SceneRender { painter } = renderer;
         assert_eq!(*painter.calls.borrow(), vec!["line_stroke"]);
+    }
+
+    fn cam_with_scale(scale: f32) -> Camera2D {
+        Camera2D::new(
+            (0.0, 0.0).into(),
+            scale,
+            Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+        )
+    }
+
+    fn queue_stroke_width(cmd: &DrawCommand) -> f32 {
+        match &cmd.style {
+            Style::Stroke(s) => s.width,
+            other => panic!("expected stroke, got {other:?}"),
+        }
+    }
+
+    /// `World` 描边：屏幕宽度随 camera.scale 线性变化。
+    #[test]
+    fn world_stroke_scales_with_camera_scale() {
+        let mut world = hecs::World::new();
+        world.spawn((
+            mk_line(1.0),
+            StrokeSolid::new_in(2.0, (0, 0, 0, 255), MeasureSpace::World),
+        ));
+
+        let mut q10 = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q10);
+        let mut q40 = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(40.0), &mut q40);
+
+        assert!((queue_stroke_width(&q10.commands()[0]) - 20.0).abs() < 1e-4);
+        assert!((queue_stroke_width(&q40.commands()[0]) - 80.0).abs() < 1e-4);
+    }
+
+    /// `Screen` 描边（默认）：屏幕宽度与 camera.scale 无关（缩放不变性）。
+    #[test]
+    fn screen_stroke_is_scale_invariant() {
+        let mut world = hecs::World::new();
+        world.spawn((mk_line(1.0), StrokeSolid::new(2.0, (0, 0, 0, 255))));
+
+        let mut q10 = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q10);
+        let mut q40 = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(40.0), &mut q40);
+
+        assert!((queue_stroke_width(&q10.commands()[0]) - 2.0).abs() < 1e-6);
+        assert!((queue_stroke_width(&q40.commands()[0]) - 2.0).abs() < 1e-6);
+    }
+
+    /// `WorldWithMinPx`：小 scale 下钳到下限像素。
+    #[test]
+    fn world_with_min_px_clamps_in_record_scene() {
+        let mut world = hecs::World::new();
+        world.spawn((
+            mk_line(1.0),
+            StrokeSolid::new_in(0.01, (0, 0, 0, 255), MeasureSpace::WorldWithMinPx(1.5)),
+        ));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(1.0), &mut q);
+        // 0.01 * 1 = 0.01 < 1.5 → 钳到 1.5
+        assert!((queue_stroke_width(&q.commands()[0]) - 1.5).abs() < 1e-6);
     }
 
     #[test]

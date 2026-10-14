@@ -181,6 +181,10 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
   展平容差是相对标称尺度的绝对值，显示尺寸缩小不会放大折线误差。
 - **空心字**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，因此公式
   暂走 Stroke（轮廓）路径；实心填充待 S3 三角化后接管（挂 `CustomShapeData::to_triangles`）。
+- **描边属世界空间**（`MeasureSpace::World`）：`ir_to_draw_cmds` 把宽度乘
+  `target / nominal_font_size`（与几何同系数）换算为世界单位；fill-only 字形的默认细线宽
+  同样按 `× scale` 换算。实机：缩放时公式描边与字形**成比例**变化
+  （nominal=12 / target=1.3 / scale=40 → 约 4.3px）。
 - **静态烘焙**：启动时编译一次并 spawn 实体；保留 `rebuild()`，将来接交互只需加 UI。
 
 > 公式源在 `App::new` 里硬编码为 `"x^2 + 1"`。注意 Typst 0.14 数学模式下连续字母
@@ -206,6 +210,10 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 > 铁律（路线甲）：`xc-time` 可依赖 `xc-geometry`，但**不得**依赖 `xc-content`——
 > 语义配对留在 `xc-content`，`xc-time` 只提供插值原语。
+>
+> 度量空间：形变形状 / 网格 / 坐标轴 / sin 曲线 / 圆均为 `MeasureSpace::Screen`
+> （粗细恒定）；只有公式描边是 `World`（随缩放成比例）。唯一换算点在
+> `xcal-render::record_scene`。
 
 ---
 

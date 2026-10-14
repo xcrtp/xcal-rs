@@ -27,7 +27,7 @@ use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
-use xcal_render::{DrawQueue, DrawQueue3D, scene::Scene};
+use xcal_render::{DrawQueue, DrawQueue3D, MeasureSpace, scene::Scene};
 use xcal_render_backends::{RenderContext, WgpuBackend3D};
 use xc_geometry::Path2D;
 
@@ -88,14 +88,15 @@ impl App {
 
         let circle_entity = scene.spawn((
             Circle::new((0.0, 0.0), 1.0),
-            StrokeSolid::new(2.0, (100, 255, 0, 255)),
+            // 屏幕空间：圆粗细是"观测工具"，不随缩放变化。
+            StrokeSolid::new_in(2.0, (100, 255, 0, 255), MeasureSpace::Screen),
             // 半径振荡由 BindingApplySystem 驱动（Binding 表：base=1.0, amp=0.4, omega=2.0）
         ));
 
         let func_entity = scene.spawn((
             FunctionX2Y::new(|x: f32| x.sin()),
             Sampler1D::new(-10.0f32, 10.0, 0.1),
-            StrokeSolid::new(2.0, (0, 200, 200, 255)),
+            StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen),
             // 相位滑动由 BindingApplySystem 驱动（Binding 表：omega=1.5）
             PhaseAnim::new(0.0, 1.5),
         ));
@@ -110,11 +111,13 @@ impl App {
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
         match formula::rebuild(&engine, &spec) {
             Some(ir) => {
-                for (vertices, color, width, closed) in formula::compile_to_stroke_paths(&ir, &spec)
+                for (vertices, color, width, closed, space) in
+                    formula::compile_to_stroke_paths(&ir, &spec)
                 {
                     scene.spawn((
                         Path::new(vertices, closed),
-                        StrokeSolid::new(width, color),
+                        // 公式描边是世界空间：与字形一同随缩放成比例变化。
+                        StrokeSolid::new_in(width, color, space),
                     ));
                 }
             }
@@ -151,7 +154,7 @@ impl App {
             ),
             // Path 是形变输出目标（首帧由 MorphApplySystem 填充）。
             Path::new(Vec::<Vec3>::new(), true),
-            StrokeSolid::new(2.0, (255, 180, 0, 255)),
+            StrokeSolid::new_in(2.0, (255, 180, 0, 255), MeasureSpace::Screen),
         ));
 
         // ── S1b 语义形变 demo：x^2 ↔ x^3（按源码锚点配对）──────────────
@@ -169,7 +172,7 @@ impl App {
                 semantic_morph_entities.push(scene.spawn((
                     MorphShape::new(from_path, to_path),
                     Path::new(Vec::<Vec3>::new(), true),
-                    StrokeSolid::new(1.0, (255, 120, 220, 255)),
+                    StrokeSolid::new_in(1.0, (255, 120, 220, 255), MeasureSpace::Screen),
                 )));
             }
         }

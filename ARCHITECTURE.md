@@ -224,6 +224,42 @@ xcal-core  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（Sce
 - 已知限制：旋转对齐（起点不一致会"绕圈"，原型期约定起点对齐）、
   Color 线性空间非感知均匀、当前为 CPU 插值。
 
+### 呈现层度量空间（MeasureSpace）
+
+让"宽度属于哪个空间"成为**可声明**的属性（仅 2D 描边宽度；不含 3D）。
+
+**判断标准**：这个度量是**被观测对象的属性**，还是**观测工具的属性**？
+- 被观测对象的属性（有数学含义的粗线段、公式描边）→ `MeasureSpace::World`：随缩放变化；
+- 观测工具的属性（网格线、坐标轴）→ `MeasureSpace::Screen`：不随缩放变化；
+- 需要保底时 → `MeasureSpace::WorldWithMinPx(min)`：世界单位但钳到最小像素。
+
+属性分空间，不是对象分空间——同一个对象的不同属性可属不同空间
+（向量箭头的**长度**是世界，**粗细**是屏幕）。
+
+```
+Stroke2D.space / StrokeSolid.space / Style2D.space（声明）
+        │
+        ▼
+xc_geometry::resolve_width(width, space, scale)   ← 唯一换算入口
+        │
+        ▼
+xcal-render::record_scene（从 camera.scale 取值）  ← 唯一换算点
+        │
+        ▼
+DrawQueue（Style::Stroke.width 已是屏幕像素）
+```
+
+- **换算点必须唯一**：世界宽度需在**几何变换之前**乘一次 `scale`；若某些地方乘过、
+  某些没乘，会出现"网格线在 2D 里对、3D 里错"这类不一致。项目中 `resolve_width`
+  的非测试调用只有 `crate::draw` 的 `ResolveStyle for StrokeSolid` 一处。
+- 默认 `MeasureSpace::Screen`（`StrokeSolid::new` / `Stroke2D::new` 两参构造），
+  既有调用点行为不变；显式声明用 `new_in(...)`。
+- 公式描边：`ir_to_draw_cmds` 把宽度乘 `target / nominal_font_size`（与几何同系数）
+  换算为世界单位并标 `World` —— 否则 1.0pt 会被当成 1.0 世界单位，在 scale=40 下
+  渲染成 40px。
+- 与 S3 无关：`width / space / 当前 scale` 是 **per-draw uniform**，不碰顶点格式；
+  只有到 S3 需要缓存几何时才把换算挪进 shader（接口不变）。
+
 ### cargo-archtest 适配状态
 
 `cargo-archtest v0.2.3` 的架构模型是「单 crate 内按 `src/` 子目录分层」，

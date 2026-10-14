@@ -30,6 +30,7 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 | `mat` | `Mat3` / `Mat4` / `Quat` | 3×3、4×4 矩阵与四元数 |
 | `color` | `Color32` | RGBA8888（`u8` 四通道），`From<(u8,u8,u8,u8)>` / `From<[u8;4]>` / 透明度混色 |
 | `lerp` | `Lerp` | 线性插值 trait（`f32` / `Vec2` / `Vec3` / `Color32` / `Path2D`）；纯函数、零 trait object |
+| `space` | `MeasureSpace` / `resolve_width` | 呈现层度量空间：宽度属**世界**（随缩放）还是**屏幕**（不随缩放）；唯一换算入口 |
 | `rect` | [`Rect2D`](#rect2d-轴对齐矩形) | 2D 轴对齐矩形，交/并/包含/扩展 |
 | `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样；弧长重采样 / 形变 / 变换 |
 | `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（平移 × 旋转 × 缩放），可与 `Mat3`/`Mat4` 互转 |
@@ -52,6 +53,29 @@ let mixed = Color32::from_hex("#FF6600").unwrap().with_alpha(180);
 ```
 
 内置常量表：`Color32::BLACK / WHITE / RED / GREEN / BLUE / TRANSPARENT …`
+
+---
+
+### MeasureSpace — 呈现层度量空间
+
+"宽度属于哪个空间"是可声明的属性（仅 2D 描边宽度）：
+
+```rust
+use xc_geometry::{MeasureSpace, resolve_width};
+
+// Screen：不随缩放变化（默认）
+assert_eq!(resolve_width(2.0, MeasureSpace::Screen, 40.0), 2.0);
+// World：随缩放线性变化
+assert_eq!(resolve_width(2.0, MeasureSpace::World, 40.0), 80.0);
+// WorldWithMinPx：世界单位但钳到下限像素
+assert_eq!(resolve_width(0.01, MeasureSpace::WorldWithMinPx(1.5), 1.0), 1.5);
+```
+
+- 判断标准：**被观测对象的属性 → World；观测工具的属性 → Screen**。
+- `resolve_width` 是**唯一换算入口**；真正调用它的地方只有 xcal-render 的
+  `record_scene`（唯一换算点），其它地方不得乘除 `scale`。
+- `scale = 0` 不产生 NaN。
+- 纯数据层：`MeasureSpace` 可随 `serde` feature 序列化（`Stroke2D.space` 需要）。
 
 ---
 
@@ -147,7 +171,7 @@ let inv = t.inverse();       // 仿射逆（平移+旋转+正交缩放时解析�
 ## 测试
 
 ```bash
-cargo test -p xc-geometry           # 运行 40 个单元测试
+cargo test -p xc-geometry           # 运行 46 个单元测试
 cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
 ```
 
@@ -155,6 +179,9 @@ cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
 
 - `Color32` — round-trip 转换、`with_alpha`、预设值
 - `Lerp` — 各类型端点/中点、区间外线性外插（不 clamp）
+- `MeasureSpace` — `Screen` 缩放不变性（核心承诺）、`World` 线性、
+  `WorldWithMinPx` 双向钳制、`scale = 0` 不产生 NaN、默认 `Screen`
+- `Stroke2D` — 可见性判定、默认构造空间为 `Screen`
 - `Rect2D` — 并/交退化、包含边界、split 系列、缩放偏移
 - `Path2D` — flatten 闭合/开放路径、`flatten_subpaths` 双轮廓分组
   （外圈 + 内孔各自成组，两组不互相拼线）、圆弧弦误差、Cubic/Quad 端点一致、

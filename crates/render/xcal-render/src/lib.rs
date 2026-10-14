@@ -42,6 +42,11 @@ pub use draw::{
     DrawCommand, DrawQueue, Painter2D, SceneRender, Shape, Style, ZIndex, record_scene,
 };
 
+// ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
+// 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度
+// 属于世界空间还是屏幕空间。
+pub use xc_geometry::MeasureSpace;
+
 // ─── 3D 队列 / 绘制器 ─────────────────────────────────────────────────────
 pub use draw_queue_3d::{DrawQueue3D, LineDraw, MeshDraw};
 pub use painter_3d::Painter3D;

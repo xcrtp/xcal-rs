@@ -11,7 +11,7 @@
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 
 use xcal_core::types::{Color32, Vec3};
-use xcal_render::{ContentDrawCmd, Shape2D, ir_to_draw_cmds};
+use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
 use xc_geometry::Path2D;
 use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
@@ -21,8 +21,10 @@ use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
 /// 因为 `rebuild()` 用标称字号（默认 12.0）编译 IR，容差相对字形尺度始终
 /// 合理（0.1/12 ≈ 0.8%）；最终显示尺寸缩小不会放大该误差。
 const FLATTEN_TOLERANCE: f32 = 0.1;
-/// 只有 fill、没有 stroke 时使用的默认描边宽度（px）。
-const DEFAULT_STROKE_WIDTH: f32 = 1.0;
+/// 只有 fill、没有 stroke 时使用的默认描边宽度（**标称 pt**）。
+///
+/// 需乘 `target / nominal` 换算为世界单位后使用（描边属世界空间）。
+const DEFAULT_STROKE_WIDTH_PT: f32 = 1.0;
 /// Typst 编译用的标称字号（pt）。曲线提取精度以它为基准；
 /// 目标显示大小由 [`FormulaSpec::font_size`] 经 `ir_to_draw_cmds` 缩放得到。
 const DEFAULT_NOMINAL_FONT_SIZE: f32 = 12.0;
@@ -83,23 +85,34 @@ pub fn rebuild(engine: &InMemoryEngine, spec: &FormulaSpec) -> Option<ContentIR>
     engine.take(handle).and_then(|r| r.ok())
 }
 
-/// 一条可 spawn 的描边路径：`(顶点, 颜色, 线宽, 是否闭合)`。
+/// 一条可 spawn 的描边路径：`(顶点, 颜色, 线宽, 是否闭合, 线宽所属空间)`。
 ///
 /// 每个子轮廓单独一条——多轮廓字形（`o`/`B`/`8`）不会在轮廓之间
 /// 产生横穿字形内部的桥接线。
-pub type StrokePath = (Vec<Vec3>, Color32, f32, bool);
+///
+/// `space` 由 `ir_to_draw_cmds` 声明（当前恒为 `MeasureSpace::World`：
+/// 宽度已乘 `target / nominal` 换算为世界单位，与字形一同随缩放变化）。
+pub type StrokePath = (Vec<Vec3>, Color32, f32, bool, MeasureSpace);
 
 /// IR → 可 spawn 的描边路径列表。
 ///
 /// 复用 [`ir_to_draw_cmds`] 完成缩放与平移；再用 `Path2D::flatten_subpaths`
 /// 按子路径分组，逐组应用变换落到世界坐标。描边色回退规则见 [`stroke_style`]。
 pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<StrokePath> {
+    // 与 `ir_to_draw_cmds` 相同的换算系数：标称 pt → 世界单位。
+    // 用于把"默认细线宽"（以标称 pt 表述）换算到世界空间。
+    let scale = if ir.nominal_font_size > 0.0 {
+        spec.font_size / ir.nominal_font_size
+    } else {
+        1.0
+    };
+
     let mut out = Vec::new();
     for cmd in ir_to_draw_cmds(ir, spec.font_size, spec.world_pos) {
         let Shape2D::Path(path) = &cmd.shape else {
             continue;
         };
-        let Some((color, width)) = stroke_style(&cmd) else {
+        let Some((color, width)) = stroke_style(&cmd, scale) else {
             continue;
         };
 
@@ -115,7 +128,7 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
                     (w.x, w.y, 0.0).into()
                 })
                 .collect();
-            out.push((vertices, color, width, closed));
+            out.push((vertices, color, width, closed, cmd.style.space));
         }
     }
     out
@@ -160,15 +173,17 @@ pub fn compile_morph_pairs(
 }
 
 /// 描边色 / 宽度回退规则（计划 §3.3）：
-/// 1. stroke 存在 → 用其颜色与宽度（宽度为 0 时取默认细值）；
-/// 2. 否则若 fill 存在 → 用 fill 色 + 默认细线宽；
+/// 1. stroke 存在且宽度 > 0 → 用其颜色与宽度（`content_ir` 已换算为**世界单位**）；
+/// 2. 否则若 fill 存在 → 用 fill 色 + 默认细线宽（`DEFAULT_STROKE_WIDTH_PT × scale`，
+///    同样换算为世界单位——描边是世界空间，须与字形成比例）；
 /// 3. 都无 → 跳过该 path。
-fn stroke_style(cmd: &ContentDrawCmd) -> Option<(Color32, f32)> {
+fn stroke_style(cmd: &ContentDrawCmd, scale: f32) -> Option<(Color32, f32)> {
     let style = &cmd.style;
+    let default_w = DEFAULT_STROKE_WIDTH_PT * scale;
     match (style.stroke, style.fill) {
         (Some(color), _) if style.stroke_width > 0.0 => Some((color, style.stroke_width)),
-        (Some(color), _) => Some((color, DEFAULT_STROKE_WIDTH)),
-        (None, Some(color)) => Some((color, DEFAULT_STROKE_WIDTH)),
+        (Some(color), _) => Some((color, default_w)),
+        (None, Some(color)) => Some((color, default_w)),
         (None, None) => None,
     }
 }
@@ -206,7 +221,7 @@ mod tests {
     fn bounds_of(paths: &[StrokePath]) -> (f32, f32) {
         let mut min = glam::Vec2::splat(f32::INFINITY);
         let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
-        for (pts, _, _, _) in paths {
+        for (pts, _, _, _, _) in paths {
             for v in pts {
                 let p = glam::Vec2::new(v.x, v.y);
                 min = min.min(p);
@@ -224,8 +239,10 @@ mod tests {
         // 占位字形每个都是单轮廓闭合矩形 → 每条 item 恰好一条路径。
         assert_eq!(paths.len(), ir.items.len());
         assert_eq!(paths.len(), 3);
-        for (_, _, _, closed) in &paths {
+        for (_, _, _, closed, space) in &paths {
             assert!(*closed, "占位矩形应为闭合子路径");
+            // 公式描边恒为世界空间（随缩放成比例变化）。
+            assert_eq!(*space, MeasureSpace::World);
         }
     }
 
@@ -235,10 +252,25 @@ mod tests {
         let spec = FormulaSpec::new("xy", 12.0, glam::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert!(!paths.is_empty());
-        for (pts, _, width, _) in &paths {
+        for (pts, _, width, _, _) in &paths {
             assert!(!pts.is_empty(), "每条路径应至少有一个点");
             assert!(*width > 0.0);
         }
+    }
+
+    /// 默认细线宽也是**世界单位**：`1pt × (target / nominal)`；
+    /// camera.scale = 40 时应约 4.3px（计划 §3.6 的数值校验）。
+    #[test]
+    fn default_width_is_world_units() {
+        let ir = placeholder_ir("a", 12.0);
+        let spec = FormulaSpec::new("a", 1.3, glam::Vec2::ZERO);
+        let paths = compile_to_stroke_paths(&ir, &spec);
+        let world_w = paths[0].2;
+        assert!((world_w - 1.0 * 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
+        assert_eq!(paths[0].4, MeasureSpace::World);
+
+        let px = xc_geometry::resolve_width(world_w, MeasureSpace::World, 40.0);
+        assert!((px - 4.333).abs() < 0.01, "屏幕宽度应约 4.3px，实际 {px}");
     }
 
     #[test]
@@ -281,7 +313,7 @@ mod tests {
         let anchor = glam::Vec2::new(-8.0, 2.5);
         let spec = FormulaSpec::new("abc", 12.0, anchor);
         let paths = compile_to_stroke_paths(&ir, &spec);
-        for (pts, _, _, _) in &paths {
+        for (pts, _, _, _, _) in &paths {
             for v in pts {
                 assert!(v.x >= anchor.x - 1e-3, "x 越界: {}", v.x);
                 assert!(v.y >= anchor.y - 1e-3, "y 应位于锚点上方: {}", v.y);
@@ -316,7 +348,7 @@ mod tests {
         let spec = FormulaSpec::new("o", 10.0, glam::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert_eq!(paths.len(), 2, "双轮廓应拆成两条独立路径");
-        for (pts, _, _, closed) in &paths {
+        for (pts, _, _, closed, _) in &paths {
             assert_eq!(pts.len(), 5, "每个轮廓：4 顶点 + 回起点");
             assert!(*closed);
         }
