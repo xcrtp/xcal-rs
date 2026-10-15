@@ -1,20 +1,22 @@
 # xcal-egui
 
-> **UI overlay 层**：把 `egui 0.36` 的每一帧 UI 拆成一组符合 xcal-core 六阶段
-> 调度约定的 `System`，提供控制面板、网格背景、相机输入、视口矩形、
-> 2D 绘制提交等功能。
+> **UI 适配层**：`EguiSceneHost` 是 egui 与场景之间的**唯一**适配层——把每帧 egui
+> 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容；
+> 另有 4 个符合 xcal-core 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
+> 网格背景、场景录制），只依赖纯数据 Resource，可 headless 测试。
 
 ```
-xcal-core (System/Resource/Scheduler)
-xcal-render (冻结 2D 管线 Painter2D / DrawQueue)
-xcal-render-backends (EguiPainter)
+xcal-core (System/Resource/Scheduler + domain 契约)
+xcal-render (2D 管线 Painter2D / DrawQueue / Shape2D)
+xcal-render-backends (EguiPainter / Layer2DCallback / Layer3DCallback)
+xc-geometry (Rect2D：声明 GPU 2D 回调视口)
 xcal-macro (Transform2DInto 派生)
       │
       ▼
 xcal-egui  ← 本 crate
       │
       ▼
-xcal-app (装配)
+xcal-app (装配 + ParamPanelSystem)
 ```
 
 ---
@@ -24,68 +26,74 @@ xcal-app (装配)
 所有资源都实现了 `xcal_core::resource::Resource` (blanket for
 `Send + Sync + 'static`)，可直接放入 `Resources` 并被各 System 声明读写：
 
-| Resource | 读/写在哪些阶段 | 说明 |
-|----------|-----------------|------|
-| `TimeState { elapsed, dt, tick }` | Input **W**; LogicUpdate **R**; SceneSync **R** | 每帧累计时钟（由 `TimeUpdateSystem` 加 `dt`）|
-| `AppCamera { zoom, offset, anchor }` | Input **W**; Prepare **R**; RenderCommit **R** | 2D 视图相机（pan/zoom，由鼠标/键盘驱动）|
-| `UiConfig { grid, snap, palette, show_axis }` | LogicUpdate **W**; Prepare **R** | 由控制面板修改的全局 UI 配置 |
-| `ViewRect { min, max }` | SceneSync **W**; Prepare **R**; RenderCommit **R**; FrameEnd **R** | 中央视口在 egui 像素坐标中的矩形（`ViewRectUpdateSystem` 从 `EguiFrameContext` 获取）|
-| `EguiFrameContext(&'ui egui::Ui)` | Input 注入/FrameEnd 移除; 各阶段 **R** | 将每帧短暂的 `&egui::Ui` 降级为 Resource，实现 system 间传递 |
-| `DrawQueue` (来自 xcal-render) | Prepare **W**; RenderCommit **W**; FrameEnd **R+W** | 2D 绘制命令队列 |
+| Resource | 归属 | 说明 |
+|----------|------|------|
+| `AppCamera { center: Vec2, scale: f32 }` | 本 crate | 2D 相机**纯状态**；输入处理已删除，控制器是纯函数 `apply_command`（消费 domain 的 `CameraCommand`）|
+| `UiConfig { show_grid, show_field, gpu_2d }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = false`）|
+| `ViewRect { rect }` | 本 crate | 中央视口在 egui 点坐标中的矩形（由 `EguiSceneHost::update_view_rect` 写入）|
+| `TimeState` | 再导出自 xcal-core | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
+| `DirectorState` | xcal-core | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
+| `InputEvents`（`Vec<SceneEvent>`）| xcal-core::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
+| `DrawQueue`（来自 xcal-render）| — | 2D 绘制命令队列（Prepare 写网格、RenderCommit 录场景）|
+| `DrawQueue3D`（来自 xcal-render）| — | 3D 绘制命令队列（`EguiSceneHost::present` 消费）|
+
+> `EguiFrameContext` **已删除**（B 阶段 UI 解耦）：egui 访问收敛到 `EguiSceneHost`，
+> 场景侧 System 只依赖纯数据 `InputEvents`，因此可 headless 测试。
 
 ---
 
 ## System（按 Phase 分配）
 
-每一 phase 的 Read/Write 资源集合都经过精心分配，保证**同 phase 内任意两
-System 不冲突**（debug 下 BorrowTracker 会验证）：
+本 crate 只保留 4 个**场景侧** System（不含任何 egui 类型）；纯 UI chrome
+（控制面板 / 时间面板 / 参数面板）与内容提交都在 `EguiSceneHost`。
 
-### Phase::Input
-| System | 读写 | 功能 |
-|--------|------|------|
-| `TimeUpdateSystem` | W=TimeState | `time.elapsed += dt; time.tick += 1` |
-| `CameraInputSystem` | R=EguiFrameContext; W=AppCamera | 处理滚轮缩放（鼠标锚点）、中键拖拽平移、方向键 pan |
+| Phase | System | 读写 | 功能 |
+|-------|--------|------|------|
+| Input | `CameraInputSystem` | R=`InputEvents`; W=`AppCamera` | 过滤 `SceneEvent::Camera`，委托 `AppCamera::apply_command`（PanZoom 模式）|
+| LogicUpdate | `TimeControlSystem` | R=`InputEvents`; W=`DirectorState` | 消费 `Button(PLAY_PAUSE)` / `Slider(SPEED)` / `Slider(SEEK)` |
+| Prepare | `GridBuildSystem` | R=`ViewRect`, `AppCamera`, `UiConfig`; W=`DrawQueue` | 视口底色 + 多级网格 / 坐标轴（`MeasureSpace::Screen`）|
+| RenderCommit | `SceneRecordSystem` | R=`ViewRect`, `AppCamera`; W=`DrawQueue` | `record_scene(world, camera, dq)` 遍历 hecs World + `FunctionX2Y` 曲线 |
 
-### Phase::LogicUpdate
-| System | 读写 | 功能 |
-|--------|------|------|
-| `ControlPanelSystem` | R=TimeState, AppCamera, EguiFrameContext; W=UiConfig | 绘制 egui 侧栏：网格开关/颜色、缩放重置、相机显示、FPS 文本 |
+其他阶段由别的 crate 提供：Input 的 `DirectorAdvance`、SceneSync 的 `BindingApply`
+（xcal-core），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
 
-### Phase::SceneSync
-| System | 读写 | 功能 |
-|--------|------|------|
-| `ViewRectUpdateSystem` | R=EguiFrameContext; W=ViewRect | 从当前 ui.max_rect() 减去侧栏宽度得到中央视口 |
-| `AnimationApplySystem` | R=TimeState; W=() (写 hecs 组件) | 按 `LocalClock + CircleAnim/PhaseAnim` 更新 Circle 半径 / FunctionX2Y 相位 |
-
-### Phase::Prepare
-| System | 读写 | 功能 |
-|--------|------|------|
-| `GridBuildSystem` | R=ViewRect, AppCamera, UiConfig; W=DrawQueue | 根据视口 + 缩放级别绘制 1×1, 10×10, 100×100 多级网格线 |
-
-### Phase::RenderCommit
-| System | 读写 | 功能 |
-|--------|------|------|
-| `SceneRecordSystem` | R=ViewRect, AppCamera; W=DrawQueue | 调 `xcal_render::record_scene(world, camera, view, dq)` 遍历 hecs World |
-
-### Phase::FrameEnd
-| System | 读写 | 功能 |
-|--------|------|------|
-| `RenderSubmitSystem` | R=ViewRect, EguiFrameContext, DrawQueue; W=()（通过 EguiPainter 消费 DrawQueue）| 取 `ui.painter_at(central_rect)`，以 `EguiPainter` flush 命令 |
-
-> 注意：`AnimationApplySystem` / 其他 scene 系统通过
-> `ctx.with_world_and_resource_mut::<R, _>(...)` 实现同时访问 `&hecs::World`
-> 和 `&mut Resource` 的拆分借用。
+> `SceneRecordSystem` 同时需要 `&hecs::World` 与 `&mut DrawQueue`，通过
+> `ctx.with_world_and_resource_mut::<DrawQueue, _>(...)` 做拆分借用。
 
 ---
 
-## 控制面板面交互
+## 面板 chrome
 
-`ControlPanelSystem` 暴露的 UI 控件：
+`EguiSceneHost`（`host.rs`）绘制的三个面板：
 
-- **时间**：elapsed/tick 显示，暂停/恢复按钮（设置 `ClockState`）
-- **相机**：当前 zoom + offset 显示，一键 `重置视图`
-- **网格**：`显示/隐藏`、主次网格颜色、轴线颜色、`吸附到网格` 开关
-- **调试**：Health Overlay (F1) 切换 / World Snapshot (F10) 开关按钮
+- **控制面板（左）**：`t` 读数、`显示网格` / `显示向量场` 复选框、
+  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认关）、相机 center/scale 读数。
+- **时间面板（左）**：播放/暂停按钮、速度滑块、时间轴 seek 滑块。
+- **参数面板（右）**：按 (curve, target) 展示绑定滑块——圆半径 `base/amp/omega`、
+  函数相位 `omega`、3D 轨道相机 `radius/speed/angle`。
+
+所有控件交互都以 `SceneEvent`（按 `WidgetId` 标识）上报，由场景侧 System 消费。
+
+---
+
+## `EguiSceneHost`：唯一 egui 触点
+
+- `build_scene_view(world, res) -> SceneView`：场景 → UI，纯数据（2D 图层取
+  `AppCamera` + `ViewRect`，3D 图层取 World 中第一个 `Camera3D`）。
+- `begin_frame(ui, view, res)`：收集视口输入（滚轮 → `Zoom`、右键/中键拖拽 → `Pan`，
+  位移在 host 内换算为**世界坐标**并做 Y 翻转）+ 三面板 chrome，整帧替换写入
+  `InputEvents`；随后 `update_view_rect` 写 `ViewRect`（必须在 `run_frame` 之前，
+  否则 resize 时内容慢一帧）。
+- `present(ui, view, res)`：提交 2D 与 3D 内容，替代原 `RenderSubmitSystem` /
+  `RenderSubmit3DSystem`。**2D 两条管路由 `UiConfig::gpu_2d` 运行期二选一**：
+
+  | `gpu_2d` | 路径 |
+  |----------|------|
+  | `false`（默认）| `DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（迁移前基线）|
+  | `true` | `Layer2DCallback`：`prepare` 渲染离屏 MSAA 4x 纹理，`paint` 合成回主 pass |
+
+  3D 内容恒以 `Layer3DCallback` 覆盖在 2D 之上（`ui.painter_at(rect)` 同层、
+  shape 顺序在后，clip 自动局限在中央视口）。
 
 ---
 
@@ -105,11 +113,13 @@ use xcal_egui::EguiPainter;
 ## 依赖
 
 ```toml
-xcal-core              = { features = ["egui"] }     # EguiFrameContext 需要 feature = "egui"
-xcal-render            = { default-features = false }# 仅用冻结 2D 管线（无 wgpu）
-xcal-render-backends   = { features = ["egui"] }     # EguiPainter + color_to_egui
+xcal-core              = { features = ["egui"] }              # egui feature 门控（如需）
+xcal-render            = { default-features = false }         # 2D 管线（无 wgpu）
+xcal-render-backends   = { features = ["egui", "egui-wgpu"] } # EguiPainter + Layer2DCallback/Layer3DCallback
+xc-geometry                                                   # S3-1：以 Rect2D 声明回调视口
 xcal-macro
 egui                   = "0.36"
+egui-wgpu                                                     # present 提交 3D/GPU2D 回调
 hecs / glam / derive-new / derive-builder
 ```
 
@@ -120,5 +130,10 @@ cargo test -p xcal-egui
 cargo doc  -p xcal-egui --no-deps
 ```
 
-主要覆盖资源类型的 Default / round-trip 属性；系统行为依赖 `xcal-app`
-端到端运行与 `cargo test --workspace` 中的 hecs 查询集成。
+- `resources`：`AppCamera` / `UiConfig` Default（含 `!gpu_2d` 断言）/ `Resources` 增删
+- `systems`：`CameraInputSystem` zoom / clamp / pan / 无事件 4 例；`AppCamera::apply_command`
+  忽略 Orbit/Dolly 1 例
+- `time_control`：`TimeControlSystem` 播放切换 / speed+seek / 无关事件忽略 3 例
+- `host`：`build_scene_view` 图层声明 / 缺层跳过 / 2D 相机与 AppCamera 一致 3 例
+
+以上均为 **headless**（无窗口、无 egui 上下文）构造 `Scheduler + Resources` 驱动。

@@ -31,7 +31,8 @@ use xcal_core::scene::components::Camera3D;
 use xcal_core::types::Rect;
 use xcal_core::{Curve, TimeState};
 use xcal_render::{DrawQueue, DrawQueue3D};
-use xcal_render_backends::{EguiPainter, Layer3DCallback};
+use xcal_render_backends::{EguiPainter, Layer2DCallback, Layer3DCallback};
+use xc_geometry::Rect2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 
@@ -194,6 +195,11 @@ impl EguiSceneHost {
 
                 ui.checkbox(&mut ui_config.show_grid, "显示网格");
                 ui.checkbox(&mut ui_config.show_field, "显示向量场");
+
+                ui.separator();
+                // S3-1 验收开关：切换 2D 管线（旧 CPU 回放 ↔ 新 GPU 离屏 MSAA），
+                // 用于同一画面下逐帧对比两条管线的输出是否一致。
+                ui.checkbox(&mut ui_config.gpu_2d, "GPU 2D 管线");
 
                 ui.separator();
                 ui.label("Camera");
@@ -373,8 +379,24 @@ impl EguiSceneHost {
             .unwrap_or_else(|| ViewRect::default().rect);
         let egui_rect = view_rect.into_egui_rect();
 
-        // 2D 内容先画。
-        if let Some(queue) = res.get_mut::<DrawQueue>() {
+        // 2D 内容先画。两条管路由 `UiConfig::gpu_2d` 运行期开关二选一
+        // （S3-1：新管线不是替换而是并存，验收靠对比两条管线）。
+        let gpu_2d = res.get::<UiConfig>().map(|c| c.gpu_2d).unwrap_or(false);
+        if gpu_2d {
+            // 新路径：`Layer2DCallback` 在 `prepare` 把队列渲染进离屏 MSAA 纹理，
+            // 在 `paint` 合成回主 pass（场景侧 System 的 Reads/Writes 不变，
+            // 开关只影响 present 这一处）。
+            if let Some(queue) = res.get::<DrawQueue>() {
+                if !queue.is_empty() {
+                    let viewport = Rect2D::new(*view_rect.min(), *view_rect.max());
+                    let callback = Layer2DCallback::new(viewport, queue);
+                    ui.painter_at(egui_rect).add(egui::epaint::Shape::Callback(
+                        egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
+                    ));
+                }
+            }
+        } else if let Some(queue) = res.get_mut::<DrawQueue>() {
+            // 旧路径：`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（特征化基线）。
             let painter = ui.painter_at(egui_rect);
             queue.execute(&EguiPainter::new(&painter));
         }

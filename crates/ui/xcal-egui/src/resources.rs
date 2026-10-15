@@ -86,6 +86,13 @@ pub use xcal_core::TimeState;
 pub struct UiConfig {
     pub show_grid: bool,
     pub show_field: bool,
+    /// S3-1：2D 管线开关（运行期 checkbox，不是编译期 feature）。
+    ///
+    /// - `false`（默认）：旧路径——`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放；
+    /// - `true`：新路径——`Layer2DCallback` 走 wGPU 离屏纹理（MSAA 4x）+ 合成。
+    ///
+    /// 两条管线并存的意义就是逐帧对比验收（计划 §5.5/§8）；旧管线退役属 S3-4。
+    pub gpu_2d: bool,
 }
 
 impl Default for UiConfig {
@@ -93,6 +100,7 @@ impl Default for UiConfig {
         Self {
             show_grid: true,
             show_field: false,
+            gpu_2d: false,
         }
     }
 }
@@ -130,6 +138,8 @@ mod tests {
         let cfg = UiConfig::default();
         assert!(cfg.show_grid);
         assert!(!cfg.show_field);
+        // S3-1：默认走旧 2D 管线（开关关闭），保证不开关时画面与迁移前一致。
+        assert!(!cfg.gpu_2d);
     }
 
     #[test]

@@ -6,8 +6,8 @@
       "name": "kernel",
       "path": "crates/kernel",
       "prefix": "xc-",
-      "description": "纯计算/数据，无 egui/渲染/领域依赖",
-      "crates": ["xc-geometry"]
+      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
+      "crates": ["xc-geometry", "xc-time", "xc-content", "xc-prerender"]
     },
     {
       "name": "graph",

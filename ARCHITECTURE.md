@@ -63,6 +63,8 @@ graph TD
     %% graph → kernel
     xc_graph_algo --> xc_node
     xc_graph_eval --> xc_node
+    xc_node_schema --> xc_node
+    xc_node_schema --> xc_node_schema_macros
 
     %% render → kernel + graph + UI sibling
     xcal_core --> xc_geometry
@@ -83,10 +85,10 @@ graph TD
     xcal_egui --> xcal_render_backends
     xcal_node_editor --> xc_node
     xcal_node_editor --> xc_graph_algo
-    xcal_node_egui --> xcal_node
+    xcal_node_egui --> xc_node
     xcal_node_egui --> xcal_node_editor
     xcal_node_egui_ui --> xc_node
-    xcal_node_egui_ui --> xcal_node_schema
+    xcal_node_egui_ui --> xc_node_schema
     xcal_node_egui_ui --> xcal_node_egui
 
     %% app → everything
@@ -260,6 +262,32 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 - 与 S3 无关：`width / space / 当前 scale` 是 **per-draw uniform**，不碰顶点格式；
   只有到 S3 需要缓存几何时才把换算挪进 shader（接口不变）。
 
+### S3 2D 渲染统一（M0 / S3-0 / S3-1）
+
+**M0 图元体系迁移**：2D 载荷统一为 `Shape2D` / `Style2D`（旧 `Shape` / `Style` 枚举删除）。
+`Painter2D::paint(&self, &Shape2D, &Style2D)`；`DrawQueue::push(DrawCommand { z, shape, style })`
++ `ensure_sorted()`（`Vec::sort`，稳定）+ `execute(&painter)`。迁移后画面不变。
+
+**S3-0 三角化适配层**（`xcal-render::tessellate`，纯 CPU / headless，无 feature 门控）：
+`Shape2D + Transform2D + Style2D` → `Vec<Tessellation2D>`，顶点**严格**符合顶点契约
+（`VertexLayout::standard`，stride 20，三槽 position/attrib0/attrib1；
+`Vertex2D { position, normal, side }`，`size == 20` 编译期断言）。三角化用
+`lyon_tessellation` 1.0，不自研；`tolerance_for_scale(scale) = (0.25/scale).clamp(1e-4, 1.0)`。
+
+**S3-1 wGPU 2D 后端**（`xcal-render-backends::wgpu_2d`）：离屏 `Rgba8Unorm`（非 sRGB，
+存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化 → 顶点哈希缓存
+（`ResourceCache<()>` + `DeferredDestroyer`）→ `UniformArena`（**复用 `wgpu_3d`**，
+256B 对齐 dynamic offset）→ 离屏绘制；`composite` 用哨兵 `COMPOSITE_QUAD` 贴回主 pass。
+`Layer2DCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
+**运行期开关** `UiConfig::gpu_2d`（默认 off）在 `xcal-egui::EguiSceneHost::present` 二选一：
+`EguiPainter` CPU 回放 ↔ `Layer2DCallback` GPU 路径（旧管线退役属 S3-4）。
+
+**egui-wgpu 回调 viewport 契约（踩坑记录）**：egui-wgpu 处理 `Primitive::Callback` 时会把
+render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一个 primitive 才复位）。
+即回调内 NDC `[-1,1]²` 对应回调矩形本身——合成四边形必须写死全 NDC 盒，不得用整屏尺寸
+把视口像素矩形换算成裁剪坐标（否则视口被**二次应用** → 2D 视图在 X 方向被压扁）。
+回归测试 `composite_lands_inside_scoped_viewport_on_real_device` 在旧实现下必然失败。
+
 ### cargo-archtest 适配状态
 
 `cargo-archtest v0.2.3` 的架构模型是「单 crate 内按 `src/` 子目录分层」，
@@ -275,5 +303,16 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 >
 > 备注（2026-10-13）：S1 引入 `xc-time → xc-geometry` 边后按同一口径再次重算
 > FanIn/FanOut（`xc-time` FanOut 0→1、`xc-geometry` FanIn 5→7、`xcal-app` FanOut 5→8）。
+>
+> 备注（2026-10-15）：依赖图与 `workspace-analyzer.mmd` 按同一 `cargo metadata` 口径
+> 手工补齐（工具仍不可用），合计补 9 条边：
+> - 本文件图区：修正 `xcal_node_egui → xc_node`、`xcal_node_egui_ui → xc_node_schema`
+>   两处前缀笔误，并补 `xc-node-schema → xc-node` / `→ xc-node-schema-macros`（2 条）；
+> - `workspace-analyzer.mmd`：补 `xc-prerender → xc-content` / `→ xc-geometry`、
+>   `xc-time → xc-geometry`、`xcal-app → xc-content` / `→ xc-geometry` / `→ xc-prerender`、
+>   `xcal-render → xc-content`（7 条，29 → 36）。
+>
+> FanIn/FanOut 表经复核无需改动。工具恢复后重跑 `cargo-workspace-analyzer -d .`
+> 即可覆盖回自动产物。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

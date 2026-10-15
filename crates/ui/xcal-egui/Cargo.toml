@@ -12,6 +12,8 @@ xcal-render = { path = "../../render/xcal-render", default-features = false }
 # Painter2D 的 egui 实现（EguiPainter）+ 3D egui_wgpu 回调（Layer3DCallback）位于 backends crate。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui", "egui-wgpu"] }
 xcal-macro = { path = "../xcal-macro" }
+# S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。
+xc-geometry = { path = "../../kernel/xc-geometry" }
 
 egui.workspace = true
 # EguiSceneHost::present 把 3D 内容封装为 egui_wgpu 回调提交（原 RenderSubmit3DSystem 职责）。

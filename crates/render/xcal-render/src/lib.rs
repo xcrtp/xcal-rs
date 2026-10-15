@@ -22,6 +22,7 @@ pub mod draw_queue_3d;
 pub mod painter_2d;
 pub mod painter_3d;
 pub mod shape;
+pub mod tessellate;
 pub mod text_engine;
 pub mod vector_content;
 pub mod vertex;
@@ -37,10 +38,9 @@ pub mod render_target;
 #[cfg(feature = "wgpu")]
 pub mod resource_cache;
 
-// ─── 冻结 2D 管线 re-export ───────────────────────────────────────────────
-pub use draw::{
-    DrawCommand, DrawQueue, Painter2D, SceneRender, Shape, Style, ZIndex, record_scene,
-};
+// ─── 2D 管线 re-export ────────────────────────────────────────────────────
+// M0 起载荷统一为 Shape2D / Style2D（旧 Shape / Style 枚举已删除）。
+pub use draw::{DrawCommand, DrawQueue, Painter2D, SceneRender, ZIndex, record_scene};
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
 // 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度
@@ -59,6 +59,11 @@ pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};
 pub use draw_queue_2d::{DrawCommand2D, DrawQueue2D};
 pub use painter_2d::{Painter2DTarget, Style2D};
 pub use shape::{CustomShapeData, CustomTypeId, Shape2D};
+
+// ─── S3-0：lyon 三角化适配层（纯 CPU，无 wgpu/egui 依赖） ────────────────
+pub use tessellate::{
+    TessKind, Tessellation2D, Vertex2D, tessellate, tessellation_layout, tolerance_for_scale,
+};
 // text_engine 已由新的 ContentIR 两阶段管线取代（见 text_engine.rs 各条目的 #[deprecated]）。
 // 这里保留 re-export 以免下游直接从 xcal-render:: 取类型时 break；
 // 导入侧显式 allow，避免 crate 自己 re-export 就触发 deprecated warning。

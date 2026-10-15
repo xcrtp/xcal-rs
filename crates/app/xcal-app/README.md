@@ -21,7 +21,9 @@ cargo run -p xcal-app
    - 一个橙色**形变形状**：圆 ↔ 方 平滑来回（S1a；`MorphShape` + `MorphApplySystem`）
    - 一段粉色**语义形变公式**：`x²` ↔ `x³`（S1b；按源码锚点配对 —— `x` 配到 `x`）
    - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
-2. **egui 面板**：左侧时间/相机/网格，右侧动画参数
+2. **egui 面板**：左侧时间/相机/网格 + **`GPU 2D 管线` 复选框**
+   （S3-1 运行期开关，默认关；勾选后 2D 走 `Layer2DCallback` 离屏 MSAA 合成，
+   不勾则走 `EguiPainter` CPU 回放），右侧动画参数
    （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
 3. **右上角 Health Overlay（F1 切换）**：FPS、tick、实体数、绘制调用数
 4. **快捷键**：
@@ -38,10 +40,16 @@ cargo run -p xcal-app
 Self::setup_fonts(&ctx.egui_ctx)?;
 Self::setup_visuals(&ctx.egui_ctx);
 
-// ── 2. RenderContext + WgpuBackend3D（回调资源） ──
+// ── 2. RenderContext + WgpuBackend3D / WgpuBackend2D（回调资源） ──
 let rs = ctx.wgpu_render_state.clone().unwrap();
 let backend_3d = WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
 rs.renderer.write().callback_resources.insert(backend_3d);  // 回调为 &self，资源存 TypeMap
+
+// S3-1：同一 TypeMap 再放一份 WgpuBackend2D（pipeline / 缓存 / 离屏目标惰性重建；
+// `UiConfig::gpu_2d` 关闭时不产生任何 GPU 工作）。
+let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue, rs.target_format);
+rs.renderer.write().callback_resources.insert(backend_2d);
+
 let render_ctx = RenderContext::from_render_state(&rs);
 
 // ── 3. Scene 填充 hecs World（纯逻辑组件） ──
@@ -55,8 +63,12 @@ scene.spawn((FunctionX2Y::new(|x| x.sin()), Sampler1D,
 let engine = formula::build_engine();
 let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
 if let Some(ir) = formula::rebuild(&engine, &spec) {
-    for (vertices, color, width, closed) in formula::compile_to_stroke_paths(&ir, &spec) {
-        scene.spawn((Path::new(vertices, closed), StrokeSolid::new(width, color)));
+    for (vertices, color, width, closed, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+        scene.spawn((
+            Path::new(vertices, closed),
+            // 公式描边是世界空间：与字形一同随缩放成比例变化。
+            StrokeSolid::new_in(width, color, space),
+        ));
     }
 }
 
@@ -228,6 +240,19 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 所以**绝对不能**用 `Order::Background`（会在主 pass 之前提交、被侧栏覆盖），
 而是 `ui.painter_at(central_rect).add(Shape::Callback(...))`——同一 layer 内
 "后提交 = 在上面"。详见 `xcal-render-backends` 文档。
+
+### 2D 管线开关（S3-1）
+
+2D 内容有两条**并存**管线，由 `UiConfig::gpu_2d`（面板复选框）在
+`EguiSceneHost::present` 运行期二选一：
+
+- `gpu_2d = false`（默认）：`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（基线）；
+- `gpu_2d = true`：`Layer2DCallback` → `WgpuBackend2D` 离屏 `Rgba8Unorm` + MSAA 4x，
+  再 `composite` 贴回主 pass。
+
+> ⚠️ 合成四边形必须写死全 NDC 盒（`COMPOSITE_QUAD`）：egui-wgpu 会把 render pass
+> viewport 设为**回调自身矩形**，若按整屏尺寸换算裁剪坐标会导致视口被二次应用
+> （2D 视图 X 方向被压扁）。见 `xcal-render-backends` README 的 viewport 陷阱一节。
 
 ---
 

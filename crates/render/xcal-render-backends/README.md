@@ -1,7 +1,10 @@
 # xcal-render-backends
 
-> **具体渲染后端实现**：wgpu 3D、egui 2D、SVG 录制、eframe 集成、Typst/LaTeX
-> 文本引擎占位。**所有模块按 feature-gate 提供**，最终用户按需组合。
+> **具体渲染后端实现**：wgpu 3D、wgpu 2D（S3-1）、egui 2D、eframe 集成、顶点契约翻译层。
+> **所有模块按 feature-gate 提供**，最终用户按需组合。
+>
+> （旧 `svg_recorder` / Typst / LaTeX 空壳已删除——内容管线改走
+> `xc-prerender::engine → xc-content::ContentIR → xcal-render::ir_to_draw_cmds`。）
 
 ```
 xcal-core / xcal-render / xc-geometry
@@ -9,11 +12,11 @@ xcal-core / xcal-render / xc-geometry
               ▼
     xcal-render-backends  ← 本 crate
               │
-              ├ wgpu 后端 (feature = "wgpu")
+              ├ wgpu 3D 后端 (feature = "wgpu")
+              ├ wgpu 2D 后端 (feature = "wgpu")          ← S3-1：离屏 MSAA + 合成
+              ├ 顶点契约 → wgpu 翻译 (feature = "wgpu")
               ├ egui 2D 后端 (feature = "egui")
-              ├ eframe + egui_wgpu 集成 (feature = "egui-wgpu")
-              ├ SVG 录制 (always)
-              └ text 引擎占位 (feature = "text")
+              └ eframe + egui_wgpu 集成 (feature = "egui-wgpu")
 ```
 
 ---
@@ -22,11 +25,11 @@ xcal-core / xcal-render / xc-geometry
 
 | feature | 引入的依赖 | 可用模块 |
 |---------|-----------|----------|
-| `default` (空) | 无 | `svg_recorder`, `text::{mod, typst_engine, latex_engine}` (空壳) |
-| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d` |
+| `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
+| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout` |
 | `egui` | `egui 0.36`, `xcal-core/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
-| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-core/egui` | `render_context`, `wgpu_3d`, `eframe_backend`, `layer_callback` |
-| `text` | — | 占位文本引擎预留接口 |
+| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-core/egui` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `eframe_backend`, `layer_callback` |
+| `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
 四种 feature 组合都通过 CI 的 `cargo check -F` 验证。
 
@@ -80,28 +83,63 @@ let ctx = RenderContext::from_render_state(rs);
 - `WgpuBackend3D` 存放在 `rs.renderer.write().callback_resources` TypeMap
   中，回调以 `&self` 访问，回调内部通过内部可变性重建缓冲区。
 
-### 4. `egui_2d` (`egui`)
+### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1
 
-`EguiPainter`：xcal-render 冻结 2D 管线 (`Painter2D`) 的 egui 实现。
-把 `Shape::{Line, Rect, Circle, Path, Text, Callback}` 翻译成 egui 原生
-`Shape::*`。同时提供 `color_to_egui(xc_geometry::Color32) -> egui::Color32`
-辅助函数。由 xcal-egui 直接 re-export。
+xcal-rs 的首个 GPU 2D 后端：**离屏纹理 + MSAA 4x + 合成**。
 
-### 5. `eframe_backend` (`egui-wgpu`)
+- **`WgpuBackend2D`**：`new(device, queue, target_format)` 建两条管线——
+  `shaders/shape_2d.wgsl`（图元；硬边 + MSAA）与 `shaders/composite_2d.wgsl`
+  （合成），后者按主目标 `is_srgb()` 选 `fs_linear` / `fs_gamma` 入口，
+  sRGB 与非 sRGB 主目标都能启动而不 panic。
+- 实现 `Painter2DTarget`（`begin_frame` / `draw_shape` / `end_frame`），
+  另有直达录制 API `push(shape, transform, style, z)`。
+- **每帧流程**（`finish_frame(encoder, geometry) -> Frame2DData`）：
+  1. 录制项按 `z` 稳定排序（同 z 保录制序，画家算法）；
+  2. 每项 `tessellate`（S3-0）→ 顶点哈希 → `ResourceCache<()>` 命中即复用、
+     未命中则上传（`DeferredDestroyer` 延迟销毁）；
+  3. uniform 经 **复用 `wgpu_3d` 的 `UniformArena`**（256B 对齐 dynamic offset，
+     `UNIFORM_SIZE = 80`）写入；
+  4. 在离屏 MSAA 纹理上绘制并 resolve。
+- **离屏格式** `OFFSCREEN_FORMAT = Rgba8Unorm`（**非 sRGB**，存 gamma 值），
+  `MSAA_SAMPLES = 4`；纹理开 `COPY_SRC` 支持像素回读。
+- **合成**：`composite(frame, render_pass)` 用常量 `COMPOSITE_QUAD`（NDC
+  `[-1,1]²` 全屏四边形）把离屏纹理贴回主 pass。
+- **`Frame2DGeometry`**：`viewport_points` + `pixels_per_point` + `screen_size_px`；
+  `viewport_px()` 复刻 `epaint::ViewportInPixels::from_points` 的取整 + 钳制口径，
+  使**离屏纹理尺寸恒等于 egui-wgpu 为该回调设置的 render pass viewport 尺寸**。
+- **`Layer2DCallback`**（`feature = "egui-wgpu"`）：实现 `CallbackTrait`，
+  `prepare` 渲染离屏、`paint` 合成；经
+  `ui.painter_at(rect).add(Shape::Callback(...))` 与 egui UI 同层提交。
+- 导出：`WgpuBackend2D` / `Layer2DCallback` / `Frame2DGeometry` / `Frame2DData` /
+  `Recorded2D` / `snapshot_queue` / `MSAA_SAMPLES` / `OFFSCREEN_FORMAT`。
+
+> ⚠️ **egui-wgpu 回调 viewport 陷阱**：egui-wgpu 处理 `Primitive::Callback` 时会
+> `set_viewport(callback.viewport_in_pixels())`（下一个 primitive 处才复位）。
+> 即**回调内 NDC `[-1,1]²` 对应回调自身矩形**，而非整屏。因此合成四边形必须写死
+> 全 NDC 盒（`COMPOSITE_QUAD`）；若按整屏尺寸把视口像素矩形换算成裁剪坐标，视口会被
+> **二次应用**（宽度 × 视口宽/屏幕宽并右移），表现为 2D 视图在 X 方向被压扁。
+> 回归测试 `composite_lands_inside_scoped_viewport_on_real_device` 在旧实现下必然失败。
+
+### 5. `egui_2d` (`egui`)
+
+`EguiPainter`：xcal-render 统一 2D 管线 (`Painter2D`) 的 egui 实现。
+按 `Shape2D` 的 `Circle / Line / Rect / Polyline / Polygon / Ellipse / Path`
+分支，把 `fill` / `stroke` **独立**翻译成 egui 原生 `Shape::*`
+（`Path` 经 `FLATTEN_TOLERANCE = 0.1` 展平）。同时提供
+`color_to_egui(xc_geometry::Color32) -> egui::Color32` 辅助函数。
+由 xcal-egui 直接 re-export。
+
+### 6. `eframe_backend` (`egui-wgpu`)
 
 `EframeWgpuBackend`：实现 `xcal_render::RenderBackend` trait 的 eframe 版本。
 对写纯 eframe/wgpu 示例时可直接复用。
 
-### 6. `svg_recorder`（始终编译）
+### 7. `vertex_layout` (`wgpu` / `egui-wgpu`)
 
-空壳占位后端。保留给未来：把 `DrawQueue2D` 的 `Shape2D` 序列化为 `.svg` 文件，
-用于无头导出。
-
-### 7. `text`（始终编译，`feature="text"` 预留）
-
-- `typst_engine.rs`：Typst 数学公式 → 位图
-- `latex_engine.rs`：LaTeX/DviSvg → 位图
-两者目前仅保留模块骨架（不做实际调用），避免在默认 CI 引入系统级 texlive 依赖。
+顶点格式契约（`xcal-render::vertex`）→ wgpu 的翻译层：`to_wgpu(layout, &mut attrs)`
+把 `VertexLayout` 转成 `wgpu::VertexBufferLayout`（调用方提供属性数组存储）；
+多 buffer 用 `to_wgpu_buffers(&VertexInputDesc, &mut …)`，shader location 跨 buffer
+全局连续（wgpu 语义）。入口先 `validate()` fail-fast。**不碰 `wgpu_3d.rs`。**
 
 ---
 
@@ -140,8 +178,14 @@ egui-wgpu              (optional)  ← egui-wgpu
 ## 测试
 
 ```bash
-cargo test -p xcal-render-backends --features egui-wgpu   # ~12 个测试（含 3D 离线渲染）
-cargo test -p xcal-render-backends --no-default-features  # 仅 SVG + text 空壳
+cargo test -p xcal-render-backends --features egui-wgpu   # 36 个测试（3D/2D 离线渲染、合成、顶点布局翻译）
+cargo test -p xcal-render-backends --no-default-features  # 空 crate（全部模块被 feature 门控关闭）
 cargo check -p xcal-render-backends --features wgpu
 cargo check -p xcal-render-backends --features egui
 ```
+
+`--features egui-wgpu` 下的 2D 相关测试：`Frame2DGeometry::viewport_px` 取整/钳制口径、
+离屏尺寸下限、局部变换与裁剪矩阵、`COMPOSITE_QUAD` 全 NDC 盒、合成在真实设备上
+落在 scoped viewport 内（端到端）、`gpu_frame_rasterizes_and_recreates_targets_on_resize`
+（离屏像素回读 + 视口 200×100 → 400×300 目标重建）、
+`gpu_pipeline_builds_for_srgb_and_non_srgb_targets`、`pipeline_vertex_layout_comes_from_contract`。

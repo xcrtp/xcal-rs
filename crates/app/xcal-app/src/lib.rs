@@ -28,7 +28,7 @@ use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D, MeasureSpace, scene::Scene};
-use xcal_render_backends::{RenderContext, WgpuBackend3D};
+use xcal_render_backends::{RenderContext, WgpuBackend2D, WgpuBackend3D};
 use xc_geometry::Path2D;
 
 mod formula;
@@ -67,6 +67,13 @@ impl App {
             let backend_3d =
                 WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(backend_3d);
+
+            // 2D 后端（S3-1）：同一 TypeMap 里再放一份 WgpuBackend2D，
+            // 由 `UiConfig::gpu_2d` 开关决定 `Layer2DCallback` 是否被创建。
+            // 后端常驻（pipeline/缓存/离屏目标随视口尺寸惰性重建），
+            // 关掉开关时不产生任何 GPU 工作。
+            let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue, rs.target_format);
+            rs.renderer.write().callback_resources.insert(backend_2d);
 
             RenderContext::from_render_state(&rs)
         };

@@ -4,6 +4,12 @@ graph TD
     xc-graph-eval --> xc-node
     xc-node-schema --> xc-node
     xc-node-schema --> xc-node-schema-macros
+    xc-prerender --> xc-content
+    xc-prerender --> xc-geometry
+    xc-time --> xc-geometry
+    xcal-app --> xc-content
+    xcal-app --> xc-geometry
+    xcal-app --> xc-prerender
     xcal-app --> xcal-core
     xcal-app --> xcal-egui
     xcal-app --> xcal-macro
@@ -23,6 +29,7 @@ graph TD
     xcal-node-egui-ui --> xc-node
     xcal-node-egui-ui --> xc-node-schema
     xcal-node-egui-ui --> xcal-node-egui
+    xcal-render --> xc-content
     xcal-render --> xc-geometry
     xcal-render --> xcal-core
     xcal-render-backends --> xc-geometry

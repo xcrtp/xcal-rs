@@ -1,44 +1,39 @@
 // draw.rs
 //
-// 绘制抽象：Painter2D trait + Shape/Style/ZIndex + DrawQueue + SceneRender + record_scene
+// 2D 绘制抽象：Painter2D trait + Shape2D/Style2D + ZIndex + DrawQueue +
+// SceneRender + record_scene。
 // 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 xcal_core::transform。
+//
+// M0（图元体系迁移）：载荷已统一为 [`Shape2D`](crate::shape::Shape2D) /
+// [`Style2D`](crate::painter_2d::Style2D)，旧 `Shape` / `Style` 枚举已删除。
+// 录制语义保持不变：
+// - 场景图元在 [`record_scene`] 里经 `to_screen(camera)` 落到**屏幕空间**后
+//   再转成 `Shape2D`（`Shape2D::Path` 承载折线/闭合语义）；
+// - 描边宽度在 [`record_scene`] 里经 [`resolve_width`] 结合 `camera.scale`
+//   解析为屏幕像素（**唯一换算点**）。
 
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
+use crate::painter_2d::Style2D;
+use crate::shape::Shape2D;
 use xcal_core::transform::Transform2D;
-use xcal_core::types::{Camera2D, Rect};
-use xc_geometry::{MeasureSpace, resolve_width};
+use xcal_core::types::{Camera2D, Rect, Vec3};
+use xc_geometry::{MeasureSpace, Path2D, Rect2D, Vec2 as GeoVec2, resolve_width};
 
 /// 2D 绘制器 Trait。
 pub trait Painter2D {
-    fn paint(&self, shape: &Shape, style: &Style);
+    fn paint(&self, shape: &Shape2D, style: &Style2D);
 }
 
 /// 绘制层级。值越小越先绘制（位于画面下层）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, derive_new::new)]
 pub struct ZIndex(pub i32);
 
-/// 2D 形状变体。
-#[derive(Debug, Clone)]
-pub enum Shape {
-    Circle(Circle),
-    Path(Path),
-    Line(Line),
-    Rect(Rect),
-}
-
-/// 2D 样式变体。
-#[derive(Debug, Clone)]
-pub enum Style {
-    Fill(FillSolid),
-    Stroke(StrokeSolid),
-}
-
-/// 单条 2D 绘制命令 = [`ZIndex`] + [`Shape`] + [`Style`]。
+/// 单条 2D 绘制命令 = [`ZIndex`] + [`Shape2D`] + [`Style2D`]。
 #[derive(Debug, Clone, derive_new::new)]
 pub struct DrawCommand {
     pub z: ZIndex,
-    pub shape: Shape,
-    pub style: Style,
+    pub shape: Shape2D,
+    pub style: Style2D,
 }
 
 impl PartialEq for DrawCommand {
@@ -64,6 +59,121 @@ pub struct DrawQueue {
     sorted: bool,
 }
 
+// ─── 组件 → Shape2D 转换（屏幕空间） ────────────────────────────────────────
+
+/// 屏幕空间折线点（`Vec3` 取 xy）→ `Shape2D::Path`。
+///
+/// `closed` 语义用 `Path2D::from_polyline(points, closed)` 表达（M0 方案 b：
+/// 闭合路径追加 `Close` 命令，不新增 `Shape2D::Polyline` 字段）。
+fn polyline_shape(vertices: &[Vec3], closed: bool) -> Shape2D {
+    let pts: Vec<GeoVec2> = vertices
+        .iter()
+        .map(|v| GeoVec2::new(v.x, v.y))
+        .collect();
+    Shape2D::Path(Path2D::from_polyline(&pts, closed))
+}
+
+fn rect_shape(r: &Rect) -> Shape2D {
+    let (min, max) = (r.min(), r.max());
+    Shape2D::Rect(Rect2D::new(
+        GeoVec2::new(min.x, min.y),
+        GeoVec2::new(max.x, max.y),
+    ))
+}
+
+/// 场景图元 → 屏幕空间 [`Shape2D`]。
+trait ToShape2D {
+    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D;
+}
+
+impl ToShape2D for Circle {
+    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
+        let s = self.to_screen(camera);
+        Shape2D::Circle {
+            center: GeoVec2::new(s.center.x, s.center.y),
+            radius: s.radius,
+        }
+    }
+}
+
+impl ToShape2D for Path {
+    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
+        let s = self.to_screen(camera);
+        polyline_shape(&s.vertices, s.closed)
+    }
+}
+
+impl ToShape2D for Line {
+    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
+        let s = self.to_screen(camera);
+        Shape2D::Line {
+            start: GeoVec2::new(s.a.x, s.a.y),
+            end: GeoVec2::new(s.b.x, s.b.y),
+        }
+    }
+}
+
+impl ToShape2D for Rect {
+    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
+        let s = self.to_screen(camera);
+        rect_shape(&s)
+    }
+}
+
+// ─── 样式解析（唯一换算点） ────────────────────────────────────────────────
+
+/// 把样式组件解析为**屏幕空间**的 [`Style2D`]。
+///
+/// ⚠️ **本任务是唯一换算点**：描边宽度在此经 [`resolve_width`] 结合
+/// `camera.scale` 解析为屏幕像素。项目中其它任何地方都**不得**再乘除 `scale`——
+/// 否则会出现"某些描边乘过、某些没乘"的不一致。
+trait ResolveStyle {
+    fn resolve_style(&self, scale: f32) -> Style2D;
+}
+
+impl ResolveStyle for StrokeSolid {
+    fn resolve_style(&self, scale: f32) -> Style2D {
+        Style2D {
+            fill: None,
+            stroke: Some(self.color),
+            stroke_width: resolve_width(self.width, self.space, scale),
+            // 已解析为屏幕像素，不再是世界度量。
+            space: MeasureSpace::Screen,
+        }
+    }
+}
+
+impl ResolveStyle for FillSolid {
+    fn resolve_style(&self, _scale: f32) -> Style2D {
+        Style2D {
+            fill: Some(self.color),
+            stroke: None,
+            stroke_width: 0.0,
+            space: MeasureSpace::Screen,
+        }
+    }
+}
+
+/// 队列便捷方法的样式构造：**不做** scale 换算（调用方给的就是屏幕空间量，
+/// 与迁移前的队列行为一致；世界→屏幕换算只发生在 [`record_scene`]）。
+fn fill_style(fill: &FillSolid) -> Style2D {
+    Style2D {
+        fill: Some(fill.color),
+        stroke: None,
+        stroke_width: 0.0,
+        space: MeasureSpace::Screen,
+    }
+}
+
+fn stroke_style_raw(stroke: &StrokeSolid) -> Style2D {
+    Style2D {
+        fill: None,
+        stroke: Some(stroke.color),
+        stroke_width: stroke.width,
+        space: stroke.space,
+    }
+}
+
 impl DrawQueue {
     pub fn new() -> Self {
         Self {
@@ -85,45 +195,71 @@ impl DrawQueue {
         self.sorted = false;
     }
 
+    /// 圆填充：`circle.center` 已在屏幕空间。
     pub fn circle_fill(&mut self, z: ZIndex, circle: Circle, fill: FillSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape::Circle(circle),
-            Style::Fill(fill),
+            Shape2D::Circle {
+                center: GeoVec2::new(circle.center.x, circle.center.y),
+                radius: circle.radius,
+            },
+            fill_style(&fill),
         ));
     }
+
+    /// 圆描边：`circle.center` 已在屏幕空间。
     pub fn circle_stroke(&mut self, z: ZIndex, circle: Circle, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape::Circle(circle),
-            Style::Stroke(stroke),
+            Shape2D::Circle {
+                center: GeoVec2::new(circle.center.x, circle.center.y),
+                radius: circle.radius,
+            },
+            stroke_style_raw(&stroke),
         ));
     }
+
+    /// 路径填充：`path` 顶点已在屏幕空间。
     pub fn path_fill(&mut self, z: ZIndex, path: Path, fill: FillSolid) {
-        self.push(DrawCommand::new(z, Shape::Path(path), Style::Fill(fill)));
+        self.push(DrawCommand::new(
+            z,
+            polyline_shape(&path.vertices, path.closed),
+            fill_style(&fill),
+        ));
     }
+
+    /// 路径描边：`path` 顶点已在屏幕空间。
     pub fn path_stroke(&mut self, z: ZIndex, path: Path, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape::Path(path),
-            Style::Stroke(stroke),
+            polyline_shape(&path.vertices, path.closed),
+            stroke_style_raw(&stroke),
         ));
     }
+
+    /// 线段描边：端点已在屏幕空间。
     pub fn line_stroke(&mut self, z: ZIndex, line: Line, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape::Line(line),
-            Style::Stroke(stroke),
+            Shape2D::Line {
+                start: GeoVec2::new(line.a.x, line.a.y),
+                end: GeoVec2::new(line.b.x, line.b.y),
+            },
+            stroke_style_raw(&stroke),
         ));
     }
+
+    /// 矩形填充：`rect` 已在屏幕空间。
     pub fn rect_fill(&mut self, z: ZIndex, rect: Rect, fill: FillSolid) {
-        self.push(DrawCommand::new(z, Shape::Rect(rect), Style::Fill(fill)));
+        self.push(DrawCommand::new(z, rect_shape(&rect), fill_style(&fill)));
     }
+
+    /// 矩形描边：`rect` 已在屏幕空间。
     pub fn rect_stroke(&mut self, z: ZIndex, rect: Rect, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape::Rect(rect),
-            Style::Stroke(stroke),
+            rect_shape(&rect),
+            stroke_style_raw(&stroke),
         ));
     }
 
@@ -197,36 +333,10 @@ pub struct SceneRender<T: Painter2D> {
     painter: T,
 }
 
-/// 把样式组件解析为**屏幕空间**的 [`Style`]。
-///
-/// ⚠️ **本任务是唯一换算点**：描边宽度在此经 [`resolve_width`] 结合
-/// `camera.scale` 解析为屏幕像素。项目中其它任何地方都**不得**再乘除 `scale`——
-/// 否则会出现"某些描边乘过、某些没乘"的不一致。
-trait ResolveStyle {
-    fn resolve_style(&self, scale: f32) -> Style;
-}
-
-impl ResolveStyle for StrokeSolid {
-    fn resolve_style(&self, scale: f32) -> Style {
-        Style::Stroke(StrokeSolid::new_in(
-            resolve_width(self.width, self.space, scale),
-            self.color,
-            // 已解析为屏幕像素，不再是世界度量。
-            MeasureSpace::Screen,
-        ))
-    }
-}
-
-impl ResolveStyle for FillSolid {
-    fn resolve_style(&self, _scale: f32) -> Style {
-        Style::Fill(self.clone())
-    }
-}
-
 macro_rules! for_each_scene_primitive {
     ($w:ident $cma:ident $paint:expr; $(($shape:ident, $sty:ty))*) => {
         $(for (s, c) in $w.query::<(&$shape, &$sty)>().iter() {
-            $paint(&Shape::$shape(s.to_screen($cma)), &c.resolve_style($cma.scale));
+            $paint(&s.to_shape2d($cma), &c.resolve_style($cma.scale));
         })*
     };
 }
@@ -239,7 +349,7 @@ impl<T: Painter2D> SceneRender<T> {
     pub fn render(&self, world: &hecs::World, camera: &Camera2D) {
         for_each_scene_primitive!(
             world camera
-            |sh: &Shape, st: &Style| self.painter.paint(sh, st);
+            |sh: &Shape2D, st: &Style2D| self.painter.paint(sh, st);
             (Circle, StrokeSolid)
             (Circle, FillSolid)
             (Path, StrokeSolid)
@@ -257,7 +367,7 @@ impl<T: Painter2D> SceneRender<T> {
 pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueue) {
     for_each_scene_primitive!(
         world camera
-        |sh: &Shape, st: &Style| queue.push(DrawCommand::new(ZIndex::new(0), sh.clone(), st.clone()));
+        |sh: &Shape2D, st: &Style2D| queue.push(DrawCommand::new(ZIndex::new(0), sh.clone(), *st));
         (Circle, StrokeSolid)
         (Circle, FillSolid)
         (Path, StrokeSolid)
@@ -273,12 +383,11 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
 mod tests {
     use super::*;
     use xcal_core::scene::components::*;
-    use xcal_core::types::Rect;
 
     struct MockPainter;
 
     impl Painter2D for MockPainter {
-        fn paint(&self, _: &Shape, _: &Style) {}
+        fn paint(&self, _: &Shape2D, _: &Style2D) {}
     }
 
     fn test_camera() -> Camera2D {
@@ -368,24 +477,28 @@ mod tests {
 
     use std::cell::RefCell;
 
+    /// 记录绘制调用名（`形状_样式`），用于验证队列顺序与录制分支。
     #[derive(Default)]
     struct RecordingPainter {
-        calls: RefCell<Vec<&'static str>>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    fn shape_kind(shape: &Shape2D) -> &'static str {
+        match shape {
+            Shape2D::Circle { .. } => "circle",
+            Shape2D::Path(_) => "path",
+            Shape2D::Line { .. } => "line",
+            Shape2D::Rect(_) => "rect",
+            _ => "other",
+        }
     }
 
     impl Painter2D for RecordingPainter {
-        fn paint(&self, shape: &Shape, style: &Style) {
-            let name = match (shape, style) {
-                (Shape::Circle(_), Style::Stroke(_)) => "circle_stroke",
-                (Shape::Circle(_), Style::Fill(_)) => "circle_fill",
-                (Shape::Path(_), Style::Stroke(_)) => "path_stroke",
-                (Shape::Path(_), Style::Fill(_)) => "path_fill",
-                (Shape::Line(_), Style::Stroke(_)) => "line_stroke",
-                (Shape::Line(_), Style::Fill(_)) => "line_fill",
-                (Shape::Rect(_), Style::Stroke(_)) => "rect_stroke",
-                (Shape::Rect(_), Style::Fill(_)) => "rect_fill",
-            };
-            self.calls.borrow_mut().push(name);
+        fn paint(&self, shape: &Shape2D, style: &Style2D) {
+            let style_kind = if style.fill.is_some() { "fill" } else { "stroke" };
+            self.calls
+                .borrow_mut()
+                .push(format!("{}_{}", shape_kind(shape), style_kind));
         }
     }
 
@@ -444,7 +557,7 @@ mod tests {
         };
         renderer.render(&world, &test_camera());
         let SceneRender { painter } = renderer;
-        assert_eq!(*painter.calls.borrow(), vec!["line_stroke"]);
+        assert_eq!(*painter.calls.borrow(), vec!["line_stroke".to_string()]);
     }
 
     fn cam_with_scale(scale: f32) -> Camera2D {
@@ -456,10 +569,8 @@ mod tests {
     }
 
     fn queue_stroke_width(cmd: &DrawCommand) -> f32 {
-        match &cmd.style {
-            Style::Stroke(s) => s.width,
-            other => panic!("expected stroke, got {other:?}"),
-        }
+        assert!(cmd.style.stroke.is_some(), "expected stroke style");
+        cmd.style.stroke_width
     }
 
     /// `World` 描边：屏幕宽度随 camera.scale 线性变化。
@@ -517,13 +628,12 @@ mod tests {
         let mut queue = DrawQueue::new();
         record_scene(&world, &test_camera(), &mut queue);
         assert_eq!(queue.len(), 2);
-        let kinds: Vec<&str> = queue
+        let kinds: Vec<String> = queue
             .commands()
             .iter()
-            .map(|c| match (&c.shape, &c.style) {
-                (Shape::Circle(_), Style::Fill(_)) => "circle_fill",
-                (Shape::Line(_), Style::Stroke(_)) => "line_stroke",
-                _ => "other",
+            .map(|c| {
+                let style_kind = if c.style.fill.is_some() { "fill" } else { "stroke" };
+                format!("{}_{}", shape_kind(&c.shape), style_kind)
             })
             .collect();
         assert_eq!(kinds, vec!["circle_fill", "line_stroke"]);
@@ -564,7 +674,11 @@ mod tests {
         q.execute(&painter);
         assert_eq!(
             *painter.calls.borrow(),
-            vec!["circle_stroke", "circle_fill", "path_stroke"]
+            vec![
+                "circle_stroke".to_string(),
+                "circle_fill".to_string(),
+                "path_stroke".to_string()
+            ]
         );
     }
 
@@ -583,7 +697,12 @@ mod tests {
         merged.execute(&painter);
         assert_eq!(
             *painter.calls.borrow(),
-            vec!["circle_stroke", "circle_fill", "path_fill", "path_stroke"]
+            vec![
+                "circle_stroke".to_string(),
+                "circle_fill".to_string(),
+                "path_fill".to_string(),
+                "path_stroke".to_string()
+            ]
         );
     }
 
@@ -627,5 +746,44 @@ mod tests {
         let q = DrawQueue::with_capacity(100);
         assert_eq!(q.len(), 0);
         assert!(q.is_empty());
+    }
+
+    /// 闭合语义（M0 方案 b）：`closed = true` 经 `Shape2D::Path` 保留 `Close`。
+    #[test]
+    fn closed_path_keeps_close_command() {
+        let mut world = hecs::World::new();
+        world.spawn((
+            Path::new(
+                vec![
+                    xcal_core::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
+                    xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
+                    xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
+                ],
+                true,
+            ),
+            mk_stroke(),
+        ));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &test_camera(), &mut q);
+        let Shape2D::Path(p) = &q.commands()[0].shape else {
+            panic!("expected Shape2D::Path");
+        };
+        assert!(
+            matches!(p.commands.last(), Some(xc_geometry::PathCommand::Close)),
+            "闭合路径必须以 Close 结尾"
+        );
+    }
+
+    /// 圆半径随 camera.scale 缩放（`Circle::to_screen` 语义经 `Shape2D` 保留）。
+    #[test]
+    fn circle_radius_scales_with_camera() {
+        let mut world = hecs::World::new();
+        world.spawn((Circle::new((0.0, 0.0), 2.0), mk_stroke()));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+        let Shape2D::Circle { radius, .. } = &q.commands()[0].shape else {
+            panic!("expected Shape2D::Circle");
+        };
+        assert!((radius - 20.0).abs() < 1e-4, "radius = {radius}");
     }
 }

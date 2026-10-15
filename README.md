@@ -11,9 +11,11 @@ workspace 采用分层目录结构 `crates/<layer>/`，通用基础 crate 用 `x
 
 ```text
 crates/
-├── kernel/          # 纯数据层
+├── kernel/          # 纯数据层（xc-prerender 为例外：kernel 层唯一重 crate，重型依赖 feature-gated）
 │   ├── xc-geometry       纯几何数据（Color32 / Rect2D / Path2D / Transform2D）
-│   └── xc-time           时钟树 + 曲线 + 导演（Director 唯一时间源，纯数据纯函数）
+│   ├── xc-time           时钟树 + 曲线 + 导演（Director 唯一时间源，纯数据纯函数）
+│   ├── xc-content        内容中间表示（ContentIR + 源码归一化 + 确定性 SVG + 占位排版）
+│   └── xc-prerender      内容预渲染引擎接入（Typst / placeholder + 哈希缓存），默认零重依赖
 │
 ├── graph/           # 节点图契约层（禁止依赖 egui / xcal-* / 领域类型）
 │   ├── xc-node           节点图内核（Node / Graph / Socket trait + NodeInteraction）
@@ -49,6 +51,8 @@ crates/
 |-------|----|------|
 | `xc-geometry` | kernel | 纯几何数据（Color32 / Rect2D / Path2D / Transform2D / Point3D） |
 | `xc-time` | kernel | 纯逻辑时间内核：ClockForest（时钟树+环检测+eval_local）/ Curve（Const/Sin/Orbit/Phase/Sampled 纯函数 sample）/ Director（global_t + speed + playing，唯一时间源） |
+| `xc-content` | kernel | 内容中间表示：ContentIR / StyledPath / Span 锚点 + 源码归一化 + 确定性 SVG 量具 + 零依赖占位排版 |
+| `xc-prerender` | kernel | 内容预渲染：ContentEngine 异步形状 API + InMemoryEngine + 哈希缓存 + Typst 接入（feature 全 optional，默认零重依赖） |
 | `xc-node` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `xc-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
 | `xc-graph-eval` | graph | 惰性拉取求值（LazyPullEval） |
