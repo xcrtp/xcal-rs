@@ -14,6 +14,12 @@
 //   - 三角化器：填写 VertexLayout（声明"我吐出的顶点长什么样"）
 //   - Pipeline：读取布局构造 vertex_buffers，并把它作为变体缓存 key 的一部分
 //   - 缓存层：按 layout.cache 选择缓存路径（G7 回校对象）
+//
+// # 顶点布局是不变契约（跨着色风格共享）
+// `VertexLayout` 是**跨着色风格共享的契约**：新增着色风格（体素 / 卡通 / PBR …）时
+// **不得**改顶点格式，只能加 shader 变体与 pipeline —— 否则每加一种风格都要动格式，
+// "换风格 = 换数据"的可替换性随之失效。
+// （注：3D 顶点布局目前硬编码在 xcal-render-backends::wgpu_3d，本 crate 不参与其定义。）
 
 pub mod aa;
 pub mod cache;

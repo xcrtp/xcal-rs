@@ -26,6 +26,7 @@
 // 但描边几何已**参数化**：顶点存路径点（不含宽度），宽度由 `shape_2d.wgsl` 现场按
 // `position + normal * (stroke_width * 0.5)` 补偿（见 `tessellate.rs` 头部说明）。
 
+use std::collections::HashMap;
 use std::mem;
 
 use glam::Mat4;
@@ -36,6 +37,7 @@ use xcal_render::{
     AaModel, CacheStrategy, DrawQueue, GpuHandle, Painter2DTarget, Shape2D, Style2D, TessKind,
     Tessellation2D, VertexLayout, hash_bytes, tessellate, tolerance_for_scale,
 };
+use xcal_scene::domain::LayerId;
 use xc_geometry::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 
 use crate::vertex_layout::to_wgpu;
@@ -231,8 +233,12 @@ pub struct WgpuBackend2D {
     /// 动态 uniform 绑定布局（与 [`UniformArena`] 配套）。
     bind_group_layout: wgpu::BindGroupLayout,
     arena: UniformArena,
+    /// uniform arena 的 bind group（缓存：arena generation + bind group），
+    /// 仅在 arena 扩容重建 buffer 时失效重建。
+    arena_bind_group: Option<(u64, wgpu::BindGroup)>,
     geom_cache: ResourceCache<()>,
-    targets: Option<OffscreenTargets>,
+    /// 按 [`LayerId`] 分别持有的离屏目标（尺寸变化时重建）。
+    targets: HashMap<LayerId, OffscreenTargets>,
     /// 本帧几何（`begin_frame` 设置，`finish_frame` 消费）。
     geometry: Frame2DGeometry,
     recorder: Vec<Recorded2D>,
@@ -329,8 +335,9 @@ impl WgpuBackend2D {
             pipeline_2d,
             bind_group_layout,
             arena: UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT),
+            arena_bind_group: None,
             geom_cache: ResourceCache::new(),
-            targets: None,
+            targets: HashMap::new(),
             geometry: Frame2DGeometry {
                 viewport_points: Rect2D::default(),
                 pixels_per_point: 1.0,
@@ -356,14 +363,14 @@ impl WgpuBackend2D {
         });
     }
 
-    /// 当前离屏纹理视图（`Painter2DTarget` 路径的"输出纹理"）。
-    pub fn offscreen_view(&self) -> Option<&wgpu::TextureView> {
-        self.targets.as_ref().map(|t| &t.view)
+    /// 指定图层的离屏纹理视图（`Painter2DTarget` 路径的"输出纹理"）。
+    pub fn offscreen_view(&self, layer_id: LayerId) -> Option<&wgpu::TextureView> {
+        self.targets.get(&layer_id).map(|t| &t.view)
     }
 
-    /// 当前离屏纹理本体（S3-2/S3-3 把它当纹理共享/拷贝时的入口）。
-    pub fn offscreen_texture(&self) -> Option<&wgpu::Texture> {
-        self.targets.as_ref().map(|t| &t._color)
+    /// 指定图层的离屏纹理本体（S3-2/S3-3 把它当纹理共享/拷贝时的入口）。
+    pub fn offscreen_texture(&self, layer_id: LayerId) -> Option<&wgpu::Texture> {
+        self.targets.get(&layer_id).map(|t| &t._color)
     }
 
     /// 录制器中的指令数。
@@ -388,8 +395,8 @@ impl WgpuBackend2D {
         self.geom_cache.pending_destroy_count()
     }
 
-    fn ensure_targets(&mut self, size: (u32, u32)) {
-        if self.targets.as_ref().map(|t| t.size) == Some(size) {
+    fn ensure_targets(&mut self, layer_id: LayerId, size: (u32, u32)) {
+        if self.targets.get(&layer_id).map(|t| t.size) == Some(size) {
             return;
         }
         let extent = wgpu::Extent3d {
@@ -424,13 +431,16 @@ impl WgpuBackend2D {
         });
         let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
         // 旧目标随替换释放（其上帧的 TextureView 由 Frame2DData 持有，下帧被替换时释放）。
-        self.targets = Some(OffscreenTargets {
-            size,
-            _color: color,
-            view,
-            _msaa: msaa,
-            msaa_view,
-        });
+        self.targets.insert(
+            layer_id,
+            OffscreenTargets {
+                size,
+                _color: color,
+                view,
+                _msaa: msaa,
+                msaa_view,
+            },
+        );
     }
 
     /// 一帧落地：三角化 → 上传几何 → uniform → 离屏 MSAA pass。
@@ -439,10 +449,11 @@ impl WgpuBackend2D {
     pub fn finish_frame(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
+        layer_id: LayerId,
         geometry: &Frame2DGeometry,
     ) -> Frame2DData {
         let size = geometry.offscreen_size();
-        self.ensure_targets(size);
+        self.ensure_targets(layer_id, size);
 
         let mut draws = mem::take(&mut self.recorder);
         // 稳定排序：z 升序，同 z 保录制顺序（画家算法）。
@@ -531,17 +542,38 @@ impl WgpuBackend2D {
         self.geom_cache.evict_unused(0);
         self.geom_cache.notify_submit();
 
-        // 一次性上传全部 uniform，拿到本帧共享的 bind group（借用随后被 clone 掉）。
-        let (arena_buffer, arena_bind_group) = {
-            let (buf, bg, _stride) =
-                self.arena
-                    .flush(&self.device, &self.queue, &self.bind_group_layout);
-            (buf.clone(), bg.clone())
+        // 一次性上传全部 uniform。bind group 绑定 arena buffer，因此只在 arena
+        // 扩容重建 buffer（generation 变化）时重建，避免每帧创建。
+        let arena_buffer = {
+            let (buf, _stride) = self.arena.flush(&self.device, &self.queue);
+            buf.clone()
         };
+        let arena_generation = self.arena.generation();
+        if self.arena_bind_group.as_ref().map(|(g, _)| *g) != Some(arena_generation) {
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("xcal-2d-uniform-bind-group"),
+                layout: &self.bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &arena_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                    }),
+                }],
+            });
+            self.arena_bind_group = Some((arena_generation, bg));
+        }
+        let arena_bind_group = self
+            .arena_bind_group
+            .as_ref()
+            .expect("刚插入的 bind group")
+            .1
+            .clone();
 
         let targets = self
             .targets
-            .as_ref()
+            .get(&layer_id)
             .expect("ensure_targets 之后必然存在");
 
         {
@@ -612,7 +644,7 @@ impl Painter2DTarget for WgpuBackend2D {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("xcal-2d-standalone-encoder"),
             });
-        let _frame = self.finish_frame(&mut encoder, &geometry);
+        let _frame = self.finish_frame(&mut encoder, LayerId(0), &geometry);
         self.queue.submit([encoder.finish()]);
     }
 }
@@ -873,7 +905,7 @@ mod tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("xcal-2d-test-e2e"),
             });
-        let frame = backend.finish_frame(&mut enc, &g);
+        let frame = backend.finish_frame(&mut enc, LayerId(0), &g);
         let compositor = Compositor::new(&ctx.device, ctx.target_format);
         let composite = compositor.prepare(
             &ctx.device,
@@ -1056,14 +1088,14 @@ mod tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("xcal-2d-test-frame-1"),
             });
-        let frame = backend.finish_frame(&mut enc, &g);
+        let frame = backend.finish_frame(&mut enc, LayerId(0), &g);
         assert_eq!(frame.draw_count, 2, "填充 + 描边各一条几何");
         ctx.queue.submit([enc.finish()]);
         ctx.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("第一帧 submit 后 poll");
 
-        let px = read_texture(&ctx, backend.offscreen_texture().unwrap(), (200, 100));
+        let px = read_texture(&ctx, backend.offscreen_texture(LayerId(0)).unwrap(), (200, 100));
         let at = |x: u32, y: u32| {
             let o = ((y * 200 + x) * 4) as usize;
             [px[o], px[o + 1], px[o + 2], px[o + 3]]
@@ -1087,17 +1119,17 @@ mod tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("xcal-2d-test-frame-2"),
             });
-        let frame2 = backend.finish_frame(&mut enc2, &g2);
+        let frame2 = backend.finish_frame(&mut enc2, LayerId(0), &g2);
         assert_eq!(frame2.draw_count, 2);
-        assert_eq!(backend.offscreen_texture().unwrap().width(), 400);
-        assert_eq!(backend.offscreen_texture().unwrap().height(), 300);
+        assert_eq!(backend.offscreen_texture(LayerId(0)).unwrap().width(), 400);
+        assert_eq!(backend.offscreen_texture(LayerId(0)).unwrap().height(), 300);
         ctx.queue.submit([enc2.finish()]);
         ctx.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("第二帧 submit 后 poll");
 
         // 本地坐标不随视口变化（视口原点平移恒定），故内容位置与第一帧一致。
-        let px2 = read_texture(&ctx, backend.offscreen_texture().unwrap(), (400, 300));
+        let px2 = read_texture(&ctx, backend.offscreen_texture(LayerId(0)).unwrap(), (400, 300));
         let at2 = |x: u32, y: u32| {
             let o = ((y * 400 + x) * 4) as usize;
             [px2[o], px2[o + 1], px2[o + 2], px2[o + 3]]
@@ -1141,7 +1173,7 @@ mod tests {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("xcal-2d-format-smoke"),
                 });
-            let frame = backend.finish_frame(&mut enc, &g);
+            let frame = backend.finish_frame(&mut enc, LayerId(0), &g);
             assert_eq!(frame.draw_count, 1, "{format:?} 下应有一条几何");
             ctx.queue.submit([enc.finish()]);
             ctx.device
@@ -1255,7 +1287,7 @@ mod tests {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("xcal-2d-bounded-frame"),
                 });
-            let out = backend.finish_frame(&mut enc, &g);
+            let out = backend.finish_frame(&mut enc, LayerId(0), &g);
             assert_eq!(out.draw_count, DRAWS as usize, "第 {frame} 帧：draw 数应为 {DRAWS}");
             ctx.queue.submit([enc.finish()]);
             ctx.device

@@ -1,8 +1,8 @@
 // draw_queue_3d.rs
 //
 // 3D 绘制队列：收集本帧待绘制的网格与线段。
-// 与 2D DrawQueue 不同，3D 队列不做排序（深度由相机/后续 depth buffer 处理，
-// MVE 阶段无深度测试，按录制顺序提交）。
+// 与 2D DrawQueue 不同，3D 队列不做排序：遮挡由 3D 后端离屏 pass 的深度测试
+// 决定（RC.3，Depth32Float + CompareFunction::Less），队列本身按录制顺序提交。
 //
 // 坐标类型使用 xcal-geometry 的 Vec3（= glam::Vec3）/ Color32；
 // 网格几何（MeshGeometry）与材质（Material3D）由 xcal-scene 的 ECS 组件体系提供。

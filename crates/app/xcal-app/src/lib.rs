@@ -17,8 +17,8 @@ use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::errors::Error;
 use xcal_schedule::resource::Resources;
 use xcal_scene::domain::InputEvents;
-use xcal_scene::scene::components::{Camera3D, Material3D, MorphShape, Projection};
-use xcal_scene::scene::primitives::wireframe_cube;
+use xcal_scene::scene::components::{Camera3D, Material3D, MorphShape, Projection, Transform};
+use xcal_scene::scene::primitives::{SurfaceSpec, parametric_surface, wireframe_cube};
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::TimeState;
 use xcal_scene::types::Color32;
@@ -86,7 +86,31 @@ impl App {
         let mut scene = Scene::new();
 
         // ── 3D 场景：白色线框立方体 ──────────────────────────────
-        scene.spawn((wireframe_cube(1.0), Material3D::color(Color32::WHITE)));
+        // 几何以 `Arc` 持有：SceneRecord3DSystem 直接复用引用（Arc::clone），
+        // 避免「先深拷贝再包 Arc」的每帧无效开销。
+        scene.spawn((
+            Arc::new(wireframe_cube(1.0)),
+            Material3D::color(Color32::WHITE),
+        ));
+
+        // ── 3D 场景：参数曲面 z = 0.35·sin(3x)·cos(3y)，域 [-1.5, 1.5]² ──
+        // 曲面自带真实法线，经 cube.wgsl 的头顶 Lambert 呈现明暗起伏（非纯色剪影）。
+        // 平移到立方体侧下方（部分重叠），以体现深度测试决定的前后遮挡。
+        let surface = parametric_surface(SurfaceSpec::new(
+            (-1.5, 1.5),
+            (-1.5, 1.5),
+            48,
+            48,
+            |x, y| 0.35 * (3.0 * x).sin() * (3.0 * y).cos(),
+        ));
+        scene.spawn((
+            Arc::new(surface),
+            Material3D::color(Color32::new(120, 200, 255, 255)),
+            Transform {
+                position: glam::Vec3::new(0.0, -1.35, 0.0),
+                ..Default::default()
+            },
+        ));
 
         // 3D 相机（eye 由 BindingApplySystem 驱动，旧 OrbitAnim 组件已移除）。
         let camera_entity = scene.spawn((

@@ -64,15 +64,27 @@ let ctx = RenderContext::from_render_state(rs);
 **WgpuBackend3D**：xcal-rs 的官方 3D MVE 后端。
 
 - **双渲染管线**：
-  - `triangle list` 管线：实心网格、solid_cube
+  - `triangle list` 管线：实心网格、solid_cube、参数曲面
   - `line list` 管线：wireframe_cube、坐标轴
-- **Uniform 绑定**：`ViewProj (Mat4) + TintColor (Vec4)` 每实例一提交，使用
-  `wgpu 30` 新 API（`draw(0..n, 0..1)` 范围语法）。
+  - 两条管线均带 `Depth32Float` 深度测试（`Less`，写入开）——RC.3。
+- **材质绑定**（RC.1）：bind group 3 entry = uniform（dynamic offset）+
+  `texture_2d<f32>` + sampler；材质未指定纹理时绑定 1×1 白色兜底纹理
+  （`color * white == color`）。顶点布局 32 字节 = `Float32x3` 位置 + `Float32x2` UV
+  + `Float32x3` 法线（RC 补充；法线缺省填 `(0,0,1)`）。
+- **Uniform 绑定**：`ViewProj (Mat4) + TintColor (Vec4)` 每 draw 一提交，经
+  `UniformArena`（256B 对齐 dynamic offset），使用 `wgpu 30` 新 API
+  （`draw(0..n, 0..1)` 范围语法）。
 - **每帧流程**：
-  1. `prepare_draws(&device, &queue, camera, aspect, &draw_queue_3d) -> Frame3DData`
-     重算 VP 矩阵、重建 vertex/uniform buffer，生成 Vec\<PreparedDraw3D\>
-  2. `record_prepared(&mut rpass, &frame_data, viewport_scissor)` 提交 draw
-- **Cube WGSL Shader**：位于 `shaders/cube.wgsl`（48 行，单 VS + FS，顶点位置 `vec3<f32>` + 颜色 `vec4<u8>` unpack）。
+  1. `prepare_draws(&device, &queue, view_proj, &meshes, &lines) -> Frame3DData`
+     按几何版本/内容寻址复用 vertex buffer、uniform 走 arena，生成 Vec\<PreparedDraw3D\>
+  2. `record_prepared(&mut rpass, &draws)` 提交 draw
+  3. `render_layer_offscreen(encoder, layer_id, view_proj, viewport, meshes, lines)`
+     渲染到该图层**自己的离屏纹理 + 深度纹理**（透明清屏），交合成器按声明序混合
+- **Cube WGSL Shader**：位于 `shaders/cube.wgsl`，单 VS + FS；VS 输入
+  `vec3<f32>` 位置 + `vec2<f32>` UV + `vec3<f32>` 法线，FS 返回
+  `color * lit * textureSample(t, s, uv)`，其中 `lit` 为固定头顶方向
+  `L = (0,0,1)` 的 Lambert（`ambient = 0.2`）；无法线几何 `lit = 1` 故外观不变
+  （RC 补充）。
 - 兼容 `glam 0.33`：使用
   `glam::camera::rh::proj::directx::perspective` / `orthographic` 与
   `glam::camera::rh::view::look_at_mat4`（移除旧 `perspective_rh` /
@@ -102,8 +114,9 @@ let ctx = RenderContext::from_render_state(rs);
   与 egui 同层提交，回调落在有效序中**首个 GPU 图层**的位置（CPU 2D 层就地回放）。
 - `WgpuBackend2D` / `WgpuBackend3D` / `Compositor` 存放在
   `rs.renderer.write().callback_resources` TypeMap 中，回调以 `&self` 访问。
-- **本阶段容量限制**：2D/3D 后端各只有**一份**离屏目标 → 每类最多一个图层
-  （`prepare` 中有 `debug_assert`）；per-`LayerId` 目标属 S3-3。
+- **离屏目标按图层持有**（RC.1）：2D/3D 后端各自以 `HashMap<LayerId, _>` 管理离屏
+  目标，同一类可有多个图层（S3-2 的"每类最多一个图层"`debug_assert` 已解除）；
+  目标尺寸随 `viewport` 变化时按图层重建。
 
 ### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1 / S3-2
 

@@ -28,14 +28,15 @@ impl System for SceneRecord3DSystem {
             queue.clear();
             // hecs 0.11：iter() 直接产出组件元组（无 Entity）。
             for (mesh, material, transform) in world
-                .query::<(&MeshGeometry, Option<&Material3D>, Option<&Transform>)>()
+                .query::<(&Arc<MeshGeometry>, Option<&Material3D>, Option<&Transform>)>()
                 .iter()
             {
                 let model = transform
                     .map(|t| t.matrix())
                     .unwrap_or(glam::Mat4::IDENTITY);
                 let material = material.copied().unwrap_or_default();
-                queue.draw_mesh(Arc::new(mesh.clone()), model, material);
+                // 几何以 Arc 持有：此处仅克隆引用计数，不再深拷贝顶点数据。
+                queue.draw_mesh(Arc::clone(mesh), model, material);
             }
         });
     }

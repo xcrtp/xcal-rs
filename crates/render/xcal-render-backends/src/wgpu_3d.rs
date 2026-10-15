@@ -8,8 +8,27 @@
 // - G5：UniformArena — 256 字节对齐的 dynamic uniform staging，flush 一次性 write_buffer；
 // - G6：prepare_draws — mesh/line 顶点缓冲走 `mesh_cache`，
 //   uniform 走 arena，缓存命中时不再 per-mesh per-frame 调用 `create_buffer_init`；
-// - PreparedDraw3D / Frame3DData：只持有句柄克隆（wgpu::Buffer 是 ref-counted），
-//   arena 对应的 bind_group 所有 draw 共享（clone 浅拷贝）。
+// - PreparedDraw3D / Frame3DData：只持有句柄克隆（wgpu::Buffer 是 ref-counted）。
+//
+// # RC.1 材质系统
+//
+// - 绑定组扩到 3 个 entry：binding 0 = uniform（dynamic）、binding 1 = `texture_2d<f32>`、
+//   binding 2 = sampler。未注册纹理时绑定 1×1 白色兜底纹理（`color * white == color`）；
+// - 顶点布局扩到 20 字节：`Float32x3` 位置 @0 + `Float32x2` UV @12（`loc1`）。
+//   UV 优先取几何自带 [`MeshGeometry::uvs`]，缺省时按 [`Material3D::uv_projection`] 兜底；
+// - bind group 依赖 uniform buffer 与纹理视图，因此不再由 [`UniformArena`] 持有，
+//   改由后端按纹理 id 缓存（`bind_groups`），buffer 重建（`generation` 变化）或
+//   纹理注册时整体失效；
+// - 离屏渲染目标按 [`LayerId`] 分别持有（`offscreen: HashMap<LayerId, RenderTarget>`），
+//   解除 S3-2 遗留的"每类最多一个图层"限制。
+//
+// # RC.3 深度测试
+//
+// - 两条 3D 管线均带 `Depth32Float` 深度状态（`Less`，写入开）；
+// - 深度目标按 [`LayerId`] 持有（`depth: HashMap<LayerId, DepthTarget>`），
+//   与颜色目标同尺寸、尺寸变化时一并重建；
+// - 深度附件只挂到 3D 的两个 pass（`render_layer_offscreen` / `submit_layer`）——
+//   合成 pass 与 2D 离屏 pass 保持 `None`。
 //
 // egui 集成的回调（SceneCompositorCallback）见 scene_callback.rs。
 //
@@ -28,22 +47,24 @@
 // 声明 + 稳定 entity identity 后，可在 `prepare_draws` /
 // `record_prepared` 入口补齐。
 
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use glam::Mat4;
+use glam::{Mat4, Vec2, Vec3};
 use wgpu::util::DeviceExt as _;
 
-use xcal_scene::scene::components::PrimitiveTopology;
+use xcal_scene::domain::LayerId;
+use xcal_scene::scene::components::{PrimitiveTopology, ShaderVariant, UvProjection};
 use xc_geometry::Color32;
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xcal_render::{
     GpuHandle, RenderBackend3D, RenderLayer, RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 
-/// 默认着色器（cube.wgsl）：uniform = mat4 mvp + vec4 color。
+/// 默认着色器（cube.wgsl）：uniform = mat4 mvp + vec4 color，纹理 = 颜色调制。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");
 
 /// uniform 块大小：mat4x4（64 字节）+ vec4（16 字节）。
@@ -52,8 +73,51 @@ pub const UNIFORM_SIZE: u64 = 80;
 /// wgpu dynamic uniform offset 要求的最小对齐。
 pub const DYNAMIC_OFFSET_ALIGNMENT: u64 = 256;
 
-/// 顶点步长：vec3 position = 12 字节。
-const VERTEX_STRIDE: u64 = 12;
+/// 顶点步长：vec3 position（12 字节）+ vec2 uv（8 字节）+ vec3 normal（12 字节）= 32 字节。
+const VERTEX_STRIDE: u64 = 32;
+/// UV 属性在顶点内的字节偏移（紧随 position 之后）。
+const VERTEX_UV_OFFSET: u64 = 12;
+/// 法线属性在顶点内的字节偏移（紧随 uv 之后）。
+const VERTEX_NORMAL_OFFSET: u64 = 20;
+
+/// 未指定纹理时使用的兜底纹理 id（1×1 白色）。
+const DEFAULT_TEXTURE_ID: u64 = 0;
+
+/// [`RenderBackend3D::submit_layer`] 没有 `LayerId` 参数，用保留 id 承载其
+/// 颜色/深度目标的键（颜色目标来自 `layer.target.view`，仅深度目标需按 id 缓存）。
+pub const SUBMIT_LAYER_ID: LayerId = LayerId(u32::MAX);
+
+/// RC.3：3D 深度缓冲格式（投影矩阵为 D3D/wgpu 约定，深度范围 [0, 1]）。
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+// ─── D2：着色变体 → pipeline 表 ─────────────────────────────────────────────
+
+/// 后端预建 pipeline 时遍历的全部着色变体。
+///
+/// ⚠️ 新增 [`ShaderVariant`] 变体时**必须**同步扩此数组（否则该变体查表落空，会
+/// `debug_assert` 并回退到 `Lambert`）。与 `compositor.rs` 的
+/// `(LayerBlend, Conversion)` 双层预建同一写法。
+const SHADER_VARIANTS: [ShaderVariant; 2] = [ShaderVariant::Lambert, ShaderVariant::Flat];
+
+/// 着色变体 → 片元入口名（`@fragment fn`）的映射。
+///
+/// wgpu 无"动态入口点"，故变体只能靠"同一 shader module 的多个 `fs_*` 入口 + 各自
+/// 预建的 pipeline"实现。`ShaderVariant` 定义在数据层 xcal-scene（不得引用 wgpu），
+/// 因此该映射是后端侧的自由函数而非 `ShaderVariant` 的固有方法。
+fn variant_entry_point(variant: ShaderVariant) -> &'static str {
+    match variant {
+        ShaderVariant::Flat => "fs_flat",
+        ShaderVariant::Lambert => "fs_lambert",
+    }
+}
+
+/// RC.3：一张离屏颜色目标配套的深度目标（尺寸变化时整体重建）。
+struct DepthTarget {
+    /// 持有纹理以延长生命周期（视图自身也引用纹理，此处显式保留）。
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
+}
 
 // ─── G5：UniformArena ──────────────────────────────────────────────────────
 
@@ -62,16 +126,20 @@ const VERTEX_STRIDE: u64 = 12;
 /// 典型使用：
 /// 1. `begin_frame()` 重置 used_blocks（staging 底层容量不释放，避免抖动）；
 /// 2. `push(data)` 追加一帧内每个 draw 的 uniform 字节，返回块 index（0..used_blocks）；
-/// 3. `flush(device, queue, bgl)`：必要时扩容 buffer，一次性 `write_buffer` 上传 staging
-///    的全部数据，并按需重建 bind group。返回 (&buffer, &bind_group, stride_bytes)。
+/// 3. `flush(device, queue)`：必要时扩容 buffer，一次性 `write_buffer` 上传 staging
+///    的全部数据。返回 (&buffer, stride_bytes)。
+///
+/// RC.1 起 arena **不再持有 bind group**：bind group 还需绑定材质纹理视图，
+/// 由后端按纹理 id 缓存（见 [`WgpuBackend3D::bind_groups`]）。`generation()` 在
+/// 每次重建 buffer 时递增，供后端判断其缓存的 bind group 是否已失效。
 pub struct UniformArena {
     buffer: Option<wgpu::Buffer>,
-    bind_group: Option<wgpu::BindGroup>,
     capacity_blocks: u32,
     used_blocks: u32,
     stride: u64,
     uniform_size: u64,
     staging: Vec<u8>,
+    generation: u64,
 }
 
 impl UniformArena {
@@ -89,12 +157,12 @@ impl UniformArena {
         );
         Self {
             buffer: None,
-            bind_group: None,
             capacity_blocks: 0,
             used_blocks: 0,
             stride,
             uniform_size,
             staging: Vec::new(),
+            generation: 0,
         }
     }
 
@@ -125,13 +193,15 @@ impl UniformArena {
     }
 
     /// 保证 arena 的 GPU 缓冲容量 ≥ needed_blocks（MIN_BLOCKS 下限），
-    /// 写回 staging 数据，并按需重建 bind_group（buffer 身份变化时）。
+    /// 写回 staging 数据。返回 (&buffer, stride_bytes)。
+    ///
+    /// buffer 扩容（身份变化）时 `generation` 递增 —— 后端据此判定其按纹理缓存的
+    /// bind group 已失效并整体重建。
     pub fn flush<'a>(
         &'a mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        bgl: &wgpu::BindGroupLayout,
-    ) -> (&'a wgpu::Buffer, &'a wgpu::BindGroup, u32) {
+    ) -> (&'a wgpu::Buffer, u32) {
         let needed_blocks = self.used_blocks.max(Self::MIN_BLOCKS);
 
         if needed_blocks > self.capacity_blocks {
@@ -142,8 +212,8 @@ impl UniformArena {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            // 缓冲身份切换 -> bind_group 必须重建。
-            self.bind_group = None;
+            // 缓冲身份切换 -> 引用它的 bind group 必须重建。
+            self.generation += 1;
             self.buffer = Some(new_buf);
             self.capacity_blocks = new_blocks;
         }
@@ -154,24 +224,13 @@ impl UniformArena {
             queue.write_buffer(buffer, 0, &self.staging[..used_bytes]);
         }
 
-        if self.bind_group.is_none() {
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("xcal-3d-arena-bind-group"),
-                layout: bgl,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(self.uniform_size),
-                    }),
-                }],
-            });
-            self.bind_group = Some(bg);
-        }
+        (buffer, self.stride as u32)
+    }
 
-        let bg = self.bind_group.as_ref().expect("bind_group must be created");
-        (buffer, bg, self.stride as u32)
+    /// uniform buffer 的版本号：每次重建（扩容）递增。
+    #[inline]
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     #[inline]
@@ -216,7 +275,8 @@ struct LineVertexTag;
 ///
 /// - `vertex_buffer` / `index_buffer`：`mesh_cache` 中的 CachedMeshBuffers 的 clone
 ///   （wgpu::Buffer 是内部 ref-counted 句柄，clone 是浅拷贝且非常廉价）。
-/// - `bind_group`：本帧 `arena.flush()` 返回的 bind group 的 clone（所有 draw 共享同一个）；
+/// - `bind_group`：材质 bind group（按纹理 id 缓存，见 [`BindGroupCache`]）。
+///   绑定本帧 arena buffer + 材质纹理视图 + sampler；
 /// - `uniform_offset`：dynamic uniform offset（字节，256 对齐）。
 pub struct PreparedDraw3D {
     pub vertex_buffer: wgpu::Buffer,
@@ -224,6 +284,8 @@ pub struct PreparedDraw3D {
     pub vertex_count: u32,
     pub index_count: u32,
     pub topology: PrimitiveTopology,
+    /// 着色变体：与 `topology` 一起构成 pipeline 表的查表键。
+    pub variant: ShaderVariant,
     pub uniform_offset: u32,
     pub bind_group: wgpu::BindGroup,
 }
@@ -254,6 +316,18 @@ pub struct Layer3DFrame {
 
 // ─── WgpuBackend3D ──────────────────────────────────────────────────────────
 
+/// 材质 bind group 缓存（按纹理 id 索引）。
+///
+/// bind group 绑定 uniform arena buffer（binding 0）+ 纹理视图（binding 1）+ sampler
+/// （binding 2），因此其有效性取决于两者：`arena_generation` 记录创建时的
+/// [`UniformArena::generation`]，不一致即整体丢弃重建；纹理注册时也整体清空
+/// （见 [`WgpuBackend3D::register_texture`]）。
+#[derive(Default)]
+struct BindGroupCache {
+    arena_generation: u64,
+    entries: HashMap<u64, wgpu::BindGroup>,
+}
+
 /// WGPU 3D 渲染后端（设备句柄 + 管线 + 绑定布局 + mesh 缓存 + uniform arena）。
 ///
 /// 内部状态（cache / arena）用 `Mutex` 保护：`RenderBackend3D` 要求 `Send + Sync`，
@@ -263,22 +337,37 @@ pub struct WgpuBackend3D {
     queue: wgpu::Queue,
     /// 管线目标格式（3D 离屏纹理沿用该格式，合成器据此判域）。
     format: wgpu::TextureFormat,
-    pipeline_triangles: wgpu::RenderPipeline,
-    pipeline_lines: wgpu::RenderPipeline,
+    /// 预建的渲染管线表：`(topology, variant)` → pipeline。
+    ///
+    /// 所有变体共用同一条 `pipeline_layout` 与同一 bind group layout（uniform /
+    /// texture / sampler 三槽），故只需一张表。**已知限制**：若将来某变体需要额外
+    /// 资源槽（粗糙度贴图 / 环境图），需引入第二套 bind group layout 与对应的
+    /// pipeline 族，本表不再够用。
+    pipelines: HashMap<(PrimitiveTopology, ShaderVariant), wgpu::RenderPipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
+    /// 材质采样器（binding 2）。
+    sampler: wgpu::Sampler,
+    /// 兜底纹理视图（1×1 白色，binding 1）：材质未指定纹理时使用。
+    default_texture_view: wgpu::TextureView,
+    /// 已注册纹理视图（`TextureHandle::id` → view）。
+    textures: Mutex<HashMap<u64, wgpu::TextureView>>,
+    /// 按纹理 id 缓存的材质 bind group。
+    bind_groups: Mutex<BindGroupCache>,
     /// mesh/line 顶点（+可选索引）缓冲缓存。
-    /// mesh key = `ResourceKey::versioned`（几何 id + version）+ `MeshVertexTag`；
+    /// mesh key = `ResourceKey::versioned`（几何 id + version/UV 来源）+ `MeshVertexTag`；
     /// line key = `ResourceKey::content`（端点内容哈希）+ `LineVertexTag`；
     /// meta = ()；实际 GPU 句柄以 `GpuHandle<CachedMeshBuffers>` 形式存于 ResourceCache。
     mesh_cache: Mutex<ResourceCache<()>>,
     /// 256 对齐 dynamic uniform arena。
     arena: Mutex<UniformArena>,
-    /// 本层离屏渲染目标（尺寸变化时重建；`None` = 尚未渲染过）。
-    offscreen: Mutex<Option<RenderTarget>>,
+    /// 按 [`LayerId`] 分别持有的离屏渲染目标（尺寸变化时重建）。
+    offscreen: Mutex<HashMap<LayerId, RenderTarget>>,
+    /// RC.3：按 [`LayerId`] 分别持有的深度目标，尺寸随颜色目标一同重建。
+    depth: Mutex<HashMap<LayerId, DepthTarget>>,
 }
 
 impl WgpuBackend3D {
-    /// 用给定 WGSL 源码构造后端（创建三角形/线段两条管线）。
+    /// 用给定 WGSL 源码构造后端（按 `(topology, variant)` 预建管线表）。
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -288,19 +377,38 @@ impl WgpuBackend3D {
         let device = device.clone();
         let queue = queue.clone();
 
-        // G6: binding 0 = uniform with dynamic offset。
+        // RC.1: binding 0 = uniform with dynamic offset；binding 1 = 材质纹理；
+        // binding 2 = 采样器。
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("xcal-3d-bind-group-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: Some(NonZeroU64::new(UNIFORM_SIZE).unwrap()),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(NonZeroU64::new(UNIFORM_SIZE).unwrap()),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -314,18 +422,33 @@ impl WgpuBackend3D {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
+        // RC.1: 顶点 = 位置（Float32x3 @0）+ UV（Float32x2 @12）。
+        // RC 补充: 追加法线（Float32x3 @20）供 shader 做 Lambert 着色。
         let vertex_layout = [Some(wgpu::VertexBufferLayout {
             array_stride: VERTEX_STRIDE,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 0,
-                shader_location: 0,
-            }],
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: VERTEX_UV_OFFSET,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: VERTEX_NORMAL_OFFSET,
+                    shader_location: 2,
+                },
+            ],
         })];
 
         let make_pipeline = |topology: wgpu::PrimitiveTopology,
                              cull_mode: Option<wgpu::Face>,
+                             fs_entry: &'static str,
                              label: &'static str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -338,7 +461,7 @@ impl WgpuBackend3D {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(fs_entry),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -351,34 +474,109 @@ impl WgpuBackend3D {
                     cull_mode,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                // RC.3：深度测试（Less：近处像素深度更小者胜出），写入深度。
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
             })
         };
 
-        let pipeline_triangles = make_pipeline(
-            wgpu::PrimitiveTopology::TriangleList,
-            Some(wgpu::Face::Back),
-            "xcal-3d-pipeline-triangles",
+        // 预建全部 `(topology, variant)` 组合（三角形 + 线段；点列表当前无 pipeline）。
+        let mut pipelines: HashMap<(PrimitiveTopology, ShaderVariant), wgpu::RenderPipeline> =
+            HashMap::new();
+        for variant in SHADER_VARIANTS {
+            let fs_entry = variant_entry_point(variant);
+            // 三角形：背面剔除。
+            pipelines.insert(
+                (PrimitiveTopology::Triangles, variant),
+                make_pipeline(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Back),
+                    fs_entry,
+                    "xcal-3d-pipeline-triangles",
+                ),
+            );
+            // 线段：无剔除。
+            pipelines.insert(
+                (PrimitiveTopology::Lines, variant),
+                make_pipeline(
+                    wgpu::PrimitiveTopology::LineList,
+                    None,
+                    fs_entry,
+                    "xcal-3d-pipeline-lines",
+                ),
+            );
+        }
+
+        // RC.1: 1×1 白色兜底纹理 —— 材质无纹理时绑定它，`color * white == color`。
+        let default_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("xcal-3d-default-texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
-        let pipeline_lines = make_pipeline(
-            wgpu::PrimitiveTopology::LineList,
-            None,
-            "xcal-3d-pipeline-lines",
-        );
+        let default_texture_view =
+            default_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("xcal-3d-material-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
 
         Self {
             device,
             queue,
             format,
-            pipeline_triangles,
-            pipeline_lines,
+            pipelines,
             bind_group_layout,
+            sampler,
+            default_texture_view,
+            textures: Mutex::new(HashMap::new()),
+            bind_groups: Mutex::new(BindGroupCache::default()),
             mesh_cache: Mutex::new(ResourceCache::new()),
             arena: Mutex::new(UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT)),
-            offscreen: Mutex::new(None),
+            offscreen: Mutex::new(HashMap::new()),
+            depth: Mutex::new(HashMap::new()),
         }
     }
 
@@ -404,36 +602,140 @@ impl WgpuBackend3D {
         self.format
     }
 
-    /// 当前 3D 离屏纹理（若已渲染过）；用于回读/诊断。
-    pub fn offscreen_texture(&self) -> Option<wgpu::Texture> {
-        self.offscreen
+    /// 注册（或替换）一个纹理视图，供材质按 `TextureHandle::id` 引用。
+    ///
+    /// 注册会使已缓存的材质 bind group 整体失效（视图可能变化）。
+    /// 加锁顺序与 [`Self::prepare_draws`] 一致（bind_groups → textures），避免锁序反转。
+    pub fn register_texture(&self, id: u64, view: wgpu::TextureView) {
+        let mut bind_groups = self.bind_groups.lock().expect("bind_groups poisoned");
+        self.textures
             .lock()
-            .expect("offscreen poisoned")
-            .as_ref()
-            .and_then(|t| t.texture.clone())
+            .expect("textures poisoned")
+            .insert(id, view);
+        bind_groups.entries.clear();
     }
 
-    /// 取得（必要时按 `viewport` 尺寸重建）本层离屏渲染目标视图。
-    fn offscreen_view(&self, device: &wgpu::Device, viewport: Viewport) -> wgpu::TextureView {
+    /// 解析材质纹理视图：未注册的 id 回退到 1×1 白色兜底纹理。
+    fn resolve_texture_view(&self, texture_id: u64) -> wgpu::TextureView {
+        let guard = self.textures.lock().expect("textures poisoned");
+        match guard.get(&texture_id) {
+            Some(view) => view.clone(),
+            None => self.default_texture_view.clone(),
+        }
+    }
+
+    /// 创建材质 bind group：uniform（dynamic）+ 纹理视图 + sampler。
+    fn create_material_bind_group(
+        &self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("xcal-3d-material-bind-group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_SIZE),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
+    }
+
+    /// 取得（必要时按 `viewport` 尺寸重建）指定图层的离屏渲染目标视图。
+    fn offscreen_view(
+        &self,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        viewport: Viewport,
+    ) -> wgpu::TextureView {
         let width = viewport.w.max(1);
         let height = viewport.h.max(1);
         let mut guard = self.offscreen.lock().expect("offscreen poisoned");
-        let recreate = match guard.as_ref() {
+        let recreate = match guard.get(&layer_id) {
             Some(t) => t.size.width != width || t.size.height != height || t.format != self.format,
             None => true,
         };
         if recreate {
-            *guard = Some(RenderTarget::new_offscreen(
-                device,
-                wgpu::Extent3d {
+            guard.insert(
+                layer_id,
+                RenderTarget::new_offscreen(
+                    device,
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    self.format,
+                ),
+            );
+        }
+        guard
+            .get(&layer_id)
+            .expect("offscreen target")
+            .view()
+            .clone()
+    }
+
+    /// 指定图层的 3D 离屏纹理（若已渲染过）；用于回读/诊断。
+    pub fn offscreen_texture(&self, layer_id: LayerId) -> Option<wgpu::Texture> {
+        self.offscreen
+            .lock()
+            .expect("offscreen poisoned")
+            .get(&layer_id)
+            .and_then(|t| t.texture.clone())
+    }
+
+    /// RC.3：取得（必要时按给定尺寸重建）指定图层的深度目标视图。
+    ///
+    /// 深度目标与颜色目标同尺寸、同 [`LayerId`] 键，尺寸变化时一并重建。
+    fn depth_view(&self, device: &wgpu::Device, layer_id: LayerId, width: u32, height: u32) -> wgpu::TextureView {
+        let width = width.max(1);
+        let height = height.max(1);
+        let mut guard = self.depth.lock().expect("depth poisoned");
+        let recreate = match guard.get(&layer_id) {
+            Some(t) => t.size != (width, height),
+            None => true,
+        };
+        if recreate {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("xcal-3d-depth-texture"),
+                size: wgpu::Extent3d {
                     width,
                     height,
                     depth_or_array_layers: 1,
                 },
-                self.format,
-            ));
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            guard.insert(
+                layer_id,
+                DepthTarget {
+                    _texture: texture,
+                    view,
+                    size: (width, height),
+                },
+            );
         }
-        guard.as_ref().expect("offscreen target").view().clone()
+        guard.get(&layer_id).expect("depth target").view.clone()
     }
 
     /// 写入 uniform 块（mvp 64 字节 + color 16 字节 = 80 字节）。
@@ -470,14 +772,18 @@ impl WgpuBackend3D {
         cache_guard.begin_frame();
 
         let total_draws = meshes.len().saturating_add(lines.len());
-        // skeleton：暂存 draw 信息，bind_group 在 flush 之后再统一 clone。
+        // skeleton：暂存 draw 信息，bind_group 在 flush 之后再统一解析。
         struct Skeleton {
             vertex_buffer: wgpu::Buffer,
             index_buffer: Option<wgpu::Buffer>,
             vertex_count: u32,
             index_count: u32,
             topology: PrimitiveTopology,
+            /// 着色变体（pipeline 表的查表键的一半）。
+            variant: ShaderVariant,
             uniform_offset: u32,
+            /// 材质纹理 id（bind group 的缓存键）。
+            texture_id: u64,
         }
         let mut skeletons: Vec<Skeleton> = Vec::with_capacity(total_draws);
 
@@ -505,17 +811,25 @@ impl WgpuBackend3D {
         // ── MeshDraws：按几何 id + version 寻址（几何内容变化时 bump_version 失效）──
         for md in meshes {
             let geometry = &md.geometry;
-            let key = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), geometry.version());
+            // UV 来源（几何自带 vs 兜底策略）参与缓存键：同一几何在不同投影策略下
+            // 顶点数据不同，必须区分（见 `uv_source_code`）。
+            let uv_code = uv_source_code(geometry.uvs.is_some(), md.material.uv_projection);
+            let key_version = geometry.version().wrapping_mul(4).wrapping_add(uv_code);
+            let key = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), key_version);
 
             // 先查命中；命中直接取缓存里的字段副本；未命中创建 VB/IB 并 insert_handle。
             let cached_copy = if let Some(handle_ref) = cache_guard.get(key) {
                 extract_buffers(handle_ref)
             } else {
-                let positions: Vec<[f32; 3]> =
-                    geometry.positions.iter().map(|v| v.to_array()).collect();
+                let uvs = match &geometry.uvs {
+                    Some(uvs) => uvs.clone(),
+                    None => fallback_uvs(&geometry.positions, md.material.uv_projection),
+                };
+                let vertices =
+                    interleaved_pos_uv_normal(&geometry.positions, &uvs, geometry.normals.as_deref());
                 let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("xcal-3d-mesh-vertices"),
-                    contents: bytes_of(&positions),
+                    contents: bytes_of(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
                 let ib = geometry.indices.as_ref().map(|indices| {
@@ -559,7 +873,13 @@ impl WgpuBackend3D {
                 vertex_count: cached_copy.vertex_count,
                 index_count: cached_copy.index_count,
                 topology: cached_copy.topology,
+                variant: md.material.variant,
                 uniform_offset: offset_bytes,
+                texture_id: md
+                    .material
+                    .texture
+                    .map(|t| t.id())
+                    .unwrap_or(DEFAULT_TEXTURE_ID),
             });
         }
 
@@ -580,11 +900,15 @@ impl WgpuBackend3D {
             let cached_copy = if let Some(handle_ref) = cache_guard.get(line_key) {
                 extract_buffers(handle_ref)
             } else {
-                let positions: [[f32; 3]; 2] =
-                    [line.start.to_array(), line.end.to_array()];
+                // line 无材质纹理 → UV 恒为 0；法线填 (0, 0, 1)，
+                // 配合默认头顶光（L = (0, 0, 1)）得 lit = 1，颜色不受光照影响。
+                let vertices: [[f32; 8]; 2] = [
+                    [line.start.x, line.start.y, line.start.z, 0.0, 0.0, 0.0, 0.0, 1.0],
+                    [line.end.x, line.end.y, line.end.z, 0.0, 0.0, 0.0, 0.0, 1.0],
+                ];
                 let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("xcal-3d-line-vertices"),
-                    contents: bytes_of(&positions),
+                    contents: bytes_of(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
                 let cached = CachedMeshBuffers {
@@ -616,37 +940,58 @@ impl WgpuBackend3D {
                 vertex_count: cached_copy.vertex_count,
                 index_count: cached_copy.index_count,
                 topology: cached_copy.topology,
+                // line 默认走 Lambert（法线填 (0,0,1) → lit = 1，外观不受光照影响）。
+                variant: ShaderVariant::Lambert,
                 uniform_offset: offset_bytes,
+                // line 无材质纹理 → 兜底白色纹理。
+                texture_id: DEFAULT_TEXTURE_ID,
             });
         }
 
         // 明确释放 cache guard（MutexGuard），之后再进行 arena.flush。
         drop(cache_guard);
 
-        // ── Flush arena：一次性写 GPU，得到本帧共享的 bind group ───
-        let (arena_buf, bind_group, _stride_u32) =
-            arena_guard.flush(device, queue, &self.bind_group_layout);
-
+        // ── Flush arena：一次性把本帧全部 uniform 写进 GPU buffer ───
+        let (arena_buf, _stride_u32) = arena_guard.flush(device, queue);
         // 把返回的借用转成 owned clone（wgpu handle clone 是 ref-count 浅拷贝）。
         let arena_buf_owned: wgpu::Buffer = arena_buf.clone();
-        let bind_group_owned: wgpu::BindGroup = bind_group.clone();
-
-        // 释放 arena guard，使其不再被借用（之后可以 lock arena）。
+        let arena_generation = arena_guard.generation();
+        // 释放 arena guard，使其不再被借用（之后可以 lock bind_groups）。
         drop(arena_guard);
 
-        // ── 统一填充 bind_group（clone = 浅拷贝 wgpu handle） ───────
+        // ── 按纹理 id 解析 / 缓存材质 bind group ────────────────────
+        // bind group 绑定 arena buffer + 纹理视图 + sampler。buffer 重建
+        // （generation 变化）时全部失效；纹理注册时由 register_texture 清空。
+        let mut bg_guard = self.bind_groups.lock().expect("bind_groups poisoned");
+        if bg_guard.arena_generation != arena_generation {
+            bg_guard.entries.clear();
+            bg_guard.arena_generation = arena_generation;
+        }
         let draws_final: Vec<PreparedDraw3D> = skeletons
             .into_iter()
-            .map(|s| PreparedDraw3D {
-                vertex_buffer: s.vertex_buffer,
-                index_buffer: s.index_buffer,
-                vertex_count: s.vertex_count,
-                index_count: s.index_count,
-                topology: s.topology,
-                uniform_offset: s.uniform_offset,
-                bind_group: bind_group_owned.clone(),
+            .map(|s| {
+                let bind_group = match bg_guard.entries.get(&s.texture_id) {
+                    Some(bg) => bg.clone(),
+                    None => {
+                        let view = self.resolve_texture_view(s.texture_id);
+                        let bg = self.create_material_bind_group(device, &arena_buf_owned, &view);
+                        bg_guard.entries.insert(s.texture_id, bg.clone());
+                        bg
+                    }
+                };
+                PreparedDraw3D {
+                    vertex_buffer: s.vertex_buffer,
+                    index_buffer: s.index_buffer,
+                    vertex_count: s.vertex_count,
+                    index_count: s.index_count,
+                    topology: s.topology,
+                    variant: s.variant,
+                    uniform_offset: s.uniform_offset,
+                    bind_group,
+                }
             })
             .collect();
+        drop(bg_guard);
 
         Frame3DData {
             draws: draws_final,
@@ -657,11 +1002,23 @@ impl WgpuBackend3D {
     /// 把已准备的绘制命令录制进外部 render pass（egui 回调路径）。
     pub fn record_prepared<'a>(&self, draws: &[PreparedDraw3D], rpass: &mut wgpu::RenderPass<'a>) {
         for d in draws {
-            match d.topology {
-                PrimitiveTopology::Triangles => rpass.set_pipeline(&self.pipeline_triangles),
-                PrimitiveTopology::Lines => rpass.set_pipeline(&self.pipeline_lines),
-                PrimitiveTopology::Points => continue,
+            // 点列表当前无 pipeline —— 维持既有行为：跳过。
+            if d.topology == PrimitiveTopology::Points {
+                continue;
             }
+            // 查表选 pipeline（`(topology, variant)`）。未命中（变体未预建）时回退到
+            // 同拓扑的 Lambert，避免未知变体导致画面消失；debug 下断言以暴露漏建。
+            let key = (d.topology, d.variant);
+            let Some(pipeline) = self.pipelines.get(&key).or_else(|| {
+                debug_assert!(
+                    self.pipelines.contains_key(&key),
+                    "3D pipeline 未预建：{key:?}；已回退到 Lambert（请补齐变体 / fs 入口 / pipeline 表）",
+                );
+                self.pipelines.get(&(d.topology, ShaderVariant::Lambert))
+            }) else {
+                continue;
+            };
+            rpass.set_pipeline(pipeline);
             // G6: dynamic uniform offset 传入 set_bind_group 的 offsets。
             rpass.set_bind_group(0, &d.bind_group, &[d.uniform_offset]);
             rpass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
@@ -682,13 +1039,16 @@ impl WgpuBackend3D {
     pub fn render_layer_offscreen(
         &self,
         encoder: &mut wgpu::CommandEncoder,
+        layer_id: LayerId,
         view_proj: Mat4,
         viewport: Viewport,
         meshes: &[MeshDraw],
         lines: &[LineDraw],
     ) -> Layer3DFrame {
         let frame = self.prepare_draws(&self.device, &self.queue, view_proj, meshes, lines);
-        let offscreen = self.offscreen_view(&self.device, viewport);
+        let offscreen = self.offscreen_view(&self.device, layer_id, viewport);
+        // RC.3：本层深度目标（与离屏颜色目标同尺寸），清为最远（1.0）。
+        let depth_view = self.depth_view(&self.device, layer_id, viewport.w, viewport.h);
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -707,7 +1067,14 @@ impl WgpuBackend3D {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
@@ -736,6 +1103,14 @@ impl RenderBackend3D for WgpuBackend3D {
             layer.draw_queue.lines(),
         );
 
+        // RC.3：本层深度目标（尺寸取自颜色目标），清为最远（1.0）。
+        let depth_view = self.depth_view(
+            &self.device,
+            SUBMIT_LAYER_ID,
+            layer.target.size.width,
+            layer.target.size.height,
+        );
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("xcal-3d-layer-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -753,7 +1128,14 @@ impl RenderBackend3D for WgpuBackend3D {
                     store: wgpu::StoreOp::Store,
                 },
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
@@ -784,14 +1166,102 @@ fn uniform_bytes(mvp: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
     data
 }
 
+/// UV 来源编码，参与 mesh 顶点缓冲的缓存键。
+///
+/// 同一几何在不同 UV 来源下顶点数据不同，必须区分：几何自带 UV → 0；
+/// 否则按 [`UvProjection`] 兜底策略编码（Planar → 1 / Spherical → 2 / Triplanar → 3）。
+fn uv_source_code(has_uvs: bool, projection: UvProjection) -> u64 {
+    if has_uvs {
+        0
+    } else {
+        match projection {
+            UvProjection::Planar => 1,
+            UvProjection::Spherical => 2,
+            UvProjection::Triplanar => 3,
+        }
+    }
+}
+
+/// 交错顶点数据：每顶点 `[pos.xyz, uv.xy, normal.xyz]`（8 个 f32 = 32 字节）。
+///
+/// `uvs` 必须与 `positions` 等长（几何自带或 [`fallback_uvs`] 兜底）——不等长时
+/// 对缺失 UV 以 (0, 0) 补齐，保证布局稳定。`normals` 为 `None`（如线框立方体）
+/// 或长度不足时，对应顶点以 `(0, 0, 1)` 补齐：配合默认头顶
+/// 光照（`L = (0, 0, 1)`）得到 `lit = 1`，故未携带法线的几何外观与开启光照前一致。
+fn interleaved_pos_uv_normal(
+    positions: &[Vec3],
+    uvs: &[Vec2],
+    normals: Option<&[Vec3]>,
+) -> Vec<f32> {
+    let mut out = Vec::with_capacity(positions.len() * 8);
+    for (i, p) in positions.iter().enumerate() {
+        let uv = uvs.get(i).copied().unwrap_or(Vec2::ZERO);
+        let n = normals
+            .and_then(|ns| ns.get(i).copied())
+            .unwrap_or(Vec3::Z);
+        out.extend_from_slice(&[p.x, p.y, p.z, uv.x, uv.y, n.x, n.y, n.z]);
+    }
+    out
+}
+
+/// 几何未携带 UV 时的兜底 UV（包围盒归一化到 [0, 1]）。
+///
+/// - [`UvProjection::Planar`]：以 XY 平面投影（忽略 Z）；
+/// - [`UvProjection::Spherical`]：围绕包围盒中心的方向向量球面映射；
+/// - [`UvProjection::Triplanar`]：逐顶点按相对包围盒中心偏移最大的分量选主轴投影。
+///
+/// 退化包围盒（任一轴跨度为 0）时按最小值 1e-6 处理，避免除零。
+fn fallback_uvs(positions: &[Vec3], projection: UvProjection) -> Vec<Vec2> {
+    if positions.is_empty() {
+        return Vec::new();
+    }
+    let mut min = positions[0];
+    let mut max = positions[0];
+    for p in positions {
+        min = min.min(*p);
+        max = max.max(*p);
+    }
+    let size = (max - min).max(Vec3::splat(1e-6));
+    let center = (min + max) * 0.5;
+
+    positions
+        .iter()
+        .map(|p| {
+            let local = *p - min;
+            match projection {
+                UvProjection::Planar => Vec2::new(local.x / size.x, local.y / size.y),
+                UvProjection::Spherical => {
+                    let d = (*p - center).normalize_or_zero();
+                    // 方向向量 [-1, 1] → [0, 1]。
+                    Vec2::new(d.x * 0.5 + 0.5, d.y * 0.5 + 0.5)
+                }
+                UvProjection::Triplanar => {
+                    // 取相对中心偏移最大的分量作为主轴，对该主轴的正交两轴归一化。
+                    let rel = *p - center;
+                    let (ax, ay) = if rel.x.abs() >= rel.y.abs() && rel.x.abs() >= rel.z.abs() {
+                        (local.y / size.y, local.z / size.z)
+                    } else if rel.y.abs() >= rel.z.abs() {
+                        (local.x / size.x, local.z / size.z)
+                    } else {
+                        (local.x / size.x, local.y / size.y)
+                    };
+                    Vec2::new(ax, ay)
+                }
+            }
+        })
+        .collect()
+}
+
 // ─── tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::render_context::RenderContext;
-    use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry, Projection};
-    use xcal_scene::scene::primitives::wireframe_cube;
+    use xcal_scene::scene::components::{
+        Camera3D, Material3D, MeshGeometry, Projection, TextureHandle,
+    };
+    use xcal_scene::scene::primitives::{SurfaceSpec, parametric_surface, wireframe_cube};
     use xc_geometry::Vec3;
     use xcal_render::{DrawQueue3D, Viewport};
 
@@ -868,7 +1338,7 @@ mod tests {
 
     #[test]
     fn test_uniform_arena_push_and_flush_headless() {
-        let Some((backend, ctx)) = headless_backend() else {
+        let Some((_backend, ctx)) = headless_backend() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -888,8 +1358,7 @@ mod tests {
         // 再对外层 arena 检查 capacity（避免 mutable borrow + immutable borrow 重叠）。
         let (buf_size, stride_val);
         {
-            let (buf, _bg, stride_u32) =
-                arena.flush(ctx.device(), ctx.queue(), &backend.bind_group_layout);
+            let (buf, stride_u32) = arena.flush(ctx.device(), ctx.queue());
             stride_val = stride_u32 as u64;
             buf_size = buf.size();
         }
@@ -986,14 +1455,23 @@ mod tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("test-3d-offscreen-encoder"),
             });
-        let frame = backend.render_layer_offscreen(&mut encoder, Mat4::IDENTITY, viewport, &[], &[]);
+        let frame = backend.render_layer_offscreen(
+            &mut encoder,
+            LayerId(0),
+            Mat4::IDENTITY,
+            viewport,
+            &[],
+            &[],
+        );
         assert_eq!(frame.format, ctx.target_format());
         ctx.submit(encoder.finish());
         ctx.device()
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("poll 失败");
 
-        let texture = backend.offscreen_texture().expect("离屏纹理应已创建");
+        let texture = backend
+            .offscreen_texture(LayerId(0))
+            .expect("离屏纹理应已创建");
         assert_eq!((texture.width(), texture.height()), (size, size));
         let pixels = read_rgba8(ctx.device(), ctx.queue(), &texture, size, size);
         assert_eq!(pixels.len(), (size * size * 4) as usize);
@@ -1168,5 +1646,273 @@ mod tests {
             stable_cache, 12,
             "should cache 10 unique mesh buffers + 2 unique line buffers"
         );
+    }
+
+    // ── RC.1 §4.2：材质纹理采样（像素级断言） ────────────────────────
+
+    /// 注册 1×1 绿色纹理并让全屏四边形采样它；整屏像素应等于该绿色。
+    ///
+    /// 若材质纹理未接线（回退到白色兜底纹理），像素会是白色而非绿色 → 失败。
+    #[test]
+    fn test_material_samples_registered_texture() {
+        let Some((backend, ctx)) = headless_backend() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let size = 64u32;
+
+        // 注册 1×1 纯绿纹理（id = 42）。
+        let texture = ctx.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("test-material-green-texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        ctx.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8, 255, 0, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        backend.register_texture(
+            42,
+            texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        );
+
+        // 全屏四边形：NDC x/y 覆盖 [-1, 1]，z = 0.5（在 [0, 1] 深度范围内）。
+        // 顶点绕序从 +z 观察为 CCW，与默认背面剔除约定一致。
+        let quad = MeshGeometry::new(
+            vec![
+                glam::Vec3::new(-1.0, -1.0, 0.5),
+                glam::Vec3::new(1.0, -1.0, 0.5),
+                glam::Vec3::new(1.0, 1.0, 0.5),
+                glam::Vec3::new(-1.0, 1.0, 0.5),
+            ],
+            Some(vec![0, 1, 2, 0, 2, 3]),
+            PrimitiveTopology::Triangles,
+        )
+        .with_uvs(vec![
+            glam::Vec2::new(0.0, 1.0),
+            glam::Vec2::new(1.0, 1.0),
+            glam::Vec2::new(1.0, 0.0),
+            glam::Vec2::new(0.0, 0.0),
+        ]);
+
+        let mut material = Material3D::color(Color32::WHITE);
+        material.texture = Some(TextureHandle::new(42));
+        let draws = [MeshDraw::new(
+            std::sync::Arc::new(quad),
+            Mat4::IDENTITY,
+            material,
+        )];
+
+        let pixels = render_planes(&backend, &ctx, LayerId(7), size, &draws);
+        // 目标格式 Bgra8UnormSrgb：内存字节序为 [B, G, R, A]，纯绿 = [0, 255, 0, 255]。
+        let green = [0u8, 255, 0, 255];
+        let first_bad = pixels.chunks_exact(4).position(|p| p != green);
+        assert!(
+            first_bad.is_none(),
+            "材质应采样已注册的绿色纹理；首个非绿像素索引 = {first_bad:?}"
+        );
+    }
+
+    // ── RC.3 §4.6：深度遮挡（像素级断言） ───────────────────────────
+
+    /// 两个同向平面（中心方块 + 全屏平面）重叠，覆盖关系仅由深度决定。
+    ///
+    /// - Case 1：中心块 z = 0.25（近，红）+ 全屏 z = 0.75（远，蓝），**先画近的**；
+    ///   中心像素应为红（近者胜出，远的虽后画仍被深度拒绝），角落像素为蓝。
+    /// - Case 2：中心块 z = 0.75（远，红）+ 全屏 z = 0.25（近，蓝），**先画近的全屏**；
+    ///   中心像素应保持蓝（远者后画仍被拒绝），角落像素为蓝。
+    ///
+    /// 两例的"远处几何后绘制"都被深度拒绝；去掉深度测试则中心像素会变成后画的颜色。
+    #[test]
+    fn test_depth_test_occludes_farther_geometry() {
+        let Some((backend, ctx)) = headless_backend() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let size = 64u32;
+        // Bgra8UnormSrgb 字节序下的纯红 / 纯蓝。
+        let red = [0u8, 0, 255, 255];
+        let blue = [255u8, 0, 0, 255];
+
+        // Case 1：先画近的红中心块，再画远的蓝全屏平面。
+        let case1 = [
+            flat_plane(0.5, 0.5, 0.25, Color32::RED),
+            flat_plane(1.0, 1.0, 0.75, Color32::BLUE),
+        ];
+        let pixels = render_planes(&backend, &ctx, LayerId(11), size, &case1);
+        assert_eq!(
+            pixel_at(&pixels, size, 32, 32),
+            red,
+            "近的中心块应遮住后绘制的远处全屏平面"
+        );
+        assert_eq!(
+            pixel_at(&pixels, size, 4, 4),
+            blue,
+            "角落仅有远的全屏平面覆盖"
+        );
+
+        // Case 2：先画近的蓝全屏平面，再画远的红中心块。
+        let case2 = [
+            flat_plane(1.0, 1.0, 0.25, Color32::BLUE),
+            flat_plane(0.5, 0.5, 0.75, Color32::RED),
+        ];
+        let pixels = render_planes(&backend, &ctx, LayerId(12), size, &case2);
+        assert_eq!(
+            pixel_at(&pixels, size, 32, 32),
+            blue,
+            "近的全屏平面应遮住后绘制的远处中心块"
+        );
+        assert_eq!(pixel_at(&pixels, size, 4, 4), blue);
+    }
+
+    // ── RD §D2：着色变体可替换性（像素级断言，能证伪） ─────────────
+
+    /// 同一几何切换 [`ShaderVariant`] 应产生不同像素 —— 证明"换风格 = 换数据"。
+    ///
+    /// 用法线恒为 `normalize(1, 0, 1)` 的四边形（**非** `flat_plane` 的恒定
+    /// `(0, 0, 1)`）：此时 `dot(n, L) = 1/√2 < 1`，故 Lambert 的 `lit < 1`；而
+    /// `Flat` 无光照（`lit = 1`）。两者像素必然不同 —— 若相同则变体机制失效。
+    #[test]
+    fn test_shader_variant_changes_pixels() {
+        let Some((backend, ctx)) = headless_backend() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let size = 64u32;
+
+        // 法线倾斜的四边形：lit ≈ 0.2 + 0.8 / √2 ≈ 0.766 < 1。
+        let n = glam::Vec3::new(1.0, 0.0, 1.0).normalize();
+        let geometry = std::sync::Arc::new(
+            MeshGeometry::new(
+                vec![
+                    glam::Vec3::new(-1.0, -1.0, 0.5),
+                    glam::Vec3::new(1.0, -1.0, 0.5),
+                    glam::Vec3::new(1.0, 1.0, 0.5),
+                    glam::Vec3::new(-1.0, 1.0, 0.5),
+                ],
+                Some(vec![0, 1, 2, 0, 2, 3]),
+                PrimitiveTopology::Triangles,
+            )
+            .with_uvs(vec![glam::Vec2::ZERO; 4])
+            .with_normals(vec![n; 4]),
+        );
+
+        let mut flat_material = Material3D::color(Color32::WHITE);
+        flat_material.variant = ShaderVariant::Flat;
+        let mut lambert_material = Material3D::color(Color32::WHITE);
+        lambert_material.variant = ShaderVariant::Lambert;
+
+        let flat_pixels = render_planes(
+            &backend,
+            &ctx,
+            LayerId(21),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                flat_material,
+            )],
+        );
+        let lambert_pixels = render_planes(
+            &backend,
+            &ctx,
+            LayerId(22),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                lambert_material,
+            )],
+        );
+
+        // 目标格式 Bgra8UnormSrgb：纯白 = [255, 255, 255, 255]。
+        let white = [255u8, 255, 255, 255];
+        let center_flat = pixel_at(&flat_pixels, size, 32, 32);
+        let center_lambert = pixel_at(&lambert_pixels, size, 32, 32);
+        assert_eq!(center_flat, white, "Flat 变体应是无光照的纯白");
+        assert_ne!(center_lambert, white, "Lambert 变体应因光照而变暗");
+        assert_ne!(
+            center_flat, center_lambert,
+            "切换 ShaderVariant 必须改变输出像素"
+        );
+    }
+
+    /// 生成一个朝向 +Z 的平面（[`parametric_surface`] 在 XY 平面，z 由变换平移）。
+    ///
+    /// `view_proj = IDENTITY` 时 `mvp = transform`，平移的 z 分量即 NDC 深度。
+    fn flat_plane(half_w: f32, half_h: f32, z: f32, color: Color32) -> MeshDraw {
+        let geometry = parametric_surface(SurfaceSpec::new(
+            (-half_w, half_w),
+            (-half_h, half_h),
+            1,
+            1,
+            |_, _| 0.0,
+        ));
+        MeshDraw::new(
+            std::sync::Arc::new(geometry),
+            Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z)),
+            Material3D::color(color),
+        )
+    }
+
+    /// 以 `view_proj = IDENTITY` 把一组网格渲染到指定图层的离屏目标并回读像素。
+    fn render_planes(
+        backend: &WgpuBackend3D,
+        ctx: &RenderContext,
+        layer_id: LayerId,
+        size: u32,
+        draws: &[MeshDraw],
+    ) -> Vec<u8> {
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-3d-material-depth-encoder"),
+            });
+        let _frame = backend.render_layer_offscreen(
+            &mut encoder,
+            layer_id,
+            Mat4::IDENTITY,
+            Viewport::full(size, size),
+            draws,
+            &[],
+        );
+        ctx.submit(encoder.finish());
+        ctx.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll 失败");
+        let texture = backend
+            .offscreen_texture(layer_id)
+            .expect("离屏纹理应已创建");
+        read_rgba8(ctx.device(), ctx.queue(), &texture, size, size)
+    }
+
+    /// 取像素 `(x, y)` 的 4 字节（左上角为原点，Bgra8 字节序）。
+    fn pixel_at(pixels: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * size + x) * 4) as usize;
+        pixels[i..i + 4].try_into().expect("pixel bytes")
     }
 }

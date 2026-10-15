@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use xcal_schedule::resource::Resources;
 use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
@@ -49,7 +50,8 @@ impl HealthOverlay {
         let mut registry = SnapshotRegistry::new();
 
         // ── 组件注册（未注册者仍会以 <unregistered> 出现在快照结构中）──
-        registry.register_component::<MeshGeometry>("MeshGeometry");
+        // 几何组件以 `Arc<MeshGeometry>` 存储（见 `SceneRecord3DSystem` 的查询）。
+        registry.register_component::<Arc<MeshGeometry>>("MeshGeometry");
         registry.register_component::<Material3D>("Material3D");
         registry.register_component::<Camera3D>("Camera3D");
         registry.register_component::<Circle>("Circle");

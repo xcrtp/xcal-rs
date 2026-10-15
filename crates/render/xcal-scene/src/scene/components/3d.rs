@@ -3,7 +3,8 @@
 // 3D 核心类型（纯逻辑，无 GPU 依赖）：
 // - PrimitiveTopology：图元拓扑
 // - MeshGeometry：顶点/法线/UV/索引/拓扑 + 稳定 id/version（几何）
-// - Material3D：颜色/纹理/UV 投影（外观）
+// - Material3D：颜色/纹理/UV 投影/着色变体（外观）
+// - ShaderVariant：着色变体（纯数据风格声明，渲染端据此查表选 pipeline）
 // - Projection：透视/正交投影
 // - Camera3D：视点 + 投影，提供视图矩阵与 VP 矩阵
 //
@@ -29,7 +30,7 @@ use glam::camera::rh::view::look_at_mat4;
 /// assert_eq!(PrimitiveTopology::Triangles as u8, PrimitiveTopology::Triangles as u8);
 /// assert_ne!(PrimitiveTopology::Lines, PrimitiveTopology::Points);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimitiveTopology {
     /// 三角形列表：每 3 个顶点构成一个三角形。
     Triangles,
@@ -167,18 +168,49 @@ pub enum UvProjection {
     Triplanar,
 }
 
-/// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影。
+/// 3D 着色变体：选择片元着色方程（即"风格"）。
+///
+/// 这是**纯数据声明**——只表达"想要哪种着色"，不引用 wgpu/egui。渲染后端按它
+/// 查表选中一条**已预建**的 pipeline（wgpu 不允许运行时改变 bind group 布局，
+/// 故着色可插拔只能"预建变体 + 查表"，见后端 `WgpuBackend3D::pipelines`）。
+///
+/// # 新增风格的步骤（三处同步）
+/// 1. 在此加一个变体；
+/// 2. 在后端 shader（cube.wgsl）中加一个对应的 `@fragment` 入口（`fs_*`）；
+/// 3. 在后端 pipeline 表里加一条 `(topology, variant)` 预建条目。
+///
+/// 三者缺一则该变体查不到 pipeline（后端 `debug_assert` 并回退到
+/// [`ShaderVariant::Lambert`]，不会让画面消失）。同一几何切换变体只改数据，
+/// **不改 shader 源码** —— 这正是本枚举存在的意义。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ShaderVariant {
+    /// 无光照：`color * tex`（加光前的行为；体素 / UI 风格常用）。
+    Flat,
+    /// 朗伯漫反射（当前默认行为）。
+    #[default]
+    Lambert,
+}
+
+/// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影 + 着色变体。
 ///
 /// 只描述"看起来什么颜色/贴什么纹理"，不含几何数据（几何见 [`MeshGeometry`]）。
 ///
+/// # 图集 / 纹理数组（未来能力，无需改动本结构）
+/// [`texture`](Self::texture) 是不透明句柄 [`TextureHandle`]，指向资源层的一张纹理。
+/// 将来做字形图集或纹理数组时，只需把整张图集注册为一个 [`TextureHandle`]，并让
+/// 几何 UV 指向图集内区域即可；**不需要**为本结构或 [`ShaderVariant`] 新增
+/// `TextureKind` 之类的枚举（与 [`ContentHandle`](crate::domain::ContentHandle) 同构的不透明句柄设计）。
+///
 /// # Example
 /// ```rust
-/// use xcal_scene::scene::components::Material3D;
+/// use xcal_scene::scene::components::{Material3D, ShaderVariant};
 /// use xcal_scene::types::Color32;
 ///
 /// let m = Material3D::color(Color32::new(255, 0, 0, 255));
 /// assert_eq!(m.color.r, 255);
 /// assert!(m.texture.is_none());
+/// // 默认着色变体为朗伯漫反射。
+/// assert_eq!(m.variant, ShaderVariant::Lambert);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Material3D {
@@ -188,6 +220,8 @@ pub struct Material3D {
     pub texture: Option<TextureHandle>,
     /// 无 UV 几何的兜底 UV 投影策略。
     pub uv_projection: UvProjection,
+    /// 着色变体（片元着色方程的选择）。
+    pub variant: ShaderVariant,
 }
 
 impl Material3D {

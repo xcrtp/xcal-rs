@@ -19,12 +19,11 @@
 // `composite_layers`。于是 `TypeMap` 里的合成条目**只有一处**，寻址冲突从结构上消失，
 // 同时顺带消灭了"同帧双画 → 边缘双重描边加粗"。
 //
-// # 离屏目标的容量限制（本阶段口径）
+// # 离屏目标（RC.1 起）
 //
-// `WgpuBackend2D` / `WgpuBackend3D` 各自只有**一份**离屏目标
-// （`targets: Option<..>` / `offscreen: Mutex<Option<..>>`），所以本帧
-// **每类最多一个图层**（`prepare` 里有 `debug_assert`）。按 `LayerId` 分别持有
-// 离屏目标属 S3-3（2D/3D 互为纹理）的事，本阶段不扩范围。
+// `WgpuBackend2D` / `WgpuBackend3D` 现在都按 [`LayerId`] 分别持有离屏目标
+// （`HashMap<LayerId, ..>`），本帧**同类图层不再有数量上限**——这是 S3-3
+// （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
 use xcal_render::{DrawQueue, DrawQueue3D, Viewport};
@@ -119,21 +118,6 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
         egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        debug_assert!(
-            self.layers
-                .iter()
-                .filter(|l| matches!(l.kind, LayerKind::Viewport2D { .. }))
-                .count()
-                <= 1
-                && self
-                    .layers
-                    .iter()
-                    .filter(|l| matches!(l.kind, LayerKind::Viewport3D { .. }))
-                    .count()
-                    <= 1,
-            "每类最多一个图层：2D/3D 后端各只有一份离屏目标（per-LayerId 目标属 S3-3）"
-        );
-
         let ppp = screen_descriptor.pixels_per_point;
         let screen_size_px = screen_descriptor.size_in_pixels;
         let (left, top, w_pt, h_pt) = (
@@ -163,7 +147,7 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                             for d in &self.draws_2d {
                                 backend.push(&d.shape, &d.transform, &d.style, d.z);
                             }
-                            backend.finish_frame(egui_encoder, &geometry)
+                            backend.finish_frame(egui_encoder, layer.id, &geometry)
                         })
                     else {
                         continue;
@@ -196,6 +180,7 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                     let view_proj = camera.view_projection(viewport.aspect());
                     let frame = backend.render_layer_offscreen(
                         egui_encoder,
+                        layer.id,
                         view_proj,
                         viewport,
                         &self.meshes_3d,
