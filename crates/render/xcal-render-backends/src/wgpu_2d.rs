@@ -4,12 +4,16 @@
 //
 // 与 `egui_2d.rs`（旧 CPU 管线）**并行存在**，由运行期开关切换（见 host::present）。
 // 本后端把 `Shape2D` 三角化（S3-0 的 lyon 适配层）后渲染到**离屏纹理**，
-// 再作为一个四边形合成进 eframe 主 pass —— 为 S3-2（合成器）/ S3-3（2D/3D 互为纹理）铺路。
+// 再交给 [`crate::Compositor`] 按声明顺序合成进 eframe 主 pass
+// —— 为 S3-2（合成器）/ S3-3（2D/3D 互为纹理）铺路。
+//
+// S3-2/C2 变化：本文件**不再自带合成管线**（原先的 `pipeline_composite` /
+// `composite_bgl` / `sampler` / `composite()` / `COMPOSITE_QUAD` 已移除），
+// 合成统一由 [`crate::Compositor`] 承担；离屏清屏改为透明（背景由 `host` 提供）。
 //
 // 关键口径：
 // - **顶点布局来自契约**：`to_wgpu(&VertexLayout::standard(AaModel::None, PerFrame))`，
-//   无任何硬编码 `Float32x2` 字面量（合成管线复用同一契约布局：position=裁剪坐标、
-//   attrib0=UV、attrib1 未用）；
+//   无任何硬编码 `Float32x2` 字面量；
 // - **MSAA 4x**：`MSAA_SAMPLES = 4`，离屏 pass = MSAA 纹理 → resolve 到单采样离屏纹理；
 // - **2D 不用深度缓冲**：z 序由 `ZIndex` 稳定排序保证（画家算法）；
 // - **uniform 复用 `UniformArena`**（256B 对齐 dynamic offset），不另造一套；
@@ -30,7 +34,7 @@ use wgpu::util::DeviceExt as _;
 use xcal_render::resource_cache::{ResourceCache, ResourceKey};
 use xcal_render::{
     AaModel, CacheStrategy, DrawQueue, GpuHandle, Painter2DTarget, Shape2D, Style2D, TessKind,
-    Tessellation2D, Vertex2D, VertexLayout, hash_bytes, tessellate, tolerance_for_scale,
+    Tessellation2D, VertexLayout, hash_bytes, tessellate, tolerance_for_scale,
 };
 use xc_geometry::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 
@@ -52,18 +56,20 @@ const UNIFORM_SIZE: u64 = 96;
 /// wgpu dynamic uniform offset 要求的最小对齐。
 const DYNAMIC_OFFSET_ALIGNMENT: u64 = 256;
 
-/// 离屏清屏色：与 GridBuild 的背景矩形 `(20,20,20,255)` 保持一致。
+/// 离屏清屏色：**透明**（S3-2/C2）。
+///
+/// 背景不属于任何图层——它由合成器清屏（`SceneView::background`）提供。
+/// 2D 离屏只保留实际绘制内容，图层外是 alpha=0，这样 2D 才能叠到 3D 之上
+/// 而不盖死下层（若清成不透明，合成的就是一张不透明卡片）。
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
-    r: 20.0 / 255.0,
-    g: 20.0 / 255.0,
-    b: 20.0 / 255.0,
-    a: 1.0,
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 0.0,
 };
 
 /// 2D 几何着色器（几何 pass）。
 pub const SHAPE_2D_SHADER: &str = include_str!("../shaders/shape_2d.wgsl");
-/// 合成着色器（把离屏纹理画进主 pass）。
-pub const COMPOSITE_2D_SHADER: &str = include_str!("../shaders/composite_2d.wgsl");
 
 // ─── 帧几何 ───────────────────────────────────────────────────────────────
 
@@ -77,7 +83,7 @@ pub struct Frame2DGeometry {
     /// 整个渲染目标尺寸（物理像素）。只用于把视口矩形**钳制**到屏幕内
     /// （与 `epaint::ViewportInPixels::from_points` 同口径），使离屏纹理尺寸
     /// 恒等于 egui-wgpu 为回调设置的 render pass viewport 尺寸；
-    /// 合成四边形本身不依赖它（见 [`COMPOSITE_QUAD`]）。
+    /// 合成四边形本身不依赖它（见 [`crate::compositor::COMPOSITE_QUAD`]）。
     pub screen_size_px: [u32; 2],
 }
 
@@ -202,16 +208,10 @@ struct Prepared2D {
     uniform_offset: u32,
 }
 
-/// 一帧的合成数据（`prepare` 阶段产出、`paint` 阶段消费）。
+/// 一帧的离屏结果（`prepare` 阶段产出、由回调交给合成器）。
 pub struct Frame2DData {
-    /// 离屏纹理（单采样）视图。
+    /// 离屏纹理（单采样）视图（合成器的采样源）。
     pub offscreen: wgpu::TextureView,
-    /// 合成绑定组（离屏纹理 + 采样器）。
-    pub composite_bind_group: wgpu::BindGroup,
-    /// 合成四边形顶点缓冲（裁剪坐标 + UV，契约布局）。
-    pub quad: wgpu::Buffer,
-    /// 合成四边形顶点数。
-    pub quad_vertices: u32,
     /// 本帧实际 draw 数（0 表示只有清屏）。
     pub draw_count: usize,
     /// 保活：各 draw 的 bind group 引用的 uniform arena 缓冲。
@@ -220,19 +220,16 @@ pub struct Frame2DData {
 
 // ─── WgpuBackend2D ────────────────────────────────────────────────────────
 
-/// wGPU 2D 后端：2D 管线 + 合成管线 + 离屏/MSAA 目标 + uniform arena + 几何缓存。
+/// wGPU 2D 后端：2D 几何管线 + 离屏/MSAA 目标 + uniform arena + 几何缓存。
+///
+/// **不含合成管线**（S3-2/C2 起统一由 [`crate::Compositor`] 承担）。
 pub struct WgpuBackend2D {
     device: wgpu::Device,
     queue: wgpu::Queue,
     /// 2D 几何管线（4x MSAA，目标 = 离屏 MSAA 纹理）。
     pipeline_2d: wgpu::RenderPipeline,
-    /// 合成管线（主 pass，1x —— 与 egui 主 pass 采样数一致，同 3D 回调口径）。
-    pipeline_composite: wgpu::RenderPipeline,
     /// 动态 uniform 绑定布局（与 [`UniformArena`] 配套）。
     bind_group_layout: wgpu::BindGroupLayout,
-    /// 合成绑定布局（纹理 + 采样器）。
-    composite_bgl: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
     arena: UniformArena,
     geom_cache: ResourceCache<()>,
     targets: Option<OffscreenTargets>,
@@ -242,7 +239,7 @@ pub struct WgpuBackend2D {
 }
 
 impl WgpuBackend2D {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let device = device.clone();
         let queue = queue.clone();
 
@@ -322,95 +319,15 @@ impl WgpuBackend2D {
             cache: None,
         });
 
-        // ── 合成管线 ──
-        let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("xcal-2d-composite-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("xcal-2d-composite-pipeline-layout"),
-            bind_group_layouts: &[Some(&composite_bgl)],
-            immediate_size: 0,
-        });
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("xcal-2d-composite-shader"),
-            source: wgpu::ShaderSource::Wgsl(COMPOSITE_2D_SHADER.into()),
-        });
-        let mut composite_attrs = Vec::new();
-        let composite_vertex_layout = to_wgpu(&vertex_layout, &mut composite_attrs);
-        // 主 pass 目标为 sRGB 时硬件会做 linear→sRGB 编码，需先 gamma→linear；
-        // 非 sRGB 目标直接输出 gamma 值（与 egui.wgsl 的两分支同口径）。
-        let composite_entry = if target_format.is_srgb() {
-            "fs_linear"
-        } else {
-            "fs_gamma"
-        };
-        let pipeline_composite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("xcal-2d-composite-pipeline"),
-            layout: Some(&composite_layout),
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(composite_vertex_layout)],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some(composite_entry),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            // 与 egui 主 pass 的采样数一致（同 3D 回调口径：主 pass 为 1x）。
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("xcal-2d-sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        // ── 合成管线已外移 ──
+        // S3-2/C2：本后端只负责画离屏几何纹理；主 pass 的合成由
+        // [`crate::Compositor`] 统一承担（含 sRGB / 非 sRGB 双入口 + opacity）。
 
         Self {
             device,
             queue,
             pipeline_2d,
-            pipeline_composite,
             bind_group_layout,
-            composite_bgl,
-            sampler,
             arena: UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT),
             geom_cache: ResourceCache::new(),
             targets: None,
@@ -655,44 +572,12 @@ impl WgpuBackend2D {
             }
         }
 
-        // ── 合成数据：四边形（裁剪坐标 + UV，契约布局）+ 绑定组 ──
-        let quad_vertices = COMPOSITE_QUAD;
-        let quad = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("xcal-2d-composite-quad"),
-            contents: bytes_of(&quad_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let composite_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("xcal-2d-composite-bind-group"),
-            layout: &self.composite_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&targets.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
+        // ── 产出离屏结果（合成由调用方 / 回调经合成器完成） ──
         Frame2DData {
             offscreen: targets.view.clone(),
-            composite_bind_group,
-            quad,
-            quad_vertices: quad_vertices.len() as u32,
             draw_count: prepared.len(),
             _arena_buffer: arena_buffer,
         }
-    }
-
-    /// `paint` 阶段：把离屏纹理合成到主 pass 的当前目标上。
-    pub fn composite(&self, frame: &Frame2DData, render_pass: &mut wgpu::RenderPass<'static>) {
-        render_pass.set_pipeline(&self.pipeline_composite);
-        render_pass.set_bind_group(0, &frame.composite_bind_group, &[]);
-        render_pass.set_vertex_buffer(0, frame.quad.slice(..));
-        render_pass.draw(0..frame.quad_vertices, 0..1);
     }
 }
 
@@ -729,88 +614,6 @@ impl Painter2DTarget for WgpuBackend2D {
             });
         let _frame = self.finish_frame(&mut encoder, &geometry);
         self.queue.submit([encoder.finish()]);
-    }
-}
-
-// ─── egui-wgpu 回调 ───────────────────────────────────────────────────────
-
-/// 2D 图层回调：`prepare` 渲染到离屏纹理，`paint` 合成进主 pass。
-///
-/// 与 [`crate::Layer3DCallback`] 并列；两者都通过 `painter.add(Shape::Callback(..))`
-/// 加入同一图层，**添加顺序即绘制顺序**（2D 先加 → 3D 覆盖其上，与旧管线 z 序一致）。
-#[cfg(feature = "egui-wgpu")]
-pub struct Layer2DCallback {
-    viewport_points: Rect2D,
-    draws: Vec<Recorded2D>,
-}
-
-#[cfg(feature = "egui-wgpu")]
-impl Layer2DCallback {
-    /// 从视口矩形（egui points）与 2D 队列快照构造。
-    pub fn new(viewport_points: Rect2D, queue: &DrawQueue) -> Self {
-        Self {
-            viewport_points,
-            draws: snapshot_queue(queue),
-        }
-    }
-
-    /// 快照中的指令数。
-    pub fn draw_count(&self) -> usize {
-        self.draws.len()
-    }
-}
-
-#[cfg(feature = "egui-wgpu")]
-impl egui_wgpu::CallbackTrait for Layer2DCallback {
-    fn prepare(
-        &self,
-        _device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        egui_encoder: &mut wgpu::CommandEncoder,
-        callback_resources: &mut egui_wgpu::CallbackResources,
-    ) -> Vec<wgpu::CommandBuffer> {
-        let geometry = Frame2DGeometry {
-            viewport_points: self.viewport_points,
-            pixels_per_point: screen_descriptor.pixels_per_point,
-            screen_size_px: screen_descriptor.size_in_pixels,
-        };
-        let frame = {
-            let Some(backend) = callback_resources.get_mut::<WgpuBackend2D>() else {
-                return Vec::new();
-            };
-            backend.begin_frame_at(geometry);
-            for d in &self.draws {
-                backend.push(&d.shape, &d.transform, &d.style, d.z);
-            }
-            // 复用 egui 的 encoder：离屏 pass 在主 pass 之前执行（同 encoder 内顺序）。
-            backend.finish_frame(egui_encoder, &geometry)
-        };
-        callback_resources.insert(frame);
-        Vec::new()
-    }
-
-    fn paint(
-        &self,
-        info: egui::epaint::PaintCallbackInfo,
-        render_pass: &mut wgpu::RenderPass<'static>,
-        callback_resources: &egui_wgpu::CallbackResources,
-    ) {
-        let (Some(backend), Some(frame)) = (
-            callback_resources.get::<WgpuBackend2D>(),
-            callback_resources.get::<Frame2DData>(),
-        ) else {
-            return;
-        };
-        // 裁剪到回调区域，避免 2D 内容覆盖 egui 面板。
-        let clip = info.clip_rect_in_pixels();
-        render_pass.set_scissor_rect(
-            clip.left_px.max(0) as u32,
-            clip.top_px.max(0) as u32,
-            clip.width_px.max(0) as u32,
-            clip.height_px.max(0) as u32,
-        );
-        backend.composite(frame, render_pass);
     }
 }
 
@@ -858,47 +661,13 @@ fn uniform_bytes(
     data
 }
 
-/// 合成四边形（TriangleStrip，4 顶点）：**写死覆盖 NDC [-1,1]²**，
-/// position = 裁剪坐标、attrib0 = UV（复用契约布局的 stride 20 三槽，
-/// `side` 未使用，避免任何硬编码顶点格式）。
-///
-/// 不能按"整屏尺寸"把视口像素矩形换算成裁剪坐标：egui-wgpu 在处理
-/// `Primitive::Callback` 时会把 render pass 的 viewport 设成**该回调自己的矩形**
-/// （见 egui-wgpu `renderer.rs` 里那段 "courtesy" 注释的 `set_viewport(...)`），
-/// 也就是说 NDC [-1,1]² 在 `paint` 回调里对应的**就是**回调视口本身。
-/// 若再拿整屏尺寸做一次换算，视口会被二次缩放：X 被压成 `视口宽/屏幕宽`、
-/// Y 被压成 `视口高/屏幕高`（有侧边控制面板时前者远小于 1 → 2D 视图在 X 方向
-/// 明显被压扁并向右偏移），这正是本 bug 的成因。
-///
-/// 顶点顺序按 `TriangleStrip` 解释：左上 → 右上 → 左下 → 右下
-/// （wgpu 的 viewport 变换把 ndc.y = +1 映射到视口顶边）。
-const COMPOSITE_QUAD: [Vertex2D; 4] = [
-    Vertex2D {
-        position: [-1.0, 1.0],
-        normal: [0.0, 0.0],
-        side: 0.0,
-    },
-    Vertex2D {
-        position: [1.0, 1.0],
-        normal: [1.0, 0.0],
-        side: 0.0,
-    },
-    Vertex2D {
-        position: [-1.0, -1.0],
-        normal: [0.0, 1.0],
-        side: 0.0,
-    },
-    Vertex2D {
-        position: [1.0, -1.0],
-        normal: [1.0, 1.0],
-        side: 0.0,
-    },
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xcal_core::domain::LayerBlend;
     use xcal_render::{DrawCommand, ZIndex};
+
+    use crate::compositor::{CompositeOp, Compositor};
 
     fn geometry(w: f32, h: f32, ppp: f32, screen: [u32; 2]) -> Frame2DGeometry {
         Frame2DGeometry {
@@ -960,63 +729,6 @@ mod tests {
         let se = m * glam::vec4(w as f32, h as f32, 0.0, 1.0);
         assert!((nw.x + 1.0).abs() < 1e-5 && (nw.y - 1.0).abs() < 1e-5);
         assert!((se.x - 1.0).abs() < 1e-5 && (se.y + 1.0).abs() < 1e-5);
-    }
-
-    /// 合成四边形：4 顶点、覆盖视口、UV 为 (0,0)-(1,1)（契约布局）。
-    #[test]
-    fn composite_quad_is_full_ndc_box_with_uv() {
-        let quad = COMPOSITE_QUAD;
-        assert_eq!(quad.len(), 4);
-        // TriangleStrip 的顶点序：左上 → 右上 → 左下 → 右下。
-        assert_eq!(quad[0].position, [-1.0, 1.0]);
-        assert_eq!(quad[1].position, [1.0, 1.0]);
-        assert_eq!(quad[2].position, [-1.0, -1.0]);
-        assert_eq!(quad[3].position, [1.0, -1.0]);
-        assert_eq!(quad[0].normal, [0.0, 0.0]);
-        assert_eq!(quad[1].normal, [1.0, 0.0]);
-        assert_eq!(quad[2].normal, [0.0, 1.0]);
-        assert_eq!(quad[3].normal, [1.0, 1.0]);
-        for v in &quad {
-            assert_eq!(v.side, 0.0);
-        }
-    }
-
-    /// **回归**（"2D 视图在 X 方向被压扁"）：egui-wgpu 会为每个回调把 render pass
-    /// 的 viewport 设成该回调矩形（`renderer.rs` 的 "courtesy" `set_viewport`），
-    /// 所以合成四边形必须在**任意**视口位置/尺寸下都正好铺满该视口。
-    /// 这里按 wgpu 的 viewport 变换把四边形顶点换算回帧缓冲像素，
-    /// 断言左右/上下边界与 `viewport_px()` 完全一致（容忍 ±1px 取整）。
-    #[test]
-    fn composite_quad_fills_callback_viewport_at_any_position() {
-        // 视口偏右且比屏幕窄（左侧有控制面板），正是暴露该 bug 的形态。
-        for g in [
-            geometry(300.0, 200.0, 1.0, [1600, 1200]),
-            geometry(1350.0, 1150.0, 1.0, [1600, 1200]),
-            geometry(300.0, 200.0, 1.5, [1600, 1200]),
-        ] {
-            let (left, top, w, h) = g.viewport_px();
-            // wgpu viewport 变换：x_fb = left + (ndc.x+1)/2 * w；y_fb = top + (1-ndc.y)/2 * h
-            let to_fb = |ndc: [f32; 2]| -> (f32, f32) {
-                (
-                    left as f32 + (ndc[0] + 1.0) * 0.5 * w as f32,
-                    top as f32 + (1.0 - ndc[1]) * 0.5 * h as f32,
-                )
-            };
-            let (x_l, y_t) = to_fb(COMPOSITE_QUAD[0].position);
-            let (x_r, y_b) = to_fb(COMPOSITE_QUAD[3].position);
-            assert!((x_l - left as f32).abs() < 0.5, "左边界 {x_l} != {left}");
-            assert!((y_t - top as f32).abs() < 0.5, "上边界 {y_t} != {top}");
-            assert!(
-                (x_r - (left + w as i32) as f32).abs() < 0.5,
-                "右边界 {x_r} != {}",
-                left + w as i32
-            );
-            assert!(
-                (y_b - (top + h as i32) as f32).abs() < 0.5,
-                "下边界 {y_b} != {}",
-                top + h as i32
-            );
-        }
     }
 
     /// uniform 字节：mat4 + 预乘颜色（alpha=255 时颜色不变）+ params.x = 描边宽度。
@@ -1095,24 +807,25 @@ mod tests {
 
     /// **端到端回归**（"2D 视图在 X 方向被压扁"）：在真实 device 上复刻
     /// egui-wgpu 对回调的处理方式 —— 主 pass 的 viewport 被设成回调矩形
-    /// （`set_viewport(视口 px)`）—— 再执行 `composite()`，然后回读**主目标**
-    /// 像素，断言 2D 内容落在视口内的正确位置：
+    /// （`set_viewport(视口 px)`）—— 再交给合成器把离屏纹理合成到主 pass，
+    /// 然后回读**主目标**像素，断言 2D 内容落在视口内的正确位置：
     ///
     /// - 视口像素矩形 (100,50)-(400,250)，离屏尺寸 = 视口尺寸；
     /// - 图元：屏幕矩形 (150,75)-(250,125)（= 离屏本地 (50,25)-(150,75)）；
-    /// - 修复前：quad 用整屏尺寸换算 → 内容被压成 `300/1600` 宽并右移，
-    ///   视口内左侧根本收不到离屏清屏色（本测试会失败）。
+    /// - 修复前：quad 用整屏尺寸换算 → 内容被压成 `300/1600` 宽并右移。
+    ///
+    /// 主 pass 清成不透明黑；2D 离屏为透明底（S3-2/C2），故"视口内、矩形外"
+    /// 与"视口外"都保持黑 —— 这正好证明图层外是透明的、没有被离屏卡片盖死。
     #[test]
     fn composite_lands_inside_scoped_viewport_on_real_device() {
-        // 用非 sRGB 的 RGBA 主目标：合成走 `fs_gamma`（字节直通），
-        // 这样下面的颜色断言可以是逐字节精确的（sRGB 编解码路径由
-        // `gpu_pipeline_builds_for_srgb_and_non_srgb_targets` 覆盖创建与运行）。
+        // 用非 sRGB 的 RGBA 主目标：合成走 Identity 入口（字节直通），
+        // 这样下面的颜色断言可以是逐字节精确的。
         let Ok(ctx) =
             crate::RenderContext::headless_with_format(wgpu::TextureFormat::Rgba8Unorm)
         else {
             return; // 无 GPU 环境：跳过
         };
-        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue, ctx.target_format);
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
 
         let screen = [1600u32, 1200u32];
         let g = geometry(300.0, 200.0, 1.0, screen);
@@ -1161,6 +874,17 @@ mod tests {
                 label: Some("xcal-2d-test-e2e"),
             });
         let frame = backend.finish_frame(&mut enc, &g);
+        let compositor = Compositor::new(&ctx.device, ctx.target_format);
+        let composite = compositor.prepare(
+            &ctx.device,
+            &[CompositeOp {
+                texture: frame.offscreen.clone(),
+                src_format: OFFSCREEN_FORMAT,
+                blend: LayerBlend::Alpha,
+                opacity: 1.0,
+                rect_px: (left as f32, top as f32, vw as f32, vh as f32),
+            }],
+        );
         {
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1183,7 +907,7 @@ mod tests {
             // egui-wgpu 的 "courtesy" 行为：回调 rect → render pass viewport。
             pass.set_viewport(left as f32, top as f32, vw as f32, vh as f32, 0.0, 1.0);
             pass.set_scissor_rect(left as u32, top as u32, vw, vh);
-            backend.composite(&frame, &mut pass);
+            compositor.composite_layers(&mut pass, &composite);
         }
         ctx.queue.submit([enc.finish()]);
         ctx.device
@@ -1195,20 +919,21 @@ mod tests {
             let o = ((y * screen[0] + x) * 4) as usize;
             [px[o], px[o + 1], px[o + 2], px[o + 3]]
         };
-        const CLEAR: [u8; 4] = [20, 20, 20, 255];
+        const BG: [u8; 4] = [0, 0, 0, 255];
         // 视口内、矩形内 → 红。
         assert_eq!(at(200, 100), [255, 0, 0, 255], "图元应在视口内的正确位置");
-        // 视口内、矩形外 → 离屏清屏色（证明离屏铺满了**整个**视口）。
-        assert_eq!(at(110, 60), CLEAR, "视口左上角应被离屏覆盖");
-        assert_eq!(at(390, 240), CLEAR, "视口右下角应被离屏覆盖");
+        // 视口内、矩形外 → 离屏为透明，混到黑底上仍是黑（图层卡片不可见）。
+        assert_eq!(at(110, 60), BG, "视口左上角不应出现不透明卡片");
+        assert_eq!(at(390, 240), BG, "视口右下角不应出现不透明卡片");
         // 视口外 → 主目标自身的清屏色（黑），证明没有越界。
-        assert_eq!(at(50, 50), [0, 0, 0, 255], "视口外不应被绘制");
-        assert_eq!(at(500, 400), [0, 0, 0, 255], "视口外不应被绘制");
+        assert_eq!(at(50, 50), BG, "视口外不应被绘制");
+        assert_eq!(at(500, 400), BG, "视口外不应被绘制");
         // 水平边界（±2px 容差）：矩形左边 150、右边 250。
         assert_eq!(at(152, 100), [255, 0, 0, 255]);
-        assert_eq!(at(148, 100), CLEAR, "矩形左侧应仍是离屏清屏色");
+        assert_eq!(at(148, 100), BG, "矩形左侧应仍是背景");
+
         assert_eq!(at(248, 100), [255, 0, 0, 255]);
-        assert_eq!(at(252, 100), CLEAR, "矩形右侧应仍是离屏清屏色");
+        assert_eq!(at(252, 100), BG, "矩形右侧应仍是背景");
     }
 
     /// 从纹理回读像素（未填充的紧凑 `w*4` 行距；解码交给调用方）。
@@ -1284,7 +1009,7 @@ mod tests {
         ) else {
             return; // 无 GPU 环境：跳过
         };
-        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue, ctx.target_format);
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
 
         // 视口 points (100,50)-(300,150)，ppp = 1 → 离屏 200×100 像素；
         // 屏幕坐标 → 离屏本地坐标 = 平移 (-100,-50)。
@@ -1347,9 +1072,9 @@ mod tests {
         assert_eq!(at(100, 50), [255, 0, 0, 255], "矩形填充处应为红色");
         // 离屏 (60,50)：圆描边带内（本地圆心 (50,50)，半径 10、宽 4 → 带 [8,12]）。
         assert_eq!(at(60, 50), [0, 255, 0, 255], "圆描边处应为绿色");
-        // 未绘制处 = 清屏色。
-        assert_eq!(at(10, 10), [20, 20, 20, 255], "未绘制处应为清屏色");
-        assert_eq!(at(199, 99), [20, 20, 20, 255]);
+        // 未绘制处 = 透明清屏（S3-2/C2 起离屏透明，背景由 host 提供）。
+        assert_eq!(at(10, 10), [0, 0, 0, 0], "未绘制处应为透明");
+        assert_eq!(at(199, 99), [0, 0, 0, 0]);
 
         // ── 第二帧：视口变 400×300 → 离屏目标重建 ──
         let g2 = geometry(400.0, 300.0, 1.0, [800, 600]);
@@ -1378,14 +1103,14 @@ mod tests {
             [px2[o], px2[o + 1], px2[o + 2], px2[o + 3]]
         };
         assert_eq!(at2(100, 50), [255, 0, 0, 255]);
-        // 新增区域内侧边界仍为清屏色（没有拉伸/残留）。
-        assert_eq!(at2(390, 290), [20, 20, 20, 255]);
-        assert_eq!(at2(10, 10), [20, 20, 20, 255]);
+        // 新增区域内侧边界仍为透明清屏（没有拉伸/残留）。
+        assert_eq!(at2(390, 290), [0, 0, 0, 0]);
+        assert_eq!(at2(10, 10), [0, 0, 0, 0]);
     }
 
-    /// 合成管线对两种主 pass 目标格式都能建出来并跑通（sRGB → `fs_linear`，
-    /// 非 sRGB → `fs_gamma`）：eframe 的目标格式依平台/配置而定，
-    /// 少覆盖一支就等于在别的机器上启动即 panic。
+    /// 2D 几何管线在两种主 pass 目标格式下都能建出来并跑通（eframe 的目标格式
+    /// 依平台/配置而定，少覆盖一支就等于在别的机器上启动即 panic）；
+    /// 合成管线的双入口由 `compositor` 侧覆盖。
     #[test]
     fn gpu_pipeline_builds_for_srgb_and_non_srgb_targets() {
         let Ok(ctx) = crate::RenderContext::headless() else {
@@ -1395,7 +1120,10 @@ mod tests {
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Rgba8Unorm,
         ] {
-            let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue, format);
+            let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+            // 合成器对两种目标格式都必须能建出管线。
+            let compositor = Compositor::new(&ctx.device, format);
+            let _ = &compositor;
             let g = geometry(64.0, 64.0, 1.0, [128, 128]);
             backend.begin_frame_at(g);
             backend.push(
@@ -1491,7 +1219,7 @@ mod tests {
         else {
             return; // 无 GPU 环境：跳过
         };
-        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue, ctx.target_format);
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
         // 视口 points (100,50)-(300,150)，ppp = 1 → 离屏 200×100 像素。
         let g = geometry(200.0, 100.0, 1.0, [400, 200]);
 
@@ -1572,6 +1300,7 @@ mod tests {
     /// 契约布局：stride 20 / 三槽（无硬编码字面量的可测证明）。
     #[test]
     fn pipeline_vertex_layout_comes_from_contract() {
+        use xcal_render::Vertex2D;
         let l = VertexLayout::standard(AaModel::None, CacheStrategy::PerFrame);
         l.validate().unwrap();
         assert_eq!(l.stride, 20);

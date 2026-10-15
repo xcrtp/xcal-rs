@@ -9,7 +9,7 @@ license.workspace = true
 xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
 xcal-render = { path = "../../render/xcal-render", default-features = false }
-# Painter2D 的 egui 实现（EguiPainter）+ 3D egui_wgpu 回调（Layer3DCallback）位于 backends crate。
+# Painter2D 的 egui 实现（EguiPainter）+ 图层合成 egui_wgpu 回调（SceneCompositorCallback）位于 backends crate。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui", "egui-wgpu"] }
 xcal-macro = { path = "../xcal-macro" }
 # S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。

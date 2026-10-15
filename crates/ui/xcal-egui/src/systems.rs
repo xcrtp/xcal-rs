@@ -24,7 +24,7 @@ use xcal_core::system::System;
 use xcal_core::transform::Transform2D;
 use xcal_core::types::{Camera2D, Rect, Vec3};
 use xcal_render::components::{
-    FillSolid, FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
+    FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
 use xcal_render::{DrawQueue, MeasureSpace, ZIndex, record_scene};
 
@@ -142,8 +142,9 @@ impl System for GridBuildSystem {
             return;
         };
 
-        queue.rect_fill(ZIndex::new(-1000), rect, FillSolid::new((20, 20, 20, 255)));
-
+        // S3-2 §1.1/C2：全屏背景矩形**已删除**。2D 图层只含内容，
+        // 背景改由合成器清屏（GPU 路径）或 host 回放前补画（CPU 路径）提供；
+        // 否则 2D 层搬到 3D 层之上时会用不透明背景盖死 3D。
         if show_grid {
             Self::push_grid(queue, &camera, rect);
         }
@@ -299,5 +300,33 @@ mod tests {
         assert_eq!(cam.center.x, 0.0);
         assert_eq!(cam.center.y, 0.0);
         assert_eq!(cam.scale, 40.0);
+    }
+
+    /// C2 验收：`GridBuildSystem` 产出的队列**不含**全屏背景矩形。
+    ///
+    /// 背景已外移到合成器清屏（GPU）/ host 回放前（CPU）：2D 图层若还带着
+    /// 不透明背景矩形，2D 叠到 3D 之上时会把它整片盖死。
+    #[test]
+    fn grid_build_emits_no_fullscreen_background_rect() {
+        let mut resources = Resources::new();
+        resources.insert(ViewRect::default());
+        resources.insert(AppCamera::default());
+        resources.insert(UiConfig::default());
+        resources.insert(DrawQueue::new());
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::Prepare, GridBuildSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let queue = sched.resources().get::<DrawQueue>().unwrap();
+        assert!(!queue.is_empty(), "网格开关默认打开，应有网格线命令");
+        for cmd in queue.commands() {
+            assert_ne!(cmd.z.0, -1000, "背景矩形的 z 层已删除");
+            assert!(
+                !matches!(cmd.shape, xcal_render::Shape2D::Rect(_)),
+                "2D 图层不应再输出任何矩形填充（背景矩形残留）"
+            );
+        }
     }
 }

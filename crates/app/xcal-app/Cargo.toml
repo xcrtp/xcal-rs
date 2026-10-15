@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
 xcal-render = { path = "../../render/xcal-render" }
-# RenderContext / WgpuBackend3D / Layer3DCallback / EguiPainter 等具体后端实现。
+# RenderContext / WgpuBackend3D / WgpuBackend2D / SceneCompositorCallback / EguiPainter 等具体后端实现。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
 xcal-egui = { path = "../../ui/xcal-egui" }
 xcal-macro = { path = "../../ui/xcal-macro" }

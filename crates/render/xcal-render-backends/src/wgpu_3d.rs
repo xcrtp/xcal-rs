@@ -10,7 +10,7 @@
 // - PreparedDraw3D / Frame3DData：只持有句柄克隆（wgpu::Buffer 是 ref-counted），
 //   arena 对应的 bind_group 所有 draw 共享（clone 浅拷贝）。
 //
-// egui 集成的回调（Layer3DCallback）见 layer_callback.rs。
+// egui 集成的回调（SceneCompositorCallback）见 scene_callback.rs。
 //
 // # G7 回校（R6）：为什么这里**不**接 `StaticConsistencyChecker`
 //
@@ -37,7 +37,9 @@ use wgpu::util::DeviceExt as _;
 use xcal_core::scene::components::{Mesh3D, PrimitiveTopology};
 use xc_geometry::Color32;
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
-use xcal_render::{GpuHandle, RenderBackend3D, RenderLayer, ResourceCache, ResourceKey};
+use xcal_render::{
+    GpuHandle, RenderBackend3D, RenderLayer, RenderTarget, ResourceCache, ResourceKey, Viewport,
+};
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + vec4 color。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");
@@ -263,6 +265,21 @@ pub struct Frame3DData {
     pub _arena_buffer: wgpu::Buffer,
 }
 
+// ─── S3-2/C3：3D 图层离屏帧 ─────────────────────────────────────────────────
+
+/// 一个 3D 图层渲染到**自己的离屏纹理**后的结果（交给合成器采样）。
+///
+/// 与 [`Frame3DData`] 的区别：`Frame3DData` 是"已上传的绘制资源"，本结构是
+/// "已画进一张纹理的像素"，由 `SceneCompositorCallback::prepare` 交给 [`crate::Compositor`]。
+pub struct Layer3DFrame {
+    /// 本层离屏纹理视图（合成器的采样源）。
+    pub offscreen: wgpu::TextureView,
+    /// 离屏纹理格式（= 后端构造时的 `format`）；合成器据此选域转换入口。
+    pub format: wgpu::TextureFormat,
+    /// 保活：本帧 uniform arena buffer（`draws` 的 bind group 引用它）。
+    pub _arena_buffer: wgpu::Buffer,
+}
+
 // ─── WgpuBackend3D ──────────────────────────────────────────────────────────
 
 /// WGPU 3D 渲染后端（设备句柄 + 管线 + 绑定布局 + mesh 缓存 + uniform arena）。
@@ -272,6 +289,8 @@ pub struct Frame3DData {
 pub struct WgpuBackend3D {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// 管线目标格式（3D 离屏纹理沿用该格式，合成器据此判域）。
+    format: wgpu::TextureFormat,
     pipeline_triangles: wgpu::RenderPipeline,
     pipeline_lines: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -280,6 +299,8 @@ pub struct WgpuBackend3D {
     mesh_cache: Mutex<ResourceCache<()>>,
     /// 256 对齐 dynamic uniform arena。
     arena: Mutex<UniformArena>,
+    /// 本层离屏渲染目标（尺寸变化时重建；`None` = 尚未渲染过）。
+    offscreen: Mutex<Option<RenderTarget>>,
 }
 
 impl WgpuBackend3D {
@@ -377,11 +398,13 @@ impl WgpuBackend3D {
         Self {
             device,
             queue,
+            format,
             pipeline_triangles,
             pipeline_lines,
             bind_group_layout,
             mesh_cache: Mutex::new(ResourceCache::new()),
             arena: Mutex::new(UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT)),
+            offscreen: Mutex::new(None),
         }
     }
 
@@ -400,6 +423,43 @@ impl WgpuBackend3D {
 
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    /// 管线/离屏目标格式。
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    /// 当前 3D 离屏纹理（若已渲染过）；用于回读/诊断。
+    pub fn offscreen_texture(&self) -> Option<wgpu::Texture> {
+        self.offscreen
+            .lock()
+            .expect("offscreen poisoned")
+            .as_ref()
+            .and_then(|t| t.texture.clone())
+    }
+
+    /// 取得（必要时按 `viewport` 尺寸重建）本层离屏渲染目标视图。
+    fn offscreen_view(&self, device: &wgpu::Device, viewport: Viewport) -> wgpu::TextureView {
+        let width = viewport.w.max(1);
+        let height = viewport.h.max(1);
+        let mut guard = self.offscreen.lock().expect("offscreen poisoned");
+        let recreate = match guard.as_ref() {
+            Some(t) => t.size.width != width || t.size.height != height || t.format != self.format,
+            None => true,
+        };
+        if recreate {
+            *guard = Some(RenderTarget::new_offscreen(
+                device,
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                self.format,
+            ));
+        }
+        guard.as_ref().expect("offscreen target").view().clone()
     }
 
     /// 写入 uniform 块（mvp 64 字节 + color 16 字节 = 80 字节）。
@@ -640,6 +700,54 @@ impl WgpuBackend3D {
             }
         }
     }
+
+    /// C3：把一个 3D 图层渲染到**自己的离屏纹理**（透明清屏）。
+    ///
+    /// 产出 [`Layer3DFrame`]，由 `SceneCompositorCallback::prepare` 交给合成器按声明顺序混合。
+    /// 离屏纹理按 `viewport` 尺寸缓存，尺寸不变时不重建。清屏 alpha = 0：未绘制处
+    /// 保持透明，合成时不会盖住背景与下层（这是"图层可任意叠放"的前提）。
+    pub fn render_layer_offscreen(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view_proj: Mat4,
+        viewport: Viewport,
+        meshes: &[MeshDraw],
+        lines: &[LineDraw],
+    ) -> Layer3DFrame {
+        let frame = self.prepare_draws(&self.device, &self.queue, view_proj, meshes, lines);
+        let offscreen = self.offscreen_view(&self.device, viewport);
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("xcal-3d-layer-offscreen-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &offscreen,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.record_prepared(&frame.draws, &mut pass);
+        }
+
+        Layer3DFrame {
+            offscreen,
+            format: self.format,
+            _arena_buffer: frame._arena_buffer,
+        }
+    }
 }
 
 // ─── RenderBackend3D 实现 ───────────────────────────────────────────────────
@@ -666,7 +774,8 @@ impl RenderBackend3D for WgpuBackend3D {
                         r: 0.0,
                         g: 0.0,
                         b: 0.0,
-                        a: 1.0,
+                        // S3-2/C3：图层离屏渲染必须透明清屏，否则会盖住背景与下层。
+                        a: 0.0,
                     }),
                     store: wgpu::StoreOp::Store,
                 },
@@ -883,6 +992,100 @@ mod tests {
         backend.submit_layer(&layer, &mut encoder);
         backend.notify_submit();
         ctx.submit(encoder.finish());
+    }
+
+    /// C3 验收（真实设备）：3D 图层渲染到自己的离屏纹理，且**清屏为透明**。
+    ///
+    /// 空队列 → 离屏纹理全部应为 `[0,0,0,0]`。这是"图层可任意叠放"的前提：
+    /// 若清屏不透明（旧值 alpha = 1.0），该层会像一张不透明卡片盖住背景与下层。
+    #[test]
+    fn test_render_layer_offscreen_clears_transparent() {
+        let Some((backend, ctx)) = headless_backend() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        // 64 × 4 = 256 字节 = COPY_BYTES_PER_ROW_ALIGNMENT，回读无需补行距。
+        let size = 64u32;
+        let viewport = Viewport::full(size, size);
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-3d-offscreen-encoder"),
+            });
+        let frame = backend.render_layer_offscreen(&mut encoder, Mat4::IDENTITY, viewport, &[], &[]);
+        assert_eq!(frame.format, ctx.target_format());
+        ctx.submit(encoder.finish());
+        ctx.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll 失败");
+
+        let texture = backend.offscreen_texture().expect("离屏纹理应已创建");
+        assert_eq!((texture.width(), texture.height()), (size, size));
+        let pixels = read_rgba8(ctx.device(), ctx.queue(), &texture, size, size);
+        assert_eq!(pixels.len(), (size * size * 4) as usize);
+        assert!(
+            pixels.iter().all(|&b| b == 0),
+            "C3：离屏清屏必须透明（首个非零字节 = {:?})",
+            pixels.iter().position(|&b| b != 0)
+        );
+    }
+
+    /// 回读 `Rgba8` 纹理（`width × 4` 恰为 256 对齐时无需补行距）。
+    fn read_rgba8(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        let unpadded = width * 4;
+        let padded = unpadded.div_ceil(256) * 256;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("test-3d-readback"),
+            size: (padded * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("test-3d-readback-encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map_async 失败"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll 失败");
+        let data = slice.get_mapped_range().expect("映射失败");
+        let mut out = Vec::with_capacity((unpadded * height) as usize);
+        for row in 0..height {
+            let start = (row * padded) as usize;
+            out.extend_from_slice(&data[start..start + unpadded as usize]);
+        }
+        drop(data);
+        buffer.unmap();
+        out
     }
 
     #[test]

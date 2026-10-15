@@ -23,15 +23,15 @@ use egui::Panel;
 use xcal_core::animation::{BindingTable, BindingTarget};
 use xcal_core::director_state::DirectorState;
 use xcal_core::domain::{
-    ids, CameraCommand, ContentHandle, InputEvents, LayerDescriptor, LayerId, LayerKind, SceneEvent,
-    SceneView,
+    ids, CameraCommand, ContentHandle, InputEvents, LayerBlend, LayerDescriptor, LayerId, LayerKind,
+    SceneEvent, SceneView,
 };
 use xcal_core::resource::Resources;
 use xcal_core::scene::components::Camera3D;
 use xcal_core::types::Rect;
 use xcal_core::{Curve, TimeState};
 use xcal_render::{DrawQueue, DrawQueue3D};
-use xcal_render_backends::{EguiPainter, Layer2DCallback, Layer3DCallback};
+use xcal_render_backends::{EguiPainter, SceneCompositorCallback, SceneLayer};
 use xc_geometry::Rect2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
@@ -65,7 +65,10 @@ impl EguiSceneHost {
     ///
     /// - 2D 图层：相机来自 `AppCamera` + `ViewRect`（UI 侧管理的观察参数）；
     /// - 3D 图层：相机取 World 中第一个 `Camera3D` 组件；
-    /// - `ContentHandle` 为 B 阶段占位（S3 统一管线接管后指向 RenderQueue 分片）。
+    /// - `ContentHandle` 为 B 阶段占位（S3 统一管线接管后指向 RenderQueue 分片）；
+    /// - **混合方式（S3-2）**：两个图层的内容都渲染到**透明底**离屏纹理，
+    ///   所以声明为 [`LayerBlend::Alpha`] —— 用 `Opaque`(REPLACE) 会把透明像素
+    ///   原样写进主 pass，抹掉背景与下层（`Opaque` 仅作枚举默认值）。
     pub fn build_scene_view(world: &hecs::World, res: &Resources) -> SceneView {
         let rect = res
             .get::<ViewRect>()
@@ -76,20 +79,24 @@ impl EguiSceneHost {
 
         if let Some(cam) = res.get::<AppCamera>() {
             view.layers.push(LayerDescriptor {
-                id: LayerId(0),
+                id: LayerId(view.layers.len() as u32),
                 kind: LayerKind::Viewport2D {
                     camera: cam.to_camera_2d(rect),
                 },
                 content: ContentHandle::OPAQUE,
+                opacity: 1.0,
+                blend: LayerBlend::Alpha,
             });
         }
 
         // hecs 0.11：单组件查询的 iter 产出 `&Camera3D`（无 Entity）。
         if let Some(camera3d) = world.query::<&Camera3D>().iter().next() {
             view.layers.push(LayerDescriptor {
-                id: LayerId(1),
+                id: LayerId(view.layers.len() as u32),
                 kind: LayerKind::Viewport3D { camera: *camera3d },
                 content: ContentHandle::OPAQUE,
+                opacity: 1.0,
+                blend: LayerBlend::Alpha,
             });
         }
 
@@ -200,6 +207,9 @@ impl EguiSceneHost {
                 // S3-1 验收开关：切换 2D 管线（旧 CPU 回放 ↔ 新 GPU 离屏 MSAA），
                 // 用于同一画面下逐帧对比两条管线的输出是否一致。
                 ui.checkbox(&mut ui_config.gpu_2d, "GPU 2D 管线");
+
+                // S3-2 验收开关：翻转图层叠放顺序（见 `UiConfig::flip_layer_order`）。
+                ui.checkbox(&mut ui_config.flip_layer_order, "翻转图层顺序");
 
                 ui.separator();
                 ui.label("Camera");
@@ -366,12 +376,23 @@ impl EguiSceneHost {
     // ─── 内容提交 ──────────────────────────────────────────────────────────
 
     /// 把本帧录制的内容提交到 egui painter（原 RenderSubmitSystem /
-    /// RenderSubmit3DSystem 的职责）。在 `Scheduler::run_frame` 之后调用。
+    /// RenderSubmit3DSystem / GridBuild 背景矩形的职责）。在 `Scheduler::run_frame`
+    /// 之后调用。
     ///
-    /// - 2D：`DrawQueue` 经 `EguiPainter` 回放到视口矩形；
-    /// - 3D：取 SceneView 声明的 3D 图层相机 + `DrawQueue3D` 快照，
-    ///   封装为 egui_wgpu 回调（与 2D 同层、shape 顺序在后 → 绘制于 2D 之上，
-    ///   clip 自动限定在中央视口，侧边面板不受影响）。
+    /// **顺序语义（S3-2）**：`SceneView::layers` 的**索引序 = 合成序**（先 = 下）。
+    /// `UiConfig::flip_layer_order` 仅用于验收时翻转一次顺序（不改场景声明）。
+    ///
+    /// **单一回调（S3-2 修复）**：`egui_wgpu::CallbackResources` 是全局 TypeMap，
+    /// 若每个图层各注册一个回调，它们会互相覆盖同一份合成资源
+    /// （见 [`xcal_render_backends::scene_callback`] 头部说明）。因此这里
+    /// 只注册**一个** [`SceneCompositorCallback`]，由它一次性渲染并合成**全部**
+    /// GPU 图层。回调被放在有效序中**首个 GPU 图层**的位置，以保持与相邻 CPU
+    /// 图层的相对次序：
+    ///
+    /// - 背景：先铺 `SceneView::background`（原 GridBuild 的 `-1000` 全屏矩形职责）；
+    /// - GPU 层（3D，或 `gpu_2d = true` 的 2D）：进唯一回调（离屏 + 合成）；
+    /// - CPU 2D 层（`gpu_2d = false`）：就地 `DrawQueue` → `EguiPainter` 回放
+    ///   （旧路径，退役属 S3-4）。
     pub fn present(ui: &mut egui::Ui, view: &SceneView, res: &mut Resources) {
         let view_rect = res
             .get::<ViewRect>()
@@ -379,52 +400,83 @@ impl EguiSceneHost {
             .unwrap_or_else(|| ViewRect::default().rect);
         let egui_rect = view_rect.into_egui_rect();
 
-        // 2D 内容先画。两条管路由 `UiConfig::gpu_2d` 运行期开关二选一
-        // （S3-1：新管线不是替换而是并存，验收靠对比两条管线）。
+        let painter = ui.painter_at(egui_rect);
+
+        // ── 背景铺底（图层全部在它之上） ──
+        let bg = view.background;
+        painter.rect_filled(
+            egui_rect,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(bg.r, bg.g, bg.b, bg.a),
+        );
+
+        // 2D 管线开关与图层顺序开关（UI 状态）。
         let gpu_2d = res.get::<UiConfig>().map(|c| c.gpu_2d).unwrap_or(false);
-        if gpu_2d {
-            // 新路径：`Layer2DCallback` 在 `prepare` 把队列渲染进离屏 MSAA 纹理，
-            // 在 `paint` 合成回主 pass（场景侧 System 的 Reads/Writes 不变，
-            // 开关只影响 present 这一处）。
-            if let Some(queue) = res.get::<DrawQueue>() {
-                if !queue.is_empty() {
-                    let viewport = Rect2D::new(*view_rect.min(), *view_rect.max());
-                    let callback = Layer2DCallback::new(viewport, queue);
-                    ui.painter_at(egui_rect).add(egui::epaint::Shape::Callback(
-                        egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
-                    ));
+        let flip = res
+            .get::<UiConfig>()
+            .map(|c| c.flip_layer_order)
+            .unwrap_or(false);
+
+        let order: Vec<usize> = if flip {
+            (0..view.layers.len()).rev().collect()
+        } else {
+            (0..view.layers.len()).collect()
+        };
+
+        // 该层是否走 GPU 路径（3D 恒走；2D 仅在 `gpu_2d` 打开时走）。
+        let is_gpu = |idx: usize| {
+            matches!(view.layers[idx].kind, LayerKind::Viewport3D { .. })
+                || (gpu_2d && matches!(view.layers[idx].kind, LayerKind::Viewport2D { .. }))
+        };
+
+        // pass 1：按有效序收集 GPU 图层声明，并记下首个 GPU 图层在有效序中的位置
+        // （唯一回调就落在那里）。
+        let mut gpu_specs: Vec<SceneLayer> = Vec::new();
+        let mut first_gpu_pos: Option<usize> = None;
+        for (pos, &idx) in order.iter().enumerate() {
+            if !is_gpu(idx) {
+                continue;
+            }
+            let layer = &view.layers[idx];
+            gpu_specs.push(SceneLayer {
+                id: layer.id,
+                kind: layer.kind.clone(),
+                blend: layer.blend,
+                opacity: layer.clamped_opacity(),
+            });
+            if first_gpu_pos.is_none() {
+                first_gpu_pos = Some(pos);
+            }
+        }
+
+        // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
+        let viewport = Rect2D::new(*view_rect.min(), *view_rect.max());
+
+        // pass 2：按有效序发射 —— 首个 GPU 图层处注册唯一回调；CPU 2D 层就地回放。
+        for (pos, &idx) in order.iter().enumerate() {
+            if Some(pos) == first_gpu_pos {
+                let (Some(queue_2d), Some(queue_3d)) =
+                    (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
+                else {
+                    continue;
+                };
+                let callback = SceneCompositorCallback::new(
+                    viewport,
+                    std::mem::take(&mut gpu_specs),
+                    queue_2d,
+                    queue_3d,
+                );
+                painter.add(egui::epaint::Shape::Callback(
+                    egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
+                ));
+            } else if !is_gpu(idx) {
+                // 旧路径：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放
+                // （特征化基线，退役属 S3-4）。
+                if let Some(queue) = res.get_mut::<DrawQueue>() {
+                    queue.execute(&EguiPainter::new(&painter));
                 }
             }
-        } else if let Some(queue) = res.get_mut::<DrawQueue>() {
-            // 旧路径：`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（特征化基线）。
-            let painter = ui.painter_at(egui_rect);
-            queue.execute(&EguiPainter::new(&painter));
         }
-
-        // 3D 内容覆盖其上（仅当场景声明了 3D 图层且队列非空）。
-        let Some(LayerDescriptor {
-            kind: LayerKind::Viewport3D { camera },
-            ..
-        }) = view
-            .layers
-            .iter()
-            .find(|l| matches!(l.kind, LayerKind::Viewport3D { .. }))
-        else {
-            return;
-        };
-        let Some(queue3d) = res.get::<DrawQueue3D>() else {
-            return;
-        };
-        if queue3d.is_empty() {
-            return;
-        }
-
-        let aspect = egui_rect.width() / egui_rect.height().max(1.0);
-        let callback = Layer3DCallback::new(*camera, aspect, queue3d);
-        let painter = ui.painter_at(egui_rect);
-        painter.add(egui::epaint::Shape::Callback(
-            egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
-        ));
     }
 }
 
@@ -456,6 +508,41 @@ mod tests {
         assert!(matches!(view.layers[0].kind, LayerKind::Viewport2D { .. }));
         assert!(matches!(view.layers[1].kind, LayerKind::Viewport3D { .. }));
         assert_eq!(view.layers[0].content, ContentHandle::OPAQUE);
+        // S3-2：两个图层都渲染到透明底离屏纹理，必须声明为 Alpha
+        // （用默认的 Opaque/REPLACE 会把透明像素写进主 pass，抹掉背景）。
+        for l in &view.layers {
+            assert_eq!(l.blend, LayerBlend::Alpha);
+            assert_eq!(l.opacity, 1.0);
+            assert_eq!(l.clamped_opacity(), 1.0);
+        }
+        assert_eq!(view.background, xcal_core::domain::DEFAULT_BACKGROUND);
+    }
+
+    /// S3-2 修复：`view.layers` 内 `LayerId` 必须**两两唯一**
+    /// （此前是常量式 —— 所有层同一个值会让按层寻址的方案退化成冲突）。
+    #[test]
+    fn build_scene_view_assigns_unique_layer_ids() {
+        let mut world = hecs::World::new();
+        world.spawn((
+            Camera3D::new(
+                glam::Vec3::new(0.0, 0.0, 5.0),
+                glam::Vec3::ZERO,
+                glam::Vec3::Y,
+                Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
+            ),
+        ));
+
+        let mut res = Resources::new();
+        res.insert(AppCamera::default());
+        res.insert(ViewRect::default());
+
+        let view = EguiSceneHost::build_scene_view(&world, &res);
+        assert_eq!(view.layers.len(), 2);
+        for (i, a) in view.layers.iter().enumerate() {
+            for b in view.layers.iter().skip(i + 1) {
+                assert_ne!(a.id, b.id, "图层 LayerId 必须两两不相等");
+            }
+        }
     }
 
     /// 无 3D 相机实体时只声明 2D 图层；无 AppCamera 资源时无 2D 图层。

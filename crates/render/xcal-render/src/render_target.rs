@@ -47,7 +47,10 @@ impl RenderTarget {
         }
     }
 
-    /// 创建离屏渲染目标（RENDER_ATTACHMENT | COPY_SRC，便于回读/调试）。
+    /// 创建离屏渲染目标（`RENDER_ATTACHMENT | COPY_SRC | TEXTURE_BINDING`）。
+    ///
+    /// - `COPY_SRC`：便于回读/调试；
+    /// - `TEXTURE_BINDING`：S3-2 起离屏纹理要作为合成器的采样源。
     pub fn new_offscreen(
         device: &wgpu::Device,
         size: wgpu::Extent3d,
@@ -60,7 +63,9 @@ impl RenderTarget {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         Self::from_texture(texture)

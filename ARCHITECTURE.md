@@ -284,16 +284,76 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化 → 顶点哈希缓存
 （`ResourceCache<()>` + `DeferredDestroyer`）→ `UniformArena`（**复用 `wgpu_3d`**，
 256B 对齐 dynamic offset，`UNIFORM_SIZE = 96` = mat4 + color + **params**，
-`params.x = stroke_width`）→ 离屏绘制；`composite` 用哨兵 `COMPOSITE_QUAD` 贴回主 pass。
-`Layer2DCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
+`params.x = stroke_width`）→ 离屏绘制。`SceneCompositorCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
+**S3-2 起本文件不再自带合成管线**（`pipeline_composite` / `composite_bgl` / `sampler` /
+`composite()` / `COMPOSITE_QUAD` 已移除），离屏清屏改为**透明**，合成统一交给
+`xcal-render-backends::compositor::Compositor`。
 **运行期开关** `UiConfig::gpu_2d`（默认 off）在 `xcal-egui::EguiSceneHost::present` 二选一：
-`EguiPainter` CPU 回放 ↔ `Layer2DCallback` GPU 路径（旧管线退役属 S3-4）。
+`EguiPainter` CPU 回放 ↔ `SceneCompositorCallback` GPU 路径（旧管线退役属 S3-4）。
 
 **egui-wgpu 回调 viewport 契约（踩坑记录）**：egui-wgpu 处理 `Primitive::Callback` 时会把
 render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一个 primitive 才复位）。
 即回调内 NDC `[-1,1]²` 对应回调矩形本身——合成四边形必须写死全 NDC 盒，不得用整屏尺寸
 把视口像素矩形换算成裁剪坐标（否则视口被**二次应用** → 2D 视图在 X 方向被压扁）。
 回归测试 `composite_lands_inside_scoped_viewport_on_real_device` 在旧实现下必然失败。
+
+### S3-2 图层合成器
+
+**目标**：每个图层渲染到自己的**离屏纹理**，由合成器按 `SceneView::layers` 的
+**索引顺序**（先 = 下）混合进主 pass —— 2D / 3D 可任意叠放（此前 3D 硬编码在 2D 之上），
+并为 S3-3（2D / 3D 互为纹理）铺路。
+
+**声明契约**（`xcal-core::domain::view`）：
+- `LayerBlend { Opaque, Alpha, Additive }`，`Default = Opaque`；
+- `LayerDescriptor.opacity: f32` + `clamped_opacity()`（合成器唯一取值口径，clamp `[0,1]`）；
+- `SceneView.background: Color32`，默认 `DEFAULT_BACKGROUND = (20,20,20,255)`
+  —— 即改动前 2D 图层内那个全屏背景矩形；背景**不属于任何图层**，铺在所有图层之下。
+
+**背景外移（C2）**：`GridBuildSystem` 不再产出 `ZIndex::new(-1000)` 的全屏矩形；
+2D 离屏清屏 `CLEAR_COLOR` alpha 由 1 → 0（`Rgba8Unorm` 透明底）；背景改由
+`EguiSceneHost::present` 在回放/合成前铺一次（CPU / GPU 两条路径都保留背景）。
+
+**3D 离屏化（C3）**：`WgpuBackend3D::render_layer_offscreen` 把一层画进按视口尺寸缓存的
+离屏纹理，清屏 **alpha = 0**；产出 `Layer3DFrame { offscreen, format, _arena_buffer }`。
+`depth_stencil` 仍为 `None`（深度属 S4）。
+
+**合成器（C4）**：`xcal-render-backends::compositor`
+- `CompositeOp { texture, src_format, blend, opacity, rect_px }` →
+  `prepare(device, &[..]) -> CompositeFrame`（建 bind group + opacity uniform，
+  **不重排**，层序 = 输入序）→ `composite_layers(pass, &frame)`；
+- `COMPOSITE_QUAD` = 写死覆盖 NDC `[-1,1]²` 的 TriangleStrip（左上→右上→左下→右下），
+  2D / 3D 共用；顶点布局仍来自契约 `VertexLayout::standard(AaModel::None, CacheStrategy::Static)`；
+- **无动态 blend / 无动态入口点** → 预建 `HashMap<(LayerBlend, Conversion), RenderPipeline>`
+  （3 blend × 3 conversion = 9 条，`label` 统一 `"xcal-compositor-pipeline"`）；
+- 混合（预乘 alpha）：`Opaque` = REPLACE；`Alpha` = 色/alpha 均 `One / OneMinusSrcAlpha`；
+  `Additive` = `One / One`。`opacity` 由 uniform（x 分量）乘进源色，不走 blend constant；
+- **sRGB 域转换**：`textureSample` 对 sRGB 格式纹理**自动解码**，故按
+  (源 sRGB-ness, 目标 sRGB-ness) 选 fragment 入口：同域 `fs_identity`、
+  源非 sRGB → sRGB 目标 `fs_gamma_to_linear`、源 sRGB → 非 sRGB 目标 `fs_linear_to_gamma`
+  （`Conversion::for_formats`）。3D 离屏沿用主目标格式（源=目标 → Identity，逐字节保持现状），
+  2D 离屏为 `Rgba8Unorm`（存 gamma）。
+
+**接线（C5）**：`EguiSceneHost::present` 删除"`.find()` 取第一个 3D 层"的写法，
+改为**遍历 `SceneView::layers`**（索引序 = 合成序）。
+`UiConfig::flip_layer_order`（控制面板复选框）仅用于验收时翻转一次顺序。
+两个图层都声明 `LayerBlend::Alpha` —— 离屏是透明底，用 `Opaque`(REPLACE) 会把透明像素
+写进主 pass、抹掉背景与下层。
+
+**单一回调（S3-2 修复）**：`egui_wgpu::CallbackResources` 是**全局共享**的
+`HashMap<TypeId, _>`，**不是 per-callback 的**。早期"每个图层各注册一个回调"的设计里，
+`Layer2DCallback` 与 `Layer3DCallback` 各自 `insert::<CompositeFrame>()` —— 后插入覆盖
+先插入，两个 `paint()` 取到**同一帧**，把同一张离屏纹理画两遍（实机现象：顺序 A 只见 3D、
+顺序 B 只见 2D）。故改为**单个** `SceneCompositorCallback`（`xcal-render-backends::scene_callback`）：
+- 持有本帧全部图层声明 `Vec<SceneLayer { id, kind, blend, opacity }>` + 两个队列快照；
+- `prepare`：逐层渲染离屏 → 按声明序收集全部 `CompositeOp` → **一次** `Compositor::prepare`
+  → 单个 `CompositeFrame`，与各层 `_arena_buffer`（保活）一起存入 TypeMap 的 `SceneCompositorFrame`；
+- `paint`：设 scissor → `composite_layers`；
+- `present` 只注册**一个**回调，放在有效序中**首个 GPU 图层**的位置（CPU 2D 层就地回放）。
+- `LayerId` 改为**按层唯一**（`build_scene_view` 按索引派生），并有单测断言两两不相等。
+
+**已知限制**：3D 无深度缓冲（同层内物体互相穿透，S4）；3D 离屏无 MSAA（1x，与现状一致，S4）；
+每层多一次全屏 blit（层数少时可接受，层多时优化）；**CPU 路径不支持真合成**
+（退化为顺序绘制，2D 仍在下，S3-4 退役旧管线后消失）；`opacity` × `blend` 组合未穷举验证。
 
 ### cargo-archtest 适配状态
 

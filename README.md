@@ -60,7 +60,7 @@ crates/
 | `xc-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
 | `xcal-core` | render | ECS（hecs World / Resources / System trait / 六阶段 Scheduler）；Transform2D 体系；3D 场景类型；**动画绑定层**（Binding / BindingTable / BindingApplySystem，取代组件组合查询）；DirectorState + DirectorAdvanceSystem；TimeState |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer / Viewport） |
-| `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / EguiPainter / Layer3DCallback） |
+| `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback / EguiPainter） |
 | `xcal-macro` | ui | `Transform2DInto` 派生过程宏 |
 | `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
 | `xcal-node-editor` | ui | 纯逻辑节点编辑器状态机（Command / Undo / 可插拔 HitTestPolicy） |
@@ -99,13 +99,12 @@ crates/
    `Camera3D.eye`（轨道）等组件，取代旧的 `OrbitAnim` 组件 + `OrbitApplySystem`。
 2. **RenderCommit**：`SceneRecord3DSystem` 遍历 World 中的 `Mesh3D`
    （+ 可选 `Transform`），清空并填充 `DrawQueue3D`。
-3. **FrameEnd**：`RenderSubmit3DSystem` 取中央视口矩形，构造
-   `Layer3DCallback`（camera + aspect + DrawQueue3D 快照）注册为
-   egui paint callback；egui-wgpu 在主 render pass 内回调：
-   - `prepare`：`WgpuBackend3D::prepare_draws` 计算 VP 矩阵、每帧重建
-     vertex/uniform buffer，生成 `Frame3DData`；
-   - `paint`：`record_prepared` 设置 scissor（中央视口，避开侧栏）、
-     绑定 pipeline 与 bind group，按 topology 发出 draw 命令。
+3. **FrameEnd**：`EguiSceneHost::present` 取中央视口矩形，构造**单个**
+   `SceneCompositorCallback`（含全部 `SceneLayer` 声明 + `DrawQueue`/`DrawQueue3D` 快照）
+   注册为 egui paint callback；egui-wgpu 在主 render pass 内回调：
+   - `prepare`：逐层渲染到各自离屏纹理（`WgpuBackend2D` / `WgpuBackend3D::render_layer_offscreen`），
+     收集 `CompositeOp` → 一次 `Compositor::prepare` 得到单个 `CompositeFrame`；
+   - `paint`：`Compositor::composite_layers` 按声明顺序混合（层序 = `SceneView::layers` 索引序）。
 
 ## 运行
 

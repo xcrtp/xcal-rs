@@ -5,7 +5,7 @@
 // 模块：
 //   - render_context：RenderContext（device/queue/format 句柄，wgpu/pollster）
 //   - wgpu_3d：WgpuBackend3D / PreparedDraw3D / Frame3DData（3D MVE 后端）
-//   - layer_callback：Layer3DCallback（egui_wgpu 回调，feature = "egui-wgpu"）
+//   - scene_callback：SceneCompositorCallback（唯一 egui_wgpu 回调，一次合成全部图层，feature = "egui-wgpu"）
 //   - egui_2d：EguiPainter + color_to_egui（Painter2D 的 egui 实现，feature = "egui"）
 //   - eframe_backend：EframeWgpuBackend（RenderBackend 的 egui-wgpu 实现）
 //   - svg_recorder：SVG 录制后端（预留空壳）
@@ -22,11 +22,16 @@ pub mod vertex_layout;
 // （`egui-wgpu`），纯后端与几何/裁剪数学在 `wgpu` 下即可编译与测试。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod wgpu_2d;
+// S3-2/C4：图层合成器（N 张图层纹理按声明顺序混合进主 pass）。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod compositor;
 
 #[cfg(feature = "egui-wgpu")]
 pub mod eframe_backend;
+// S3-2 修复：合并 2D/3D 为**单个**回调，一次性合成全部图层。
+// （`CallbackResources` 是全局 TypeMap，每层一个 callback 会互相覆盖合成资源。）
 #[cfg(feature = "egui-wgpu")]
-pub mod layer_callback;
+pub mod scene_callback;
 
 #[cfg(feature = "egui")]
 pub mod egui_2d;
@@ -39,6 +44,8 @@ pub mod egui_2d;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_context::{DEFAULT_TARGET_FORMAT, RenderContext};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use compositor::{CompositeFrame, CompositeOp, Compositor};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use vertex_layout::to_wgpu;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use wgpu_2d::{
@@ -46,14 +53,12 @@ pub use wgpu_2d::{
     snapshot_queue,
 };
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
-pub use wgpu_3d::{Frame3DData, PreparedDraw3D, WgpuBackend3D};
+pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 
 #[cfg(feature = "egui-wgpu")]
 pub use eframe_backend::EframeWgpuBackend;
 #[cfg(feature = "egui-wgpu")]
-pub use layer_callback::Layer3DCallback;
-#[cfg(feature = "egui-wgpu")]
-pub use wgpu_2d::Layer2DCallback;
+pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};
 
 #[cfg(feature = "egui")]
 pub use egui_2d::{EguiPainter, color_to_egui};

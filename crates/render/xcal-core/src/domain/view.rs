@@ -7,7 +7,7 @@
 // B 不阻塞 S3，S3 也不用等 B。
 
 use crate::scene::components::Camera3D;
-use crate::types::Camera2D;
+use crate::types::{Camera2D, Color32};
 
 /// 图层唯一标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -45,16 +45,130 @@ impl ContentHandle {
     }
 }
 
-/// 一个图层的声明：ID + 类型 + 内容句柄。
+/// 图层与下层的混合方式（S3-2 合成器）。
+///
+/// 只声明语义，具体 wgpu 混合状态属于后端（`xcal-render-backends`）：
+/// - [`Opaque`](Self::Opaque) → `BlendState::REPLACE`（该层完全覆盖下层，
+///   要求图层纹理本身不透明）；
+/// - [`Alpha`](Self::Alpha) → 预乘 alpha（`src: One, dst: OneMinusSrcAlpha`）；
+/// - [`Additive`](Self::Additive) → `src: One, dst: One`（发光/高亮）。
+///
+/// `Default` 是 `Opaque`（"等价于当前行为"的语义默认），但**当前 2D/3D 图层
+/// 的纹理都是透明底**（背景已外移到合成器清屏，见 S3-2 §1.1），
+/// 因此 `build_scene_view` 显式声明为 `Alpha`——用 `Opaque` 的 REPLACE
+/// 会把图层外的透明像素写进主 pass，抹掉下层与背景。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LayerBlend {
+    /// 不透明覆盖（默认；等价于当前行为）。
+    #[default]
+    Opaque,
+    /// 预乘 alpha 混合（图层纹理 alpha 参与）。
+    Alpha,
+    /// 加法混合（发光/高亮效果）。
+    Additive,
+}
+
+/// 一个图层的声明：ID + 类型 + 内容句柄 + 混合参数。
 #[derive(Debug, Clone, Copy)]
 pub struct LayerDescriptor {
     pub id: LayerId,
     pub kind: LayerKind,
     pub content: ContentHandle,
+    /// 不透明度 [0,1]；配合 `blend` 使用。默认 1.0。
+    ///
+    /// 取值可能越界，混合前经 [`LayerDescriptor::clamped_opacity`] 钳制。
+    pub opacity: f32,
+    /// 与下层的混合方式。默认 `Opaque`。
+    pub blend: LayerBlend,
 }
 
+impl LayerDescriptor {
+    /// 钳制到 [0,1] 的不透明度（合成器唯一取值口径）。
+    pub fn clamped_opacity(&self) -> f32 {
+        self.opacity.clamp(0.0, 1.0)
+    }
+}
+
+/// 合成器清屏色默认值（与改动前 2D 图层内的背景矩形一致）。
+pub const DEFAULT_BACKGROUND: Color32 = Color32::new(20, 20, 20, 255);
+
 /// 场景对外的完整视图声明。
-#[derive(Debug, Clone, Default)]
+///
+/// **顺序语义**：`layers` 的索引顺序即合成顺序，索引 0 在最下，末位在最上。
+#[derive(Debug, Clone)]
 pub struct SceneView {
     pub layers: Vec<LayerDescriptor>,
+    /// 合成器清屏色（**不属于任何图层**）。
+    pub background: Color32,
+}
+
+impl Default for SceneView {
+    fn default() -> Self {
+        Self {
+            layers: Vec::new(),
+            background: DEFAULT_BACKGROUND,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Rect;
+
+    fn layer(opacity: f32, blend: LayerBlend) -> LayerDescriptor {
+        LayerDescriptor {
+            id: LayerId(0),
+            kind: LayerKind::Viewport2D {
+                camera: Camera2D::new(
+                    (0.0, 0.0).into(),
+                    40.0,
+                    Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+                ),
+            },
+            content: ContentHandle::OPAQUE,
+            opacity,
+            blend,
+        }
+    }
+
+    /// C1：`SceneView::default()` 的背景 = 改动前 2D 图层内的背景矩形 (20,20,20,255)。
+    #[test]
+    fn default_scene_view_background_matches_legacy_rect() {
+        let view = SceneView::default();
+        assert!(view.layers.is_empty());
+        assert_eq!(view.background, Color32::new(20, 20, 20, 255));
+        assert_eq!(view.background.a, 255, "默认背景必须不透明");
+    }
+
+    /// C1：`LayerBlend` 默认 `Opaque`（三变体齐备）。
+    #[test]
+    fn layer_blend_default_is_opaque() {
+        assert_eq!(LayerBlend::default(), LayerBlend::Opaque);
+        // 三变体互不相等（保证 HashMap<LayerBlend, _> 可作键）。
+        assert_ne!(LayerBlend::Opaque, LayerBlend::Alpha);
+        assert_ne!(LayerBlend::Alpha, LayerBlend::Additive);
+    }
+
+    /// C1：`opacity` clamp 到 [0,1]（合成器唯一取值口径）。
+    #[test]
+    fn opacity_is_clamped_to_unit_range() {
+        assert_eq!(layer(1.0, LayerBlend::Alpha).clamped_opacity(), 1.0);
+        assert_eq!(layer(0.0, LayerBlend::Alpha).clamped_opacity(), 0.0);
+        assert_eq!(layer(2.5, LayerBlend::Alpha).clamped_opacity(), 1.0);
+        assert_eq!(layer(-1.0, LayerBlend::Alpha).clamped_opacity(), 0.0);
+        assert_eq!(layer(0.25, LayerBlend::Alpha).clamped_opacity(), 0.25);
+    }
+
+    /// C1 红线：`SceneView` / `LayerDescriptor` 仍为纯数据（无 egui 类型）。
+    #[test]
+    fn scene_view_layer_order_is_declaration_order() {
+        let mut view = SceneView::default();
+        view.layers.push(layer(1.0, LayerBlend::Alpha));
+        view.layers.push(layer(1.0, LayerBlend::Alpha));
+        assert_eq!(view.layers[0].id, LayerId(0));
+        assert_eq!(view.layers[1].id, LayerId(0));
+        // 索引 0 = 最下层（顺序即声明，无额外 z 字段）。
+        assert_eq!(view.layers.len(), 2);
+    }
 }

@@ -8,7 +8,7 @@
 ```
 xcal-core (System/Resource/Scheduler + domain 契约)
 xcal-render (2D 管线 Painter2D / DrawQueue / Shape2D)
-xcal-render-backends (EguiPainter / Layer2DCallback / Layer3DCallback)
+xcal-render-backends (EguiPainter / Compositor / SceneCompositorCallback)
 xc-geometry (Rect2D：声明 GPU 2D 回调视口)
 xcal-macro (Transform2DInto 派生)
       │
@@ -29,7 +29,7 @@ xcal-app (装配 + ParamPanelSystem)
 | Resource | 归属 | 说明 |
 |----------|------|------|
 | `AppCamera { center: Vec2, scale: f32 }` | 本 crate | 2D 相机**纯状态**；输入处理已删除，控制器是纯函数 `apply_command`（消费 domain 的 `CameraCommand`）|
-| `UiConfig { show_grid, show_field, gpu_2d }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = false`）|
+| `UiConfig { show_grid, show_field, gpu_2d, flip_layer_order }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = false`）+ S3-2 图层顺序翻转（默认 `false`）|
 | `ViewRect { rect }` | 本 crate | 中央视口在 egui 点坐标中的矩形（由 `EguiSceneHost::update_view_rect` 写入）|
 | `TimeState` | 再导出自 xcal-core | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
 | `DirectorState` | xcal-core | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
@@ -67,7 +67,8 @@ xcal-app (装配 + ParamPanelSystem)
 `EguiSceneHost`（`host.rs`）绘制的三个面板：
 
 - **控制面板（左）**：`t` 读数、`显示网格` / `显示向量场` 复选框、
-  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认关）、相机 center/scale 读数。
+  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认关）、
+  **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数。
 - **时间面板（左）**：播放/暂停按钮、速度滑块、时间轴 seek 滑块。
 - **参数面板（右）**：按 (curve, target) 展示绑定滑块——圆半径 `base/amp/omega`、
   函数相位 `omega`、3D 轨道相机 `radius/speed/angle`。
@@ -85,15 +86,26 @@ xcal-app (装配 + ParamPanelSystem)
   `InputEvents`；随后 `update_view_rect` 写 `ViewRect`（必须在 `run_frame` 之前，
   否则 resize 时内容慢一帧）。
 - `present(ui, view, res)`：提交 2D 与 3D 内容，替代原 `RenderSubmitSystem` /
-  `RenderSubmit3DSystem`。**2D 两条管路由 `UiConfig::gpu_2d` 运行期二选一**：
+  `RenderSubmit3DSystem` / `GridBuild` 的全屏背景矩形。**顺序语义（S3-2）**：
+  `SceneView::layers` 的**索引序 = 合成序**（先 = 下），本函数**遍历该列表**依次
+  `painter.add`（调用顺序即绘制顺序）—— 不再是"3D 永远盖在 2D 上"；
+  `UiConfig::flip_layer_order`（控制面板复选框）仅用于验收时翻转一次顺序。
+  先铺 `SceneView::background`（原 `GridBuild` 的 `-1000` 矩形职责，C2 外移），
+  图层全部在其之上。**2D 两条管路由 `UiConfig::gpu_2d` 运行期二选一**：
 
   | `gpu_2d` | 路径 |
   |----------|------|
   | `false`（默认）| `DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（迁移前基线）|
-  | `true` | `Layer2DCallback`：`prepare` 渲染离屏 MSAA 4x 纹理，`paint` 合成回主 pass |
+  | `true` | `SceneCompositorCallback`：`prepare` 渲染离屏 MSAA 4x 透明底纹理，`paint` 经**合成器**混合回主 pass |
 
-  3D 内容恒以 `Layer3DCallback` 覆盖在 2D 之上（`ui.painter_at(rect)` 同层、
-  shape 顺序在后，clip 自动局限在中央视口）。
+  3D 图层与 GPU 2D 图层进**同一个** `SceneCompositorCallback`（离屏 + 合成器），
+  回调落在有效序中首个 GPU 图层的位置；CPU 2D 层在其声明位置就地回放。
+  两个图层都声明 `LayerBlend::Alpha`：离屏是透明底，用 `Opaque`(REPLACE) 会把透明像素
+  写进主 pass、抹掉背景与下层。CPU 路径**不支持真合成**（退化为顺序绘制，2D 仍在下，S3-4 退役后消失）。
+
+> **单一回调（S3-2 修复）**：`egui_wgpu::CallbackResources` 是全局共享的 TypeMap，
+> 每层一个回调会互相覆盖 `CompositeFrame`（实机现象：顺序 A 只见 3D、顺序 B 只见 2D）。
+> 故 `present` 只注册一个回调，一次性合成全部图层。
 
 ---
 
@@ -115,7 +127,7 @@ use xcal_egui::EguiPainter;
 ```toml
 xcal-core              = { features = ["egui"] }              # egui feature 门控（如需）
 xcal-render            = { default-features = false }         # 2D 管线（无 wgpu）
-xcal-render-backends   = { features = ["egui", "egui-wgpu"] } # EguiPainter + Layer2DCallback/Layer3DCallback
+xcal-render-backends   = { features = ["egui", "egui-wgpu"] } # EguiPainter + Compositor/SceneCompositorCallback
 xc-geometry                                                   # S3-1：以 Rect2D 声明回调视口
 xcal-macro
 egui                   = "0.36"
@@ -130,10 +142,11 @@ cargo test -p xcal-egui
 cargo doc  -p xcal-egui --no-deps
 ```
 
-- `resources`：`AppCamera` / `UiConfig` Default（含 `!gpu_2d` 断言）/ `Resources` 增删
+- `resources`：`AppCamera` / `UiConfig` Default（含 `!gpu_2d` / `!flip_layer_order` 断言）/ `Resources` 增删
 - `systems`：`CameraInputSystem` zoom / clamp / pan / 无事件 4 例；`AppCamera::apply_command`
-  忽略 Orbit/Dolly 1 例
+  忽略 Orbit/Dolly 1 例；`GridBuildSystem` 不再产出全屏背景矩形 1 例
 - `time_control`：`TimeControlSystem` 播放切换 / speed+seek / 无关事件忽略 3 例
-- `host`：`build_scene_view` 图层声明 / 缺层跳过 / 2D 相机与 AppCamera 一致 3 例
+- `host`：`build_scene_view` 图层声明（含 `LayerBlend::Alpha` / `opacity` / 默认背景断言）/
+  缺层跳过 / 2D 相机与 AppCamera 一致 3 例
 
 以上均为 **headless**（无窗口、无 egui 上下文）构造 `Scheduler + Resources` 驱动。

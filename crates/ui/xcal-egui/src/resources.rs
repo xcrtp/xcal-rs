@@ -89,10 +89,16 @@ pub struct UiConfig {
     /// S3-1：2D 管线开关（运行期 checkbox，不是编译期 feature）。
     ///
     /// - `false`（默认）：旧路径——`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放；
-    /// - `true`：新路径——`Layer2DCallback` 走 wGPU 离屏纹理（MSAA 4x）+ 合成。
+    /// - `true`：新路径——`SceneCompositorCallback` 走 wGPU 离屏纹理（MSAA 4x）+ 合成。
     ///
     /// 两条管线并存的意义就是逐帧对比验收（计划 §5.5/§8）；旧管线退役属 S3-4。
     pub gpu_2d: bool,
+    /// S3-2 验收开关：**声明的图层顺序**（`false`）= 先声明的在**下**；
+    /// 翻转后 = 先声明的在**上**（2D 盖住 3D）。
+    ///
+    /// 顺序的语义来源是 `SceneView::layers` 的索引序，本开关只做展示期翻转，
+    /// 不改动场景声明（用于肉眼验证"叠放顺序确实由声明决定"）。
+    pub flip_layer_order: bool,
 }
 
 impl Default for UiConfig {
@@ -101,6 +107,7 @@ impl Default for UiConfig {
             show_grid: true,
             show_field: false,
             gpu_2d: false,
+            flip_layer_order: false,
         }
     }
 }

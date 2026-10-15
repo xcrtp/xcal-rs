@@ -5,19 +5,22 @@
 //!    [`xcal_render_backends::WgpuBackend3D`] 并存入 egui-wgpu Renderer 的
 //!    `callback_resources`（pipeline 等 GPU 资源的宿主）；
 //! 2. 每帧手动更新轨道相机位置 → 填充 [`DrawQueue3D`]（线框立方体）→
-//!    通过 [`xcal_render_backends::Layer3DCallback`] 注册 egui 绘制回调，
-//!    在 eframe 主 render pass 中绘制 3D 内容。
+//!    通过 [`xcal_render_backends::SceneCompositorCallback`] 注册**单个** egui
+//!    绘制回调，在 eframe 主 render pass 中把 3D 离屏纹理合成进来。
 //!
 //! 运行：`cargo run -p xcal-render-backends --features egui-wgpu --example cube_3d`
 
 use std::time::Instant;
 
 use glam::Mat4;
+use xcal_core::domain::{LayerBlend, LayerId, LayerKind};
 use xcal_core::scene::components::{Camera3D, Mesh3D, Projection};
 use xcal_core::scene::primitives::wireframe_cube;
-use xc_geometry::Color32;
-use xcal_render::DrawQueue3D;
-use xcal_render_backends::{Layer3DCallback, WgpuBackend3D};
+use xcal_render::{DrawQueue, DrawQueue3D};
+use xcal_render_backends::{
+    Compositor, SceneCompositorCallback, SceneLayer, WgpuBackend3D,
+};
+use xc_geometry::{Color32, Rect2D, Vec2};
 
 struct Cube3dApp {
     start: Instant,
@@ -40,13 +43,25 @@ impl eframe::App for Cube3dApp {
         // eframe 0.36 的 App::ui 直接给出中央区域 Ui（无边距/背景），
         // max_rect 即整个窗口客户区。
         let rect = ui.max_rect();
-        let aspect = rect.width() / rect.height().max(1.0);
+        let viewport = Rect2D::new(
+            Vec2::new(rect.min.x, rect.min.y),
+            Vec2::new(rect.max.x, rect.max.y),
+        );
 
         let white = Color32::new(255, 255, 255, 255);
         let mut queue = DrawQueue3D::new();
         queue.draw_mesh(self.cube.clone(), Mat4::IDENTITY, white);
 
-        let callback = Layer3DCallback::new(camera, aspect, &queue);
+        // S3-2/C3：图层先渲染到自己的离屏纹理（透明清屏），再由合成器混合到主 pass。
+        // S3-2 修复：2D/3D 合并为**单个**回调，一次性合成全部图层。
+        let layers = vec![SceneLayer {
+            id: LayerId(0),
+            kind: LayerKind::Viewport3D { camera },
+            blend: LayerBlend::Alpha,
+            opacity: 1.0,
+        }];
+        let queue_2d = DrawQueue::new(); // 本 demo 无 2D 图层
+        let callback = SceneCompositorCallback::new(viewport, layers, &queue_2d, &queue);
         ui.painter().add(egui::epaint::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(rect, callback),
         ));
@@ -87,6 +102,9 @@ fn main() -> eframe::Result<()> {
             let backend =
                 WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(backend);
+            // S3-2：合成器（把 3D 离屏纹理按声明顺序混合进主 pass）。
+            let compositor = Compositor::new(&rs.device, rs.target_format);
+            rs.renderer.write().callback_resources.insert(compositor);
 
             Ok(Box::new(Cube3dApp {
                 start: Instant::now(),
