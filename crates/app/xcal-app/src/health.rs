@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use xcal_schedule::resource::Resources;
 use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use xcal_scene::scene::components::{Camera3D, Mesh3D};
+use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry};
 use xcal_egui::resources::{AppCamera, TimeState, UiConfig, ViewRect};
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
@@ -49,7 +49,8 @@ impl HealthOverlay {
         let mut registry = SnapshotRegistry::new();
 
         // ── 组件注册（未注册者仍会以 <unregistered> 出现在快照结构中）──
-        registry.register_component::<Mesh3D>("Mesh3D");
+        registry.register_component::<MeshGeometry>("MeshGeometry");
+        registry.register_component::<Material3D>("Material3D");
         registry.register_component::<Camera3D>("Camera3D");
         registry.register_component::<Circle>("Circle");
         registry.register_component::<StrokeSolid>("StrokeSolid");

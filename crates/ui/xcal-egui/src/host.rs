@@ -31,7 +31,9 @@ use xcal_scene::scene::components::Camera3D;
 use xcal_scene::types::Rect;
 use xcal_scene::{Curve, TimeState};
 use xcal_render::{DrawQueue, DrawQueue3D};
-use xcal_render_backends::{EguiPainter, SceneCompositorCallback, SceneLayer};
+#[cfg(feature = "cpu-2d")]
+use xcal_render_backends::EguiPainter;
+use xcal_render_backends::{SceneCompositorCallback, SceneLayer};
 use xc_geometry::Rect2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
@@ -418,8 +420,8 @@ impl EguiSceneHost {
             egui::Color32::from_rgba_unmultiplied(bg.r, bg.g, bg.b, bg.a),
         );
 
-        // 2D 管线开关与图层顺序开关（UI 状态）。
-        let gpu_2d = res.get::<UiConfig>().map(|c| c.gpu_2d).unwrap_or(false);
+        // 2D 管线开关与图层顺序开关（UI 状态）。缺省与 `UiConfig::default()` 一致（GPU 2D 开）。
+        let gpu_2d = res.get::<UiConfig>().map(|c| c.gpu_2d).unwrap_or(true);
         let flip = res
             .get::<UiConfig>()
             .map(|c| c.flip_layer_order)
@@ -479,9 +481,12 @@ impl EguiSceneHost {
                 ));
             } else if !is_gpu(idx) {
                 // 旧路径：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放
-                // （特征化基线，退役属 S3-4）。
-                if let Some(queue) = res.get_mut::<DrawQueue>() {
-                    queue.execute(&EguiPainter::new(&painter));
+                // （特征化基线，退役属 S3-4）。仅在 `cpu-2d` feature 下编译。
+                #[cfg(feature = "cpu-2d")]
+                {
+                    if let Some(queue) = res.get_mut::<DrawQueue>() {
+                        queue.execute(&EguiPainter::new(&painter));
+                    }
                 }
             }
         }

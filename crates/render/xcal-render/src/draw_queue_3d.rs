@@ -5,35 +5,39 @@
 // MVE 阶段无深度测试，按录制顺序提交）。
 //
 // 坐标类型使用 xcal-geometry 的 Vec3（= glam::Vec3）/ Color32；
-// 网格组件 Mesh3D 仍由 xcal-scene 的 ECS 组件体系提供。
+// 网格几何（MeshGeometry）与材质（Material3D）由 xcal-scene 的 ECS 组件体系提供。
+
+use std::sync::Arc;
 
 use glam::Mat4;
-use xcal_scene::scene::components::{Mesh3D, PrimitiveTopology};
+use xcal_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 use xc_geometry::{Color32, Vec3};
 
-/// 一次网格绘制命令：网格 + 模型变换 + 覆盖颜色。
+/// 一次网格绘制命令：共享几何 + 模型变换 + 材质。
+///
+/// 几何用 [`Arc`] 共享：`clone` 只递增引用计数，不深拷贝顶点数据。
 #[derive(Debug, Clone)]
 pub struct MeshDraw {
-    /// 网格数据（顶点/索引/拓扑）。
-    pub mesh: Mesh3D,
+    /// 网格几何（顶点/法线/UV/索引/拓扑），多引用者共享。
+    pub geometry: Arc<MeshGeometry>,
     /// 模型矩阵（模型空间 → 世界空间）。
     pub transform: Mat4,
-    /// 本次绘制颜色（通常等于 `mesh.color`）。
-    pub color: Color32,
+    /// 本次绘制材质（颜色/纹理/UV 兜底投影）。
+    pub material: Material3D,
 }
 
 impl MeshDraw {
-    pub fn new(mesh: Mesh3D, transform: Mat4, color: Color32) -> Self {
+    pub fn new(geometry: Arc<MeshGeometry>, transform: Mat4, material: Material3D) -> Self {
         Self {
-            mesh,
+            geometry,
             transform,
-            color,
+            material,
         }
     }
 
-    /// 拓扑（转发自网格）。
+    /// 拓扑（转发自几何）。
     pub fn topology(&self) -> PrimitiveTopology {
-        self.mesh.topology
+        self.geometry.topology
     }
 }
 
@@ -58,16 +62,23 @@ impl LineDraw {
 ///
 /// # Example
 /// ```
+/// use std::sync::Arc;
+///
 /// use glam::Mat4;
+/// use xcal_render::DrawQueue3D;
+/// use xcal_scene::scene::components::Material3D;
 /// use xcal_scene::scene::primitives::wireframe_cube;
 /// use xc_geometry::Color32;
-/// use xcal_render::DrawQueue3D;
 ///
 /// let white = Color32::new(255, 255, 255, 255);
 /// let mut queue = DrawQueue3D::new();
 /// assert!(queue.is_empty());
 ///
-/// queue.draw_mesh(wireframe_cube(1.0, white), Mat4::IDENTITY, white);
+/// queue.draw_mesh(
+///     Arc::new(wireframe_cube(1.0)),
+///     Mat4::IDENTITY,
+///     Material3D::color(white),
+/// );
 /// assert_eq!(queue.mesh_count(), 1);
 ///
 /// queue.clear();
@@ -92,8 +103,9 @@ impl DrawQueue3D {
     }
 
     /// 追加一个网格绘制命令。
-    pub fn draw_mesh(&mut self, mesh: Mesh3D, transform: Mat4, color: Color32) {
-        self.meshes.push(MeshDraw::new(mesh, transform, color));
+    pub fn draw_mesh(&mut self, geometry: Arc<MeshGeometry>, transform: Mat4, material: Material3D) {
+        self.meshes
+            .push(MeshDraw::new(geometry, transform, material));
     }
 
     /// 追加一条世界空间线段。
@@ -144,14 +156,35 @@ mod tests {
     #[test]
     fn test_push_mesh_then_clear() {
         let mut q = DrawQueue3D::new();
-        let cube = wireframe_cube(1.0, Color32::new(255, 255, 255, 255));
-        q.draw_mesh(cube, Mat4::IDENTITY, Color32::new(255, 0, 0, 255));
+        let cube = Arc::new(wireframe_cube(1.0));
+        q.draw_mesh(
+            cube,
+            Mat4::IDENTITY,
+            Material3D::color(Color32::new(255, 0, 0, 255)),
+        );
         assert_eq!(q.mesh_count(), 1);
         assert!(!q.is_empty());
 
         q.clear();
         assert!(q.is_empty());
         assert_eq!(q.meshes().len(), 0);
+    }
+
+    /// `MeshDraw` 的 `clone` 只递增几何引用计数，不深拷贝顶点数据。
+    #[test]
+    fn test_mesh_draw_clone_shares_geometry() {
+        let mut q = DrawQueue3D::new();
+        let geometry = Arc::new(wireframe_cube(1.0));
+        q.draw_mesh(
+            Arc::clone(&geometry),
+            Mat4::IDENTITY,
+            Material3D::color(Color32::WHITE),
+        );
+        assert_eq!(Arc::strong_count(&geometry), 2);
+
+        let cloned = q.meshes()[0].clone();
+        assert_eq!(Arc::strong_count(&geometry), 3);
+        assert!(Arc::ptr_eq(&cloned.geometry, &geometry));
     }
 
     #[test]

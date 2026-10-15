@@ -49,7 +49,7 @@
 组件分两处：
 
 - 2D 纯逻辑组件（`Circle` / `Path` / `Line` / `MorphShape` / `FunctionX2Y` / marker …）
-  与 3D 类型（`Camera3D` / `Projection` / `Mesh3D`）都在 `scene::components`
+  与 3D 类型（`Camera3D` / `Projection` / `MeshGeometry` / `Material3D`）都在 `scene::components`
   （以 `comp` 别名再导出）。
 - **渲染专属**的组件（`StrokeSolid` / `FillSolid` 等）**不在这里**，它们在 `xcal-render`。
 
@@ -61,7 +61,7 @@
 |--------|------|------|
 | `DirectorAdvanceSystem` | `Input` | **唯一**能推进时间的 System：`Director::advance(dt)` → 同步 `TimeState.elapsed` |
 | `BindingApplySystem` | `SceneSync` | 查 `BindingTable`，把 `Curve::sample(forest.eval_local(clock, t))` 写进组件字段 |
-| `MorphApplySystem` | `SceneSync` | `MorphShape{from,to,t}` → 插值出 `Path.vertices`（必须在 `BindingApply` 之后，后者写 `t`） |
+| `MorphApplySystem` | `SceneSync` | `MorphShape{from,to,t}` → 插值出 `Path` 的 `Path2D`（必须在 `BindingApply` 之后，后者写 `t`） |
 
 动画是**纯函数** `f(t) → 值`（由 `xc_time::Curve::sample` 保证），永不累积状态；
 `BindingTable` 是时钟树/曲线与组件之间的**显式**绑定表，取代旧的动画组件组合查询。
@@ -95,7 +95,7 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 
 | 模块 | 核心类型 |
 |------|----------|
-| [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `Mesh3D`, `Circle`, `Path`, `MorphShape`, `Line`, `FunctionX2Y`, …), `primitives`(`wireframe_cube` / `solid_cube`) |
+| [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `FunctionX2Y`, …), `primitives`(`wireframe_cube` / `solid_cube`) |
 | [`animation`] | `Binding` / `BindingTarget` / `BindingTable` / `SeekKind` + `BindingApplySystem` / `MorphApplySystem` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |

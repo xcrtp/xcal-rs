@@ -10,10 +10,10 @@ use xc_geometry::Path2D;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 use xcal_scene::scene::components::{MorphShape, Path};
-use xcal_scene::types::Vec3;
 
-/// 形变应用：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的 `Path.vertices`
-/// （`closed = true`）。render 层由 `record_scene` 消费 `(Path, StrokeSolid)`。
+/// 形变应用：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的 `Path.path`
+/// （闭合折线，`from_polyline(..., true)` 携带闭合语义）。render 层由
+/// `record_scene` 消费 `(Path, StrokeSolid)`。
 pub struct MorphApplySystem;
 
 impl System for MorphApplySystem {
@@ -24,11 +24,7 @@ impl System for MorphApplySystem {
         for (morph, path) in ctx.world.query::<(&MorphShape, &mut Path)>().iter() {
             let samples = morph.samples.max(1) as usize;
             let pts = Path2D::morph_points(&morph.from, &morph.to, morph.t, samples);
-            path.vertices = pts
-                .iter()
-                .map(|p| Vec3::new(glam::Vec3::new(p.x, p.y, 0.0)))
-                .collect();
-            path.closed = true;
+            path.path = Path2D::from_polyline(&pts, true);
         }
     }
 }
@@ -61,7 +57,7 @@ mod tests {
         let mut world = hecs::World::new();
         let entity = world.spawn((
             MorphShape::new(square(1.0), square(2.0)),
-            Path::new(Vec::<Vec3>::new(), false),
+            Path::new(Path2D::new()),
         ));
 
         let mut forest = ClockForest::new();
@@ -91,10 +87,18 @@ mod tests {
         assert!((t - 0.5).abs() < 1e-5, "t 未被写入: {t}");
 
         let path = scheduler.world().get::<&Path>(entity).unwrap();
-        assert_eq!(path.vertices.len(), 128, "顶点数应恒为 samples");
-        assert!(path.closed);
-        let max_x = path.vertices.iter().map(|v| v.x).fold(f32::MIN, f32::max);
-        let min_x = path.vertices.iter().map(|v| v.x).fold(f32::MAX, f32::min);
+        // 128 个采样点 + Close 回到起点 = 129 个展平点。
+        let pts = path.path.flatten(0.01);
+        assert_eq!(pts.len(), 129, "顶点数应恒为 samples + 闭合回起点");
+        assert!(
+            matches!(
+                path.path.commands.last(),
+                Some(xc_geometry::PathCommand::Close)
+            ),
+            "形变输出应闭合（末命令为 Close）"
+        );
+        let max_x = pts.iter().map(|p| p.x).fold(f32::MIN, f32::max);
+        let min_x = pts.iter().map(|p| p.x).fold(f32::MAX, f32::min);
         assert!((max_x - 1.5).abs() < 1e-3, "max_x={max_x}");
         assert!((min_x + 1.5).abs() < 1e-3, "min_x={min_x}");
     }

@@ -163,22 +163,24 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
 ### 调度流水线
 
-**2D**
+**每个 Phase 的系统**（`xcal-app::App::new` 的装配）
 
 ```
-Input → LogicUpdate → SceneSync → Prepare → RenderCommit → FrameEnd
- TimeUpdate  ControlPanel  ViewRectUpdate  GridBuild   SceneRecord  RenderSubmit
+Input:         DirectorAdvance · CameraInput
+LogicUpdate:   TimeControl · ParamPanel
+SceneSync:     BindingApply · MorphApply
+Prepare:       GridBuild
+RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D)
+FrameEnd:      —（内容提交由 host.present 承担；
+                 面板 chrome 与 ViewRect 由 host.begin_frame 在 run_frame 前写入）
 ```
 
-**3D**
-
-```
-SceneSync:  OrbitApply (R=TimeState, W=())
-RenderCommit: SceneRecord3D (W=DrawQueue3D)
-FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
-```
-
-3D 合成方式：`ui.painter_at(central_rect).add(Shape::Callback(...))`，不使用 `Order::Background`，clip rect 自动限制到中央视口。
+3D 合成方式：`EguiSceneHost::present` 先铺 `SceneView::background`，再**遍历**
+`SceneView::layers`（索引序 = 合成序，先 = 下），把全部 GPU 图层（3D，及
+`UiConfig::gpu_2d = true` 时的 2D）交给**单个** `SceneCompositorCallback`
+（`Shape::Callback` 注册在有效序中**首个** GPU 图层的位置），由它一次性离屏渲染并
+合成全部图层；`gpu_2d = false` 的 CPU 2D 层则在其声明位置经 `EguiPainter` 就地回放。
+不使用 `Order::Background`，clip rect 自动限制到中央视口。
 
 ### 技术约束
 
@@ -201,7 +203,7 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
            → xcal-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
                                           Shape2D::Path + Style2D + Transform2D）
            → xcal-app::formula（接线桥：flatten_subpaths + apply_point
-                               → 旧 Path 组件 + StrokeSolid，每个子轮廓一条实体）
+                               → Path 组件（Path2D）+ StrokeSolid，每个子轮廓一条实体）
 ```
 
 - **铁律**：`typst` 仅允许出现在 `xc-prerender` 且 feature-gated；`xcal-render`
@@ -309,8 +311,10 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 **S3-2 起本文件不再自带合成管线**（`pipeline_composite` / `composite_bgl` / `sampler` /
 `composite()` / `COMPOSITE_QUAD` 已移除），离屏清屏改为**透明**，合成统一交给
 `xcal-render-backends::compositor::Compositor`。
-**运行期开关** `UiConfig::gpu_2d`（默认 off）在 `xcal-egui::EguiSceneHost::present` 二选一：
-`EguiPainter` CPU 回放 ↔ `SceneCompositorCallback` GPU 路径（旧管线退役属 S3-4）。
+**运行期开关** `UiConfig::gpu_2d`（默认 on）在 `xcal-egui::EguiSceneHost::present` 二选一：
+`SceneCompositorCallback` GPU 路径 ↔ `EguiPainter` CPU 回放（旧管线退役属 S3-4）。
+CPU 回放路径另受 `xcal-render-backends` 的**编译期** feature `cpu-2d` 门控
+（关闭后 `egui_2d` 不被编译）；运行期开关与编译期 feature 语义不同，不可互相替代。
 
 **egui-wgpu 回调 viewport 契约（踩坑记录）**：egui-wgpu 处理 `Primitive::Callback` 时会把
 render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一个 primitive 才复位）。

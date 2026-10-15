@@ -17,11 +17,11 @@ use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::errors::Error;
 use xcal_schedule::resource::Resources;
 use xcal_scene::domain::InputEvents;
-use xcal_scene::scene::components::{Camera3D, MorphShape, Projection};
+use xcal_scene::scene::components::{Camera3D, Material3D, MorphShape, Projection};
 use xcal_scene::scene::primitives::wireframe_cube;
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::TimeState;
-use xcal_scene::types::{Color32, Vec3};
+use xcal_scene::types::Color32;
 use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
@@ -86,7 +86,7 @@ impl App {
         let mut scene = Scene::new();
 
         // ── 3D 场景：白色线框立方体 ──────────────────────────────
-        scene.spawn((wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),));
+        scene.spawn((wireframe_cube(1.0), Material3D::color(Color32::WHITE)));
 
         // 3D 相机（eye 由 BindingApplySystem 驱动，旧 OrbitAnim 组件已移除）。
         let camera_entity = scene.spawn((
@@ -123,11 +123,9 @@ impl App {
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
         match formula::rebuild(&engine, &spec) {
             Some(ir) => {
-                for (vertices, color, width, closed, space) in
-                    formula::compile_to_stroke_paths(&ir, &spec)
-                {
+                for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
                     scene.spawn((
-                        Path::new(vertices, closed),
+                        Path::new(path),
                         // 公式描边是世界空间：与字形一同随缩放成比例变化。
                         StrokeSolid::new_in(width, color, space),
                     ));
@@ -165,7 +163,7 @@ impl App {
                 Path2D::from_polyline(&square_pts, true),
             ),
             // Path 是形变输出目标（首帧由 MorphApplySystem 填充）。
-            Path::new(Vec::<Vec3>::new(), true),
+            Path::new(Path2D::new()),
             StrokeSolid::new_in(2.0, (255, 180, 0, 255), MeasureSpace::Screen),
         ));
 
@@ -183,7 +181,7 @@ impl App {
             for (from_path, to_path) in formula::compile_morph_pairs(&f, &t, &anchor_spec) {
                 semantic_morph_entities.push(scene.spawn((
                     MorphShape::new(from_path, to_path),
-                    Path::new(Vec::<Vec3>::new(), true),
+                    Path::new(Path2D::new()),
                     StrokeSolid::new_in(1.0, (255, 120, 220, 255), MeasureSpace::Screen),
                 )));
             }

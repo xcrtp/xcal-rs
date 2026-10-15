@@ -10,11 +10,12 @@
 //!
 //! 运行：`cargo run -p xcal-render-backends --features egui-wgpu --example cube_3d`
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use glam::Mat4;
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-use xcal_scene::scene::components::{Camera3D, Mesh3D, Projection};
+use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry, Projection};
 use xcal_scene::scene::primitives::wireframe_cube;
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::{
@@ -24,7 +25,7 @@ use xc_geometry::{Color32, Rect2D, Vec2};
 
 struct Cube3dApp {
     start: Instant,
-    cube: Mesh3D,
+    cube: Arc<MeshGeometry>,
 }
 
 impl eframe::App for Cube3dApp {
@@ -50,7 +51,7 @@ impl eframe::App for Cube3dApp {
 
         let white = Color32::new(255, 255, 255, 255);
         let mut queue = DrawQueue3D::new();
-        queue.draw_mesh(self.cube.clone(), Mat4::IDENTITY, white);
+        queue.draw_mesh(Arc::clone(&self.cube), Mat4::IDENTITY, Material3D::color(white));
 
         // S3-2/C3：图层先渲染到自己的离屏纹理（透明清屏），再由合成器混合到主 pass。
         // S3-2 修复：2D/3D 合并为**单个**回调，一次性合成全部图层。
@@ -108,7 +109,7 @@ fn main() -> eframe::Result<()> {
 
             Ok(Box::new(Cube3dApp {
                 start: Instant::now(),
-                cube: wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),
+                cube: Arc::new(wireframe_cube(1.0)),
             }))
         }),
     )

@@ -1,8 +1,8 @@
 # xcal-rs
 
 基于 ECS（hecs）与 wgpu 的 2D/3D 渲染实验框架：分阶段的 System 调度器、
-Painter 抽象、egui UI overlay，以及 3D 渲染层（Camera3D / Mesh3D /
-WgpuBackend3D）。
+Painter 抽象、egui UI overlay，以及 3D 渲染层（Camera3D /
+MeshGeometry / Material3D / WgpuBackend3D）。
 
 ## 架构总览
 
@@ -105,8 +105,8 @@ crates/
 
 1. **SceneSync**：`BindingApplySystem` 根据 `BindingTable` 把动画值写入
    `Camera3D.eye`（轨道）等组件，取代旧的 `OrbitAnim` 组件 + `OrbitApplySystem`。
-2. **RenderCommit**：`SceneRecord3DSystem` 遍历 World 中的 `Mesh3D`
-   （+ 可选 `Transform`），清空并填充 `DrawQueue3D`。
+2. **RenderCommit**：`SceneRecord3DSystem` 遍历 World 中的 `MeshGeometry`
+   （+ 可选 `Material3D` / `Transform`），清空并填充 `DrawQueue3D`。
 3. **FrameEnd**：`EguiSceneHost::present` 取中央视口矩形，构造**单个**
    `SceneCompositorCallback`（含全部 `SceneLayer` 声明 + `DrawQueue`/`DrawQueue3D` 快照）
    注册为 egui paint callback；egui-wgpu 在主 render pass 内回调：

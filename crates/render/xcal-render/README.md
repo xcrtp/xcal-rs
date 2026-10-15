@@ -152,13 +152,15 @@ assert!(items.iter().all(|t| t.layout == xcal_render::tessellation_layout()));
 ## 使用示例（3D DrawQueue3D）
 
 ```rust
+use std::sync::Arc;
 use xcal_render::DrawQueue3D;
+use xcal_scene::scene::components::Material3D;
 use xcal_scene::scene::primitives::wireframe_cube;
 use xc_geometry::Color32;
 
 let white = Color32::new(255, 255, 255, 255);
 let mut q3 = DrawQueue3D::new();
-q3.draw_mesh(wireframe_cube(1.0, white), glam::Mat4::IDENTITY, white);
+q3.draw_mesh(Arc::new(wireframe_cube(1.0)), glam::Mat4::IDENTITY, Material3D::color(white));
 q3.draw_line(glam::Vec3::ZERO, glam::Vec3::X, Color32::new(255, 0, 0, 255));
 assert_eq!(q3.mesh_count() + q3.line_count(), 2);
 ```

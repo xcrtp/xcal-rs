@@ -2,9 +2,13 @@
 //
 // 3D 核心类型（纯逻辑，无 GPU 依赖）：
 // - PrimitiveTopology：图元拓扑
-// - Mesh3D：顶点/索引/拓扑/颜色
+// - MeshGeometry：顶点/法线/UV/索引/拓扑 + 稳定 id/version（几何）
+// - Material3D：颜色/纹理/UV 投影（外观）
 // - Projection：透视/正交投影
 // - Camera3D：视点 + 投影，提供视图矩阵与 VP 矩阵
+//
+// 几何与外观是两类关注点：`MeshGeometry` 只描述"长什么样"，
+// `Material3D` 只描述"看起来什么颜色/贴什么纹理"。二者同层（均在 xcal-scene）。
 //
 // 数学类型直接使用 glam（与 Transform 组件一致），2D 包装类型（Vec3 等）
 // 仅服务于 Transform2D trait 体系。
@@ -35,17 +39,26 @@ pub enum PrimitiveTopology {
     Points,
 }
 
-/// 3D 网格组件：顶点缓冲 + 可选索引缓冲 + 拓扑 + 整网格颜色。
+/// 分配进程内唯一的几何 id。
+fn next_geometry_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 3D 网格几何组件：顶点位置 + 可选法线/UV + 可选索引 + 拓扑。
 ///
-/// MVE 阶段不支持逐顶点色与法线；颜色由 uniform 传入。
+/// 只描述"长什么样"，不含颜色等外观信息（外观见 [`Material3D`]）。
+/// 每个几何体带一个进程内唯一、跨 `clone` 稳定的 `id`，以及可手动递增的
+/// `version`；二者的组合（`ResourceKey::Versioned`）作为 GPU 侧缓存的键：
+/// 几何内容变化时调用 [`MeshGeometry::bump_version`]，所有引用者的缓存一起失效。
 ///
 /// # Example
 /// ```rust
-/// use xcal_scene::scene::components::{Mesh3D, PrimitiveTopology};
-/// use xcal_scene::types::Color32;
+/// use xcal_scene::scene::components::{MeshGeometry, PrimitiveTopology};
 ///
 /// // 一个无索引三角形。
-/// let mesh = Mesh3D::new(
+/// let mesh = MeshGeometry::new(
 ///     vec![
 ///         glam::Vec3::new(-1.0, -1.0, 0.0),
 ///         glam::Vec3::new(1.0, -1.0, 0.0),
@@ -53,21 +66,138 @@ pub enum PrimitiveTopology {
 ///     ],
 ///     None,
 ///     PrimitiveTopology::Triangles,
-///     Color32::new(255, 255, 255, 255),
 /// );
-/// assert_eq!(mesh.vertices.len(), 3);
+/// assert_eq!(mesh.positions.len(), 3);
 /// assert!(mesh.indices.is_none());
 /// ```
-#[derive(Debug, Clone, derive_new::new)]
-pub struct Mesh3D {
+#[derive(Debug, Clone)]
+pub struct MeshGeometry {
     /// 顶点位置（模型空间）。
-    pub vertices: Vec<glam::Vec3>,
+    pub positions: Vec<glam::Vec3>,
+    /// 可选逐顶点法线；长度应与 `positions` 一致。
+    pub normals: Option<Vec<glam::Vec3>>,
+    /// 可选逐顶点 UV；长度应与 `positions` 一致。
+    pub uvs: Option<Vec<glam::Vec2>>,
     /// 可选索引；`None` 表示按顶点顺序连续解释。
     pub indices: Option<Vec<u32>>,
     /// 图元拓扑。
     pub topology: PrimitiveTopology,
-    /// 整网格颜色。
+    /// 进程内唯一且跨 `clone` 稳定的几何 id。
+    id: u64,
+    /// 几何内容版本号，由 [`MeshGeometry::bump_version`] 递增。
+    version: u64,
+}
+
+impl MeshGeometry {
+    /// 构造几何：`id` 自动分配，`version` 从 0 开始。
+    pub fn new(
+        positions: Vec<glam::Vec3>,
+        indices: Option<Vec<u32>>,
+        topology: PrimitiveTopology,
+    ) -> Self {
+        Self {
+            positions,
+            normals: None,
+            uvs: None,
+            indices,
+            topology,
+            id: next_geometry_id(),
+            version: 0,
+        }
+    }
+
+    /// 附加逐顶点法线（builder 风格）。
+    pub fn with_normals(mut self, normals: Vec<glam::Vec3>) -> Self {
+        self.normals = Some(normals);
+        self
+    }
+
+    /// 附加逐顶点 UV（builder 风格）。
+    pub fn with_uvs(mut self, uvs: Vec<glam::Vec2>) -> Self {
+        self.uvs = Some(uvs);
+        self
+    }
+
+    /// 稳定几何 id（跨 `clone` 保持不变）。
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// 当前几何版本号。
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// 递增几何版本号，使所有引用者的 GPU 缓存失效。
+    pub fn bump_version(&mut self) -> u64 {
+        self.version += 1;
+        self.version
+    }
+}
+
+/// 纹理句柄：不透明标识符，仅用于在资源层定位纹理。
+///
+/// 句柄本身不持有 GPU 资源，具体纹理由后端按 id 解析。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureHandle(u64);
+
+impl TextureHandle {
+    /// 以给定 id 构造句柄。
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    /// 句柄 id。
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+}
+
+/// 无 UV 几何的兜底 UV 投影策略。
+///
+/// 几何自带真实 UV（[`MeshGeometry::uvs`]）时应忽略本策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UvProjection {
+    /// 沿主视轴平面投影（默认）。
+    #[default]
+    Planar,
+    /// 球面投影。
+    Spherical,
+    /// 三平面投影。
+    Triplanar,
+}
+
+/// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影。
+///
+/// 只描述"看起来什么颜色/贴什么纹理"，不含几何数据（几何见 [`MeshGeometry`]）。
+///
+/// # Example
+/// ```rust
+/// use xcal_scene::scene::components::Material3D;
+/// use xcal_scene::types::Color32;
+///
+/// let m = Material3D::color(Color32::new(255, 0, 0, 255));
+/// assert_eq!(m.color.r, 255);
+/// assert!(m.texture.is_none());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Material3D {
+    /// 整体颜色（无纹理时的着色来源，有纹理时作为调制色）。
     pub color: Color32,
+    /// 可选纹理句柄。
+    pub texture: Option<TextureHandle>,
+    /// 无 UV 几何的兜底 UV 投影策略。
+    pub uv_projection: UvProjection,
+}
+
+impl Material3D {
+    /// 以单一颜色构造材质（无纹理、平面投影兜底）。
+    pub fn color(color: Color32) -> Self {
+        Self {
+            color,
+            ..Self::default()
+        }
+    }
 }
 
 /// 投影方式。
@@ -234,6 +364,57 @@ impl Camera3D {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Color32;
+
+    #[test]
+    fn test_mesh_geometry_and_material3d_independent() {
+        // 1) 几何与材质可独立构造。
+        let mut geometry = MeshGeometry::new(
+            vec![glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            Some(vec![0, 1, 2]),
+            PrimitiveTopology::Triangles,
+        );
+        let material = Material3D::color(Color32::WHITE);
+        let id_before = geometry.id();
+        assert_eq!(geometry.version(), 0);
+
+        // 2) 改材质不影响几何 identity/version：拆分后二者关注点天然隔离，
+        //    不再需要旧 `hash_mesh` 里手工排除 color 的特例。
+        let mut edited_material = material;
+        edited_material.color = Color32::RED;
+        edited_material.uv_projection = UvProjection::Spherical;
+        assert_eq!(geometry.id(), id_before);
+        assert_eq!(geometry.version(), 0, "改材质不应改变几何版本");
+        assert_ne!(material, edited_material);
+
+        // 3) 只有几何自身内容变更才递增 version，且 id 不变。
+        assert_eq!(geometry.bump_version(), 1);
+        assert_eq!(geometry.version(), 1);
+        assert_eq!(geometry.id(), id_before, "bump_version 不改 id");
+    }
+
+    #[test]
+    fn test_parametric_surface_uv_boundaries_exact() {
+        // 临时构造 1×1 参数网格（u 沿 x 参数、v 沿 y 参数），验证 UV 被
+        // 精确保留：边界值恰好 0.0 / 1.0，无浮点漂移。
+        let mut positions = Vec::new();
+        let mut uvs = Vec::new();
+        for j in 0..=1 {
+            let v = j as f32;
+            for i in 0..=1 {
+                let u = i as f32;
+                positions.push(glam::Vec3::new(u * 2.0 - 1.0, v * 2.0 - 1.0, 0.0));
+                uvs.push(glam::Vec2::new(u, v));
+            }
+        }
+        let mesh = MeshGeometry::new(positions, None, PrimitiveTopology::Triangles).with_uvs(uvs);
+
+        let uvs = mesh.uvs.as_ref().expect("uvs 应存在");
+        assert_eq!(uvs[0], glam::Vec2::new(0.0, 0.0));
+        assert_eq!(uvs[1], glam::Vec2::new(1.0, 0.0));
+        assert_eq!(uvs[2], glam::Vec2::new(0.0, 1.0));
+        assert_eq!(uvs[3], glam::Vec2::new(1.0, 1.0));
+    }
 
     #[test]
     fn test_camera3d_view_matrix_eye_on_z_axis() {

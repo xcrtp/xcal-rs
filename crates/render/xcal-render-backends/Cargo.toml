@@ -35,9 +35,16 @@ required-features = ["egui-wgpu"]
 [features]
 # 默认启用 wgpu：让 `cargo test -p xcal-render-backends`（顶点契约 V6 验收命令）
 # 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
-default = ["wgpu"]
+# 默认启用 cpu-2d：CPU 2D 管线（`EguiPainter`）是默认行为，关闭需显式裁剪 feature。
+default = ["wgpu", "cpu-2d"]
 wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
-egui = ["dep:egui"]
+# CPU 2D 管线（`egui_2d` 模块 / `EguiPainter`）：**编译期** feature。
+# 与之对应的**运行期**开关是 `xcal_egui::UiConfig::gpu_2d`（面板 checkbox），二者语义不同：
+# 本 feature 决定该回放路径是否被编译进来，`gpu_2d` 决定当帧是否真的走 GPU 离屏路径。
+# 关闭本 feature 时 `egui_2d` 不被编译，`UiConfig::gpu_2d = false` 将无可回放路径。
+cpu-2d = ["dep:egui"]
+# 旧 feature 名，保留为等价别名（`text` 之外的既有依赖声明仍可用）。
+egui = ["cpu-2d"]
 # egui + wgpu 集成（egui_wgpu 回调、EframeWgpuBackend、RenderContext）。
 egui-wgpu = [
     "dep:egui",

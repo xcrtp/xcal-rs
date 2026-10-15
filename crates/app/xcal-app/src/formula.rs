@@ -2,7 +2,7 @@
 //
 // 数据流：
 //   ContentIR →(ir_to_draw_cmds)→ ContentDrawCmd
-//             →(flatten_subpaths + transform.apply_point)→ 旧 Path 组件顶点
+//             →(flatten_subpaths + transform.apply_point)→ Path 组件（Path2D）
 //             →(spawn)→ SceneRecordSystem → DrawQueue → EguiPainter。
 //
 // 走描边（Stroke）而非填充：旧管线 Fill 分支用 `convex_polygon`，非凸字形
@@ -10,7 +10,7 @@
 //
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 
-use xcal_scene::types::{Color32, Vec3};
+use xcal_scene::types::Color32;
 use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
 use xc_geometry::Path2D;
@@ -85,14 +85,14 @@ pub fn rebuild(engine: &InMemoryEngine, spec: &FormulaSpec) -> Option<ContentIR>
     engine.take(handle).and_then(|r| r.ok())
 }
 
-/// 一条可 spawn 的描边路径：`(顶点, 颜色, 线宽, 是否闭合, 线宽所属空间)`。
+/// 一条可 spawn 的描边路径：`(路径, 颜色, 线宽, 线宽所属空间)`。
 ///
 /// 每个子轮廓单独一条——多轮廓字形（`o`/`B`/`8`）不会在轮廓之间
 /// 产生横穿字形内部的桥接线。
 ///
 /// `space` 由 `ir_to_draw_cmds` 声明（当前恒为 `MeasureSpace::World`：
 /// 宽度已乘 `target / nominal` 换算为世界单位，与字形一同随缩放变化）。
-pub type StrokePath = (Vec<Vec3>, Color32, f32, bool, MeasureSpace);
+pub type StrokePath = (Path2D, Color32, f32, MeasureSpace);
 
 /// IR → 可 spawn 的描边路径列表。
 ///
@@ -121,14 +121,8 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
                 continue;
             }
             let closed = is_closed(&sub);
-            let vertices: Vec<Vec3> = sub
-                .iter()
-                .map(|p| {
-                    let w = cmd.transform.apply_point(*p);
-                    (w.x, w.y, 0.0).into()
-                })
-                .collect();
-            out.push((vertices, color, width, closed, cmd.style.space));
+            let world: Vec<glam::Vec2> = sub.iter().map(|p| cmd.transform.apply_point(*p)).collect();
+            out.push((Path2D::from_polyline(&world, closed), color, width, cmd.style.space));
         }
     }
     out
@@ -217,13 +211,25 @@ mod tests {
         rebuild(&engine, &spec).expect("placeholder IR")
     }
 
+    /// 取路径的折线点（`MoveTo` / `LineTo` 端点），用于断言几何。
+    fn path_points(path: &Path2D) -> Vec<glam::Vec2> {
+        path.commands
+            .iter()
+            .filter_map(|c| match c {
+                xc_geometry::PathCommand::MoveTo(p) | xc_geometry::PathCommand::LineTo(p) => {
+                    Some(*p)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// 顶点集合的包围盒尺寸（宽, 高）。
     fn bounds_of(paths: &[StrokePath]) -> (f32, f32) {
         let mut min = glam::Vec2::splat(f32::INFINITY);
         let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
-        for (pts, _, _, _, _) in paths {
-            for v in pts {
-                let p = glam::Vec2::new(v.x, v.y);
+        for (path, _, _, _) in paths {
+            for p in path_points(path) {
                 min = min.min(p);
                 max = max.max(p);
             }
@@ -239,8 +245,11 @@ mod tests {
         // 占位字形每个都是单轮廓闭合矩形 → 每条 item 恰好一条路径。
         assert_eq!(paths.len(), ir.items.len());
         assert_eq!(paths.len(), 3);
-        for (_, _, _, closed, space) in &paths {
-            assert!(*closed, "占位矩形应为闭合子路径");
+        for (path, _, _, space) in &paths {
+            assert!(
+                matches!(path.commands.last(), Some(xc_geometry::PathCommand::Close)),
+                "占位矩形应为闭合子路径"
+            );
             // 公式描边恒为世界空间（随缩放成比例变化）。
             assert_eq!(*space, MeasureSpace::World);
         }
@@ -252,8 +261,8 @@ mod tests {
         let spec = FormulaSpec::new("xy", 12.0, glam::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert!(!paths.is_empty());
-        for (pts, _, width, _, _) in &paths {
-            assert!(!pts.is_empty(), "每条路径应至少有一个点");
+        for (path, _, width, _) in &paths {
+            assert!(!path_points(path).is_empty(), "每条路径应至少有一个点");
             assert!(*width > 0.0);
         }
     }
@@ -267,7 +276,7 @@ mod tests {
         let paths = compile_to_stroke_paths(&ir, &spec);
         let world_w = paths[0].2;
         assert!((world_w - 1.0 * 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
-        assert_eq!(paths[0].4, MeasureSpace::World);
+        assert_eq!(paths[0].3, MeasureSpace::World);
 
         let px = xc_geometry::resolve_width(world_w, MeasureSpace::World, 40.0);
         assert!((px - 4.333).abs() < 0.01, "屏幕宽度应约 4.3px，实际 {px}");
@@ -313,8 +322,8 @@ mod tests {
         let anchor = glam::Vec2::new(-8.0, 2.5);
         let spec = FormulaSpec::new("abc", 12.0, anchor);
         let paths = compile_to_stroke_paths(&ir, &spec);
-        for (pts, _, _, _, _) in &paths {
-            for v in pts {
+        for (path, _, _, _) in &paths {
+            for v in path_points(path) {
                 assert!(v.x >= anchor.x - 1e-3, "x 越界: {}", v.x);
                 assert!(v.y >= anchor.y - 1e-3, "y 应位于锚点上方: {}", v.y);
             }
@@ -348,13 +357,16 @@ mod tests {
         let spec = FormulaSpec::new("o", 10.0, glam::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert_eq!(paths.len(), 2, "双轮廓应拆成两条独立路径");
-        for (pts, _, _, closed, _) in &paths {
-            assert_eq!(pts.len(), 5, "每个轮廓：4 顶点 + 回起点");
-            assert!(*closed);
+        for (path, _, _, _) in &paths {
+            assert_eq!(path_points(path).len(), 5, "每个轮廓：4 顶点 + 回起点");
+            assert!(
+                matches!(path.commands.last(), Some(xc_geometry::PathCommand::Close)),
+                "轮廓应闭合"
+            );
         }
         // 两条路径顶点完全不重叠（没有跨轮廓的桥接点）。
-        let outer = &paths[0].0;
-        let inner = &paths[1].0;
+        let outer = path_points(&paths[0].0);
+        let inner = path_points(&paths[1].0);
         assert_ne!(
             (outer[0].x, outer[0].y),
             (inner[0].x, inner[0].y),
@@ -380,7 +392,10 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].1, Color32::from_rgb(0x00FF00));
         assert!((paths[0].2 - 2.5).abs() < 1e-6);
-        assert!(!paths[0].3, "开放折线不应标记为闭合");
+        assert!(
+            !matches!(paths[0].0.commands.last(), Some(xc_geometry::PathCommand::Close)),
+            "开放折线不应标记为闭合"
+        );
     }
 
     /// 无色（fill/stroke 都无）的 path 被跳过。

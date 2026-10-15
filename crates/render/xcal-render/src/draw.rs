@@ -15,8 +15,8 @@
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
 use xcal_scene::transform::Transform2D;
-use xcal_scene::types::{Camera2D, Rect, Vec3};
-use xc_geometry::{MeasureSpace, Path2D, Rect2D, Vec2 as GeoVec2, resolve_width};
+use xcal_scene::types::{Camera2D, Rect};
+use xc_geometry::{MeasureSpace, Rect2D, Vec2 as GeoVec2, resolve_width};
 
 /// 2D 绘制器 Trait。
 pub trait Painter2D {
@@ -60,18 +60,6 @@ pub struct DrawQueue {
 
 // ─── 组件 → Shape2D 转换（屏幕空间） ────────────────────────────────────────
 
-/// 屏幕空间折线点（`Vec3` 取 xy）→ `Shape2D::Path`。
-///
-/// `closed` 语义用 `Path2D::from_polyline(points, closed)` 表达（M0 方案 b：
-/// 闭合路径追加 `Close` 命令，不新增 `Shape2D::Polyline` 字段）。
-fn polyline_shape(vertices: &[Vec3], closed: bool) -> Shape2D {
-    let pts: Vec<GeoVec2> = vertices
-        .iter()
-        .map(|v| GeoVec2::new(v.x, v.y))
-        .collect();
-    Shape2D::Path(Path2D::from_polyline(&pts, closed))
-}
-
 fn rect_shape(r: &Rect) -> Shape2D {
     let (min, max) = (r.min(), r.max());
     Shape2D::Rect(Rect2D::new(
@@ -97,8 +85,9 @@ impl ToShape2D for Circle {
 
 impl ToShape2D for Path {
     fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
-        let s = self.to_screen(camera);
-        polyline_shape(&s.vertices, s.closed)
+        // `Path` 直接持有 `Path2D`（自带闭合语义）；变换后在屏幕空间仍是
+        // 同一条命令序列，仅逐命令映射坐标（含 `Close` 保留）。
+        Shape2D::Path(self.to_screen(camera).path)
     }
 }
 
@@ -218,20 +207,20 @@ impl DrawQueue {
         ));
     }
 
-    /// 路径填充：`path` 顶点已在屏幕空间。
+    /// 路径填充：`path` 已在屏幕空间。
     pub fn path_fill(&mut self, z: ZIndex, path: Path, fill: FillSolid) {
         self.push(DrawCommand::new(
             z,
-            polyline_shape(&path.vertices, path.closed),
+            Shape2D::Path(path.path),
             fill_style(&fill),
         ));
     }
 
-    /// 路径描边：`path` 顶点已在屏幕空间。
+    /// 路径描边：`path` 已在屏幕空间。
     pub fn path_stroke(&mut self, z: ZIndex, path: Path, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            polyline_shape(&path.vertices, path.closed),
+            Shape2D::Path(path.path),
             stroke_style_raw(&stroke),
         ));
     }
@@ -382,6 +371,7 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
 mod tests {
     use super::*;
     use xcal_scene::scene::components::*;
+    use xc_geometry::Path2D;
 
     struct MockPainter;
 
@@ -426,13 +416,10 @@ mod tests {
     #[test]
     fn test_scene_render_path_stroke() {
         let mut world = hecs::World::new();
-        let path = Path::new(
-            vec![
-                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
-            ],
+        let path = Path::new(Path2D::from_polyline(
+            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0)],
             false,
-        );
+        ));
         world.spawn((path, StrokeSolid::new(1.0, (0, 0, 255, 255))));
         let renderer = SceneRender {
             painter: MockPainter,
@@ -460,13 +447,10 @@ mod tests {
             Circle::new((5.0, 5.0), 20.0),
             FillSolid::new((0, 255, 0, 128)),
         ));
-        let path = Path::new(
-            vec![
-                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
-            ],
+        let path = Path::new(Path2D::from_polyline(
+            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0)],
             false,
-        );
+        ));
         world.spawn((path, FillSolid::new((0, 0, 255, 255))));
         let renderer = SceneRender {
             painter: MockPainter,
@@ -511,13 +495,10 @@ mod tests {
         FillSolid::new((0, 0, 0, 255))
     }
     fn mk_path() -> Path {
-        Path::new(
-            vec![
-                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
-            ],
+        Path::new(Path2D::from_polyline(
+            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 0.0)],
             false,
-        )
+        ))
     }
     fn mk_line(x: f32) -> Line {
         Line::new((x, 0.0), (x, 10.0))
@@ -747,19 +728,20 @@ mod tests {
         assert!(q.is_empty());
     }
 
-    /// 闭合语义（M0 方案 b）：`closed = true` 经 `Shape2D::Path` 保留 `Close`。
+    /// 闭合语义（M0 方案 b）：`closed` 经 `Path2D::from_polyline` 追加 `Close`，
+    /// 变换后 `Shape2D::Path` 仍保留 `Close`。
     #[test]
     fn closed_path_keeps_close_command() {
         let mut world = hecs::World::new();
         world.spawn((
-            Path::new(
-                vec![
-                    xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                    xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
-                    xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
+            Path::new(Path2D::from_polyline(
+                &[
+                    glam::Vec2::new(0.0, 0.0),
+                    glam::Vec2::new(1.0, 0.0),
+                    glam::Vec2::new(1.0, 1.0),
                 ],
                 true,
-            ),
+            )),
             mk_stroke(),
         ));
         let mut q = DrawQueue::new();

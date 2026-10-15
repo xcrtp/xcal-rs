@@ -16,7 +16,7 @@ xcal-scene / xcal-render / xc-geometry
               ├ wgpu 2D 后端 (feature = "wgpu")          ← S3-1：离屏 MSAA；S3-2：透明清屏
               ├ 图层合成器 (feature = "wgpu")            ← S3-2：N 层按声明顺序混合
               ├ 顶点契约 → wgpu 翻译 (feature = "wgpu")
-              ├ egui 2D 后端 (feature = "egui")
+              ├ egui 2D 后端 (feature = "cpu-2d")
               └ eframe + egui_wgpu 集成 (feature = "egui-wgpu")
 ```
 
@@ -26,13 +26,18 @@ xcal-scene / xcal-render / xc-geometry
 
 | feature | 引入的依赖 | 可用模块 |
 |---------|-----------|----------|
-| `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
+| `default` (= `wgpu` + `cpu-2d`) | 同 `wgpu` + `cpu-2d` | 同二者（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
 | `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout` |
-| `egui` | `egui 0.36`, `xcal-scene/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
+| `cpu-2d` | `egui 0.36`, `xcal-scene/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
+| `egui` | = `cpu-2d`（旧 feature 名，保留为等价别名） | 同 `cpu-2d` |
 | `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-scene/egui` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
 四种 feature 组合都通过 CI 的 `cargo check -F` 验证。
+
+> **编译期 feature vs 运行期开关**：`cpu-2d` 是**编译期** feature，决定 CPU 回放路径
+> （`egui_2d`）是否被编译进来；与之对应的**运行期**开关是 `xcal_egui::UiConfig::gpu_2d`
+> （面板 checkbox），决定当帧是否真的走 GPU 离屏路径。二者语义不同、互不替代。
 
 ---
 
@@ -165,7 +170,7 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
   2D 离屏为 `Rgba8Unorm`（存 gamma）。
 - 导出：`Compositor` / `CompositeOp` / `CompositeFrame`。
 
-### 7. `egui_2d` (`egui`)
+### 7. `egui_2d` (`cpu-2d`)
 
 `EguiPainter`：xcal-render 统一 2D 管线 (`Painter2D`) 的 egui 实现。
 按 `Shape2D` 的 `Circle / Line / Rect / Polyline / Polygon / Ellipse / Path`

@@ -4,8 +4,8 @@
 // 这些放到 xcal-render） + FunctionX2Y/Sampler/Scene，以及 3D 类型与图元生成器。
 //
 // 模块组织（文件模块，见 scene/ 目录）：
-// - components：所有 ECS 组件（含 components/3d.rs 的 Camera3D/Mesh3D 等，
-//   以 `three_d` 模块名挂载；components/animation/orbit.rs 的 OrbitAnim）
+// - components：所有 ECS 组件（含 components/3d.rs 的 Camera3D/MeshGeometry/
+//   Material3D 等，以 `three_d` 模块名挂载；components/animation/orbit.rs 的 OrbitAnim）
 // - primitives：内置图元生成器（primitives/cube.rs 的线框/实心立方体）
 
 use std::{any::TypeId, collections::HashMap};

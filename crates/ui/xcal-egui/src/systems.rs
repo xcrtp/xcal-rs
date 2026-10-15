@@ -22,11 +22,12 @@ use xcal_schedule::context::ExecutorContext;
 use xcal_scene::domain::{CameraCommand, InputEvents, SceneEvent};
 use xcal_schedule::system::System;
 use xcal_scene::transform::Transform2D;
-use xcal_scene::types::{Camera2D, Rect, Vec3};
+use xcal_scene::types::{Camera2D, Rect};
 use xcal_render::components::{
     FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
 use xcal_render::{DrawQueue, MeasureSpace, ZIndex, record_scene};
+use xc_geometry::Path2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 
@@ -182,15 +183,15 @@ impl System for SceneRecordSystem {
             {
                 // BindingApplySystem 写入的相位偏移：让 sin 曲线随时间水平滑动。
                 let phase = phase.map(|p| p.phase).unwrap_or(0.0);
-                let mut pts: Vec<Vec3> = Vec::new();
+                let mut pts: Vec<glam::Vec2> = Vec::new();
                 let mut x = sampler.start;
                 while x <= sampler.end {
-                    pts.push((x, (func.f)(x + phase), 0.0).into());
+                    pts.push(glam::Vec2::new(x, (func.f)(x + phase)));
                     x += sampler.step;
                 }
                 queue.path_stroke(
                     ZIndex::new(0),
-                    Path::new(pts, false).to_screen(&camera),
+                    Path::new(Path2D::from_polyline(&pts, false)).to_screen(&camera),
                     stroke.clone(),
                 );
             }

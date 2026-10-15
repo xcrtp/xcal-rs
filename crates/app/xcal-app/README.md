@@ -22,8 +22,8 @@ cargo run -p xcal-app
    - 一段粉色**语义形变公式**：`x²` ↔ `x³`（S1b；按源码锚点配对 —— `x` 配到 `x`）
    - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
 2. **egui 面板**：左侧时间/相机/网格 + **`GPU 2D 管线` 复选框**
-   （S3-1 运行期开关，默认关；勾选后 2D 走 `SceneCompositorCallback` 离屏 MSAA 合成，
-   不勾则走 `EguiPainter` CPU 回放）+ **`翻转图层顺序` 复选框**
+   （S3-1 运行期开关，默认开；勾选后 2D 走 `SceneCompositorCallback` 离屏 MSAA 合成，
+   取消勾选则走 `EguiPainter` CPU 回放）+ **`翻转图层顺序` 复选框**
    （S3-2 验收开关：验证叠放顺序确实由 `SceneView::layers` 的声明序决定，默认关），
    右侧动画参数
    （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
@@ -60,18 +60,18 @@ let render_ctx = RenderContext::from_render_state(&rs);
 
 // ── 3. Scene 填充 hecs World（纯逻辑组件） ──
 let mut scene = Scene::new();
-scene.spawn((wireframe_cube(1.0, Color32::WHITE),));            // 3D 线框立方体
+scene.spawn((wireframe_cube(1.0), Material3D::color(Color32::WHITE))); // 3D 线框立方体
 scene.spawn((Camera3D::new(...),));                            // 3D 相机（eye 由 Binding 驱动）
 scene.spawn((Circle::new((0.,0.),1.0), StrokeSolid));          // 振动圆（半径由 Binding 驱动）
 scene.spawn((FunctionX2Y::new(|x| x.sin()), Sampler1D,
              StrokeSolid, PhaseAnim));                         // sin 曲线（相位由 Binding 驱动）
-// 公式：IR → 旧 (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"
+// 公式：IR → (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"
 let engine = formula::build_engine();
 let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
 if let Some(ir) = formula::rebuild(&engine, &spec) {
-    for (vertices, color, width, closed, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+    for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
         scene.spawn((
-            Path::new(vertices, closed),
+            Path::new(path),
             // 公式描边是世界空间：与字形一同随缩放成比例变化。
             StrokeSolid::new_in(width, color, space),
         ));
@@ -193,7 +193,7 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 - **复用 `ir_to_draw_cmds`**：缩放与平移全部由它完成，桥接层不另写变换。
 - **每个子轮廓单独一条路径**：用 `Path2D::flatten_subpaths` 按 `MoveTo` 分组
   （`flatten` 会把所有子路径拼成一条，多轮廓字形 `o`/`B`/`8` 会出现横穿字形内部
-  的桥接线）；组内首尾点重合即传 `closed=true`。
+  的桥接线）；组内首尾点重合即视为闭合，`Path2D::from_polyline(..., closed=true)` 追加 `Close`。
 - **字号解耦**：`FormulaSpec.nominal_font_size`（默认 12.0）是 Typst 编译标称字号，
   决定曲线提取精度与 IR 本地点尺度；`FormulaSpec.font_size` 是目标显示大小。
   展平容差是相对标称尺度的绝对值，显示尺寸缩小不会放大折线误差。
@@ -216,7 +216,7 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 - **S1a 几何形变**：橙色形状 `MorphShape(圆, 方)`。`BindingTarget::MorphT` 写 `t`，
   `MorphApplySystem`（BindingApply 之后）每帧把
-  `Path2D::morph_points(from, to, t, samples)` 写进同实体的 `Path`（`closed = true`），
+  `Path2D::morph_points(from, to, t, samples)` 写进同实体的 `Path`（`Path2D` 末命令为 `Close`），
   再由现有 `record_scene` 消费 —— **零录制改动**。
 - **S1b 语义形变**：`formula::compile_morph_pairs("x^2", "x^3")` 用
   `xc_content::pair_by_anchor` 按**源码锚点**配对（`x` 配到 `x`，而非按位置配到 `3`），
@@ -257,9 +257,10 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 2D 内容有两条**并存**管线，由 `UiConfig::gpu_2d`（面板复选框）在
 `EguiSceneHost::present` 运行期二选一：
 
-- `gpu_2d = false`（默认）：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放（基线）；
-- `gpu_2d = true`：2D 进 `SceneCompositorCallback` → `WgpuBackend2D` 离屏 `Rgba8Unorm` + MSAA 4x，
+- `gpu_2d = true`（默认）：2D 进 `SceneCompositorCallback` → `WgpuBackend2D` 离屏 `Rgba8Unorm` + MSAA 4x，
   再经 `Compositor` 按声明顺序混合回主 pass（与 3D 图层同在**同一个** `CompositeFrame` 内）。
+- `gpu_2d = false`：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放（基线；
+  受 backends 的**编译期** `cpu-2d` feature 门控，关闭后该分支不编译）；
 
 > ⚠️ 合成四边形必须写死全 NDC 盒（`compositor::COMPOSITE_QUAD`）：egui-wgpu 会把 render pass
 > viewport 设为**回调自身矩形**，若按整屏尺寸换算裁剪坐标会导致视口被二次应用

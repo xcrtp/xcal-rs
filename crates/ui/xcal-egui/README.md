@@ -30,7 +30,7 @@ xcal-app (装配 + ParamPanelSystem)
 | Resource | 归属 | 说明 |
 |----------|------|------|
 | `AppCamera { center: Vec2, scale: f32 }` | 本 crate | 2D 相机**纯状态**；输入处理已删除，控制器是纯函数 `apply_command`（消费 domain 的 `CameraCommand`）|
-| `UiConfig { show_grid, show_field, gpu_2d, flip_layer_order }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = false`）+ S3-2 图层顺序翻转（默认 `false`）|
+| `UiConfig { show_grid, show_field, gpu_2d, flip_layer_order }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = true`）+ S3-2 图层顺序翻转（默认 `false`）|
 | `ViewRect { rect }` | 本 crate | 中央视口在 egui 点坐标中的矩形（由 `EguiSceneHost::update_view_rect` 写入）|
 | `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
 | `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
@@ -68,7 +68,7 @@ xcal-app (装配 + ParamPanelSystem)
 `EguiSceneHost`（`host.rs`）绘制的三个面板：
 
 - **控制面板（左）**：`t` 读数、`显示网格` / `显示向量场` 复选框、
-  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认关）、
+  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认开）、
   **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数。
 - **时间面板（左）**：播放/暂停按钮、速度滑块、时间轴 seek 滑块。
 - **参数面板（右）**：按 (curve, target) 展示绑定滑块——圆半径 `base/amp/omega`、
@@ -96,13 +96,14 @@ xcal-app (装配 + ParamPanelSystem)
 
   | `gpu_2d` | 路径 |
   |----------|------|
-  | `false`（默认）| `DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（迁移前基线）|
-  | `true` | `SceneCompositorCallback`：`prepare` 渲染离屏 MSAA 4x 透明底纹理，`paint` 经**合成器**混合回主 pass |
+  | `true`（默认）| `SceneCompositorCallback`：`prepare` 渲染离屏 MSAA 4x 透明底纹理，`paint` 经**合成器**混合回主 pass |
+  | `false` | `DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（迁移前基线，需 `cpu-2d` feature）|
 
   3D 图层与 GPU 2D 图层进**同一个** `SceneCompositorCallback`（离屏 + 合成器），
   回调落在有效序中首个 GPU 图层的位置；CPU 2D 层在其声明位置就地回放。
   两个图层都声明 `LayerBlend::Alpha`：离屏是透明底，用 `Opaque`(REPLACE) 会把透明像素
-  写进主 pass、抹掉背景与下层。CPU 路径**不支持真合成**（退化为顺序绘制，2D 仍在下，S3-4 退役后消失）。
+  写进主 pass、抹掉背景与下层。CPU 路径**不支持真合成**（退化为顺序绘制，2D 仍在下，S3-4 退役后消失），
+  且受**编译期** `cpu-2d` feature 门控（关闭后该回放分支不编译）。
 
 > **单一回调（S3-2 修复）**：`egui_wgpu::CallbackResources` 是全局共享的 TypeMap，
 > 每层一个回调会互相覆盖 `CompositeFrame`（实机现象：顺序 A 只见 3D、顺序 B 只见 2D）。
@@ -113,7 +114,8 @@ xcal-app (装配 + ParamPanelSystem)
 ## EguiPainter 的定位
 
 `xcal_egui::EguiPainter` 实际由 **xcal-render-backends/egui_2d** 提供，本 crate
-通过 `pub use xcal_render_backends::EguiPainter;` 重新导出。下游用户统一写：
+通过 `pub use xcal_render_backends::EguiPainter;` 重新导出（受本 crate 的
+**编译期** `cpu-2d` feature 门控，默认开启）。下游用户统一写：
 
 ```rust
 use xcal_egui::EguiPainter;
@@ -128,13 +130,19 @@ use xcal_egui::EguiPainter;
 ```toml
 xcal-scene              = { features = ["egui"] }              # egui feature 门控（如需）
 xcal-render            = { default-features = false }         # 2D 管线（无 wgpu）
-xcal-render-backends   = { features = ["egui", "egui-wgpu"] } # EguiPainter + Compositor/SceneCompositorCallback
+xcal-render-backends   = { default-features = false, features = ["egui-wgpu"] } # Compositor / SceneCompositorCallback
 xc-geometry                                                   # S3-1：以 Rect2D 声明回调视口
 xc-macro
 egui                   = "0.36"
 egui-wgpu                                                     # present 提交 3D/GPU2D 回调
 hecs / glam / derive-new / derive-builder
 ```
+
+本 crate 自身暴露一个 feature：
+
+| feature | 转发 | 说明 |
+|---------|------|------|
+| `cpu-2d`（默认） | `xcal-render-backends/cpu-2d` | 编译期门控 CPU 2D 回放路径（`EguiPainter` / `host::present` 旧分支），关闭后不再编译 |
 
 ## 测试
 
@@ -143,7 +151,7 @@ cargo test -p xcal-egui
 cargo doc  -p xcal-egui --no-deps
 ```
 
-- `resources`：`AppCamera` / `UiConfig` Default（含 `!gpu_2d` / `!flip_layer_order` 断言）/ `Resources` 增删
+- `resources`：`AppCamera` / `UiConfig` Default（含 `gpu_2d` / `!flip_layer_order` 断言）/ `Resources` 增删
 - `systems`：`CameraInputSystem` zoom / clamp / pan / 无事件 4 例；`AppCamera::apply_command`
   忽略 Orbit/Dolly 1 例；`GridBuildSystem` 不再产出全屏背景矩形 1 例
 - `time_control`：`TimeControlSystem` 播放切换 / speed+seek / 无关事件忽略 3 例

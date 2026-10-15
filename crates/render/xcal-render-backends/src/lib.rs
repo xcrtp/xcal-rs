@@ -6,7 +6,7 @@
 //   - render_context：RenderContext（device/queue/format 句柄，wgpu/pollster）
 //   - wgpu_3d：WgpuBackend3D / PreparedDraw3D / Frame3DData（3D MVE 后端）
 //   - scene_callback：SceneCompositorCallback（唯一 egui_wgpu 回调，一次合成全部图层，feature = "egui-wgpu"）
-//   - egui_2d：EguiPainter + color_to_egui（Painter2D 的 egui 实现，feature = "egui"）
+//   - egui_2d：EguiPainter + color_to_egui（Painter2D 的 egui 实现，feature = "cpu-2d"）
 //   - eframe_backend：EframeWgpuBackend（RenderBackend 的 egui-wgpu 实现）
 //   - svg_recorder：SVG 录制后端（预留空壳）
 //   - text：文本引擎（Typst/LaTeX，预留空壳，feature = "text"）
@@ -33,7 +33,9 @@ pub mod eframe_backend;
 #[cfg(feature = "egui-wgpu")]
 pub mod scene_callback;
 
-#[cfg(feature = "egui")]
+// CPU 2D 管线（编译期 feature `cpu-2d`）：`Painter2D` 的 egui 就地回放实现。
+// 是否真的走该路径由运行期开关 `xcal_egui::UiConfig::gpu_2d` 决定（见 host::present）。
+#[cfg(feature = "cpu-2d")]
 pub mod egui_2d;
 
 // 旧 svg_recorder / text 空壳已删除（见上注）。
@@ -60,5 +62,5 @@ pub use eframe_backend::EframeWgpuBackend;
 #[cfg(feature = "egui-wgpu")]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};
 
-#[cfg(feature = "egui")]
+#[cfg(feature = "cpu-2d")]
 pub use egui_2d::{EguiPainter, color_to_egui};

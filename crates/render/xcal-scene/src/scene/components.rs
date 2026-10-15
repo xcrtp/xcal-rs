@@ -35,7 +35,8 @@ pub mod mesh {
     }
 }
 
-/// 3D 核心类型（PrimitiveTopology / Mesh3D / Projection / Camera3D）。
+/// 3D 核心类型（PrimitiveTopology / MeshGeometry / Material3D /
+/// Projection / Camera3D）。
 /// 文件名以数字开头，无法直接作为 Rust 标识符，通过 `#[path]` 挂载为 `three_d`。
 #[path = "components/3d.rs"]
 pub mod three_d;
@@ -44,7 +45,7 @@ pub use marker::*;
 pub use mesh::*;
 pub use three_d::*;
 
-use crate::types::{Vec2, Vec3};
+use crate::types::Vec2;
 
 #[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
 pub struct Circle {
@@ -90,13 +91,14 @@ impl MorphShape {
     }
 }
 
+/// 2D 路径组件：直接持有 [`xc_geometry::Path2D`]（命令序列，自带闭合语义，
+/// `closed` 不再作为独立字段——避免两处真相）。
+///
+/// 坐标变换（屏幕 ↔ 逻辑）由 `xc_macro::Transform2DInto` 派生，落到
+/// `xcal_scene::transform` 里 `Path2D` 的手动实现（逐命令映射，含椭圆弧解析改写）。
 #[derive(Debug, Clone, derive_builder::Builder, derive_new::new, xc_macro::Transform2DInto)]
 pub struct Path {
-    #[new(into_iter = "Vec3")]
-    #[transform(iter)]
-    pub vertices: Vec<Vec3>,
-    #[transform(skip)]
-    pub closed: bool,
+    pub path: xc_geometry::Path2D,
 }
 
 /// 线段图元：两个端点独立完成坐标转换（派生 [`xcal_scene::transform::Transform2DInto`]）。

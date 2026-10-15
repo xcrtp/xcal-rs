@@ -3,9 +3,10 @@
 // WGPU 3D 后端（G2/G5/G6 资源生命周期改造）：
 // - WgpuBackend3D：持有 device/queue 与两条管线（triangle list / line list），
 //   共享一套 dynamic-offset uniform 绑定布局；
-// - G2：hash_mesh — 基于 Mesh3D 公有字段（顶点/索引/拓扑）的内容哈希，颜色排除；
+// - G2：mesh 缓冲缓存用 `ResourceKey::versioned`（几何 id + version）失效，
+//   line 缓冲缓存用 `ResourceKey::content`（端点内容哈希）；
 // - G5：UniformArena — 256 字节对齐的 dynamic uniform staging，flush 一次性 write_buffer；
-// - G6：prepare_draws — mesh/line 顶点缓冲走 `mesh_cache`（按内容去重），
+// - G6：prepare_draws — mesh/line 顶点缓冲走 `mesh_cache`，
 //   uniform 走 arena，缓存命中时不再 per-mesh per-frame 调用 `create_buffer_init`；
 // - PreparedDraw3D / Frame3DData：只持有句柄克隆（wgpu::Buffer 是 ref-counted），
 //   arena 对应的 bind_group 所有 draw 共享（clone 浅拷贝）。
@@ -18,12 +19,13 @@
 //   1. **没有顶点布局契约声明** —— 3D pipeline 的顶点布局是硬编码 bespoke
 //      （`Float32x3` / stride 12），`VertexLayout` 从未参与，checker 的
 //      `(layout, identity)` 对没有输入可比；
-//   2. **没有稳定 identity** —— `MeshDraw` 按值携带 `Mesh3D`，`DrawQueue3D`
-//      不携带 entity id；唯一现成的 identity 就是内容哈希本身，而用它当 key
-//      两帧必然一致 → checker **恒不报警**，属于"假接线"。
+//   2. **没有 entity identity 契约** —— `DrawQueue3D` 不携带 entity id。
+//      （RB 起 `MeshDraw` 已携带稳定几何 identity：`MeshGeometry::id()/version()`，
+//      但它是"几何资源身份"而非"ECS 实体身份"，仍不足以支撑 checker 的
+//      `(layout, identity)` 输入——顶点布局契约仍是第 1 点未解的问题。）
 // 2D 侧则相反：内容（形变 / 相机 / group）每帧都变，接上必然大量误报。
 // 因此 R6 决策 = **两侧都不接**，把事实记在此处；将来 3D 引入 VertexLayout 契约
-// 声明 + 稳定 entity identity（或 `MeshDraw` 带 id）后，可在 `prepare_draws` /
+// 声明 + 稳定 entity identity 后，可在 `prepare_draws` /
 // `record_prepared` 入口补齐。
 
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -34,7 +36,7 @@ use std::sync::Mutex;
 use glam::Mat4;
 use wgpu::util::DeviceExt as _;
 
-use xcal_scene::scene::components::{Mesh3D, PrimitiveTopology};
+use xcal_scene::scene::components::PrimitiveTopology;
 use xc_geometry::Color32;
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xcal_render::{
@@ -52,36 +54,6 @@ pub const DYNAMIC_OFFSET_ALIGNMENT: u64 = 256;
 
 /// 顶点步长：vec3 position = 12 字节。
 const VERTEX_STRIDE: u64 = 12;
-
-// ─── G2：hash_mesh ─────────────────────────────────────────────────────────
-
-/// 基于 [`Mesh3D`] 公有字段的内容哈希。
-///
-/// - 顶点：按 `to_bits()` 散列（f32 本身不实现 Hash）；
-/// - 索引：`Some` 分支写入长度+每个索引；`None` 单独写入 discriminant；
-/// - 拓扑：按 `as u8` 写入；
-/// - **颜色 intentionally excluded**（颜色走 per-draw uniform，不影响 mesh 复用）。
-pub fn hash_mesh(mesh: &Mesh3D) -> u64 {
-    let mut h = DefaultHasher::new();
-    (mesh.vertices.len() as u64).hash(&mut h);
-    for v in &mesh.vertices {
-        v.x.to_bits().hash(&mut h);
-        v.y.to_bits().hash(&mut h);
-        v.z.to_bits().hash(&mut h);
-    }
-    match &mesh.indices {
-        Some(idx) => {
-            1u8.hash(&mut h);
-            (idx.len() as u64).hash(&mut h);
-            for &i in idx {
-                i.hash(&mut h);
-            }
-        }
-        None => 0u8.hash(&mut h),
-    }
-    (mesh.topology as u8).hash(&mut h);
-    h.finish()
-}
 
 // ─── G5：UniformArena ──────────────────────────────────────────────────────
 
@@ -294,7 +266,9 @@ pub struct WgpuBackend3D {
     pipeline_triangles: wgpu::RenderPipeline,
     pipeline_lines: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    /// mesh/line 顶点（+可选索引）缓冲缓存。key = 内容哈希 + type_tag；
+    /// mesh/line 顶点（+可选索引）缓冲缓存。
+    /// mesh key = `ResourceKey::versioned`（几何 id + version）+ `MeshVertexTag`；
+    /// line key = `ResourceKey::content`（端点内容哈希）+ `LineVertexTag`；
     /// meta = ()；实际 GPU 句柄以 `GpuHandle<CachedMeshBuffers>` 形式存于 ResourceCache。
     mesh_cache: Mutex<ResourceCache<()>>,
     /// 256 对齐 dynamic uniform arena。
@@ -528,23 +502,23 @@ impl WgpuBackend3D {
             topology: PrimitiveTopology,
         }
 
-        // ── MeshDraws ───────────────────────────────────────────────────
+        // ── MeshDraws：按几何 id + version 寻址（几何内容变化时 bump_version 失效）──
         for md in meshes {
-            let hash = hash_mesh(&md.mesh);
-            let key = ResourceKey::content::<MeshVertexTag>(hash);
+            let geometry = &md.geometry;
+            let key = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), geometry.version());
 
             // 先查命中；命中直接取缓存里的字段副本；未命中创建 VB/IB 并 insert_handle。
             let cached_copy = if let Some(handle_ref) = cache_guard.get(key) {
                 extract_buffers(handle_ref)
             } else {
                 let positions: Vec<[f32; 3]> =
-                    md.mesh.vertices.iter().map(|v| v.to_array()).collect();
+                    geometry.positions.iter().map(|v| v.to_array()).collect();
                 let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("xcal-3d-mesh-vertices"),
                     contents: bytes_of(&positions),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let ib = md.mesh.indices.as_ref().map(|indices| {
+                let ib = geometry.indices.as_ref().map(|indices| {
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("xcal-3d-mesh-indices"),
                         contents: bytes_of(indices),
@@ -554,14 +528,13 @@ impl WgpuBackend3D {
                 let cached = CachedMeshBuffers {
                     vertex_buffer: vb,
                     index_buffer: ib,
-                    vertex_count: md.mesh.vertices.len() as u32,
-                    index_count: md
-                        .mesh
+                    vertex_count: geometry.positions.len() as u32,
+                    index_count: geometry
                         .indices
                         .as_ref()
                         .map(|v| v.len() as u32)
                         .unwrap_or(0),
-                    topology: md.mesh.topology,
+                    topology: geometry.topology,
                 };
                 let copy = CachedMeshBuffersCopy {
                     vertex_buffer: cached.vertex_buffer.clone(),
@@ -576,7 +549,7 @@ impl WgpuBackend3D {
             };
 
             let mvp = view_proj * md.transform;
-            let bytes = uniform_bytes(mvp, md.color);
+            let bytes = uniform_bytes(mvp, md.material.color);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -817,7 +790,7 @@ fn uniform_bytes(mvp: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
 mod tests {
     use super::*;
     use crate::render_context::RenderContext;
-    use xcal_scene::scene::components::{Camera3D, Projection};
+    use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry, Projection};
     use xcal_scene::scene::primitives::wireframe_cube;
     use xc_geometry::Vec3;
     use xcal_render::{DrawQueue3D, Viewport};
@@ -829,10 +802,10 @@ mod tests {
         Some((backend, ctx))
     }
 
-    // ── G2：hash_mesh 单测（纯 CPU，headless，无需 GPU） ──────────────
+    // ── G2：几何缓存键单测（纯 CPU，headless，无需 GPU） ──────────────
 
-    fn basic_mesh() -> Mesh3D {
-        Mesh3D::new(
+    fn basic_mesh() -> MeshGeometry {
+        MeshGeometry::new(
             vec![
                 glam::Vec3::new(-1.0, -1.0, 0.0),
                 glam::Vec3::new(1.0, -1.0, 0.0),
@@ -840,39 +813,40 @@ mod tests {
             ],
             Some(vec![0, 1, 2]),
             PrimitiveTopology::Triangles,
-            Color32::new(255, 255, 255, 255),
         )
     }
 
+    /// `ResourceKey::Versioned`：版本不变则持续命中，`bump_version` 后缓存失效。
     #[test]
-    fn test_hash_mesh_equal_data_equal_hash() {
-        // 场景 1：相同顶点/索引/拓扑，不同颜色 → 相同哈希
-        let a = basic_mesh();
-        let mut b = basic_mesh();
-        b.color = Color32::new(255, 0, 0, 255);
-        assert_eq!(hash_mesh(&a), hash_mesh(&b), "color must be excluded");
+    fn test_versioned_key_invalidates_cache_on_bump() {
+        let mut cache: ResourceCache<()> = ResourceCache::new();
+        cache.begin_frame();
 
-        // 场景 2：改动一个顶点 → 不同哈希
-        let mut c = basic_mesh();
-        c.vertices[0].x = 9.9;
-        assert_ne!(hash_mesh(&a), hash_mesh(&c), "vertex change must differ");
+        let mut geometry = basic_mesh();
+        let key_v0 = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), geometry.version());
+        assert!(cache.get(key_v0).is_none());
+        let _ = cache.insert_handle(key_v0, (), GpuHandle::new(0u32));
+        assert_eq!(cache.len(), 1);
+        assert!(cache.get(key_v0).is_some());
 
-        // 场景 3：追加一个索引 → 不同哈希
-        let mut d = basic_mesh();
-        if let Some(ref mut idx) = d.indices {
-            idx.push(0);
-        }
-        assert_ne!(hash_mesh(&a), hash_mesh(&d), "index change must differ");
+        // 版本未变：同一 key，缓存继续命中，不产生新条目。
+        let key_again = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), geometry.version());
+        assert_eq!(key_v0, key_again);
+        assert_eq!(cache.len(), 1);
 
-        // 场景 4：换拓扑 → 不同哈希
-        let mut e = basic_mesh();
-        e.topology = PrimitiveTopology::Lines;
-        assert_ne!(hash_mesh(&a), hash_mesh(&e), "topology change must differ");
+        // 版本递增：key 变化 → 缓存未命中（触发重建）。
+        geometry.bump_version();
+        let key_v1 = ResourceKey::versioned::<MeshVertexTag>(geometry.id(), geometry.version());
+        assert_ne!(key_v0, key_v1);
+        assert!(cache.get(key_v1).is_none());
 
-        // 另外：indices = None vs Some 必须不同（覆盖 None 分支）
-        let mut f = basic_mesh();
-        f.indices = None;
-        assert_ne!(hash_mesh(&a), hash_mesh(&f), "indices Some/None must differ");
+        // 几何 id 跨 clone 稳定 → clone 与本体共享同一缓存条目。
+        let clone = geometry.clone();
+        assert_eq!(clone.id(), geometry.id());
+        assert_eq!(
+            ResourceKey::versioned::<MeshVertexTag>(clone.id(), clone.version()),
+            key_v1
+        );
     }
 
     // ── G5：UniformArena 单测（纯 CPU + 需要真 GPU 的 headless 测试） ─
@@ -979,9 +953,9 @@ mod tests {
         let mut layer =
             RenderLayer::new_offscreen(ctx.device(), camera, viewport, ctx.target_format());
         layer.draw_queue.draw_mesh(
-            wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),
+            std::sync::Arc::new(wireframe_cube(1.0)),
             Mat4::IDENTITY,
-            Color32::new(255, 255, 255, 255),
+            Material3D::color(Color32::new(255, 255, 255, 255)),
         );
 
         let mut encoder = ctx
@@ -1096,9 +1070,9 @@ mod tests {
         };
         let mut queue = DrawQueue3D::new();
         queue.draw_mesh(
-            wireframe_cube(1.0, Color32::new(255, 255, 255, 255)),
+            std::sync::Arc::new(wireframe_cube(1.0)),
             Mat4::IDENTITY,
-            Color32::new(255, 255, 255, 255),
+            Material3D::color(Color32::new(255, 255, 255, 255)),
         );
         queue.draw_line(Vec3::ZERO, Vec3::X, Color32::new(255, 0, 0, 255));
         let frame = backend.prepare_draws(
@@ -1129,13 +1103,13 @@ mod tests {
             return;
         };
         let mut queue = DrawQueue3D::new();
-        // 10 个不同 mesh（varying size → 不同内容哈希）。
+        // 10 个不同 mesh（varying size → 不同几何 id，各自唯一缓存条目）。
         for size in 0..10u32 {
             let s = 0.5 + size as f32 * 0.1;
             queue.draw_mesh(
-                wireframe_cube(s, Color32::new(255, 255, 255, 255)),
+                std::sync::Arc::new(wireframe_cube(s)),
                 Mat4::IDENTITY,
-                Color32::new(255, 255, 255, 255),
+                Material3D::color(Color32::new(255, 255, 255, 255)),
             );
         }
         // 2 个不同 line（端点不同 → 不同内容哈希）。
@@ -1189,7 +1163,7 @@ mod tests {
                 stable_cache = stable_cache.max(cache_len);
             }
         }
-        // 内容去重断言：10 meshes + 2 lines = 12 vertex buffers cached。
+        // 缓存条目断言：10 meshes + 2 lines = 12 vertex buffers cached。
         assert_eq!(
             stable_cache, 12,
             "should cache 10 unique mesh buffers + 2 unique line buffers"

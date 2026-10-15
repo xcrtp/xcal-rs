@@ -8,7 +8,7 @@
 // - 线段：`line_segment`；
 // - 矩形：`rect_filled` / `rect_stroke(StrokeKind::Middle)`；
 // - 路径：按**子路径分组**展平后逐段 `line_segment`（闭合由 `Path2D::Close`
-//   在展平时补出回起点段，等价于旧的 `p.closed` 手动闭合）；填充走
+//   在展平时补出回起点段）；填充走
 //   `convex_polygon`（与旧 `Shape::Path` 填充分支一致）。
 // Shape2D 的其余变体（Ellipse/Polygon/Group/Empty/Custom）本条管线当前不产生，
 // 留待 S3-1 GPU 后端统一处理。

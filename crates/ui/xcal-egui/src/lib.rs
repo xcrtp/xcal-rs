@@ -23,4 +23,5 @@ pub use host::EguiSceneHost;
 pub use resources::{AppCamera, TimeState, UiConfig, ViewRect};
 pub use systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 pub use time_control::TimeControlSystem;
+#[cfg(feature = "cpu-2d")]
 pub use xcal_render_backends::EguiPainter;

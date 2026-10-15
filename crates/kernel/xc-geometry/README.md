@@ -123,7 +123,8 @@ let contours: Vec<Vec<Vec2>> = p.flatten_subpaths(0.001);
 - `Arc` 通过弦误差控制生成多段 `LineTo`，避免 `sin`/`cos` 过多；
 - 迭代器零拷贝、无堆分配（细分栈用小 `ArrayVec`）；
 - `flatten_subpaths` 保留每个子轮廓的独立性：`Close` 会把子路径起点追加到该组尾部
-  （组内首尾点相同 = 闭合），消费端据此逐轮廓 `closed` 标记。
+  （组内首尾点相同 = 闭合），消费端据此逐轮廓判定闭合（闭合语义由 `Path2D` 的
+  `Close` 命令承载，不再另存 `closed` 标记）。
 
 **弧长 / 形变 / 变换**（S1 插值内核）：
 
