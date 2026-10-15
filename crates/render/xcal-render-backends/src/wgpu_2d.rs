@@ -7,7 +7,7 @@
 // 再作为一个四边形合成进 eframe 主 pass —— 为 S3-2（合成器）/ S3-3（2D/3D 互为纹理）铺路。
 //
 // 关键口径：
-// - **顶点布局来自契约**：`to_wgpu(&VertexLayout::standard(AaModel::None, Static))`，
+// - **顶点布局来自契约**：`to_wgpu(&VertexLayout::standard(AaModel::None, PerFrame))`，
 //   无任何硬编码 `Float32x2` 字面量（合成管线复用同一契约布局：position=裁剪坐标、
 //   attrib0=UV、attrib1 未用）；
 // - **MSAA 4x**：`MSAA_SAMPLES = 4`，离屏 pass = MSAA 纹理 → resolve 到单采样离屏纹理；
@@ -15,9 +15,12 @@
 // - **uniform 复用 `UniformArena`**（256B 对齐 dynamic offset），不另造一套；
 // - 几何缓冲按**内容哈希**缓存（`ResourceCache`），非"每帧必建"；
 //   动画内容每帧哈希不同 → 帧末 `evict_unused(0)` + deferred destroy 保证有界。
+//   注意：本后端的缓存决策**只认内容哈希**，`VertexLayout.cache`（`CacheStrategy`）
+//   字段这里**仅作声明**、不参与决策（见 `tessellate::tessellation_layout` 的说明）。
 //
-// 已知限制（与计划 §7 一致）：本阶段 `AaModel::None`（硬边 + MSAA），
-// shader 不解释 normal/side；描边宽度已由 CPU 侧 lyon 落进几何（未走 shader 补偿）。
+// 已知限制（与计划 §6 一致）：本阶段 `AaModel::None`（硬边 + MSAA），**尚未启用**解析 AA。
+// 但描边几何已**参数化**：顶点存路径点（不含宽度），宽度由 `shape_2d.wgsl` 现场按
+// `position + normal * (stroke_width * 0.5)` 补偿（见 `tessellate.rs` 头部说明）。
 
 use std::mem;
 
@@ -41,8 +44,11 @@ pub const MSAA_SAMPLES: u32 = 4;
 /// （`egui.wgsl` 的 `fs_main_gamma_framebuffer` 分支 + 其 "egui prefers Rgba8Unorm" 提示）。
 pub const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// uniform 块大小：mat4x4（64）+ vec4（16）。
-const UNIFORM_SIZE: u64 = 80;
+/// uniform 块大小：mat4x4（64）+ color vec4（16）+ params vec4（16）。
+///
+/// `params.x` = 描边宽度（**与几何同一空间**的屏幕像素，由 `draw.rs::resolve_style`
+/// 唯一换算点解析）；填充 draw 传 0（`normal=[0,0]` 时偏移恒 0，与传 0 等价）。
+const UNIFORM_SIZE: u64 = 96;
 /// wgpu dynamic uniform offset 要求的最小对齐。
 const DYNAMIC_OFFSET_ALIGNMENT: u64 = 256;
 
@@ -261,7 +267,7 @@ impl WgpuBackend2D {
         });
 
         // ── 顶点布局：来自契约（无硬编码字面量） ──
-        let vertex_layout = VertexLayout::standard(AaModel::None, CacheStrategy::Static);
+        let vertex_layout = VertexLayout::standard(AaModel::None, CacheStrategy::PerFrame);
         let mut attrs = Vec::new();
         let wgpu_vertex_layout = to_wgpu(&vertex_layout, &mut attrs);
 
@@ -448,6 +454,23 @@ impl WgpuBackend2D {
         self.recorder.len()
     }
 
+    /// G7 诊断（R5-3）：uniform arena 的本帧占用 / 容量块数（`used` / `capacity`）。
+    ///
+    /// `used` 每帧被 `begin_frame` 归零，故恒等于"本帧实际 push 的 uniform 块数"。
+    pub fn arena_usage(&self) -> (u32, u32) {
+        (self.arena.used_blocks(), self.arena.capacity_blocks())
+    }
+
+    /// G7 诊断（R5-2）：几何缓存的存活条目数（帧末 `evict_unused(0)` 之后）。
+    pub fn geometry_cache_len(&self) -> usize {
+        self.geom_cache.len()
+    }
+
+    /// G7 诊断（R5-2）：graveyard 中等待延迟销毁的几何条目数。
+    pub fn pending_geometry_destroy(&self) -> usize {
+        self.geom_cache.pending_destroy_count()
+    }
+
     fn ensure_targets(&mut self, size: (u32, u32)) {
         if self.targets.as_ref().map(|t| t.size) == Some(size) {
             return;
@@ -574,7 +597,9 @@ impl WgpuBackend2D {
                     TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
                     TessKind::Stroke => style.stroke.unwrap_or(Color32::BLACK),
                 };
-                let block = self.arena.push(&uniform_bytes(clip, color));
+                let block = self
+                    .arena
+                    .push(&uniform_bytes(clip, color, style.stroke_width));
                 prepared.push(Prepared2D {
                     vertex_buffer,
                     index_buffer,
@@ -810,8 +835,15 @@ fn hash_tessellation(t: &Tessellation2D) -> u64 {
     h
 }
 
-/// uniform 字节：mat4 列主序（64）+ 预乘颜色 vec4（16）。
-fn uniform_bytes(transform: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
+/// uniform 字节：mat4 列主序（64）+ 预乘颜色 vec4（16）+ params vec4（16）。
+///
+/// `params.x` 写 `stroke_width`（偏移 80）——shader 用它沿 `normal` 外扩半个线宽，
+/// 把顶点存着的**路径点**还原成轮廓点（R1 几何参数化）。
+fn uniform_bytes(
+    transform: Mat4,
+    color: Color32,
+    stroke_width: f32,
+) -> [u8; UNIFORM_SIZE as usize] {
     let mut data = [0u8; UNIFORM_SIZE as usize];
     data[..64].copy_from_slice(bytes_of(&transform.to_cols_array()));
     let a = color.a() as f32 / 255.0;
@@ -821,7 +853,8 @@ fn uniform_bytes(transform: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize]
         color.b() as f32 / 255.0 * a,
         a,
     ];
-    data[64..].copy_from_slice(bytes_of(&c));
+    data[64..80].copy_from_slice(bytes_of(&c));
+    data[80..84].copy_from_slice(bytes_of(&[stroke_width]));
     data
 }
 
@@ -986,10 +1019,10 @@ mod tests {
         }
     }
 
-    /// uniform 字节：mat4 + 预乘颜色（alpha=255 时颜色不变）。
+    /// uniform 字节：mat4 + 预乘颜色（alpha=255 时颜色不变）+ params.x = 描边宽度。
     #[test]
     fn uniform_bytes_layout() {
-        let b = uniform_bytes(Mat4::IDENTITY, Color32::new(10, 20, 30, 255));
+        let b = uniform_bytes(Mat4::IDENTITY, Color32::new(10, 20, 30, 255), 3.0);
         assert_eq!(b.len(), UNIFORM_SIZE as usize);
         let f32_at = |off: usize| -> f32 {
             f32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
@@ -1006,9 +1039,25 @@ mod tests {
         assert!((f32_at(72) - 30.0 / 255.0).abs() < 1e-6);
         assert!((f32_at(76) - 1.0).abs() < 1e-6);
         // alpha = 0.5 → 预乘。
-        let b2 = uniform_bytes(Mat4::IDENTITY, Color32::new(200, 0, 0, 128));
+        let b2 = uniform_bytes(Mat4::IDENTITY, Color32::new(200, 0, 0, 128), 0.0);
         let a = f32_at_of(&b2, 76);
         assert!((f32_at_of(&b2, 64) - 200.0 / 255.0 * a).abs() < 1e-6);
+    }
+
+    /// 🔴 R3：描边宽度写在 **偏移 80**（`params.x`），且宽度 0 也不越界。
+    ///
+    /// 半宽/全宽或偏移算错的话，实机表现为线条偏细/偏粗一倍——这里把它钉死在字节层。
+    #[test]
+    fn uniform_stroke_width_lands_at_offset_80() {
+        for w in [0.0f32, 1.0, 2.0, 8.0] {
+            let b = uniform_bytes(Mat4::IDENTITY, Color32::WHITE, w);
+            // params.x（偏移 80）必须是原样写入的宽度。
+            assert_eq!(f32_at_of(&b, 80), w, "params.x 应为 stroke_width={w}");
+            // y/z/w 预留为 0（不参与偏移计算）。
+            assert_eq!(f32_at_of(&b, 84), 0.0);
+            assert_eq!(f32_at_of(&b, 88), 0.0);
+            assert_eq!(f32_at_of(&b, 92), 0.0);
+        }
     }
 
     fn f32_at_of(bytes: &[u8], off: usize) -> f32 {
@@ -1373,10 +1422,157 @@ mod tests {
         }
     }
 
+    /// 🔴 R1 的业务效果 / R5-1：几何内容（顶点数 + index 表 + 路径点）**与描边宽度无关**。
+    ///
+    /// 宽度只走 uniform（`params.x`），所以 2D 的缓存决策只认内容哈希，
+    /// `VertexLayout.cache` 仅作声明（换标签不改变任何缓存行为）。
+    ///
+    /// # 为什么这里不断言「哈希逐字节相等」
+    ///
+    /// lyon 把 `normal` 定义为 `(position - position_on_path) / half_width`
+    /// （`lyon_tessellation/src/stroke.rs:2037`），即"偏移量 ÷ 半宽"：换宽度就换除数，
+    /// f32 末位舍入随之变化（实测相对差 ~1e-7，曲线与直线皆然）。
+    /// 因此跨宽度的 `normal` **字节不相等是常态**，`hash_tessellation` 亦可能因此不同。
+    /// 代价仅为：同一路径改宽度时多重建一次几何（重新 miss）；
+    /// **永不产生画面差异** —— 渲染用该条目自己的 `normal × 宽度`，
+    /// 与旧 CPU 管线（lyon 直接烘进几何）同源（数值证明见
+    /// `xcal_render::tessellate::tests::shader_offset_reproduces_lyon_contour_points`）。
+    #[test]
+    fn geometry_topology_is_independent_of_width() {
+        let shape = Shape2D::Line {
+            start: Vec2::new(0.0, 0.0),
+            end: Vec2::new(30.0, 10.0),
+        };
+        let thin = tessellate(&shape, &Transform2D::identity(), &stroke_style(2.0), 0.05);
+        let thick = tessellate(&shape, &Transform2D::identity(), &stroke_style(8.0), 0.05);
+        assert_eq!(thin.len(), 1);
+        assert_eq!(thick.len(), 1);
+        let (a, b) = (&thin[0], &thick[0]);
+        assert_eq!(a.kind, b.kind);
+        assert_eq!(a.vertices.len(), b.vertices.len(), "顶点数必须与宽度无关");
+        assert_eq!(a.indices, b.indices, "index 表必须与宽度无关");
+        for (i, (x, y)) in a.vertices.iter().zip(&b.vertices).enumerate() {
+            assert_eq!(x.position, y.position, "第 {i} 个顶点的路径点必须逐字节相同");
+            assert_eq!(x.side, y.side, "第 {i} 个顶点的 side 必须逐字节相同");
+            assert!(
+                (x.normal[0] - y.normal[0]).abs() < 1e-5
+                    && (x.normal[1] - y.normal[1]).abs() < 1e-5,
+                "第 {i} 个顶点的法线应只差 f32 末位（lyon 口径）：{:?} vs {:?}",
+                x.normal,
+                y.normal
+            );
+        }
+    }
+
+    fn stroke_style(width: f32) -> Style2D {
+        Style2D {
+            fill: None,
+            stroke: Some(Color32::new(0, 255, 0, 255)),
+            stroke_width: width,
+            space: MeasureSpace::Screen,
+            ..Default::default()
+        }
+    }
+
+    /// 🔴 R5-2 / R5-3（真实 device，G7 回校）：连续 60 帧让"动画内容"每帧都变
+    /// （形变的圆 + 平移的线段），断言四条不变量：
+    /// 1. 几何缓存存活条目恒 = 本帧条目数（内容哈希逐帧全 miss、上一帧全被驱逐）；
+    /// 2. `pending_geometry_destroy()` 稳态**不增长**（graveyard 有界，
+    ///    上界 = `graveyard_period × 每帧条目数`）；
+    /// 3. arena `used_blocks` 恒 = 本帧 draw 数 —— 这是 `begin_frame` **每帧重置**的直接证据
+    ///    （若没重置，它会逐帧单调增长 2/4/6/…）；
+    /// 4. arena `capacity_blocks` 扩容一次后**稳定**。
+    ///
+    /// 无可用适配器（headless 构造失败）时跳过。
+    #[test]
+    fn animated_content_keeps_cache_and_arena_bounded() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue, ctx.target_format);
+        // 视口 points (100,50)-(300,150)，ppp = 1 → 离屏 200×100 像素。
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        const FRAMES: u32 = 60;
+        const DRAWS: u32 = 2;
+        let mut pending_at_frame_20 = 0usize;
+        let mut capacity_after_first = 0u32;
+        for frame in 0..FRAMES {
+            backend.begin_frame_at(g);
+            // 形变的圆：半径每帧变 → 顶点内容哈希每帧不同（全 miss → 全重建）。
+            backend.push(
+                &Shape2D::Circle {
+                    center: Vec2::new(200.0, 100.0),
+                    radius: 8.0 + frame as f32 * 0.25,
+                },
+                &Transform2D::identity(),
+                &stroke_style(2.0),
+                0,
+            );
+            // 平移的线段：形状不变、位置每帧变 → 同样每帧 miss。
+            backend.push(
+                &Shape2D::Line {
+                    start: Vec2::new(150.0 + frame as f32, 60.0),
+                    end: Vec2::new(250.0 + frame as f32, 60.0),
+                },
+                &Transform2D::identity(),
+                &stroke_style(1.0),
+                1,
+            );
+
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("xcal-2d-bounded-frame"),
+                });
+            let out = backend.finish_frame(&mut enc, &g);
+            assert_eq!(out.draw_count, DRAWS as usize, "第 {frame} 帧：draw 数应为 {DRAWS}");
+            ctx.queue.submit([enc.finish()]);
+            ctx.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("帧提交后 poll 失败");
+
+            assert_eq!(
+                backend.geometry_cache_len(),
+                DRAWS as usize,
+                "第 {frame} 帧：缓存条目应恒 = 本帧条目数"
+            );
+            assert_eq!(
+                backend.arena_usage().0,
+                DRAWS,
+                "第 {frame} 帧：arena 占用应恒 = 本帧 draw 数（每帧重置）"
+            );
+            if frame == 0 {
+                capacity_after_first = backend.arena_usage().1;
+            }
+            if frame == 20 {
+                pending_at_frame_20 = backend.pending_geometry_destroy();
+            }
+        }
+
+        assert_eq!(
+            backend.geometry_cache_len(),
+            DRAWS as usize,
+            "条目数不得随帧数增长"
+        );
+        assert_eq!(
+            backend.pending_geometry_destroy(),
+            pending_at_frame_20,
+            "graveyard pending 稳态不得增长"
+        );
+        assert_eq!(
+            backend.arena_usage().1,
+            capacity_after_first,
+            "arena 容量扩容一次后应稳定（不单调增长）"
+        );
+    }
+
     /// 契约布局：stride 20 / 三槽（无硬编码字面量的可测证明）。
     #[test]
     fn pipeline_vertex_layout_comes_from_contract() {
-        let l = VertexLayout::standard(AaModel::None, CacheStrategy::Static);
+        let l = VertexLayout::standard(AaModel::None, CacheStrategy::PerFrame);
         l.validate().unwrap();
         assert_eq!(l.stride, 20);
         assert_eq!(std::mem::size_of::<Vertex2D>(), l.stride as usize);

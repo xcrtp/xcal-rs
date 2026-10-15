@@ -11,6 +11,20 @@
 //   arena 对应的 bind_group 所有 draw 共享（clone 浅拷贝）。
 //
 // egui 集成的回调（Layer3DCallback）见 layer_callback.rs。
+//
+// # G7 回校（R6）：为什么这里**不**接 `StaticConsistencyChecker`
+//
+// 计划倾向于"只接 3D 侧"，但本仓库的 3D 路径缺少接线所需的两个前提：
+//   1. **没有顶点布局契约声明** —— 3D pipeline 的顶点布局是硬编码 bespoke
+//      （`Float32x3` / stride 12），`VertexLayout` 从未参与，checker 的
+//      `(layout, identity)` 对没有输入可比；
+//   2. **没有稳定 identity** —— `MeshDraw` 按值携带 `Mesh3D`，`DrawQueue3D`
+//      不携带 entity id；唯一现成的 identity 就是内容哈希本身，而用它当 key
+//      两帧必然一致 → checker **恒不报警**，属于"假接线"。
+// 2D 侧则相反：内容（形变 / 相机 / group）每帧都变，接上必然大量误报。
+// 因此 R6 决策 = **两侧都不接**，把事实记在此处；将来 3D 引入 VertexLayout 契约
+// 声明 + 稳定 entity identity（或 `MeshDraw` 带 id）后，可在 `prepare_draws` /
+// `record_prepared` 入口补齐。
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::mem;

@@ -306,6 +306,14 @@ where
         self.dirty.len()
     }
 
+    /// graveyard 中等待延迟销毁的 GPU 资源数（G7 诊断用，见 [`DeferredDestroyer::pending_count`]）。
+    ///
+    /// 稳态上界 = `graveyard_period × 每帧被驱逐的条目数`：条目在 `evict_unused` 时
+    /// 投入 pending，之后需再经过 `graveyard_period` 次 `notify_submit` 才会真正 drop。
+    pub fn pending_destroy_count(&self) -> usize {
+        self.destroyer.pending_count()
+    }
+
     /// Generation 校验的句柄访问入口。
     pub fn get_by_id(&self, id: GpuResourceId) -> Result<&GpuHandle, AccessError> {
         if id.is_sentinel() {
@@ -676,6 +684,50 @@ mod tests {
         let dropped = d.begin_frame();
         assert_eq!(dropped, 1);
         assert_eq!(d.pending_count(), 0);
+    }
+
+    // ── G7 诊断：动画内容逐帧变化时 pending / 条目数有界 ──────────────
+
+    /// 🔴 R5-2（G7 最关键一条）：复刻 `wgpu_2d::finish_frame` 的每帧调用序列 ——
+    /// `begin_frame` → 插入本帧全部条目 → `evict_unused(0)` → `notify_submit` ——
+    /// 并让"动画内容"每帧哈希都变（几何全 miss、全重建、全驱逐），
+    /// 断言 pending 队列**不随时间增长**，而是稳定在
+    /// `graveyard_period × 每帧条目数` 附近。
+    #[test]
+    fn per_frame_churn_keeps_pending_and_entries_bounded() {
+        struct GeomTag;
+        /// 每帧条目数（与 2D 后端一帧的几何条数同量级）。
+        const PER_FRAME: u64 = 3;
+        let mut cache = ResourceCache::<()>::new();
+
+        let mut peak = 0usize;
+        let mut pending_at_100 = 0usize;
+        for frame in 0..200u64 {
+            cache.begin_frame();
+            for i in 0..PER_FRAME {
+                // 内容哈希每帧都不同 = 动画内容（形变的圆 / 带相位的曲线）。
+                let key = ResourceKey::content::<GeomTag>(frame * PER_FRAME + i);
+                cache.insert_handle(key, (), GpuHandle::new(0u32));
+            }
+            cache.evict_unused(0);
+            cache.notify_submit();
+            peak = peak.max(cache.pending_destroy_count());
+            if frame == 99 {
+                pending_at_100 = cache.pending_destroy_count();
+            }
+        }
+
+        // 1) 缓存条目恒等于"本帧条目数"（上一帧的已全部被驱逐）。
+        assert_eq!(cache.len(), PER_FRAME as usize, "条目数不得随帧数增长");
+        // 2) pending 在稳态是常数：第 100 帧与第 200 帧完全相同。
+        assert_eq!(
+            cache.pending_destroy_count(),
+            pending_at_100,
+            "pending 队列不得随时间增长"
+        );
+        // 3) 实测峰值上界 = (graveyard_period + 1) × 每帧条目数。
+        let bound = ((DeferredDestroyer::DEFAULT_GRAVEYARD_PERIOD + 1) * PER_FRAME) as usize;
+        assert!(peak <= bound, "pending 峰值 {peak} 越界（上界 {bound}）");
     }
 
     // ── G1/G4 单测：stale id 返回 AccessError::Stale ──────────────────

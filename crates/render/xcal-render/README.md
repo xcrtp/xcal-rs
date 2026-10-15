@@ -43,12 +43,20 @@ xcal-render 同时承载两套渲染抽象：
 ### ② S3-0 三角化适配层（`tessellate.rs`，纯 CPU / headless）
 `Shape2D + Transform2D + Style2D` → 索引化顶点缓冲，顶点结构**严格**符合自有顶点
 契约（[`VertexLayout::standard`]，stride = 20，三槽 position/attrib0/attrib1）：
-- `Vertex2D { position, normal, side }`（`#[repr(C)]`，`size == 20` 编译期断言）
+- `Vertex2D { position, normal, side }`（`#[repr(C)]`，`size == 20` 编译期断言）。
+  **描边几何参数化**：`position` 槽存 lyon `position_on_path()`（路径点，**不含宽度**），
+  轮廓点由后端 shader 现场补偿 `position + normal * (stroke_width * 0.5)`
+  （`normal` 保持 lyon 原样、含 miter 缩放，**不得归一化**）。因此几何与
+  `stroke_width` / `camera.scale` **无关**；填充顶点 `normal = [0,0]` → 偏移恒 0。
+  宽度仍由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析（shader 只做几何偏移）
 - `Tessellation2D { vertices, indices, layout, kind: Fill | Stroke }`
 - `tessellate(shape, transform, style, tolerance) -> Vec<Tessellation2D>`
   （`Group` 递归展开；`Empty` 返回**空 Vec**）
 - `tolerance_for_scale(scale) = (0.25 / scale).clamp(1e-4, 1.0)`（≈0.25 屏幕像素误差）
 - 不自研三角化：内部用 `lyon_tessellation` 1.0 做填充 / 描边
+- `tessellation_layout()` 声明 `(AaModel::Analytic, CacheStrategy::PerFrame)`；
+  2D 后端的缓存决策**只读内容哈希**、从不读 `CacheStrategy`，故该标签**仅作声明**
+  （改它不改变任何缓存行为）
 - **无 feature 门控**：纯 CPU，`--no-default-features` 下同样可用
 
 ### ③ 3D 管线
@@ -173,9 +181,18 @@ cargo doc  -p xcal-render --no-deps --all-features
 - `Shape2D`（rect / circle / path / line）端点一致性 + `record_scene` 遍历 hecs World；
   闭合路径以 `PathCommand::Close` 结尾（M0 方案 b）
 - `tessellate`：`Vertex2D` size == 20 布局契约、`side ∈ {±1}`、
-  `position_on_path` 恒等式往返、填充面积 / 描边环面积、Group 展开、
+  填充面积 / 描边环面积、Group 展开、
   圆近似误差 ≤ tolerance、`tolerance_for_scale` 随 scale 下降并钳制、
   Custom 钩子（`to_triangles` / `to_path` / 无钩子）
+- 描边几何参数化（R1）门卫：`stroke_geometry_is_independent_of_width`
+  （同路径宽度 2/8 → 顶点数 / index 表 / `position` / `side` 相同，`normal` 只差
+  f32 末位）、`fill_vertices_are_unaffected_by_offset`（任意宽度下偏移恒 0）、
+  `shader_offset_reproduces_lyon_contour_points`（`position + normal * w/2`
+  与旧管线 lyon `position()` 逐顶点 < 1e-6，即"与旧 CPU 管线同源"的数值证明）、
+  `stroke_area_scales_linearly_with_width`（宽 2→8 面积比 = 4）
+- `resource_cache`：G7 回校的 pending 有界性压测
+  `per_frame_churn_keeps_pending_and_entries_bounded`（200 帧 × 每帧 3 条新哈希，
+  稳态 `len() == 每帧条目数`、`pending` 不增长、上界 = `(graveyard_period + 1) × 每帧条目数`）
 - `GpuHandle` 跨线程可 Send（测试用 `std::sync::mpsc` 验证）
 
 ---

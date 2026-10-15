@@ -8,27 +8,33 @@
 // # 顶点槽语义（`AaModel::Analytic` 口径）
 //
 // ```text
-// position [f32;2] @0   ← lyon `StrokeVertex::position()`（**已含宽度偏移的实际轮廓点**）
+// position [f32;2] @0   ← lyon `StrokeVertex::position_on_path()`（**路径上的点，不含宽度**）
 // normal   [f32;2] @8   ← lyon `StrokeVertex::normal()`（含 miter 缩放，未归一化）
 // side     f32     @16  ← lyon `Side` → ±1.0
 // ```
 //
-// 三者恒满足 `position_on_path = position - normal * (line_width * 0.5) * side`
-// （lyon 的 `normal` 长度定义为"沿它位移 1 个单位即把描边撑粗 2.0"）。
-// 反算出的 `position_on_path` 落在原始路径上——S3-0 的往返测试即锁定此恒等式。
+// # 描边几何参数化（R1）
 //
-// **为什么存 `position()`（轮廓点）而不是 `position_on_path()`**：
-// 计划 §4.3 的注释写的是 `position_on_path()`，但 §4.7 的往返测试公式
-// （`center = position - normal * (w*0.5) * side` 落在原路径上）与 §5.3
-// （"`AaModel::None` + MSAA 时 shader **不解释** normal/side"）都要求
-// `position` 是可直接光栅化的最终轮廓点。两者不能同时成立，这里以 **§4.7 测试
-// + §5.3 渲染正确性** 为准：存 `position()`。将来切 Analytic AA 时 shader 用
-// `position - normal * (w*0.5) * side` 即可还原路径点，顶点格式无需改动。
+// 描边宽度**不进几何**：光栅化位置由 `shape_2d.wgsl` 现场补偿
+//
+// ```text
+// 轮廓点 = position + normal * (stroke_width * 0.5)
+// ```
+//
+// （lyon 的 `normal` 长度定义为"沿它位移 1.0 即把描边撑粗 2.0"，故乘半宽即还原
+// lyon 原本烘进几何的轮廓点；**不得归一化 `normal`**，它已含 miter 缩放。）
+//
+// 由此几何与 `stroke_width` **无关**（`stroke_geometry_is_independent_of_width` 锁死），
+// 进而与 `camera.scale` 无关 —— 这是"顶点布局声明 PerFrame 是诚实的"的前提。
+// 填充顶点 `normal = [0,0]` → 偏移恒为 0（`fill_vertices_are_unaffected_by_offset` 锁死）。
+//
+// 宽度仍由 CPU 侧**唯一换算点**（`draw.rs::resolve_style`）解析为屏幕像素，
+// 经 uniform 交给 shader —— shader 只做几何偏移，不做空间换算（`MeasureSpace` 语义不变）。
 //
 // # 坐标系
 //
-// 几何在 **`transform` 作用之后的空间**（输出空间）；`style.stroke_width` 也按
-// 同一空间解释（因此本阶段描边宽度由 CPU 侧 lyon 落进几何，见计划 §7 已知限制）。
+// 几何在 **`transform` 作用之后的空间**（输出空间）；uniform 里的 `stroke_width`
+// 也按**同一空间**解释。
 //
 // # Group
 //
@@ -58,7 +64,10 @@ use crate::vertex::{AaModel, CacheStrategy, VertexLayout};
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Vertex2D {
-    /// 轮廓点（含宽度偏移）→ 契约槽 `position`。
+    /// 路径上的点（**不含宽度偏移**）→ 契约槽 `position`。
+    ///
+    /// 光栅化位置由 shader 按 `position + normal * (stroke_width * 0.5)` 还原
+    /// （[`contour_position_of`] 是同口径的 CPU 版）。
     pub position: [f32; 2],
     /// 边法线（含 miter 缩放，未归一化）→ 契约槽 `attrib0`。
     pub normal: [f32; 2],
@@ -86,7 +95,7 @@ pub enum TessKind {
 pub struct Tessellation2D {
     pub vertices: Vec<Vertex2D>,
     pub indices: Vec<u32>,
-    /// 顶点布局声明（恒为 [`VertexLayout::standard`]`(AaModel::Analytic, CacheStrategy::Static)`）。
+    /// 顶点布局声明（恒为 [`VertexLayout::standard`]`(AaModel::Analytic, CacheStrategy::PerFrame)`）。
     pub layout: VertexLayout,
     pub kind: TessKind,
 }
@@ -97,11 +106,20 @@ impl Tessellation2D {
     }
 }
 
-/// 顶点契约布局（本阶段固定）：`Analytic` 三槽 + `Static` 缓存策略。
+/// 顶点契约布局（本阶段固定）：`Analytic` 三槽 + `PerFrame` 缓存策略。
 ///
 /// 用 `Analytic` 而非 `None`：布局**三槽相同**，将来从 MSAA 切解析 AA 只需换 shader。
+///
+/// # `CacheStrategy` 在 2D 路径**仅作声明**
+///
+/// R1 后几何不含宽度，但仍依赖 `transform`（屏幕空间）与动画内容，故声明 `PerFrame`
+/// 才诚实（G7 接 `StaticConsistencyChecker` 时不会把它判成"撒谎"）。
+///
+/// 不过 `wgpu_2d.rs` 的缓存决策**只读内容哈希**
+/// （`ResourceKey::content::<Geometry2DTag>(hash_tessellation(&tess))`），
+/// **从不读这个标签** —— 也就是说：改它**不改变任何缓存行为**，改的只是"声明与语义一致"。
 pub fn tessellation_layout() -> VertexLayout {
-    VertexLayout::standard(AaModel::Analytic, CacheStrategy::Static)
+    VertexLayout::standard(AaModel::Analytic, CacheStrategy::PerFrame)
 }
 
 /// 展平容差：让误差不超过约 0.25 屏幕像素（`scale` = 每世界单位像素数）。
@@ -240,12 +258,14 @@ impl FillVertexConstructor<Vertex2D> for FillCtor {
     }
 }
 
-/// 描边顶点：`position` 取 lyon 的实际轮廓点，`normal`/`side` 供解析 AA 用。
+/// 描边顶点：`position` 取 lyon 的**路径点**（不含宽度），`normal`/`side` 供 shader 补偿。
 struct StrokeCtor;
 
 impl StrokeVertexConstructor<Vertex2D> for StrokeCtor {
     fn new_vertex(&mut self, vertex: StrokeVertex) -> Vertex2D {
-        let p = vertex.position();
+        // R1 几何参数化：**不**取 `position()`（它含宽度偏移），宽度由 shader 现场补偿。
+        let p = vertex.position_on_path();
+        // 保持 lyon 原样：含 miter 缩放，**不归一化**（归一化会在拐角产生错误收缩）。
         let n = vertex.normal();
         let side = if vertex.side().is_positive() { 1.0 } else { -1.0 };
         Vertex2D {
@@ -384,31 +404,37 @@ fn tessellate_stroke(contours: &[Contour], width: f32) -> Option<Tessellation2D>
 
 // ─── 测试辅助（也供集成测试/下游复用） ─────────────────────────────────────
 
-/// 由顶点三元组反算路径点：`position - normal * (line_width * 0.5)`。
+/// 顶点的**路径点**（`position` 槽本身）—— 顶点落在原始路径上。
 ///
-/// **不含 `* side`**：lyon 的 `normal()` 已带 side 符号
-/// （源码恒等式 `position() = position_on_path() + normal() * half_width`，
-/// 见 `StrokeVertex::position`），再乘 `side` 会二次施加符号。计划 §4.7 的
-/// `... * side` 是笔误，§8 的 `position + normal * (w*0.5)` 才是正确口径。
-pub fn position_on_path_of(v: &Vertex2D, line_width: f32) -> Vec2 {
-    let k = line_width * 0.5;
-    Vec2::new(v.position[0] - v.normal[0] * k, v.position[1] - v.normal[1] * k)
+/// R1 之前 `position` 是 lyon 的轮廓点（含宽度），此函数用
+/// `position - normal * (w * 0.5)` 反算路径点；R1 参数化后 `position` 已是
+/// lyon `position_on_path()`，反算不再需要，故直接返回 ——
+/// 断言因此直接表达"顶点落在路径上"这个**真实意图**，不依赖宽度。
+pub fn position_on_path_of(v: &Vertex2D) -> Vec2 {
+    Vec2::new(v.position[0], v.position[1])
+}
+
+/// 顶点的**光栅化位置**：`position + normal * (stroke_width * 0.5)`。
+///
+/// 与 `shape_2d.wgsl` 的顶点偏移**同一口径**（CPU 版镜像）。
+/// 填充顶点 `normal = [0,0]` → 恒等于 `position`。
+pub fn contour_position_of(v: &Vertex2D, stroke_width: f32) -> Vec2 {
+    let k = stroke_width * 0.5;
+    Vec2::new(v.position[0] + v.normal[0] * k, v.position[1] + v.normal[1] * k)
 }
 
 /// 顶点三元组的三角形总面积（光栅化面积统计用）。
-pub fn total_area(t: &Tessellation2D) -> f32 {
+///
+/// 参数化后顶点存的是**路径点**，故面积必须按 shader 的偏移公式还原轮廓，
+/// 否则描边的三角形会全部退化成 0（`stroke_width` 对填充无影响，传 0.0 即可）。
+pub fn total_area(t: &Tessellation2D, stroke_width: f32) -> f32 {
     t.indices
         .chunks_exact(3)
         .map(|tri| {
-            let a = t.vertices[tri[0] as usize].position;
-            let b = t.vertices[tri[1] as usize].position;
-            let c = t.vertices[tri[2] as usize].position;
-            Triangle2D::new(
-                Vec2::new(a[0], a[1]),
-                Vec2::new(b[0], b[1]),
-                Vec2::new(c[0], c[1]),
-            )
-            .area()
+            let a = contour_position_of(&t.vertices[tri[0] as usize], stroke_width);
+            let b = contour_position_of(&t.vertices[tri[1] as usize], stroke_width);
+            let c = contour_position_of(&t.vertices[tri[2] as usize], stroke_width);
+            Triangle2D::new(a, b, c).area()
         })
         .sum()
 }
@@ -472,7 +498,10 @@ mod tests {
         assert_eq!(out.len(), 1);
         let t = &out[0];
         assert_eq!(t.kind, TessKind::Stroke);
-        assert_eq!(t.layout, VertexLayout::standard(AaModel::Analytic, CacheStrategy::Static));
+        assert_eq!(
+            t.layout,
+            VertexLayout::standard(AaModel::Analytic, CacheStrategy::PerFrame)
+        );
         assert_eq!(t.layout.stride, 20);
         t.layout.validate().unwrap();
     }
@@ -526,10 +555,11 @@ mod tests {
 
         let mut max_err: f32 = 0.0;
         for v in &t.vertices {
-            let center = position_on_path_of(v, width);
+            // R1 后 `position` 就是路径点，这里直接断言"顶点落在原路径上"。
+            let center = position_on_path_of(v);
             max_err = max_err.max(dist_to_polyline(center, &closing(&poly)));
         }
-        assert!(max_err < 1e-3, "反算中心点偏离原始路径 {max_err}");
+        assert!(max_err < 1e-3, "顶点偏离原始路径 {max_err}");
     }
 
     /// 闭合折线的边集合（补上收尾边）。
@@ -555,12 +585,177 @@ mod tests {
 
         let expected: Vec<Vec2> = poly.iter().map(|p| transform.apply_point(*p)).collect();
         for v in &t.vertices {
-            let center = position_on_path_of(v, width);
+            let center = position_on_path_of(v);
             assert!(
                 dist_to_polyline(center, &expected) < 1e-3,
-                "变换后反算中心点偏离路径"
+                "变换后顶点偏离路径"
             );
         }
+    }
+
+    // ── R2/R3 门卫：几何与宽度无关（参数化护栏） ──────────────────────────
+
+    /// 🔴 门卫（R2）：同一路径、不同宽度三角化 → **位置与拓扑完全一致**。
+    ///
+    /// 没有这条测试，R1（`position()` → `position_on_path()`）无法证明真的生效，
+    /// 将来也会悄悄退化回"宽度烘进几何"（那会让几何重新依赖 `camera.scale`，
+    /// 并使布局声明 `PerFrame` 失去意义）。
+    ///
+    /// # 关于 `normal` 不逐位相等（实测发现，非回归）
+    ///
+    /// lyon 把法线定义为"偏移量 ÷ 半宽"（`lyon_tessellation/src/stroke.rs:2037`
+    /// `normal = (pos - position_on_path) / half_width`），故不同宽度下
+    /// **末位**会因浮点除法舍入差 ~1e-7（实测：0.97628117 vs 0.9762814）。
+    /// 这不改变任何几何语义 —— 按 lyon 的恒等式
+    /// `position() = position_on_path() + normal() * half_width`（同文件 :2673）
+    /// 用各自宽度乘回去，得到的轮廓点仍**逐位一致**（见
+    /// [`shader_offset_reproduces_lyon_contour_points`]）。故此处按相对容差断言。
+    #[test]
+    fn stroke_geometry_is_independent_of_width() {
+        let poly = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(20.0, 0.0),
+            Vec2::new(20.0, 12.0),
+        ];
+        let cases = [
+            Shape2D::Path(Path2D::from_polyline(&poly, false)),
+            Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(8.0, 5.0))),
+            Shape2D::Circle {
+                center: Vec2::new(3.0, 4.0),
+                radius: 6.0,
+            },
+        ];
+        for shape in &cases {
+            let thin = &tessellate(shape, &identity(), &style_stroke(2.0), 0.05)[0];
+            let thick = &tessellate(shape, &identity(), &style_stroke(8.0), 0.05)[0];
+            assert_eq!(thin.vertices.len(), thick.vertices.len(), "顶点数不得依赖宽度");
+            assert_eq!(thin.indices, thick.indices, "索引（拓扑）不得依赖宽度");
+            for (a, b) in thin.vertices.iter().zip(&thick.vertices) {
+                assert_eq!(a.position, b.position, "路径点不得依赖宽度");
+                assert_eq!(a.side, b.side, "side 不得依赖宽度");
+                // normal 见上文：按 lyon 的"偏移÷半宽"口径，末位可差 ~1e-7。
+                assert!(
+                    (a.normal[0] - b.normal[0]).abs() < 1e-5
+                        && (a.normal[1] - b.normal[1]).abs() < 1e-5,
+                    "normal 不得依赖宽度（除末位舍入）：{a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    /// 🔴 R3 的代码级证明（"与旧管线画面一致"）：shader 的偏移公式**逐顶点重建**
+    /// R1 之前 lyon 直接给出的轮廓点。
+    ///
+    /// lyon 的 `position()` 本身就是 `position_on_path() + normal() * half_width`
+    /// （`lyon_tessellation/src/stroke.rs:2673`），而 shader 算的是
+    /// `position + normal * (params.x * 0.5)`，`params.x` 就是同一个 `stroke_width`
+    /// —— 两者**同源**。这条测试把该恒等式钉在数值层：
+    /// 若通过，则 GPU 2D 管线光栅化的顶点与旧 CPU 烘焙几何是同一批点，
+    /// "画面一致"不需要只靠肉眼。
+    #[test]
+    fn shader_offset_reproduces_lyon_contour_points() {
+        /// R1 之前的口径：直接取 lyon 的轮廓点。
+        struct LegacyCtor;
+        impl StrokeVertexConstructor<Vertex2D> for LegacyCtor {
+            fn new_vertex(&mut self, vertex: StrokeVertex) -> Vertex2D {
+                let p = vertex.position();
+                let n = vertex.normal();
+                let side = if vertex.side().is_positive() { 1.0 } else { -1.0 };
+                Vertex2D {
+                    position: [p.x, p.y],
+                    normal: [n.x, n.y],
+                    side,
+                }
+            }
+        }
+
+        let poly = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(9.0, 0.0),
+            Vec2::new(9.0, 7.0),
+        ];
+        let cases: [(Shape2D, f32); 4] = [
+            (
+                Shape2D::Line {
+                    start: Vec2::ZERO,
+                    end: Vec2::new(10.0, 4.0),
+                },
+                3.0,
+            ),
+            (Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(8.0, 5.0))), 2.0),
+            (
+                Shape2D::Circle {
+                    center: Vec2::new(3.0, 4.0),
+                    radius: 6.0,
+                },
+                1.5,
+            ),
+            (Shape2D::Path(Path2D::from_polyline(&poly, false)), 4.0),
+        ];
+
+        for (shape, w) in &cases {
+            let contours = contours_of(shape, &identity(), 0.05);
+            let path = build_lyon_path(&contours);
+            let mut buffers: VertexBuffers<Vertex2D, u32> = VertexBuffers::new();
+            StrokeTessellator::new()
+                .tessellate_path(
+                    &path,
+                    &StrokeOptions::default().with_line_width(*w),
+                    &mut BuffersBuilder::new(&mut buffers, LegacyCtor),
+                )
+                .expect("legacy 三角化失败");
+            let legacy = buffers.vertices;
+
+            let new = &tessellate(shape, &identity(), &style_stroke(*w), 0.05)[0].vertices;
+            assert_eq!(legacy.len(), new.len(), "顶点数应与旧管线一致");
+            for (l, n) in legacy.iter().zip(new) {
+                let r = contour_position_of(n, *w);
+                assert!(
+                    (r.x - l.position[0]).abs() < 1e-6 && (r.y - l.position[1]).abs() < 1e-6,
+                    "shader 偏移未还原旧轮廓点：{r:?} vs {:?}",
+                    l.position
+                );
+            }
+        }
+    }
+
+    /// 🔴 门卫（R2）：填充顶点经 shader 偏移公式后**不变**（`normal = [0,0]`）。
+    ///
+    /// 参数化把宽度交给顶点法线，若将来有人给填充也填 normal，
+    /// 填充会被"膨胀"——这条测试把它挡在门外。
+    #[test]
+    fn fill_vertices_are_unaffected_by_offset() {
+        let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(10.0, 6.0)));
+        let t = &tessellate(&shape, &identity(), &style_fill(), 0.05)[0];
+        assert!(!t.vertices.is_empty());
+        for v in &t.vertices {
+            let raw = Vec2::new(v.position[0], v.position[1]);
+            for w in [0.0f32, 2.0, 8.0, 1e3] {
+                assert_eq!(contour_position_of(v, w), raw, "填充顶点不得被宽度偏移");
+            }
+        }
+    }
+
+    /// 🔴 R3：描边面积随宽度**线性**增长（线段 = 长 × 宽的矩形）。
+    ///
+    /// 半宽/全宽、屏幕像素/世界单位搞错一倍，会在这里直接暴露。
+    #[test]
+    fn stroke_area_scales_linearly_with_width() {
+        let shape = Shape2D::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(10.0, 0.0),
+        };
+        let thin = &tessellate(&shape, &identity(), &style_stroke(2.0), 0.05)[0];
+        let thick = &tessellate(&shape, &identity(), &style_stroke(8.0), 0.05)[0];
+        let a_thin = total_area(thin, 2.0);
+        let a_thick = total_area(thick, 8.0);
+        // 长 10、宽 2 → 20；长 10、宽 8 → 80（butt 端帽不外扩）。
+        assert!((a_thin - 20.0).abs() < 1e-3, "宽 2 面积应为 20，实际 {a_thin}");
+        assert!((a_thick - 80.0).abs() < 1e-3, "宽 8 面积应为 80，实际 {a_thick}");
+        assert!(
+            (a_thick - a_thin * 4.0).abs() < 1e-2,
+            "宽度 4 倍 → 面积 4 倍（{a_thin} vs {a_thick}）"
+        );
     }
 
     // ── 几何性质 ──────────────────────────────────────────────────────────
@@ -571,7 +766,7 @@ mod tests {
         let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(w, h)));
         let t = &tessellate(&shape, &identity(), &style_stroke(lw), 0.05)[0];
         let expected = (w + lw) * (h + lw) - (w - lw) * (h - lw);
-        let got = total_area(t);
+        let got = total_area(t, lw);
         assert!(
             (got - expected).abs() <= expected * 0.05,
             "描边三角化面积 {got} 应≈外框-内框 {expected}"
@@ -582,7 +777,7 @@ mod tests {
     fn fill_area_matches_rect_area() {
         let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(10.0, 4.0)));
         let t = &tessellate(&shape, &identity(), &style_fill(), 0.05)[0];
-        let got = total_area(t);
+        let got = total_area(t, 0.0);
         assert!((got - 40.0).abs() < 1.0, "填充面积 {got} ≈ 40");
     }
 
@@ -617,16 +812,13 @@ mod tests {
                     for &i in &t.indices {
                         assert!((i as usize) < t.vertices.len(), "索引越界");
                     }
+                    // 参数化后顶点存的是路径点：面积必须按 shader 的偏移公式
+                    // 还原轮廓，否则描边三角形会全部退化成 0。
                     for tri in t.indices.chunks_exact(3) {
-                        let a = t.vertices[tri[0] as usize].position;
-                        let b = t.vertices[tri[1] as usize].position;
-                        let c = t.vertices[tri[2] as usize].position;
-                        let area = Triangle2D::new(
-                            Vec2::new(a[0], a[1]),
-                            Vec2::new(b[0], b[1]),
-                            Vec2::new(c[0], c[1]),
-                        )
-                        .area();
+                        let a = contour_position_of(&t.vertices[tri[0] as usize], style.stroke_width);
+                        let b = contour_position_of(&t.vertices[tri[1] as usize], style.stroke_width);
+                        let c = contour_position_of(&t.vertices[tri[2] as usize], style.stroke_width);
+                        let area = Triangle2D::new(a, b, c).area();
                         assert!(area > 1e-9, "退化三角形 area={area}");
                     }
                 }
@@ -711,7 +903,7 @@ mod tests {
         let tol = 0.05;
         let t = &tessellate(&shape, &identity(), &style_stroke(1.0), tol)[0];
         for v in &t.vertices {
-            let center = position_on_path_of(v, 1.0);
+            let center = position_on_path_of(v);
             let d = (center - c).length();
             assert!((d - r).abs() <= tol + 1e-3, "半径偏差 {} (d={d})", (d - r).abs());
         }
@@ -726,7 +918,7 @@ mod tests {
         };
         let fill = &tessellate(&ellipse, &identity(), &style_fill(), 0.05)[0];
         // 椭圆面积 ≈ π·rx·ry
-        assert!((total_area(fill) - std::f32::consts::PI * 8.0).abs() < 0.5);
+        assert!((total_area(fill, 0.0) - std::f32::consts::PI * 8.0).abs() < 0.5);
 
         let polygon = Shape2D::Polygon {
             points: vec![
@@ -737,7 +929,7 @@ mod tests {
             ],
         };
         let pf = &tessellate(&polygon, &identity(), &style_fill(), 0.05)[0];
-        assert!((total_area(pf) - 16.0).abs() < 0.1);
+        assert!((total_area(pf, 0.0) - 16.0).abs() < 0.1);
     }
 
     // ── 容差自适应 ────────────────────────────────────────────────────────
@@ -773,7 +965,7 @@ mod tests {
         let t = &tessellate(&Shape2D::Custom(data), &identity(), &style_fill(), 0.05)[0];
         assert_eq!(t.kind, TessKind::Fill);
         assert_eq!(t.indices.len(), 3);
-        assert!((total_area(t) - 2.0).abs() < 1e-5);
+        assert!((total_area(t, 0.0) - 2.0).abs() < 1e-5);
     }
 
     #[test]

@@ -98,7 +98,12 @@ xcal-rs 的首个 GPU 2D 后端：**离屏纹理 + MSAA 4x + 合成**。
   2. 每项 `tessellate`（S3-0）→ 顶点哈希 → `ResourceCache<()>` 命中即复用、
      未命中则上传（`DeferredDestroyer` 延迟销毁）；
   3. uniform 经 **复用 `wgpu_3d` 的 `UniformArena`**（256B 对齐 dynamic offset，
-     `UNIFORM_SIZE = 80`）写入；
+     `UNIFORM_SIZE = 96` = mat4(64) + color vec4(16) + **params vec4(16)**）写入；
+     `params.x = style.stroke_width`（屏幕像素，与几何同空间），顶点着色器据此沿
+     `normal` 外扩半个线宽：`轮廓点 = position + normal * (stroke_width * 0.5)`。
+     宽度由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析，**shader 不做空间换算**；
+     几何本身与宽度无关（`position` 槽存 lyon `position_on_path()`），
+     故同一路径换宽度只需换 uniform；
   4. 在离屏 MSAA 纹理上绘制并 resolve。
 - **离屏格式** `OFFSCREEN_FORMAT = Rgba8Unorm`（**非 sRGB**，存 gamma 值），
   `MSAA_SAMPLES = 4`；纹理开 `COPY_SRC` 支持像素回读。

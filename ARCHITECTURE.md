@@ -273,11 +273,18 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 （`VertexLayout::standard`，stride 20，三槽 position/attrib0/attrib1；
 `Vertex2D { position, normal, side }`，`size == 20` 编译期断言）。三角化用
 `lyon_tessellation` 1.0，不自研；`tolerance_for_scale(scale) = (0.25/scale).clamp(1e-4, 1.0)`。
+**描边几何参数化（R1）**：`position` 槽 = lyon `position_on_path()`（路径点，不含宽度），
+轮廓点由 shader 现场补偿 `position + normal * (stroke_width * 0.5)`（`normal` 保持 lyon
+原样、含 miter 缩放，**不得归一化**），故几何与宽度 / `camera.scale` 无关，填充顶点
+`normal = [0,0]` → 偏移恒 0。宽度仍由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析。
+`tessellation_layout()` 声明 `CacheStrategy::PerFrame`；2D 后端只读内容哈希、
+从不读该标签，故标签**仅作声明**。
 
 **S3-1 wGPU 2D 后端**（`xcal-render-backends::wgpu_2d`）：离屏 `Rgba8Unorm`（非 sRGB，
 存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化 → 顶点哈希缓存
 （`ResourceCache<()>` + `DeferredDestroyer`）→ `UniformArena`（**复用 `wgpu_3d`**，
-256B 对齐 dynamic offset）→ 离屏绘制；`composite` 用哨兵 `COMPOSITE_QUAD` 贴回主 pass。
+256B 对齐 dynamic offset，`UNIFORM_SIZE = 96` = mat4 + color + **params**，
+`params.x = stroke_width`）→ 离屏绘制；`composite` 用哨兵 `COMPOSITE_QUAD` 贴回主 pass。
 `Layer2DCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
 **运行期开关** `UiConfig::gpu_2d`（默认 off）在 `xcal-egui::EguiSceneHost::present` 二选一：
 `EguiPainter` CPU 回放 ↔ `Layer2DCallback` GPU 路径（旧管线退役属 S3-4）。
