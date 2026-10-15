@@ -10,7 +10,7 @@
 //
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 
-use xcal_core::types::{Color32, Vec3};
+use xcal_scene::types::{Color32, Vec3};
 use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
 use xc_geometry::Path2D;

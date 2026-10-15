@@ -5,8 +5,8 @@
 //! input into `xcal_node_editor::Command`s and renders the editor's pure data
 //! as node cards and edges.
 //!
-//! Hard constraint: this crate must never depend on `xcal-core` /
-//! `xcal-render` / `xcal-app` / `xcal-macro`.
+//! Hard constraint: this crate must never depend on `xcal-scene` /
+//! `xcal-render` / `xcal-app` / `xc-macro`.
 //!
 //! Module map:
 //! - `view`: `NodeView` / `DefaultNodeView` card appearance

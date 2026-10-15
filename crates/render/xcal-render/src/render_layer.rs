@@ -3,7 +3,7 @@
 // 3D 渲染层：相机 + 视口 + 绘制队列 + 渲染目标 的完整提交单元。
 // 仅在 feature = "wgpu" 下编译（RenderTarget 依赖 wgpu）。
 
-use xcal_core::scene::components::Camera3D;
+use xcal_scene::scene::components::Camera3D;
 
 use crate::draw_queue_3d::DrawQueue3D;
 use crate::render_target::RenderTarget;

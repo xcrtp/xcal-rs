@@ -3,10 +3,10 @@
 // 3D 渲染器 trait（与 Painter2D 对应）。后端（wgpu / mock / ...）实现该 trait
 // 即可消费 DrawQueue3D 中的绘制命令。
 //
-// 坐标/颜色类型来自 xcal-geometry；网格组件 Mesh3D 由 xcal-core ECS 体系提供。
+// 坐标/颜色类型来自 xcal-geometry；网格组件 Mesh3D 由 xcal-scene ECS 体系提供。
 
 use glam::Mat4;
-use xcal_core::scene::components::Mesh3D;
+use xcal_scene::scene::components::Mesh3D;
 use xc_geometry::{Color32, Vec3};
 
 /// 3D 绘制器 trait。
@@ -17,7 +17,7 @@ use xc_geometry::{Color32, Vec3};
 /// # Example
 /// ```
 /// use glam::Mat4;
-/// use xcal_core::scene::components::Mesh3D;
+/// use xcal_scene::scene::components::Mesh3D;
 /// use xc_geometry::{Color32, Vec3};
 /// use xcal_render::Painter3D;
 ///

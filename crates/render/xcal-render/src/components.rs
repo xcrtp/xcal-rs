@@ -1,17 +1,17 @@
 // components.rs
 //
-// 从 xcal_core::scene::components 重导出 marker/mesh + Circle/Path/Line/PhaseAnim，
+// 从 xcal_scene::scene::components 重导出 marker/mesh + Circle/Path/Line/PhaseAnim，
 // 并新增 render 子模块（StrokeSolid / FillSolid），因为这些组件依赖 Color32，
-// 而 Color32 在 xcal_core::types 中。因此渲染样式组件归入 xcal-render。
+// 而 Color32 在 xcal_scene::types 中。因此渲染样式组件归入 xcal-render。
 
-pub use xcal_core::scene::components::{
+pub use xcal_scene::scene::components::{
     CPUDevice, Circle, FunctionX2Y, Interpolator, Line, ParameterCurveT2XY, ParameterCurveT2XYZ,
     Parent, Path, PathMesh, PhaseAnim, QuadMesh, Sampler1D, Sampler2D, SyncSendFn, Transform,
     TriangleMesh, WGPUDevice, marker, mesh,
 };
 
 pub mod render {
-    use xcal_core::types::Color32;
+    use xcal_scene::types::Color32;
     use xc_geometry::MeasureSpace;
 
     /// 描边样式组件：颜色 + 宽度 + 宽度所属空间。

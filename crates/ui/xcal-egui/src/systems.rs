@@ -15,14 +15,14 @@
 // - Prepare:      GridBuild    (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
 // - RenderCommit: SceneRecord  (R=ViewRect, AppCamera, W=DrawQueue)
 //
-// 注：时间推进由 DirectorAdvanceSystem（xcal-core）负责，动画由 BindingApplySystem
-// （xcal-core::animation）驱动。
+// 注：时间推进由 DirectorAdvanceSystem（xcal-scene）负责，动画由 BindingApplySystem
+// （xcal-scene::animation）驱动。
 
-use xcal_core::context::ExecutorContext;
-use xcal_core::domain::{CameraCommand, InputEvents, SceneEvent};
-use xcal_core::system::System;
-use xcal_core::transform::Transform2D;
-use xcal_core::types::{Camera2D, Rect, Vec3};
+use xcal_schedule::context::ExecutorContext;
+use xcal_scene::domain::{CameraCommand, InputEvents, SceneEvent};
+use xcal_schedule::system::System;
+use xcal_scene::transform::Transform2D;
+use xcal_scene::types::{Camera2D, Rect, Vec3};
 use xcal_render::components::{
     FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
@@ -201,9 +201,9 @@ impl System for SceneRecordSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::domain::LayerId;
-    use xcal_core::resource::Resources;
-    use xcal_core::scheduler::{Phase, Scheduler};
+    use xcal_scene::domain::LayerId;
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     fn zoom_event(factor: f32) -> SceneEvent {
         SceneEvent::Camera {

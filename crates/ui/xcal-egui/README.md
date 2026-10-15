@@ -2,15 +2,16 @@
 
 > **UI 适配层**：`EguiSceneHost` 是 egui 与场景之间的**唯一**适配层——把每帧 egui
 > 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容；
-> 另有 4 个符合 xcal-core 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
+> 另有 4 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
 > 网格背景、场景录制），只依赖纯数据 Resource，可 headless 测试。
 
 ```
-xcal-core (System/Resource/Scheduler + domain 契约)
+xcal-scene (场景组件 + 场景 System + domain 契约)
+xcal-schedule (ECS 调度框架：Resource / System trait / 六阶段 Scheduler)
 xcal-render (2D 管线 Painter2D / DrawQueue / Shape2D)
 xcal-render-backends (EguiPainter / Compositor / SceneCompositorCallback)
 xc-geometry (Rect2D：声明 GPU 2D 回调视口)
-xcal-macro (Transform2DInto 派生)
+xc-macro (Transform2DInto 派生)
       │
       ▼
 xcal-egui  ← 本 crate
@@ -23,7 +24,7 @@ xcal-app (装配 + ParamPanelSystem)
 
 ## 资源（Resource）一览
 
-所有资源都实现了 `xcal_core::resource::Resource` (blanket for
+所有资源都实现了 `xcal_schedule::resource::Resource` (blanket for
 `Send + Sync + 'static`)，可直接放入 `Resources` 并被各 System 声明读写：
 
 | Resource | 归属 | 说明 |
@@ -31,9 +32,9 @@ xcal-app (装配 + ParamPanelSystem)
 | `AppCamera { center: Vec2, scale: f32 }` | 本 crate | 2D 相机**纯状态**；输入处理已删除，控制器是纯函数 `apply_command`（消费 domain 的 `CameraCommand`）|
 | `UiConfig { show_grid, show_field, gpu_2d, flip_layer_order }` | 本 crate | 面板显示开关 + S3-1 运行期 2D 管线开关（默认 `gpu_2d = false`）+ S3-2 图层顺序翻转（默认 `false`）|
 | `ViewRect { rect }` | 本 crate | 中央视口在 egui 点坐标中的矩形（由 `EguiSceneHost::update_view_rect` 写入）|
-| `TimeState` | 再导出自 xcal-core | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
-| `DirectorState` | xcal-core | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
-| `InputEvents`（`Vec<SceneEvent>`）| xcal-core::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
+| `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
+| `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
+| `InputEvents`（`Vec<SceneEvent>`）| xcal-scene::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
 | `DrawQueue`（来自 xcal-render）| — | 2D 绘制命令队列（Prepare 写网格、RenderCommit 录场景）|
 | `DrawQueue3D`（来自 xcal-render）| — | 3D 绘制命令队列（`EguiSceneHost::present` 消费）|
 
@@ -55,7 +56,7 @@ xcal-app (装配 + ParamPanelSystem)
 | RenderCommit | `SceneRecordSystem` | R=`ViewRect`, `AppCamera`; W=`DrawQueue` | `record_scene(world, camera, dq)` 遍历 hecs World + `FunctionX2Y` 曲线 |
 
 其他阶段由别的 crate 提供：Input 的 `DirectorAdvance`、SceneSync 的 `BindingApply`
-（xcal-core），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
+（xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
 
 > `SceneRecordSystem` 同时需要 `&hecs::World` 与 `&mut DrawQueue`，通过
 > `ctx.with_world_and_resource_mut::<DrawQueue, _>(...)` 做拆分借用。
@@ -125,11 +126,11 @@ use xcal_egui::EguiPainter;
 ## 依赖
 
 ```toml
-xcal-core              = { features = ["egui"] }              # egui feature 门控（如需）
+xcal-scene              = { features = ["egui"] }              # egui feature 门控（如需）
 xcal-render            = { default-features = false }         # 2D 管线（无 wgpu）
 xcal-render-backends   = { features = ["egui", "egui-wgpu"] } # EguiPainter + Compositor/SceneCompositorCallback
 xc-geometry                                                   # S3-1：以 Rect2D 声明回调视口
-xcal-macro
+xc-macro
 egui                   = "0.36"
 egui-wgpu                                                     # present 提交 3D/GPU2D 回调
 hecs / glam / derive-new / derive-builder

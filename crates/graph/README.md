@@ -9,7 +9,7 @@ xc-node-schema = 节点结构契约（Property / NodeSpec / DynamicObject / Node
 
 1. **禁止依赖 egui** — 本层是纯逻辑/数据契约，不绑定任何 UI 框架。
 2. **禁止依赖任何 `xcal-*` crate** — 依赖方向单向：`xcal-* → xc-*`，反向禁止。
-   - 不依赖 xcal-core / xcal-render / xcal-render-backends / xcal-egui / xcal-macro
+   - 不依赖 xcal-scene / xcal-render / xcal-render-backends / xcal-egui / xc-macro
    - 不依赖 xcal-node-editor / xcal-node-egui / xcal-node-egui-ui / xcal-app
 3. **禁止依赖领域类型** — DynamicObject / DynamicNode 不得引用 FunctionDef、AST、
    AnimationClip 等领域特定类型。DynamicObject 只持有 PropertyValue（标量/向量/

@@ -1,5 +1,5 @@
 // xcal-egui: egui UI 层
-// 依赖方向：xcal-core ← xcal-render ← xcal-render-backends ← xcal-egui
+// 依赖方向：xcal-scene ← xcal-render ← xcal-render-backends ← xcal-egui
 //
 // 包含：
 //   - host.rs::EguiSceneHost —— egui 与场景之间的唯一适配层

@@ -10,13 +10,15 @@
 |---|---|---|---|
 | kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；可含通用能力领域，如几何、排版）|
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
-| render | `crates/render/` | `xcal-` | 渲染抽象 + 后端（含 ECS/场景）|
-| ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 + proc-macro |
+| schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
+| render | `crates/render/` | `xcal-` | 场景层 + 渲染抽象 + 具体后端 |
+| ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 |
 | app    | `crates/app/`    | `xcal-` | 组装 / 可执行 |
 
 ## 依赖图
 
-依赖方向自上而下：`kernel → graph → render → ui → app`，反向禁止。
+依赖方向自上而下：`kernel → graph → schedule → render → ui → app`，反向禁止。
+（`schedule` 无内部依赖，是通用底座；`render` / `ui` / `app` 亦可直接依赖 `kernel` / `graph`。）
 
 ```mermaid
 graph TD
@@ -25,6 +27,9 @@ graph TD
         xc_content["xc-content"]
         xc_prerender["xc-prerender"]
         xc_time["xc-time"]
+        xc_vertex["xc-vertex"]
+        xc_resource["xc-resource"]
+        xc_macro["xc-macro"]
     end
 
     subgraph graph[crates/graph]
@@ -35,14 +40,17 @@ graph TD
         xc_node_schema_macros["xc-node-schema-macros"]
     end
 
+    subgraph schedule[crates/schedule]
+        xcal_schedule["xcal-schedule"]
+    end
+
     subgraph render[crates/render]
-        xcal_core["xcal-core"]
+        xcal_scene["xcal-scene"]
         xcal_render["xcal-render"]
         xcal_render_backends["xcal-render-backends"]
     end
 
     subgraph ui[crates/ui]
-        xcal_macro["xcal-macro"]
         xcal_egui["xcal-egui"]
         xcal_node_editor["xcal-node-editor"]
         xcal_node_egui["xcal-node-egui"]
@@ -55,6 +63,9 @@ graph TD
 
     %% kernel
     xc_geometry
+    xc_vertex
+    xc_resource
+    xc_macro
     xc_content --> xc_geometry
     xc_prerender --> xc_content
     xc_prerender --> xc_geometry
@@ -66,21 +77,27 @@ graph TD
     xc_node_schema --> xc_node
     xc_node_schema --> xc_node_schema_macros
 
-    %% render → kernel + graph + UI sibling
-    xcal_core --> xc_geometry
-    xcal_core --> xc_time
-    xcal_core --> xcal_macro
+    %% schedule（无内部依赖，仅依赖 hecs）
+
+    %% render → kernel + schedule
+    xcal_scene --> xc_geometry
+    xcal_scene --> xc_time
+    xcal_scene --> xc_macro
+    xcal_scene --> xcal_schedule
     xcal_render --> xc_content
     xcal_render --> xc_geometry
-    xcal_render --> xcal_core
+    xcal_render --> xc_vertex
+    xcal_render --> xc_resource
+    xcal_render --> xcal_scene
     xcal_render_backends --> xc_geometry
-    xcal_render_backends --> xcal_core
+    xcal_render_backends --> xcal_scene
     xcal_render_backends --> xcal_render
 
-    %% ui → kernel + graph + render
-    xcal_macro
-    xcal_egui --> xcal_core
-    xcal_egui --> xcal_macro
+    %% ui → kernel + graph + render + schedule
+    xcal_egui --> xc_geometry
+    xcal_egui --> xc_macro
+    xcal_egui --> xcal_scene
+    xcal_egui --> xcal_schedule
     xcal_egui --> xcal_render
     xcal_egui --> xcal_render_backends
     xcal_node_editor --> xc_node
@@ -92,8 +109,9 @@ graph TD
     xcal_node_egui_ui --> xcal_node_egui
 
     %% app → everything
-    xcal_app --> xcal_core
-    xcal_app --> xcal_macro
+    xcal_app --> xcal_scene
+    xcal_app --> xcal_schedule
+    xcal_app --> xc_macro
     xcal_app --> xcal_egui
     xcal_app --> xcal_render
     xcal_app --> xcal_render_backends
@@ -115,24 +133,27 @@ graph TD
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xcal-app | 0 | 8 | 1.00 |
+| xcal-app | 0 | 9 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
-| xcal-egui | 1 | 4 | 0.80 |
+| xcal-egui | 1 | 6 | 0.86 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
 | xc-prerender | 1 | 2 | 0.67 |
+| xcal-render | 3 | 5 | 0.63 |
 | xcal-render-backends | 2 | 3 | 0.60 |
-| xcal-render | 3 | 3 | 0.50 |
+| xcal-scene | 4 | 4 | 0.50 |
 | xc-graph-algo | 1 | 1 | 0.50 |
 | xc-time | 1 | 1 | 0.50 |
-| xcal-core | 4 | 3 | 0.43 |
 | xc-content | 3 | 1 | 0.25 |
+| xcal-schedule | 3 | 0 | 0.00 |
+| xc-vertex | 1 | 0 | 0.00 |
+| xc-resource | 1 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
-| xc-geometry | 7 | 0 | 0.00 |
-| xcal-macro | 3 | 0 | 0.00 |
+| xc-geometry | 8 | 0 | 0.00 |
+| xc-macro | 3 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -165,7 +186,7 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
 - hecs 0.11 为唯一 ECS 后端，不替换
 - wgpu 30 / egui 0.36 / eframe 0.36
 - glam 0.33：NDC Z∈[0,1]，用 `glam::camera::rh::proj::directx::` 系列
-- Transform2D traits 由 `xcal_macro::Transform2DInto` 过程宏派生
+- Transform2D traits 由 `xc_macro::Transform2DInto` 过程宏派生
 - System trait 关联类型 `Reads` / `Writes` 无默认值（stable Rust 不支持 associated type defaults）
 - `ErasedSystem` 为 object-safe 运行时 trait，`Box<dyn ErasedSystem>` 存储
 - Scheduler 每阶段独立 CommandBuffer，阶段结束 flush
@@ -208,7 +229,7 @@ FrameEnd:    RenderSubmit3D (R=EguiFrameContext, DrawQueue3D, ViewRect, W=())
 xc-geometry：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
 xc-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
 xc-content ：pair_by_anchor（语义配对，按源码锚点）
-xcal-core  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（SceneSync）
+xcal-scene  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（SceneSync）
 ```
 
 - **路线甲**：`xc-time` 依赖 `xc-geometry`（插值原语），但**不得**依赖 `xc-content`
@@ -303,7 +324,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 **索引顺序**（先 = 下）混合进主 pass —— 2D / 3D 可任意叠放（此前 3D 硬编码在 2D 之上），
 并为 S3-3（2D / 3D 互为纹理）铺路。
 
-**声明契约**（`xcal-core::domain::view`）：
+**声明契约**（`xcal-scene::domain::view`）：
 - `LayerBlend { Opaque, Alpha, Additive }`，`Default = Opaque`；
 - `LayerDescriptor.opacity: f32` + `clamped_opacity()`（合成器唯一取值口径，clamp `[0,1]`）；
 - `SceneView.background: Color32`，默认 `DEFAULT_BACKGROUND = (20,20,20,255)`
@@ -381,5 +402,20 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > FanIn/FanOut 表经复核无需改动。工具恢复后重跑 `cargo-workspace-analyzer -d .`
 > 即可覆盖回自动产物。
+>
+> 备注（2026-10-15，R1.6）：场景层 crate 由 core 更名为 `xcal-scene`、ui 层的过程宏
+> crate 归位 kernel 并更名为 `xc-macro`、ECS 调度内核抽为 `xcal-schedule`
+> （置于 `crates/schedule/`），依赖图按同一 `cargo metadata` 口径同步：
+> - 新增 `schedule` 层 / 节点 `xcal-schedule`；kernel 层补 `xc-vertex` / `xc-resource` /
+>   `xc-macro`（R1 下沉 + R1.5 归位）；render 层描述改为「场景层 + 渲染抽象 + 具体后端」，
+>   ui 层移除 proc-macro；
+> - 补边（相对 R1 基线）：`xcal-scene → xcal-schedule`、`xcal-app → xcal-schedule`、
+>   `xcal-egui → xcal-schedule`、`xcal-render → xc-vertex`、`xcal-render → xc-resource`、
+>   `xcal-egui → xc-geometry`；
+> - 图与 `workspace-analyzer.mmd` 保持「仅含 workspace 内部 crate 节点」的既有约定，
+>   `xcal-schedule → hecs`（外部 crate）不入图。
+>
+> FanIn/FanOut 表按 `cargo metadata` 全量重算（18 → 21 行）。工具恢复后重跑
+> `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

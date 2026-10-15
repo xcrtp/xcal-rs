@@ -9,19 +9,19 @@ graph TD
     xc-time --> xc-geometry
     xcal-app --> xc-content
     xcal-app --> xc-geometry
+    xcal-app --> xc-macro
     xcal-app --> xc-prerender
-    xcal-app --> xcal-core
     xcal-app --> xcal-egui
-    xcal-app --> xcal-macro
     xcal-app --> xcal-render
     xcal-app --> xcal-render-backends
-    xcal-core --> xc-geometry
-    xcal-core --> xc-time
-    xcal-core --> xcal-macro
-    xcal-egui --> xcal-core
-    xcal-egui --> xcal-macro
+    xcal-app --> xcal-scene
+    xcal-app --> xcal-schedule
+    xcal-egui --> xc-geometry
+    xcal-egui --> xc-macro
     xcal-egui --> xcal-render
     xcal-egui --> xcal-render-backends
+    xcal-egui --> xcal-scene
+    xcal-egui --> xcal-schedule
     xcal-node-editor --> xc-graph-algo
     xcal-node-editor --> xc-node
     xcal-node-egui --> xc-node
@@ -31,8 +31,14 @@ graph TD
     xcal-node-egui-ui --> xcal-node-egui
     xcal-render --> xc-content
     xcal-render --> xc-geometry
-    xcal-render --> xcal-core
+    xcal-render --> xc-resource
+    xcal-render --> xc-vertex
+    xcal-render --> xcal-scene
     xcal-render-backends --> xc-geometry
-    xcal-render-backends --> xcal-core
     xcal-render-backends --> xcal-render
+    xcal-render-backends --> xcal-scene
+    xcal-scene --> xc-geometry
+    xcal-scene --> xc-macro
+    xcal-scene --> xc-time
+    xcal-scene --> xcal-schedule
 classDef red stroke:#ff0000,stroke-width:2px;

@@ -9,7 +9,7 @@
 //   为每个宿主图元增加变体即可统一处理裁剪/命中测试/离屏后端；
 // - 本模块不依赖 wgpu/egui，纯几何 + 函数指针。
 
-use xc_geometry::{Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
+use xc_geometry::{Color32, MeasureSpace, Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
 
 /// 自定义图元携带的类型标识（用于调试 / 宿主侧反查）。
 pub type CustomTypeId = std::any::TypeId;
@@ -68,6 +68,32 @@ impl CustomShapeData {
     ) -> Self {
         self.to_triangles = Some(f);
         self
+    }
+}
+
+/// 2D 绘制样式（新管线：描边 + 填充）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Style2D {
+    /// 填充色（None = 不填充）。
+    pub fill: Option<Color32>,
+    /// 描边色（None = 不描边）。
+    pub stroke: Option<Color32>,
+    /// 描边宽度（单位由 [`Style2D::space`] 声明；默认屏幕像素）。
+    pub stroke_width: f32,
+    /// 描边宽度所属空间（声明式）。IR 转换层（`content_ir`）在此声明意图，
+    /// 由消费端把它转成 `StrokeSolid.space`，最终在 `record_scene`
+    /// （**唯一换算点**）结合 `camera.scale` 解析为屏幕像素。
+    pub space: MeasureSpace,
+}
+
+impl Default for Style2D {
+    fn default() -> Self {
+        Self {
+            fill: Some(Color32::WHITE),
+            stroke: None,
+            stroke_width: 1.0,
+            space: MeasureSpace::Screen,
+        }
     }
 }
 

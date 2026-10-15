@@ -10,12 +10,14 @@ name = "xcal-app"
 path = "src/main.rs"
 
 [dependencies]
-xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
+xcal-scene = { path = "../../render/xcal-scene" }
+# ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
+xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }
 # RenderContext / WgpuBackend3D / WgpuBackend2D / SceneCompositorCallback / EguiPainter 等具体后端实现。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
 xcal-egui = { path = "../../ui/xcal-egui" }
-xcal-macro = { path = "../../ui/xcal-macro" }
+xc-macro = { path = "../../kernel/xc-macro" }
 # 内容管线接线：xc-content（IR 类型）+ xc-prerender（Typst/占位引擎）。
 # 铁律：xcal-render 只能依赖轻的 xc-content，不得依赖 xc-prerender——
 # 这里是 app 层，可以直连两者。

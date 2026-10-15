@@ -1,0 +1,23 @@
+[package]
+name = "xcal-scene"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xc-macro = { path = "../../kernel/xc-macro" }
+xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-time = { path = "../../kernel/xc-time" }
+xcal-schedule = { path = "../../schedule/xcal-schedule" }
+
+glam.workspace = true
+derive_more.workspace = true
+thiserror.workspace = true
+smart-default.workspace = true
+derive-new.workspace = true
+derive_builder.workspace = true
+hecs.workspace = true
+
+[dev-dependencies]
+glam.workspace = true

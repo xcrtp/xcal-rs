@@ -3,8 +3,8 @@
 //! Pure interface crate: defines *what the world looks like* (value types,
 //! sockets, edges, nodes, graphs, execution context) without committing to any
 //! algorithm, storage or execution strategy. It deliberately has **no
-//! dependency** on the rest of the xcal-rs project (`xcal-core`/`xcal-render`/
-//! `xcal-egui`/`xcal-app`/`xcal-macro`) so it can be reused as a standalone
+//! dependency** on the rest of the xcal-rs project (`xcal-scene`/`xcal-render`/
+//! `xcal-egui`/`xcal-app`/`xc-macro`) so it can be reused as a standalone
 //! node-graph kernel.
 
 #![forbid(unsafe_code)]

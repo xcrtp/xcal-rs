@@ -9,11 +9,11 @@
 // 这是节点编辑器的简化版，后续替换为完整节点图（xc-node-schema + xcal-node-egui）
 // 时上层逻辑不动。
 
-use xcal_core::animation::{BindingTable, BindingTarget};
-use xcal_core::context::ExecutorContext;
-use xcal_core::domain::{ids, InputEvents, SceneEvent, WidgetId};
-use xcal_core::system::System;
-use xcal_core::Curve;
+use xcal_scene::animation::{BindingTable, BindingTarget};
+use xcal_schedule::context::ExecutorContext;
+use xcal_scene::domain::{ids, InputEvents, SceneEvent, WidgetId};
+use xcal_schedule::system::System;
+use xcal_scene::Curve;
 
 pub struct ParamPanelSystem;
 impl System for ParamPanelSystem {
@@ -91,10 +91,10 @@ impl System for ParamPanelSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::animation::{Binding, SeekKind};
-    use xcal_core::resource::Resources;
-    use xcal_core::scheduler::{Phase, Scheduler};
-    use xcal_core::ClockId;
+    use xcal_scene::animation::{Binding, SeekKind};
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
+    use xcal_scene::ClockId;
 
     /// headless：Slider 事件按 WidgetId 精确写入对应绑定字段，顺序无关。
     #[test]

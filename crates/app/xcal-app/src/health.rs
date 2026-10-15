@@ -7,15 +7,15 @@
 // - F10 把当前 World + Resources 通过 SnapshotRegistry 导出为 pretty JSON，
 //   写入当前工作目录 `xcal_snapshot_tick{N}.json`，用于 bug 复现与状态对比。
 //
-// 本模块全部依赖 xcal-core telemetry feature（默认开启）。
+// 本模块全部依赖 xcal-scene telemetry feature（默认开启）。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use xcal_core::resource::Resources;
-use xcal_core::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
+use xcal_schedule::resource::Resources;
+use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use xcal_core::scene::components::{Camera3D, Mesh3D};
+use xcal_scene::scene::components::{Camera3D, Mesh3D};
 use xcal_egui::resources::{AppCamera, TimeState, UiConfig, ViewRect};
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};

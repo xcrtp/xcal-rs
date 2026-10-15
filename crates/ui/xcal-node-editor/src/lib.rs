@@ -6,7 +6,7 @@
 //! pixels). The UI layer is responsible for screen <-> graph transforms.
 //!
 //! Hard constraint: this crate must never depend on `egui`/`eframe` or any
-//! `xcal-core`/`xcal-render`/`xcal-app` crate.
+//! `xcal-scene`/`xcal-render`/`xcal-app` crate.
 //!
 //! Module map:
 //! - `geometry`: `Rect`, `HitTarget`, hit-test constants (stage 1)

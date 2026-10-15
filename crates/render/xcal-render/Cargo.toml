@@ -6,13 +6,19 @@ edition.workspace = true
 license.workspace = true
 
 # trait + 调度 + 资源管理层。
-# 依赖方向：xc-geometry / xcal-core ← xcal-render ← xcal-render-backends
+# 依赖方向：xc-geometry / xcal-scene ← xcal-render ← xcal-render-backends
 # 本 crate 禁止依赖 egui；wgpu 仅通过 feature "wgpu" 引入（RenderTarget /
 # RenderLayer / RenderBackend 等 GPU 抽象需要），纯数据/队列/trait 定义不依赖 wgpu。
 [dependencies]
-xcal-core = { path = "../xcal-core", default-features = false }
+xcal-scene = { path = "../xcal-scene", default-features = false }
 xc-geometry = { path = "../../kernel/xc-geometry" }
 xc-content = { path = "../../kernel/xc-content" }
+# 渲染契约层已下沉 kernel：
+#   xc-vertex   ← vertex/（顶点格式契约，纯数据）
+#   xc-resource ← resource_cache / render_backend 的纯数据部分（GpuHandle / ResourceKey / ...）
+# 本 crate 通过 `pub use xc_vertex as vertex;` 与 shim 模块保留原有公开路径。
+xc-vertex = { path = "../../kernel/xc-vertex" }
+xc-resource = { path = "../../kernel/xc-resource" }
 
 glam.workspace = true
 derive_more.workspace = true

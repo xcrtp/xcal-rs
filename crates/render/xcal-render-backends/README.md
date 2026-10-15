@@ -7,7 +7,7 @@
 > `xc-prerender::engine → xc-content::ContentIR → xcal-render::ir_to_draw_cmds`。）
 
 ```
-xcal-core / xcal-render / xc-geometry
+xcal-scene / xcal-render / xc-geometry
               │
               ▼
     xcal-render-backends  ← 本 crate
@@ -28,8 +28,8 @@ xcal-core / xcal-render / xc-geometry
 |---------|-----------|----------|
 | `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
 | `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout` |
-| `egui` | `egui 0.36`, `xcal-core/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
-| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-core/egui` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
+| `egui` | `egui 0.36`, `xcal-scene/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
+| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-scene/egui` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
 四种 feature 组合都通过 CI 的 `cargo check -F` 验证。
@@ -42,7 +42,7 @@ xcal-core / xcal-render / xc-geometry
 
 `RenderContext` 是跨阶段共享的 GPU 句柄三件套（`Arc<Device> + Arc<Queue> +
 TextureFormat`），实现了 `Send + Sync + Clone`，可作为 Resource 放入
-`xcal_core::Resources` 供任何 System 取用：
+`xcal_schedule::Resources` 供任何 System 取用：
 
 ```rust
 use xcal_render_backends::RenderContext;
@@ -208,7 +208,7 @@ cargo run -p xcal-render-backends --example cube_3d --features egui-wgpu
 ## 依赖
 
 ```toml
-xcal-core              = { default-features = false }
+xcal-scene              = { default-features = false }
 xcal-render            = { default-features = false }
 xc-geometry
 glam

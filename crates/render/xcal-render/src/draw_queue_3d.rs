@@ -5,10 +5,10 @@
 // MVE 阶段无深度测试，按录制顺序提交）。
 //
 // 坐标类型使用 xcal-geometry 的 Vec3（= glam::Vec3）/ Color32；
-// 网格组件 Mesh3D 仍由 xcal-core 的 ECS 组件体系提供。
+// 网格组件 Mesh3D 仍由 xcal-scene 的 ECS 组件体系提供。
 
 use glam::Mat4;
-use xcal_core::scene::components::{Mesh3D, PrimitiveTopology};
+use xcal_scene::scene::components::{Mesh3D, PrimitiveTopology};
 use xc_geometry::{Color32, Vec3};
 
 /// 一次网格绘制命令：网格 + 模型变换 + 覆盖颜色。
@@ -59,7 +59,7 @@ impl LineDraw {
 /// # Example
 /// ```
 /// use glam::Mat4;
-/// use xcal_core::scene::primitives::wireframe_cube;
+/// use xcal_scene::scene::primitives::wireframe_cube;
 /// use xc_geometry::Color32;
 /// use xcal_render::DrawQueue3D;
 ///
@@ -131,7 +131,7 @@ impl DrawQueue3D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::scene::primitives::wireframe_cube;
+    use xcal_scene::scene::primitives::wireframe_cube;
 
     #[test]
     fn test_queue_starts_empty() {

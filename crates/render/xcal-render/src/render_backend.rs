@@ -1,147 +1,17 @@
-// render_backend.rs
+// render_backend.rs（过渡 shim）
 //
-// 后端 trait 定义：
-// - GpuHandle：类型擦除的 GPU 资源句柄（无 wgpu 依赖，纯 Any），带 GpuResourceId/generation；
-// - RenderBackend：资源型后端 trait（device/queue/资源创建，wgpu 抽象）；
-// - RenderBackend3D：3D 层提交后端（把 RenderLayer 录制进 command encoder）。
+// 渲染契约层下沉 kernel 后，本模块只保留两件事：
+// - 重导出已下沉到 xc-resource 的纯数据类型（GpuHandle / GpuResourceId / AccessError）；
+// - 定义需要 wgpu 的后端 trait（RenderBackend / RenderBackend3D），它们引用
+//   `wgpu::*` 与 `crate::render_layer::RenderLayer`，无法随纯数据一起下沉。
 //
 // 具体实现（EframeWgpuBackend / WgpuBackend3D）位于 xcal-render-backends。
 
-use std::any::{Any, TypeId};
-use std::fmt;
+// 纯数据（无 wgpu 依赖），始终可用。
+pub use xc_resource::render_backend::{AccessError, GpuHandle, GpuResourceId};
 
 #[cfg(feature = "wgpu")]
 use crate::render_layer::RenderLayer;
-
-// ─── GpuResourceId ────────────────────────────────────────────────────────
-
-/// 世代感知的 GPU 资源标识符（index+generation）。
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct GpuResourceId {
-    pub(crate) index: u32,
-    pub(crate) generation: u32,
-}
-
-impl GpuResourceId {
-    /// 空/未分配的哨兵值。
-    pub const SENTINEL: Self = Self {
-        index: u32::MAX,
-        generation: 0,
-    };
-
-    #[inline]
-    pub fn is_sentinel(self) -> bool {
-        self.index == u32::MAX
-    }
-
-    #[inline]
-    pub fn index(self) -> u32 {
-        self.index
-    }
-
-    #[inline]
-    pub fn generation(self) -> u32 {
-        self.generation
-    }
-}
-
-// ─── AccessError ──────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum AccessError {
-    Stale { id: GpuResourceId },
-    TypeMismatch,
-    Dropped,
-}
-
-impl fmt::Display for AccessError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AccessError::Stale { id } => write!(
-                f,
-                "stale GPU resource access: id=(index={}, gen={})",
-                id.index(),
-                id.generation()
-            ),
-            AccessError::TypeMismatch => write!(f, "GPU resource type mismatch"),
-            AccessError::Dropped => write!(f, "GPU resource has been dropped"),
-        }
-    }
-}
-
-impl std::error::Error for AccessError {}
-
-// ─── GpuHandle ────────────────────────────────────────────────────────────
-
-/// 类型擦除的 GPU 资源句柄（buffer / texture / pipeline 等）。
-///
-/// 附带一个 [`GpuResourceId`]：创建时默认为哨兵值，
-/// 由 `ResourceCache` 在插入条目时通过 `assign_id` 赋予实际 id。
-pub struct GpuHandle {
-    id: GpuResourceId,
-    inner: Box<dyn Any + Send + Sync>,
-}
-
-impl std::fmt::Debug for GpuHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GpuHandle")
-            .field("id", &self.id)
-            .field("inner_type_id", &(*self.inner).type_id())
-            .finish()
-    }
-}
-
-impl PartialEq for GpuHandle {
-    fn eq(&self, other: &Self) -> bool {
-        // 基于 id 与内部类型 id 的相等，不比较内部包装对象值（类型擦除后不可比）
-        self.id == other.id && (*self.inner).type_id() == (*other.inner).type_id()
-    }
-}
-
-impl Eq for GpuHandle {}
-
-impl GpuHandle {
-    pub fn new<T: Any + Send + Sync>(value: T) -> Self {
-        Self {
-            id: GpuResourceId::SENTINEL,
-            inner: Box::new(value),
-        }
-    }
-
-    pub fn id(&self) -> GpuResourceId {
-        self.id
-    }
-
-    /// 由 resource_cache 在插入时赋予有效的资源 id（crate 内可见）。
-    pub(crate) fn assign_id(&mut self, id: GpuResourceId) {
-        self.id = id;
-    }
-
-    /// 剥离所有权：延迟销毁器/缓存需要移动内部资源而不立刻 drop 它时使用。
-    pub fn take(self) -> Box<dyn Any + Send + Sync> {
-        self.inner
-    }
-
-    pub fn downcast_ref<T: Any + Send + Sync>(&self) -> Option<&T> {
-        self.inner.downcast_ref::<T>()
-    }
-
-    pub fn downcast_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
-        self.inner.downcast_mut::<T>()
-    }
-
-    pub fn into_inner<T: Any + Send + Sync>(self) -> Option<T> {
-        self.inner.downcast::<T>().ok().map(|b| *b)
-    }
-
-    pub fn type_id(&self) -> TypeId {
-        (*self.inner).type_id()
-    }
-
-    pub fn is<T: Any>(&self) -> bool {
-        self.inner.is::<T>()
-    }
-}
 
 // ─── RenderBackend trait（资源型，wgpu） ──────────────────────────────────
 
@@ -190,47 +60,4 @@ pub trait RenderBackend3D: Send + Sync {
     ///
     /// 调用方负责提交 encoder（`queue.submit`）。
     fn submit_layer(&self, layer: &RenderLayer, encoder: &mut wgpu::CommandEncoder);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    #[test]
-    fn test_handle_types_are_send_sync() {
-        assert_send_sync::<GpuHandle>();
-    }
-
-    #[test]
-    fn test_gpu_handle_roundtrip() {
-        let handle = GpuHandle::new(42_u32);
-        assert!(handle.is::<u32>());
-        assert_eq!(handle.downcast_ref::<u32>(), Some(&42));
-        assert!(handle.downcast_ref::<i64>().is_none());
-
-        let mut handle = handle;
-        if let Some(v) = handle.downcast_mut::<u32>() {
-            *v = 100;
-        }
-        assert_eq!(handle.downcast_ref::<u32>(), Some(&100));
-        assert_eq!(handle.into_inner::<u32>(), Some(100));
-    }
-
-    #[test]
-    fn test_gpu_handle_into_inner_wrong_type() {
-        let handle = GpuHandle::new("hello".to_string());
-        assert_eq!(handle.into_inner::<u32>(), None);
-    }
-
-    #[test]
-    fn test_resource_id_sentinel() {
-        let id = GpuResourceId::SENTINEL;
-        assert!(id.is_sentinel());
-        assert_ne!(id, GpuResourceId {
-            index: 0,
-            generation: 1
-        });
-    }
 }

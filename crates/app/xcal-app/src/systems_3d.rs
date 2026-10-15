@@ -7,9 +7,9 @@
 //
 // OrbitApplySystem 在 P3 已废弃（由 BindingApplySystem 统一驱动 Camera3D.eye）。
 
-use xcal_core::context::ExecutorContext;
-use xcal_core::scene::components::{Mesh3D, Transform};
-use xcal_core::system::System;
+use xcal_schedule::context::ExecutorContext;
+use xcal_scene::scene::components::{Mesh3D, Transform};
+use xcal_schedule::system::System;
 use xcal_render::DrawQueue3D;
 
 /// 每帧清空 [`DrawQueue3D`]，把世界中的全部 [`Mesh3D`]（带可选 [`Transform`]）

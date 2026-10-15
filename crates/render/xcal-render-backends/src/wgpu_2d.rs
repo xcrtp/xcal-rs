@@ -664,7 +664,7 @@ fn uniform_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::domain::LayerBlend;
+    use xcal_scene::domain::LayerBlend;
     use xcal_render::{DrawCommand, ZIndex};
 
     use crate::compositor::{CompositeOp, Compositor};

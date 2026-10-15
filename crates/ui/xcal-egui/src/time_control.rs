@@ -5,10 +5,10 @@
 //   host.rs::draw_time_panel，控件交互以 SceneEvent（WidgetId 标识）写入 InputEvents；
 // - 本 System 只消费事件并写 DirectorState——可 headless 测试。
 
-use xcal_core::context::ExecutorContext;
-use xcal_core::domain::{ids, InputEvents, SceneEvent};
-use xcal_core::director_state::DirectorState;
-use xcal_core::system::System;
+use xcal_schedule::context::ExecutorContext;
+use xcal_scene::domain::{ids, InputEvents, SceneEvent};
+use xcal_scene::director_state::DirectorState;
+use xcal_schedule::system::System;
 
 pub struct TimeControlSystem;
 impl System for TimeControlSystem {
@@ -47,8 +47,8 @@ impl System for TimeControlSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::resource::Resources;
-    use xcal_core::scheduler::{Phase, Scheduler};
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     fn run_with_events(events: Vec<SceneEvent>) -> DirectorState {
         let mut resources = Resources::new();

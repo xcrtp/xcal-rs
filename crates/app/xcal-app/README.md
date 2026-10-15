@@ -1,7 +1,7 @@
 # xcal-app
 
 > **组装与启动层**。基于 `eframe 0.36`（egui + wgpu），把
-> `xcal-core / xcal-render / xcal-render-backends / xcal-egui`
+> `xcal-scene / xcal-render / xcal-render-backends / xcal-egui`
 > 提供的所有 System、Resource、Backend 按阶段装配成一个可运行的桌面应用。
 
 ```bash
@@ -267,7 +267,7 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 ---
 
-## 可观测性（`xcal-core/feature="telemetry"`）
+## 可观测性（`xcal-scene/feature="telemetry"`）
 
 Scheduler 会在每 phase 开始/结束埋点 `tracing::info_span!`；F10 触发的
 `HealthOverlay::dump_snapshot` 会把 hecs World 所有组件（通过 `hecs::World::archetypes()`
@@ -285,11 +285,11 @@ snapshots/
 ## 依赖
 
 ```toml
-xcal-core              = { features = ["egui"] }
+xcal-scene              = { features = ["egui"] }
 xcal-render                             # 默认 feature="wgpu"
 xcal-render-backends   = { features = ["egui-wgpu"] }
 xcal-egui
-xcal-macro
+xc-macro
 xc-content                              # 公式 IR 类型
 xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
 xc-geometry                             # 形变 demo：直接构造 Path2D（MorphShape 的 from/to）

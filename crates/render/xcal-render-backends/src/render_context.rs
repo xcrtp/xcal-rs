@@ -4,7 +4,7 @@
 // - headless 构造仅依赖 wgpu + pollster（feature = "wgpu"）；
 // - from_render_state 从 egui_wgpu::RenderState 提取（feature = "egui-wgpu"）。
 
-use xcal_core::errors::Error;
+use xcal_scene::errors::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

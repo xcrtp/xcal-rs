@@ -3,12 +3,13 @@
 > **渲染 trait + 调度 + 资源管理层**。位于三层架构的中间层：
 >
 > ```text
-> xc-geometry / xcal-core  ←── xcal-render ──→  xcal-render-backends
+> xc-geometry / xcal-scene  ←── xcal-render ──→  xcal-render-backends
 > ```
 >
-> 定义 2D 与 3D 的绘制器 trait、绘制队列、视口/渲染目标/渲染层抽象、
-> 新图元体系与文本渲染接口。**无 egui 依赖**；`wgpu` 仅通过
-> `feature = "wgpu"` 引入（纯数据/队列/trait 定义不依赖 wgpu）。
+> 定义 2D 与 3D 的绘制器 trait、绘制队列、视口/渲染目标/渲染层抽象与新图元体系。
+> **无 egui 依赖**；`wgpu` 仅通过 `feature = "wgpu"` 引入（纯数据/队列/trait 定义不依赖 wgpu）。
+> 渲染契约层（顶点格式 `xc-vertex`、资源缓存纯数据 `xc-resource`）已下沉 kernel，
+> 本 crate 通过 `pub use` 与过渡 shim 保留原有公开路径。
 
 ---
 
@@ -22,7 +23,7 @@ xcal-render 同时承载两套渲染抽象：
 - `Shape2D` enum（`shape.rs`）：`Empty / Line / Polyline / Polygon / Rect /
   Circle / Ellipse / Path / Group` + `Custom(CustomShapeData)` 扩展钩子
   （`Text/Image` 属预留，尚未纳入）
-- `Style2D`（`painter_2d.rs`）：fill / stroke 独立（`Option<Color32>`）+
+- `Style2D`（`shape.rs`）：fill / stroke 独立（`Option<Color32>`）+
   `stroke_width` + `space: MeasureSpace`（声明式，`content_ir` 产出 `World`）
 - `DrawCommand` = `ZIndex` + `Shape2D` + `Style2D`；`Ord` **只比 `z`**
 - `DrawQueue`：`push(DrawCommand)` + 便捷构造（`circle_fill/stroke`、
@@ -37,8 +38,8 @@ xcal-render 同时承载两套渲染抽象：
   解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
   `StrokeSolid::new(w, c)` 两参保持（默认 `Screen`），显式声明用 `new_in(w, c, space)`。
   `World` = 随缩放变化（如公式描边），`Screen` = 恒定（网格 / 轴 / 曲线 / 圆 / 形变）。
-- **预留可替换后端**（`painter_2d.rs::Painter2DTarget` / `draw_queue_2d.rs` /
-  `vector_content.rs`）：面向 SVG / PDF / TikZ 的指令级队列 + 无损矢量描述。
+- **预留可替换后端**（`painter_2d.rs::Painter2DTarget` / `draw_queue_2d.rs`）：
+  面向 SVG / PDF / TikZ 的指令级队列。
 
 ### ② S3-0 三角化适配层（`tessellate.rs`，纯 CPU / headless）
 `Shape2D + Transform2D + Style2D` → 索引化顶点缓冲，顶点结构**严格**符合自有顶点
@@ -68,9 +69,9 @@ xcal-render 同时承载两套渲染抽象：
 - `RenderTarget` (`feature="wgpu"`)：对 wgpu `TextureView` 的 RAII 包装
 - `Viewport`：纯数据 `(origin, size)`，无 wgpu 依赖，任何 feature 组合均可用
 - `RenderBackend / RenderBackend3D` (`feature="wgpu"`)：设备/队列/格式抽象
-- `ResourceCache<K,V>` / `GpuResourceCache`：TypeMap + `Arc<dyn Any>` GPU 资源缓存
-- `GpuHandle`：纯 `Any` 包装，**无 wgpu 依赖**，任何上层都可持有
-- `text_engine.rs`：`TextRenderEngine` trait + `Typst/LaTeX` 空壳占位（实现层在 backends）
+- `ResourceCache<T>` / `GpuResourceCache`：generation-aware slot + key→id 索引的资源缓存
+  （已下沉 `xc-resource`，本 crate 经 `resource_cache` shim 重导出）
+- `GpuHandle`：纯 `Any` 包装，**无 wgpu 依赖**，任何上层都可持有（已下沉 `xc-resource`）
 
 ---
 
@@ -96,18 +97,16 @@ xcal-render 同时承载两套渲染抽象：
 | `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + SceneRender + record_scene`（统一 2D 管线） |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_2d` / `draw_queue_3d` | 预留 2D 指令队列 + 3D 双列表队列 |
-| `painter_2d` / `painter_3d` | 绘制器 trait 定义 + `Style2D` / `Painter2DTarget` |
-| `shape` | `Shape2D` + `CustomShapeData/CustomTypeId` 自定义图元钩子 |
-| `vector_content` | 矢量内容容器（可序列化给 SVG/TikZ 后端） |
-| `text_engine` | `TextRenderEngine` trait + `BitmapFormat / TextRenderOutput` |
+| `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
+| `shape` | `Shape2D` + `Style2D` + `CustomShapeData/CustomTypeId` 自定义图元钩子 |
 | `viewport` | `Viewport`（纯数据） |
-| `render_backend` | `GpuHandle`（始终可用）+ `RenderBackend / RenderBackend3D` (`wgpu`) |
+| `render_backend` | 重导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源，始终可用）+ `RenderBackend / RenderBackend3D` (`wgpu`) |
 | `render_layer` (`wgpu`) | `RenderLayer`（framebuffer + 清屏描述 + 视口） |
 | `render_target` (`wgpu`) | `RenderTarget`（`TextureView` RAII + 描述符） |
-| `resource_cache` (`wgpu`) | `GpuResourceCache`（`CacheKey -> Arc<GpuHandle>` LRU 占位） |
-| `scene` (mod) | `use xcal_render::scene::{comp, Scene}` 重新导出 components + xcal_core Scene |
+| `resource_cache` (`wgpu`) | 过渡 shim：glob 重导出 `xc-resource` 的 `ResourceCache / ResourceKey / DeferredDestroyer / GpuResourceCache`，并保留仍需 hecs 的 `CacheKey` 兼容层 |
+| `scene` (mod) | `use xcal_render::scene::{comp, Scene}` 重新导出 components + xcal_scene Scene |
 | `content_ir` | `ir_to_draw_cmds`：xc-content `ContentIR` → `Shape2D + Style2D + Transform2D`（scale = target / nominal_font_size，描边宽度同步换算为世界单位并标 `MeasureSpace::World`） |
-| `vertex` | 顶点格式契约与管线缓存：`VertexLayout` / `VertexAttribute` 定义、`layout.rs`（装配与判重）、`cache.rs`（pipeline 变体缓存）、`aa.rs`（抗锯齿）、`check.rs`（契约自校验）；需 `serde` 可序列化 |
+| `vertex` | 顶点格式契约（已下沉 kernel `xc-vertex`，经 `pub use xc_vertex as vertex;` 保持路径）：`VertexLayout` / `VertexAttrib` / `AaModel` / `CacheStrategy` / `StaticConsistencyChecker`；需 `serde` 可序列化 |
 
 ---
 
@@ -154,7 +153,7 @@ assert!(items.iter().all(|t| t.layout == xcal_render::tessellation_layout()));
 
 ```rust
 use xcal_render::DrawQueue3D;
-use xcal_core::scene::primitives::wireframe_cube;
+use xcal_scene::scene::primitives::wireframe_cube;
 use xc_geometry::Color32;
 
 let white = Color32::new(255, 255, 255, 255);
@@ -169,7 +168,7 @@ assert_eq!(q3.mesh_count() + q3.line_count(), 2);
 ## 测试
 
 ```bash
-cargo test -p xcal-render                      # 103 个单元测试
+cargo test -p xcal-render                      # 75 个单元测试（顶点契约 / 资源缓存主体已随模块迁至 xc-vertex / xc-resource）
 cargo test -p xcal-render --no-default-features # 验证纯数据/队列无 wgpu 依赖时通过
 cargo doc  -p xcal-render --no-deps --all-features
 ```
@@ -190,9 +189,9 @@ cargo doc  -p xcal-render --no-deps --all-features
   `shader_offset_reproduces_lyon_contour_points`（`position + normal * w/2`
   与旧管线 lyon `position()` 逐顶点 < 1e-6，即"与旧 CPU 管线同源"的数值证明）、
   `stroke_area_scales_linearly_with_width`（宽 2→8 面积比 = 4）
-- `resource_cache`：G7 回校的 pending 有界性压测
-  `per_frame_churn_keeps_pending_and_entries_bounded`（200 帧 × 每帧 3 条新哈希，
-  稳态 `len() == 每帧条目数`、`pending` 不增长、上界 = `(graveyard_period + 1) × 每帧条目数`）
+- `resource_cache`（shim 层）：`CacheKey` 版本隔离、`get_or_insert` 命中/未命中、
+  `mark_used` 保活、`evict_unused`、脏标记与 `upload_dirty`、stale id 返回 `AccessError`
+  （`ResourceCache`/`GpuHandle` 主体与 pending 有界性压测已随模块迁至 `xc-resource`）
 - `GpuHandle` 跨线程可 Send（测试用 `std::sync::mpsc` 验证）
 
 ---
@@ -200,9 +199,11 @@ cargo doc  -p xcal-render --no-deps --all-features
 ## 依赖
 
 ```toml
-xcal-core     = { path = "../xcal-core", default-features = false }
+xcal-scene     = { path = "../xcal-scene", default-features = false }
 xc-geometry = { path = "../xc-geometry" }
 xc-content  = { path = "../../kernel/xc-content" }   # content_ir 消费侧：ir_to_draw_cmds
+xc-vertex   = { path = "../../kernel/xc-vertex" }    # 顶点格式契约（已下沉 kernel）
+xc-resource = { path = "../../kernel/xc-resource" }  # 资源缓存 / GpuHandle（已下沉 kernel）
 serde       = { workspace = true }                   # VertexLayout 可序列化（pipeline 变体缓存 key）
 glam          = "0.33"
 derive_more / derive-new / derive_builder

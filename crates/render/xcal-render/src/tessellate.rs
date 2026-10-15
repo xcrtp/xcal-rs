@@ -50,8 +50,7 @@ use lyon_tessellation::{
 
 use xc_geometry::{Transform2D, Triangle2D, Vec2};
 
-use crate::painter_2d::Style2D;
-use crate::shape::{CustomShapeData, Shape2D};
+use crate::shape::{CustomShapeData, Shape2D, Style2D};
 use crate::vertex::{AaModel, CacheStrategy, VertexLayout};
 
 /// 描边/填充顶点：与顶点契约的三槽 1:1。

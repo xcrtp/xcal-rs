@@ -1,0 +1,31 @@
+[package]
+name = "xcal-schedule"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hecs.workspace = true
+
+# 可观测性：tracing 日志 / FrameReport 计时 / WorldSnapshot 导出。
+# 关闭该 feature 时所有观测代码在编译期完全剔除（Release 零开销）。
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "scheduler_bench"
+harness = false
+
+[features]
+default = ["telemetry"]
+telemetry = [
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:serde",
+    "dep:serde_json",
+]

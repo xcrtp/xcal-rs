@@ -7,7 +7,7 @@
       "path": "crates/kernel",
       "prefix": "xc-",
       "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
-      "crates": ["xc-geometry", "xc-time", "xc-content", "xc-prerender"]
+      "crates": ["xc-geometry", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
     },
     {
       "name": "graph",
@@ -23,12 +23,19 @@
       ]
     },
     {
+      "name": "schedule",
+      "path": "crates/schedule",
+      "prefix": "xcal-",
+      "description": "通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry），不含任何场景/渲染概念",
+      "crates": ["xcal-schedule"]
+    },
+    {
       "name": "render",
       "path": "crates/render",
       "prefix": "xcal-",
-      "description": "ECS + 渲染抽象 + 具体后端实现",
+      "description": "场景层 + 渲染抽象 + 具体后端实现",
       "crates": [
-        "xcal-core",
+        "xcal-scene",
         "xcal-render",
         "xcal-render-backends"
       ]
@@ -37,9 +44,8 @@
       "name": "ui",
       "path": "crates/ui",
       "prefix": "xcal-",
-      "description": "egui 前端 + 编辑器状态机 + proc-macro",
+      "description": "egui 前端 + 编辑器状态机",
       "crates": [
-        "xcal-macro",
         "xcal-egui",
         "xcal-node-editor",
         "xcal-node-egui",

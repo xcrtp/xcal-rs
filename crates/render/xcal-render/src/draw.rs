@@ -2,10 +2,10 @@
 //
 // 2D 绘制抽象：Painter2D trait + Shape2D/Style2D + ZIndex + DrawQueue +
 // SceneRender + record_scene。
-// 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 xcal_core::transform。
+// 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 xcal_scene::transform。
 //
 // M0（图元体系迁移）：载荷已统一为 [`Shape2D`](crate::shape::Shape2D) /
-// [`Style2D`](crate::painter_2d::Style2D)，旧 `Shape` / `Style` 枚举已删除。
+// [`Style2D`](crate::shape::Style2D)，旧 `Shape` / `Style` 枚举已删除。
 // 录制语义保持不变：
 // - 场景图元在 [`record_scene`] 里经 `to_screen(camera)` 落到**屏幕空间**后
 //   再转成 `Shape2D`（`Shape2D::Path` 承载折线/闭合语义）；
@@ -13,10 +13,9 @@
 //   解析为屏幕像素（**唯一换算点**）。
 
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
-use crate::painter_2d::Style2D;
-use crate::shape::Shape2D;
-use xcal_core::transform::Transform2D;
-use xcal_core::types::{Camera2D, Rect, Vec3};
+use crate::shape::{Shape2D, Style2D};
+use xcal_scene::transform::Transform2D;
+use xcal_scene::types::{Camera2D, Rect, Vec3};
 use xc_geometry::{MeasureSpace, Path2D, Rect2D, Vec2 as GeoVec2, resolve_width};
 
 /// 2D 绘制器 Trait。
@@ -382,7 +381,7 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
 #[allow(unused_imports)]
 mod tests {
     use super::*;
-    use xcal_core::scene::components::*;
+    use xcal_scene::scene::components::*;
 
     struct MockPainter;
 
@@ -429,8 +428,8 @@ mod tests {
         let mut world = hecs::World::new();
         let path = Path::new(
             vec![
-                xcal_core::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
             ],
             false,
         );
@@ -463,8 +462,8 @@ mod tests {
         ));
         let path = Path::new(
             vec![
-                xcal_core::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
             ],
             false,
         );
@@ -514,8 +513,8 @@ mod tests {
     fn mk_path() -> Path {
         Path::new(
             vec![
-                xcal_core::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
+                xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
             ],
             false,
         )
@@ -755,9 +754,9 @@ mod tests {
         world.spawn((
             Path::new(
                 vec![
-                    xcal_core::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
-                    xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
-                    xcal_core::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
+                    xcal_scene::types::Vec3::new(glam::Vec3::new(0.0, 0.0, 0.0)),
+                    xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 0.0, 0.0)),
+                    xcal_scene::types::Vec3::new(glam::Vec3::new(1.0, 1.0, 0.0)),
                 ],
                 true,
             ),

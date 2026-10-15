@@ -5694,6 +5694,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "xc-node"
 version = "0.1.0"
 dependencies = [
@@ -5745,6 +5754,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-resource"
+version = "0.1.0"
+
+[[package]]
 name = "xc-time"
 version = "0.1.0"
 dependencies = [
@@ -5753,6 +5766,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "xc-geometry",
+]
+
+[[package]]
+name = "xc-vertex"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -5770,34 +5792,13 @@ dependencies = [
  "wgpu",
  "xc-content",
  "xc-geometry",
+ "xc-macro",
  "xc-prerender",
- "xcal-core",
  "xcal-egui",
- "xcal-macro",
  "xcal-render",
  "xcal-render-backends",
-]
-
-[[package]]
-name = "xcal-core"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "derive-new",
- "derive_builder",
- "derive_more",
- "egui",
- "glam",
- "hecs",
- "serde",
- "serde_json",
- "smart-default",
- "thiserror 2.0.20",
- "tracing",
- "tracing-subscriber",
- "xc-geometry",
- "xc-time",
- "xcal-macro",
+ "xcal-scene",
+ "xcal-schedule",
 ]
 
 [[package]]
@@ -5811,19 +5812,11 @@ dependencies = [
  "glam",
  "hecs",
  "xc-geometry",
- "xcal-core",
- "xcal-macro",
+ "xc-macro",
  "xcal-render",
  "xcal-render-backends",
-]
-
-[[package]]
-name = "xcal-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
+ "xcal-scene",
+ "xcal-schedule",
 ]
 
 [[package]]
@@ -5881,7 +5874,9 @@ dependencies = [
  "wgpu",
  "xc-content",
  "xc-geometry",
- "xcal-core",
+ "xc-resource",
+ "xc-vertex",
+ "xcal-scene",
 ]
 
 [[package]]
@@ -5897,8 +5892,37 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu",
  "xc-geometry",
- "xcal-core",
  "xcal-render",
+ "xcal-scene",
+]
+
+[[package]]
+name = "xcal-scene"
+version = "0.1.0"
+dependencies = [
+ "derive-new",
+ "derive_builder",
+ "derive_more",
+ "glam",
+ "hecs",
+ "smart-default",
+ "thiserror 2.0.20",
+ "xc-geometry",
+ "xc-macro",
+ "xc-time",
+ "xcal-schedule",
+]
+
+[[package]]
+name = "xcal-schedule"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "hecs",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

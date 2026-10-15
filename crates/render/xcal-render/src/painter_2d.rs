@@ -7,35 +7,9 @@
 // Shape2D（shape.rs）新图元体系的光栅化目标，供新后端（SVG/未来 GPU 2D）
 // 实现，后续逐步替换旧管线。
 
-use xc_geometry::{Color32, MeasureSpace, Transform2D, Vec2};
+use xc_geometry::{Transform2D, Vec2};
 
-use crate::shape::Shape2D;
-
-/// 2D 绘制样式（新管线：描边 + 填充）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Style2D {
-    /// 填充色（None = 不填充）。
-    pub fill: Option<Color32>,
-    /// 描边色（None = 不描边）。
-    pub stroke: Option<Color32>,
-    /// 描边宽度（单位由 [`Style2D::space`] 声明；默认屏幕像素）。
-    pub stroke_width: f32,
-    /// 描边宽度所属空间（声明式）。IR 转换层（`content_ir`）在此声明意图，
-    /// 由消费端把它转成 `StrokeSolid.space`，最终在 `record_scene`
-    /// （**唯一换算点**）结合 `camera.scale` 解析为屏幕像素。
-    pub space: MeasureSpace,
-}
-
-impl Default for Style2D {
-    fn default() -> Self {
-        Self {
-            fill: Some(Color32::WHITE),
-            stroke: None,
-            stroke_width: 1.0,
-            space: MeasureSpace::Screen,
-        }
-    }
-}
+use crate::shape::{Shape2D, Style2D};
 
 /// 新风格 2D 绘制目标。
 ///

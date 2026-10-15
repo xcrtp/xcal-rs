@@ -18,8 +18,7 @@
 use xc_content::{ContentIR, StyledPath};
 use xc_geometry::{MeasureSpace, Stroke2D, Transform2D};
 
-use crate::painter_2d::Style2D;
-use crate::shape::Shape2D;
+use crate::shape::{Shape2D, Style2D};
 
 /// 一个绘制指令：形状 + 样式 + 从 IR 本地坐标到画布坐标的 transform。
 #[derive(Debug, Clone)]

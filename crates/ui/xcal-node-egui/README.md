@@ -3,7 +3,7 @@
 > **egui 渲染与交互层**：把 `xcal-node-editor` 的纯逻辑状态机
 > （图、命令、撤销、连接校验）绘制成可交互的节点画布。
 >
-> 本 crate 不依赖 `xcal-core / xcal-render / xcal-app`，可独立于主应用使用。
+> 本 crate 不依赖 `xcal-scene / xcal-render / xcal-app`，可独立于主应用使用。
 
 ```
 xc-node  ──►  xcal-node-editor  ──►  xcal-node-egui  ← 本 crate

@@ -6,12 +6,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xcal-core = { path = "../../render/xcal-core", features = ["egui"] }
+xcal-scene = { path = "../../render/xcal-scene" }
+# ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。
+xcal-schedule = { path = "../../schedule/xcal-schedule" }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
 xcal-render = { path = "../../render/xcal-render", default-features = false }
 # Painter2D 的 egui 实现（EguiPainter）+ 图层合成 egui_wgpu 回调（SceneCompositorCallback）位于 backends crate。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui", "egui-wgpu"] }
-xcal-macro = { path = "../xcal-macro" }
+xc-macro = { path = "../../kernel/xc-macro" }
 # S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。
 xc-geometry = { path = "../../kernel/xc-geometry" }
 

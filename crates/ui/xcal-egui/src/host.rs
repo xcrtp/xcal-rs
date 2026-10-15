@@ -20,16 +20,16 @@
 
 use egui::Panel;
 
-use xcal_core::animation::{BindingTable, BindingTarget};
-use xcal_core::director_state::DirectorState;
-use xcal_core::domain::{
+use xcal_scene::animation::{BindingTable, BindingTarget};
+use xcal_scene::director_state::DirectorState;
+use xcal_scene::domain::{
     ids, CameraCommand, ContentHandle, InputEvents, LayerBlend, LayerDescriptor, LayerId, LayerKind,
     SceneEvent, SceneView,
 };
-use xcal_core::resource::Resources;
-use xcal_core::scene::components::Camera3D;
-use xcal_core::types::Rect;
-use xcal_core::{Curve, TimeState};
+use xcal_schedule::resource::Resources;
+use xcal_scene::scene::components::Camera3D;
+use xcal_scene::types::Rect;
+use xcal_scene::{Curve, TimeState};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::{EguiPainter, SceneCompositorCallback, SceneLayer};
 use xc_geometry::Rect2D;
@@ -167,12 +167,12 @@ impl EguiSceneHost {
                 if in_view(pos) {
                     events.push(SceneEvent::ViewportHover {
                         layer: *layer,
-                        scene_pos: camera.screen_to_world(pos.into()),
+                        scene_pos: camera.screen_to_world((pos.x, pos.y).into()),
                     });
                     if i.pointer.primary_clicked() {
                         events.push(SceneEvent::ViewportClick {
                             layer: *layer,
-                            scene_pos: camera.screen_to_world(pos.into()),
+                            scene_pos: camera.screen_to_world((pos.x, pos.y).into()),
                         });
                     }
                 }
@@ -367,7 +367,12 @@ impl EguiSceneHost {
 
     /// 面板布局完成后写入中央视口矩形（原 ViewRectUpdateSystem 的职责）。
     pub fn update_view_rect(ui: &egui::Ui, res: &mut Resources) {
-        let rect = Rect::from(ui.available_rect_before_wrap());
+        // egui::Rect → xcal_scene::Rect 的就地转换（后端转换由使用方负责）。
+        let egui_rect = ui.available_rect_before_wrap();
+        let rect = Rect::new(
+            (egui_rect.min.x, egui_rect.min.y).into(),
+            (egui_rect.max.x, egui_rect.max.y).into(),
+        );
         if let Some(vr) = res.get_mut::<ViewRect>() {
             vr.rect = rect;
         }
@@ -398,7 +403,10 @@ impl EguiSceneHost {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
-        let egui_rect = view_rect.into_egui_rect();
+        let egui_rect = egui::Rect::from_min_max(
+            egui::pos2(view_rect.min().x, view_rect.min().y),
+            egui::pos2(view_rect.max().x, view_rect.max().y),
+        );
 
         let painter = ui.painter_at(egui_rect);
 
@@ -483,8 +491,8 @@ impl EguiSceneHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::resource::Resources;
-    use xcal_core::scene::components::{Camera3D, Projection};
+    use xcal_schedule::resource::Resources;
+    use xcal_scene::scene::components::{Camera3D, Projection};
 
     /// headless：无任何 egui 上下文即可构建 SceneView。
     #[test]
@@ -515,7 +523,7 @@ mod tests {
             assert_eq!(l.opacity, 1.0);
             assert_eq!(l.clamped_opacity(), 1.0);
         }
-        assert_eq!(view.background, xcal_core::domain::DEFAULT_BACKGROUND);
+        assert_eq!(view.background, xcal_scene::domain::DEFAULT_BACKGROUND);
     }
 
     /// S3-2 修复：`view.layers` 内 `LayerId` 必须**两两唯一**

@@ -8,8 +8,7 @@
 
 use xc_geometry::Transform2D;
 
-use crate::painter_2d::Style2D;
-use crate::shape::Shape2D;
+use crate::shape::{Shape2D, Style2D};
 
 /// 一条 2D 绘制命令：图元 + 变换 + 样式 + 层序。
 #[derive(Debug, Clone)]

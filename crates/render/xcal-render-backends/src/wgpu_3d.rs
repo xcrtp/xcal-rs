@@ -34,7 +34,7 @@ use std::sync::Mutex;
 use glam::Mat4;
 use wgpu::util::DeviceExt as _;
 
-use xcal_core::scene::components::{Mesh3D, PrimitiveTopology};
+use xcal_scene::scene::components::{Mesh3D, PrimitiveTopology};
 use xc_geometry::Color32;
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xcal_render::{
@@ -817,8 +817,8 @@ fn uniform_bytes(mvp: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
 mod tests {
     use super::*;
     use crate::render_context::RenderContext;
-    use xcal_core::scene::components::{Camera3D, Projection};
-    use xcal_core::scene::primitives::wireframe_cube;
+    use xcal_scene::scene::components::{Camera3D, Projection};
+    use xcal_scene::scene::primitives::wireframe_cube;
     use xc_geometry::Vec3;
     use xcal_render::{DrawQueue3D, Viewport};
 

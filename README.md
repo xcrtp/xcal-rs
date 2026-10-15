@@ -15,7 +15,10 @@ crates/
 │   ├── xc-geometry       纯几何数据（Color32 / Rect2D / Path2D / Transform2D）
 │   ├── xc-time           时钟树 + 曲线 + 导演（Director 唯一时间源，纯数据纯函数）
 │   ├── xc-content        内容中间表示（ContentIR + 源码归一化 + 确定性 SVG + 占位排版）
-│   └── xc-prerender      内容预渲染引擎接入（Typst / placeholder + 哈希缓存），默认零重依赖
+│   ├── xc-prerender      内容预渲染引擎接入（Typst / placeholder + 哈希缓存），默认零重依赖
+│   ├── xc-vertex         顶点格式契约（VertexLayout / AaModel / CacheStrategy，无 wgpu 依赖）
+│   ├── xc-resource       GPU 资源契约与缓存（ResourceKey / ResourceCache / GpuHandle / DeferredDestroyer，纯 std）
+│   └── xc-macro          Transform2DInto 派生宏
 │
 ├── graph/           # 节点图契约层（禁止依赖 egui / xcal-* / 领域类型）
 │   ├── xc-node           节点图内核（Node / Graph / Socket trait + NodeInteraction）
@@ -24,13 +27,15 @@ crates/
 │   ├── xc-node-schema    属性模型（Property / NodeSpec / DynamicObject / NodeRegistry）
 │   └── xc-node-schema-macros  #[derive(NodeSpec)] 过程宏
 │
-├── render/          # 渲染层
-│   ├── xcal-core         ECS（hecs）+ Scheduler（六阶段）+ Transform2D + 3D 场景类型
+├── schedule/        # 通用 ECS 调度框架（不含任何场景/渲染概念）
+│   └── xcal-schedule     Resource / System trait / 六阶段 Scheduler + Telemetry（依赖仅 hecs）
+│
+├── render/          # 场景层 + 渲染层
+│   ├── xcal-scene         场景层：场景组件 + 场景 System + domain 契约 + Transform2D + 3D 场景类型
 │   ├── xcal-render       2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer）
 │   └── xcal-render-backends  wgpu / egui-wgpu 具体后端（WgpuBackend3D / EguiPainter）
 │
 ├── ui/              # UI 与编辑器层
-│   ├── xcal-macro        Transform2DInto 派生宏
 │   ├── xcal-egui         egui UI overlay System（控制面板 / 网格 / 相机）
 │   ├── xcal-node-editor  纯逻辑节点编辑器状态机（Command / Undo / HitTestPolicy）
 │   ├── xcal-node-egui    egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸）
@@ -53,15 +58,18 @@ crates/
 | `xc-time` | kernel | 纯逻辑时间内核：ClockForest（时钟树+环检测+eval_local）/ Curve（Const/Sin/Orbit/Phase/Sampled 纯函数 sample）/ Director（global_t + speed + playing，唯一时间源） |
 | `xc-content` | kernel | 内容中间表示：ContentIR / StyledPath / Span 锚点 + 源码归一化 + 确定性 SVG 量具 + 零依赖占位排版 |
 | `xc-prerender` | kernel | 内容预渲染：ContentEngine 异步形状 API + InMemoryEngine + 哈希缓存 + Typst 接入（feature 全 optional，默认零重依赖） |
+| `xc-vertex` | kernel | 顶点格式契约（VertexLayout / VertexAttrib / AaModel / CacheStrategy；无 wgpu 依赖，可序列化） |
+| `xc-resource` | kernel | GPU 资源契约与缓存（GpuResourceId / GpuHandle / ResourceKey / ResourceCache / DeferredDestroyer；纯 std 零依赖） |
+| `xc-macro` | kernel | `Transform2DInto` 派生过程宏 |
 | `xc-node` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `xc-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
 | `xc-graph-eval` | graph | 惰性拉取求值（LazyPullEval） |
 | `xc-node-schema` | graph | 属性模型（Property / NodeSpec / DynamicObject / NodeRegistry），不依赖 egui |
 | `xc-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
-| `xcal-core` | render | ECS（hecs World / Resources / System trait / 六阶段 Scheduler）；Transform2D 体系；3D 场景类型；**动画绑定层**（Binding / BindingTable / BindingApplySystem，取代组件组合查询）；DirectorState + DirectorAdvanceSystem；TimeState |
+| `xcal-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs，不含任何场景/渲染概念 |
+| `xcal-scene` | render | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply）+ domain 契约（CameraCommand / SceneView / ContentHandle）+ Transform2D 体系 + 3D 场景类型 + TimeState；依赖 `xcal-schedule` |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer / Viewport） |
 | `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback / EguiPainter） |
-| `xcal-macro` | ui | `Transform2DInto` 派生过程宏 |
 | `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
 | `xcal-node-editor` | ui | 纯逻辑节点编辑器状态机（Command / Undo / 可插拔 HitTestPolicy） |
 | `xcal-node-egui` | ui | egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸） |
@@ -120,5 +128,5 @@ cargo run -p xcal-node-egui --example node_editor_demo
 
 # 全量测试 / 文档
 cargo test --workspace
-cargo doc --no-deps -p xcal-core -p xcal-render
+cargo doc --no-deps -p xcal-scene -p xcal-render
 ```

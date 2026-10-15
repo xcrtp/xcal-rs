@@ -9,20 +9,20 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use xcal_core::Result;
-use xcal_core::animation::{
+pub use xcal_scene::Result;
+use xcal_scene::animation::{
     Binding, BindingApplySystem, BindingTable, BindingTarget, MorphApplySystem, SeekKind,
 };
-use xcal_core::director_state::{DirectorAdvanceSystem, DirectorState};
-use xcal_core::errors::Error;
-use xcal_core::resource::Resources;
-use xcal_core::domain::InputEvents;
-use xcal_core::scene::components::{Camera3D, MorphShape, Projection};
-use xcal_core::scene::primitives::wireframe_cube;
-use xcal_core::scheduler::{Phase, Scheduler};
-use xcal_core::TimeState;
-use xcal_core::types::{Color32, Vec3};
-use xcal_core::{ClockForest, ClockNode, Curve, PlayMode};
+use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
+use xcal_scene::errors::Error;
+use xcal_schedule::resource::Resources;
+use xcal_scene::domain::InputEvents;
+use xcal_scene::scene::components::{Camera3D, MorphShape, Projection};
+use xcal_scene::scene::primitives::wireframe_cube;
+use xcal_schedule::scheduler::{Phase, Scheduler};
+use xcal_scene::TimeState;
+use xcal_scene::types::{Color32, Vec3};
+use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};

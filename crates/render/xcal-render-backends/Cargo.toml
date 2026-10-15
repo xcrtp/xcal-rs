@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xcal-core = { path = "../xcal-core", default-features = false }
+xcal-scene = { path = "../xcal-scene", default-features = false }
 xcal-render = { path = "../xcal-render", default-features = false }
 xc-geometry = { path = "../../kernel/xc-geometry" }
 
@@ -37,7 +37,7 @@ required-features = ["egui-wgpu"]
 # 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
 default = ["wgpu"]
 wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
-egui = ["dep:egui", "xcal-core/egui"]
+egui = ["dep:egui"]
 # egui + wgpu 集成（egui_wgpu 回调、EframeWgpuBackend、RenderContext）。
 egui-wgpu = [
     "dep:egui",
@@ -45,7 +45,6 @@ egui-wgpu = [
     "dep:wgpu",
     "dep:pollster",
     "xcal-render/wgpu",
-    "xcal-core/egui",
 ]
 # 文本引擎（Typst/LaTeX）预留。
 text = []

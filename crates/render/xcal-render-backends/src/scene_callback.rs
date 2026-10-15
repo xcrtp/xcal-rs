@@ -26,7 +26,7 @@
 // **每类最多一个图层**（`prepare` 里有 `debug_assert`）。按 `LayerId` 分别持有
 // 离屏目标属 S3-3（2D/3D 互为纹理）的事，本阶段不扩范围。
 
-use xcal_core::domain::{LayerBlend, LayerId, LayerKind};
+use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
 use xcal_render::{DrawQueue, DrawQueue3D, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_geometry::Rect2D;

@@ -6,8 +6,8 @@
 //   相机控制器是纯函数 [`AppCamera::apply_command`]（消费 CameraCommand → 改状态），
 //   egui 原生输入（滚轮/拖拽）的读取与翻译全部在 host。
 
-use xcal_core::domain::CameraCommand;
-use xcal_core::types::{Camera2D, Rect, Vec2};
+use xcal_scene::domain::CameraCommand;
+use xcal_scene::types::{Camera2D, Rect, Vec2};
 
 // ─── AppCamera ─────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ impl AppCamera {
 
 // ─── TimeState ─────────────────────────────────────────────────────────────
 
-pub use xcal_core::TimeState;
+pub use xcal_scene::TimeState;
 
 // ─── UiConfig ──────────────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ impl Default for ViewRect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_core::resource::Resources;
+    use xcal_schedule::resource::Resources;
 
     #[test]
     fn test_app_camera_default() {

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use wgpu::util::DeviceExt as _;
 
-use xcal_core::domain::LayerBlend;
+use xcal_scene::domain::LayerBlend;
 use xcal_render::{AaModel, CacheStrategy, Vertex2D, VertexLayout};
 
 use crate::vertex_layout::to_wgpu;
