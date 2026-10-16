@@ -150,6 +150,10 @@ impl EguiSceneHost {
 
         let mut view = SceneView::default();
 
+        // ⚠️ **总闸优先（N3）**：`UiConfig::show_2d` / `show_3d` 是**图层级总闸**，
+        // 关掉即整层不画（连 `Viewport2D` 图层都不声明）——此时**不看**任何对象的
+        // 场景级 `Visibility`。总闸开时才轮到录制路径按对象 tag 逐对象判
+        // （见 `xcal_render::draw::record_scene_tagged`）。
         if cfg.show_2d {
             if let Some(handle) = res.get::<Camera2DHandle>() {
                 if let Some(camera) = handle.resolve(&WorldView::new(world), rect) {

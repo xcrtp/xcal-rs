@@ -24,6 +24,7 @@
 
 use hecs::World;
 use xc_object::{Camera3D, Circle, Framing2D};
+use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
 use xc_time::AnimValue;
 
@@ -69,6 +70,8 @@ pub enum TargetKind {
     /// 与 `Camera2DFraming` 同一分派口径：单 target、按变体决定写哪个字段
     /// （"从 0 写到 1"只需 `Scalar` 一条绑定）。
     RevealRange,
+    /// 写 `Opacity`（对象级不透明度：`Scalar` → `Opacity.0`；N4 淡入淡出通道）。
+    OpacityValue,
 }
 
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。
@@ -214,6 +217,31 @@ impl Target for RevealRange {
     }
 }
 
+/// 写 [`Opacity`]（对象级不透明度，N4 的淡入淡出通道）。
+///
+/// - `Scalar(v)` → `Opacity.0 = v`（`0.0` 全透明 … `1.0` 完全不透明）；
+/// - 其它变体**静默跳过**（不 panic），与全部既有 target 同口径。
+///
+/// 施加位置不在本 target：它只写**组件值**，由录制路径
+/// （`xcal_render::draw::apply_opacity`）乘进样式颜色 —— 唯一施加点纪律。
+#[derive(Debug, Clone, Copy)]
+pub struct OpacityValue {
+    pub id: ObjectId,
+}
+
+impl Target for OpacityValue {
+    fn apply(&self, world: &mut World, v: &AnimValue) {
+        let Some(v) = v.try_scalar() else {
+            return;
+        };
+        with_component::<Opacity, _>(world, self.id, |o| o.0 = v);
+    }
+
+    fn kind(&self) -> TargetKind {
+        TargetKind::OpacityValue
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +370,24 @@ mod tests {
             TargetKind::Camera2DFraming
         );
         assert_eq!(RevealRange { id }.kind(), TargetKind::RevealRange);
+        assert_eq!(OpacityValue { id }.kind(), TargetKind::OpacityValue);
+    }
+
+    /// `OpacityValue`：`Scalar` 写入 `Opacity.0`；其它变体跳过（不 panic）。
+    #[test]
+    fn opacity_value_writes_scalar_and_skips_mismatch() {
+        let mut world = World::new();
+        let e = world.spawn((Opacity::new(1.0),));
+        let t = OpacityValue { id: id_of(e) };
+
+        t.apply(&mut world, &AnimValue::Scalar(0.25));
+        assert_eq!(world.get::<&Opacity>(e).unwrap().0, 0.25);
+
+        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(0.1, 0.2)));
+        assert_eq!(
+            world.get::<&Opacity>(e).unwrap().0,
+            0.25,
+            "非 Scalar 变体不得写入（静默跳过）"
+        );
     }
 }

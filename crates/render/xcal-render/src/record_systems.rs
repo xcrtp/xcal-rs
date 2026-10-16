@@ -9,12 +9,23 @@
 //
 // # 阶段分配（与迁入前逐位一致）
 //
-// - `SceneRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(DrawQueue,)`
+// - `SceneRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle, GroupVisibility)`，`W=(DrawQueue,)`
 // - `ContentTextureRecordSystem` RenderCommit，`R=(ContentTextureSpec,)`，`W=(ContentTextureQueue,)`
-// - `MorphRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(MorphQueue,)`
-// - `RevealRecordSystem`       RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(RevealQueue,)`
+// - `MorphRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle, GroupVisibility)`，`W=(MorphQueue,)`
+// - `RevealRecordSystem`       RenderCommit，`R=(ViewRect, Camera2DHandle, GroupVisibility)`，`W=(RevealQueue,)`
 //
 // 四个写集类型不相交，可同相注册（debug 的 BorrowTracker 不会报冲突）。
+//
+// # 对象级可见性 / 不透明度（N3 / N4 / N5）
+//
+// 三个 2D 录制 System 都消费对象级的 [`Visibility`](xc_scene_contract::Visibility) /
+// [`Opacity`](xc_render_ir::Opacity)（缺席 = 全局可见 / 1.0）：
+// - `camera_tag` 取自 `Camera2DHandle`（`VisibilityTag::Camera` 判定用）；
+// - 组级开关 `GroupVisibility` 是可缺席资源（缺席 = 默认空 = 所有组可见）。
+//
+// ⚠️ **`ContentTextureRecordSystem` 本轮不参与过滤**（记账）：内容纹理层是**纹理源**
+// 而非显示层（它的"相机"是 `spec.camera`，并非当前 2D 相机），按相机 tag 过滤没有
+// 明确语义；且它不受图层总闸约束。若将来出现"内容层也要跟着对象走"的需求再补。
 //
 // # 相机从哪来（P1 之后）
 //
@@ -39,11 +50,13 @@ use xcal_scene::scene::components::{ContentTextureItem, MorphShape, Reveal};
 use xc_object::{Camera2DHandle, Path};
 
 use crate::draw::{
-    ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, push_morph_item, push_reveal_item,
-    record_path_stroke, record_scene,
+    ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
+    push_reveal_item, record_path_stroke, record_scene_tagged, visible_for,
 };
 use crate::view_rect::ViewRect;
 use xc_render_ir::StrokeSolid;
+// N5：组级开关（可缺席资源 ⇒ 缺席 = 所有组可见）。
+use xc_scene_contract::GroupVisibility;
 
 /// 本帧的相机（取景参数 + 视口矩形）解析；句柄失效 / 无相机对象 ⇒ `None`。
 fn resolve_camera(ctx: &mut ExecutorContext<'_>, rect: xc_notion::Rect2D) -> Option<xc_object::Camera2D> {
@@ -60,7 +73,8 @@ fn resolve_camera(ctx: &mut ExecutorContext<'_>, rect: xc_notion::Rect2D) -> Opt
 /// `record_scene` 里。本 System 只负责"取数据"：取相机 → 取世界 → 交给它翻译。
 pub struct SceneRecordSystem;
 impl System for SceneRecordSystem {
-    type Reads = (ViewRect, Camera2DHandle);
+    // N5：`GroupVisibility` 进入 Read（组级开关；缺席 ⇒ 默认空 ⇒ 所有组可见）。
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility);
     type Writes = (DrawQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -68,6 +82,10 @@ impl System for SceneRecordSystem {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
+        // N5：相机 tag（`VisibilityTag::Camera` 判定用）取自同一个 `Camera2DHandle`；
+        // 组级开关是可缺席资源 ⇒ 缺席按默认（空集 = 所有组可见）处理。
+        let camera_tag = ctx.get::<Camera2DHandle>().map(|h| h.0);
+        let groups = ctx.get::<GroupVisibility>().cloned().unwrap_or_default();
         let Some(camera) = resolve_camera(ctx, rect) else {
             return;
         };
@@ -75,9 +93,15 @@ impl System for SceneRecordSystem {
         // 同时需要 &hecs::World（不可变）与 &mut DrawQueue；
         // 通过 split-borrow 辅助 API 在闭包内同时持有两个引用。
         ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, queue| {
-            // `record_scene` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
+            // `record_scene_tagged` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
             // `WorldView` 接入 —— 渲染管线不认识 hecs（不可变借用，渲染只需要读）。
-            record_scene(&WorldView::new(world), &camera, queue);
+            record_scene_tagged(
+                &WorldView::new(world),
+                &camera,
+                camera_tag,
+                &groups,
+                queue,
+            );
         });
     }
 }
@@ -96,7 +120,8 @@ impl System for SceneRecordSystem {
 /// `Reads` / `Writes` 是冻结契约（§9.3），不能给它新增写资源。
 pub struct MorphRecordSystem;
 impl System for MorphRecordSystem {
-    type Reads = (ViewRect, Camera2DHandle);
+    // N5：与 `SceneRecordSystem` 同口径（过滤 + 组级开关）。
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility);
     type Writes = (MorphQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -104,6 +129,8 @@ impl System for MorphRecordSystem {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
+        let camera_tag = ctx.get::<Camera2DHandle>().map(|h| h.0);
+        let groups = ctx.get::<GroupVisibility>().cloned().unwrap_or_default();
         let Some(camera) = resolve_camera(ctx, rect) else {
             return;
         };
@@ -113,7 +140,13 @@ impl System for MorphRecordSystem {
             let scene = WorldView::new(world);
             // 契约层查询（原为内联 `world.query::<(&MorphShape, &StrokeSolid)>()`）：
             // 世界 → 屏幕的二端几何映射 + 描边宽度换算都在 `push_morph_item`（唯一换算点）。
-            scene.for_each_pair::<MorphShape, StrokeSolid>(|_, morph, stroke| {
+            //
+            // N5：闭包首参即 `ObjectId`，直接用 `scene.with::<..>` 点查询做可见性过滤与
+            // 不透明度取值 —— 契约层**不必**新增访客（`for_each_pair` 的 3 个位置已占满）。
+            scene.for_each_pair::<MorphShape, StrokeSolid>(|id, morph, stroke| {
+                if !visible_for(&scene, id, camera_tag, &groups) {
+                    return;
+                }
                 push_morph_item(
                     queue,
                     &morph.from,
@@ -121,6 +154,7 @@ impl System for MorphRecordSystem {
                     morph.t,
                     morph.samples,
                     stroke,
+                    opacity_of(&scene, id),
                     &camera,
                 );
             });
@@ -143,7 +177,8 @@ impl System for MorphRecordSystem {
 /// `Reads` / `Writes` 是冻结契约（§9.3），不能给它新增写资源。
 pub struct RevealRecordSystem;
 impl System for RevealRecordSystem {
-    type Reads = (ViewRect, Camera2DHandle);
+    // N5：与 `SceneRecordSystem` / `MorphRecordSystem` 同口径。
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility);
     type Writes = (RevealQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -151,6 +186,8 @@ impl System for RevealRecordSystem {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
+        let camera_tag = ctx.get::<Camera2DHandle>().map(|h| h.0);
+        let groups = ctx.get::<GroupVisibility>().cloned().unwrap_or_default();
         let Some(camera) = resolve_camera(ctx, rect) else {
             return;
         };
@@ -158,13 +195,18 @@ impl System for RevealRecordSystem {
         ctx.with_world_and_resource_mut::<RevealQueue, _>(|world, queue| {
             queue.0.clear();
             let scene = WorldView::new(world);
-            scene.for_each_pair::<Reveal, StrokeSolid>(|_, reveal, stroke| {
+            // N5：点查询做可见性过滤 + 不透明度取值（与 `MorphRecordSystem` 同法）。
+            scene.for_each_pair::<Reveal, StrokeSolid>(|id, reveal, stroke| {
+                if !visible_for(&scene, id, camera_tag, &groups) {
+                    return;
+                }
                 push_reveal_item(
                     queue,
                     &reveal.path,
                     reveal.start,
                     reveal.end,
                     stroke,
+                    opacity_of(&scene, id),
                     &camera,
                 );
             });
@@ -214,11 +256,12 @@ mod tests {
     use hecs::World;
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xcal_scene::contract::WorldScene;
+    use xcal_scene::contract::{GroupId, Visibility, WorldScene};
     use xcal_scene::scene::components::TextureHandle;
     use xcal_scene::types::Vec2;
     use xc_notion::{Path2D, PathCommand, Rect2D};
     use xc_object::{Circle, Framing2D};
+    use xc_render_ir::Opacity;
 
     /// 建一个含 2D 相机对象的场景（取景为 `framing`），返回世界与句柄。
     fn world_with_camera(framing: Framing2D) -> (World, Camera2DHandle) {
@@ -361,5 +404,138 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ─── N5：对象级可见性 / 不透明度过滤 ──────────────────────────────────
+
+    fn rect_800x600() -> Rect2D {
+        Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0))
+    }
+
+    /// 相机 tag 过滤：只对**当前相机**可见的对象被录制，`Camera(其它)` 的落选。
+    #[test]
+    fn scene_record_filters_by_camera_tag() {
+        let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
+        let other = xc_scene_contract::ObjectId::new(999, 1);
+        world.spawn((
+            Circle::new((0.0, 0.0), 1.0),
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+            Visibility::for_camera(handle.0), // 当前相机 ⇒ 可见
+        ));
+        world.spawn((
+            Circle::new((1.0, 0.0), 1.0),
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+            Visibility::for_camera(other), // 别的相机 ⇒ 落选
+        ));
+
+        let mut res = resources_with(rect_800x600(), handle);
+        res.insert(DrawQueue::new());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, SceneRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        assert_eq!(
+            sched.resources().get::<DrawQueue>().unwrap().len(),
+            1,
+            "只录对当前相机可见的那个对象"
+        );
+    }
+
+    /// 组级开关过滤：`GroupVisibility` 隐藏该组 ⇒ 随组走的对象不录，全局对象仍录。
+    #[test]
+    fn scene_record_group_switch_filters() {
+        let g = GroupId::new(1);
+        let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
+        world.spawn((
+            Circle::new((0.0, 0.0), 1.0),
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+            Visibility::of_group(g),
+        ));
+        world.spawn((
+            Circle::new((1.0, 0.0), 1.0),
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+        ));
+
+        let mut res = resources_with(rect_800x600(), handle);
+        res.insert(DrawQueue::new());
+        let mut groups = GroupVisibility::new();
+        groups.hide(g);
+        res.insert(groups);
+
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, SceneRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        assert_eq!(
+            sched.resources().get::<DrawQueue>().unwrap().len(),
+            1,
+            "隐藏组的对象落选，全局对象仍录"
+        );
+    }
+
+    /// 形变路径：不可见对象不录（队列为空）；可见对象的不透明度施加到样式 alpha。
+    #[test]
+    fn morph_record_honors_visibility_and_opacity() {
+        let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
+        let path = Path2D::from_polyline(&[Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)], false);
+
+        let mut visible = MorphShape::new(path.clone(), path.clone());
+        visible.t = 0.4;
+        world.spawn((
+            visible,
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+            Opacity::new(0.5), // 只缩 alpha：255 → 128
+        ));
+        world.spawn((
+            MorphShape::new(path.clone(), path),
+            StrokeSolid::new(2.0, (0, 255, 0, 255)),
+            Visibility::for_camera(xc_scene_contract::ObjectId::new(999, 1)),
+        ));
+
+        let mut res = resources_with(rect_800x600(), handle);
+        res.insert(MorphQueue::default());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, MorphRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let q = sched.resources().get::<MorphQueue>().unwrap();
+        assert_eq!(q.0.len(), 1, "不可见对象不录");
+        let stroke = q.0[0].style.stroke.expect("形变项应有描边样式");
+        assert_eq!((stroke.r(), stroke.g(), stroke.b()), (255, 0, 0), "rgb 不动");
+        assert_eq!(stroke.a(), 128, "opacity = 0.5 ⇒ alpha 减半");
+    }
+
+    /// 书写动画路径：同上（不可见不录 + 不透明度只缩 alpha）。
+    #[test]
+    fn reveal_record_honors_visibility_and_opacity() {
+        let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
+        let path = Path2D::from_polyline(&[Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0)], false);
+
+        world.spawn((
+            Reveal::new(path.clone()),
+            StrokeSolid::new(2.0, (10, 20, 30, 200)),
+            Opacity::new(0.5), // 200 * 0.5 = 100
+        ));
+        world.spawn((
+            Reveal::new(path),
+            StrokeSolid::new(2.0, (0, 255, 0, 255)),
+            Visibility::for_camera(xc_scene_contract::ObjectId::new(999, 1)),
+        ));
+
+        let mut res = resources_with(rect_800x600(), handle);
+        res.insert(RevealQueue::default());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, RevealRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let q = sched.resources().get::<RevealQueue>().unwrap();
+        assert_eq!(q.0.len(), 1, "不可见对象不录");
+        let stroke = q.0[0].style.stroke.expect("reveal 项应有描边样式");
+        assert_eq!((stroke.r(), stroke.g(), stroke.b()), (10, 20, 30));
+        assert_eq!(stroke.a(), 100, "200 * 0.5 = 100");
     }
 }

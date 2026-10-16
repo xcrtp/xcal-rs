@@ -23,11 +23,12 @@
 // 故动态创建必须**按类型登记**。下表即唯一登记点：
 //
 //   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform` / `ZOrder`
+//   组织与可见性（N 阶段）：`Name` / `Group` / `Visibility` / `Opacity`
 //   相机：      `Camera2D` / `Camera3D` / `Projection` / `Framing2D`（2D 取景参数，P1-2）/
 //               `CameraMode`（相机交互模式，K0）/ `FpsView`（FPS 朝向状态，K1）
 //   样式：      `StrokeSolid` / `FillSolid`
 //   装配对象：  `Axes2D` / `AxesLine` / `FunctionGraph`（M4：网格与函数图像归对象层）
-//   动画与标记：`PhaseAnim` / `MorphShape` / `ContentTextureItem`
+//   动画与标记：`PhaseAnim` / `MorphShape` / `ContentTextureItem` / `Reveal`
 //   关系：      `Parent`
 //
 // 未登记的组件类型 ⇒ `spawn_dyn` 返回 `None`（**不静默丢组件**——宁可失败也不
@@ -39,18 +40,22 @@ use xc_object::{
     Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line, Path,
     Projection, Rect, Transform, ZOrder,
 };
-use xc_render_ir::{FillSolid, StrokeSolid};
+use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
 use xc_scene_contract::{Components, Parent, Scene};
 
 /// 契约层的**只读**能力（`for_each*` / `with`）在此处对外转发：
 /// 消费方（UI 层 / 装配层）只需 `xcal_scene::contract::SceneRead` 一个入口，
 /// 不必额外依赖 `xc-scene-contract`（本 crate 已依赖它）。
 ///
-/// 同时转发身份类型 [`ObjectId`]（句柄 / 目标都要用到它）。
-pub use xc_scene_contract::{ObjectId, SceneRead};
+/// 同时转发身份与**组织**类型（句柄 / 目标 / 可见性判定都要用到它们）：
+/// `ObjectId`、`Name`、`Group` / `GroupId`、`Visibility` / `VisibilityTag`、
+/// `GroupVisibility`（组级开关）。
+pub use xc_scene_contract::{
+    Group, GroupId, GroupVisibility, Name, ObjectId, SceneRead, Visibility, VisibilityTag,
+};
 
 use crate::domain::CameraMode;
-use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim};
+use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim, Reveal};
 
 /// `hecs::Entity` → 契约层 [`ObjectId`]（位模式直通：低 32 位 index、高 32 位 generation）。
 pub fn object_id_of(e: Entity) -> ObjectId {
@@ -62,6 +67,25 @@ pub fn object_id_of(e: Entity) -> ObjectId {
 pub fn entity_of(id: ObjectId) -> Option<Entity> {
     let bits = ((id.generation as u64) << 32) | (id.index as u64);
     Entity::from_bits(bits)
+}
+
+/// **按名字查找对象**（N1）：返回**第一个**命中的 [`ObjectId`]。
+///
+/// 用 `for_each::<Name>` 遍历实现，**不新增契约层 trait 方法**
+/// （契约层加方法要动 4 个实现 —— `WorldView` / `WorldScene` / `scene::Scene` /
+/// 测试用的非 ECS `TestScene` —— 成本与收益不匹配）。
+///
+/// - 场景规模为几十个对象 ⇒ O(n) 遍历可接受（无全局注册表）；
+/// - **不强制名字唯一**：重名时返回先遍历到的那个（`Name` 的文档已写明）。
+///   需要唯一性是**装配层策略**，不是契约的职责。
+pub fn find_by_name(scene: &impl SceneRead, name: &str) -> Option<ObjectId> {
+    let mut found = None;
+    scene.for_each::<Name>(|id, n| {
+        if found.is_none() && n.as_str() == name {
+            found = Some(id);
+        }
+    });
+    found
 }
 
 /// **只读适配器**：借用 `&hecs::World` 并实现 [`SceneRead`]
@@ -219,6 +243,12 @@ fn add_known(
     arm!(Rect);
     arm!(Transform);
     arm!(ZOrder);
+    // N 阶段（对象的组织与可见性）：四个都必须登记，漏一个 ⇒ 带它的对象
+    // `spawn_dyn` 静默返回 `None`（见模块头"不造半成品对象"）。
+    arm!(Name);
+    arm!(Group);
+    arm!(Visibility);
+    arm!(Opacity);
     arm!(Camera2D);
     arm!(Camera3D);
     arm!(Projection);
@@ -233,6 +263,8 @@ fn add_known(
     arm!(PhaseAnim);
     arm!(MorphShape);
     arm!(ContentTextureItem);
+    // R0 书写动画对象：此前**漏登记**（分镜走 `Scene::spawn` 未暴露，`spawn_dyn` 会失败）。
+    arm!(Reveal);
     arm!(Parent);
 
     Err(c)

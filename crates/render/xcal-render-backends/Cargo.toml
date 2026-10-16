@@ -28,6 +28,9 @@ egui-wgpu.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 glam.workspace = true
+# N6：GPU 像素级验收要构造真实 ECS 场景（`record_scene_tagged` 的入参是
+# `SceneRead`，hecs 侧适配器 `WorldView` 需要 `&hecs::World`）——**仅测试用**。
+hecs.workspace = true
 
 [[example]]
 name = "cube_3d"

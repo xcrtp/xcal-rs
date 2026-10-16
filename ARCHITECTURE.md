@@ -753,4 +753,69 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   附带记账：`xcal-scene` 的 `glam` 依赖在源码层面**已不再使用**，
 >   但 Cargo.toml 未动（不在本轮范围）—— 留待下次清单清理时一并处理。
 
+**N 线（准备阶段二：对象组织与可见性 N1–N6）**
+
+> 解决"对象怎么被组织、怎么被引用、怎么被看见"——补词汇（Transform 通道 / 淡入淡出 /
+> 出场退场 / 箭头 / 文字）的地基。四者全部落在**契约层 `xc-scene-contract`**（+ `Opacity`
+> 在 `xc-render-ir`），与 `Parent` 同一判据："描述场景中的关系，不是数学概念"。
+>
+> - **N1 `Name`**：`Name(pub String)`，缺席 = 匿名。查找走
+>   `xcal_scene::contract::find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`
+>   （`for_each::<Name>` 遍历、返回**第一个**命中）—— **契约层不新增 trait 方法**
+>   （加方法要动 4 个实现，成本不匹配收益；几十个对象的 O(n) 足够）。
+> - **N2 `Group` / `GroupId`**：纯标签（**只含标识、不含变换**，这是与 `Parent` 的根本
+>   区别 —— 绕开"父子变换累乘"这个未接线项）。`GroupId(u32)` 而非 `ObjectId`：
+>   不建组实体 ⇒ 无生命周期、不需要 generation 失效检测。不做嵌套组。
+> - **N3 `Visibility` / `VisibilityTag` / `GroupVisibility`**：可见性是**关系而非布尔**
+>   （同一对象在不同相机下可不同）。一个组件含**非空 tag 集合**（而非挂多个组件 ——
+>   多组件的并/交语义没有自然答案），**任一命中即可见（并，非交）**；空集与缺席**同口径**
+>   （= 全局可见，避免"挂了组件反而隐形"）。tag 只认 `Global` / `Camera(ObjectId)` /
+>   `Group(GroupId)`（复用相机 `ObjectId`，不另建标识体系）。`GroupVisibility` 是
+>   **组级开关的另一半**（集中一处，不做 N 次逐对象写入）、注册为 app 资源。
+>   **与图层总闸的优先级**：`UiConfig::show_2d` / `show_3d` 是**图层级总闸**（关掉整层
+>   不画、不看对象 tag），**总闸优先**；总闸开后才轮到对象级 `Visibility`
+>   （两处注释各写一句：`build_scene_view` 与 `record_scene_tagged`）。
+> - **N4 `Opacity`**：`Opacity(pub f32)` 在 `xc-render-ir`（样式侧），缺席 = 1.0，
+>   **显式 `impl Default` = `FULL`**（不 derive，以免得到 `0.0` 全透明这种危险缺省）。
+>   通道 = 组件 + target `OpacityValue`（`Scalar → Opacity.0`）+ `TargetKind::OpacityValue`
+>   （照 `Camera2DFraming` 的"单 target 按变体分派"口径）。
+>   ⚠️ **预乘 alpha 硬约束（实测纠正计划初稿）**：`Style2D` 存**直色**，预乘发生在 GPU 侧
+>   （`uniform_bytes` 写 `rgb * a`）⇒ **施加不透明度 = 只缩直色的 alpha**（`rgb` 不动）；
+>   计划 §6.2.4 写的"`rgb` 与 `a` 同乘"对直色是**错的** —— 同乘会被 GPU 再乘一次 `a`，
+>   预乘后 `rgb` 变成 `o²` 档（`o = 0.5` 时应得 `r ≈ a ≈ 128`，那样只得 `r ≈ 64`）。
+>   "同乘"法则只适用于**已预乘**的数据（合成器 per-layer opacity）。
+>   施加点**唯一**：`xcal_render::draw::apply_opacity`（`o == 1.0` 逐位早退 ⇒ 未挂组件画面不变）。
+> - **N5 录制过滤接线**：`record_group` 加 `camera_tag: Option<ObjectId>` + `GroupVisibility`，
+>   闭包内先判可见性（不可见者连降级都不做）、再降级、最后施加不透明度。
+>   新增 `record_scene_tagged(scene, camera, camera_tag, groups, queue)` ——
+>   **`record_scene` 的冻结签名不动**（它是"`camera_tag = None`、无隐藏组"的不过滤形态，
+>   内部转调新函数 ⇒ 行为逐位不变）。**为什么拆函数**：`record_scene` 只拿得到 `&Camera2D`、
+>   **拿不到相机的 `ObjectId`**，而 `VisibilityTag::Camera(..)` 的判定恰恰需要它。
+>   **闭包内二次借用 `scene`（计划 §1.2.4 的核查项）实测通过** —— `with` 与 `for_each*`
+>   同为 `&self`，闭包首参即 `ObjectId` ⇒ 点查询即可，**契约层不必新增四元组访客**
+>   （`for_each_pair_opt` 的三个位置已被 `(形状, 样式, ZOrder)` 占满）。
+>   `SceneRecordSystem` / `MorphRecordSystem` / `RevealRecordSystem` 的 `Reads` 各加
+>   `GroupVisibility`（可缺席资源 ⇒ 缺席按默认空处理），`camera_tag` 取自 `Camera2DHandle`。
+> - **N6 GPU 像素级验收（5 条新用例，全部实测通过）**：`visibility_and_opacity_absent_match_global_full`
+>   （`Visibility::global` + `Opacity::FULL` 与两者都缺席**逐位一致**）、
+>   `visibility_camera_tag_filters_pixels`（相机 A 有像素 / 相机 B **零覆盖像素**）、
+>   `visibility_group_switch_filters_pixels`（组开有 / 组关零）、
+>   `opacity_half_premultiplies_and_has_no_dark_halo`（`o = 0.5` ⇒ 预乘后 `r ≈ a ≈ 128`、
+>   全图 `|r − a| ≤ 2` 无黑边）、`opacity_zero_yields_no_pixels`（`o = 0` ⇒ 零像素）。
+>   这些用例**走完整录制路径**（`record_scene_tagged` 消费真实 ECS 场景 → 队列 → 后端 →
+>   回读），为此 `xcal-render-backends` 增 `hecs` **dev-dependency**（库本体仍不认识 hecs）。
+> - **端到端**：整图注册回归（`full_system_graph_assembles_without_borrow_conflicts`，
+>   13 个 System 无冲突）、真实 `cargo run -p xcal-app` 跑 2700+ 帧无 panic、
+>   清缓存重编后 `cargo check --workspace --all-targets` **零新增 warning**。
+> - **记账（本轮明确不做）**：运行时创建 / 销毁对象（`ctx.commands` 仍零消费方 ——
+>   一旦引入，`⟲ 重新播放` = `seek(0)` 的"状态由 `t` 唯一决定"前提会坏，**这是引入
+>   运行时 spawn 前必须先解决的约束**）；`Parent` 父子变换累乘；嵌套组；按名字的 tag；
+>   `Name` 全局唯一性强制；**`SceneRecord3DSystem`（app 层）本轮不做** N5 过滤
+>   （其 `Reads = ()` 无 `Camera2DHandle`，且 3D 侧无真实消费方）；
+>   `ContentTextureRecordSystem` **不参与过滤**（它是**纹理源**而非显示层，其"相机"是
+>   `spec.camera`、不是当前 2D 相机，按相机 tag 过滤没有明确语义）。**不新建 crate**。
+> - **一处登记缺口顺带补上**：`Reveal` 此前**未进 `add_known` 白名单**（R 线遗留）——
+>   漏登记会让 `spawn_dyn` 静默返回 `None`；本轮与 `Name`/`Group`/`Visibility`/`Opacity`
+>   一并 `arm!`。
+
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

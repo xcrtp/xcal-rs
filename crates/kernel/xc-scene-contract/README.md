@@ -45,6 +45,8 @@ xcal-render        渲染管线    三角化 / 合批 / 队列
 |------|------|------|
 | `id` | `ObjectId` | 稳定句柄：`index`（可复用槽位）+ `generation`（代）；`DANGLING` 哨兵；`is_stale(current)` |
 | `relation` | `Parent` / `Children` | 父子关系（组件形态：`Parent` 挂子对象、`Children` 挂父对象）|
+| `organize` | `Name` / `Group` / `GroupId` | 组织语义：声明式引用（按名字找对象）+ 分组标签（**只含标识、不含变换**）|
+| `organize` | `Visibility` / `VisibilityTag` / `GroupVisibility` | 「**对谁可见**」（关系而非布尔）：tag 集合（相机 / 组 / 全局）+ 组级开关 |
 | `descriptor` | `Describable` / `StrokeDesc` / `FillDesc` / `MaterialDesc` | 样式描述符体系（增量覆盖）|
 | `descriptor` | `SLOT_STROKE` / `SLOT_FILL` / `theme_style` / `apply_stroke_desc` / `apply_fill_desc` | 供 `#[derive(Describable)]` 展开调用的合并辅助 |
 | `scene` | `Components` / `SceneRead` / `Scene` | 场景读写契约（只读能力与写能力**分成两个 trait**）|
@@ -150,6 +152,32 @@ let style = circle.apply(&(
 
 > ⚠️ **记账**：**父子变换累乘 System 尚未存在**（`Parent` 类型零生产消费方）。
 > `push` 不查重 —— 去重是装配层策略。
+
+### `organize` — 组织与可见性（N1–N3）
+
+```rust
+// 声明式引用 + 分组（纯标签，不含变换 —— 与 `Parent` 的根本区别）
+let comps: Components = vec![Box::new(Name::new("curve")), Box::new(Group::new(GroupId::new(3)))];
+let id = scene.spawn_dyn(comps);
+let found = xcal_scene::contract::find_by_name(&scene, "curve");  // Option<ObjectId>（第一个命中）
+
+// 「对谁可见」：非空 tag 集合，**任一命中即可见**（并，非交）
+let v = Visibility::for_camera(camera_id).with_tag(VisibilityTag::Group(g));
+v.visible_for(Some(camera_id), &GroupVisibility::new());   // 任一命中 ⇒ true
+
+// 组级开关（集中一处，不做 N 次逐对象写入）
+let mut groups = GroupVisibility::new();
+groups.hide(g);                                            // 组内"随组走"的对象随之不可见
+```
+
+- **可缺席组件 = 默认值**（照 `ZOrder` 先例）：`Name` 缺席 = 匿名、`Group` 缺席 = 不属于任何组、
+  `Visibility` 缺席 = **全局可见**；`Visibility::default()`（空 tag 集）与缺席**同口径** ——
+  避免"挂了组件反而隐形"的反直觉陷阱。
+- **tag 只支持一层、不做嵌套组**；tag 只认**相机与组**（不做按名字的 tag）。
+- `GroupId(u32)` 而**不是** `ObjectId`：组是纯标签、不建组实体 ⇒ 无生命周期、不需要 generation 失效检测。
+- `Name` **不强制唯一**：`find_by_name` 返回**第一个**命中（场景规模几十个对象，O(n) 足够）。
+- 与图层总闸的关系：`UiConfig::show_2d` / `show_3d` 是**图层级总闸**（关掉整层不画，不看对象 tag）；
+  **总闸优先**，之后才轮到本层的对象级 `Visibility`（判定点在 `xcal-render` 的录制路径）。
 
 ---
 

@@ -34,13 +34,13 @@ use xc_object::ZOrder;
 use xcal_scene::transform::Transform2D as _;
 // 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
 // 且**只需要读能力**）。
-use xc_scene_contract::SceneRead;
+use xc_scene_contract::{GroupVisibility, ObjectId, SceneRead, Visibility};
 // 降级 trait 与样式组件定义在渲染 IR 层（M2）：
 // - `ToShape2D` 吃**仿射矩阵**（相机在调用点降级），`ResolveStyle` 吃标量 scale
 //   ⇒ IR 层不认识相机类型，不成环（见 xc_render_ir::degrade）。
 // - `Camera2D::to_transform2d()` 由场景对象层的 `Camera2D` 提供（M3 迁往 xc-object）。
 // - `ToShape2D` 的图元 impl 在场景对象层 `xc-object`（孤儿规则：实现里必须有本地类型）。
-use xc_render_ir::{ResolveStyle, ToShape2D, fill_style, stroke_style_raw};
+use xc_render_ir::{Opacity, ResolveStyle, ToShape2D, fill_style, stroke_style_raw};
 
 /// 2D 绘制器 Trait。
 ///
@@ -455,21 +455,78 @@ impl<T: Painter2D> SceneRender<T> {
     }
 }
 
+// ─── 对象级可见性与不透明度（N3 / N4） ─────────────────────────────────────
+//
+// 两者都是**可缺席组件 = 默认值**（照 `ZOrder` 惯例）：
+// - `Visibility` 缺席 ⇒ 全局可见；
+// - `Opacity` 缺席 ⇒ 1.0（不调制）。
+//
+// 查询方式：`for_each_pair_opt` 的闭包**第一个参数就是 `ObjectId`**，故在闭包内用
+// `scene.with::<T, _>(id, ..)` 点查询即可 —— **契约层不必新增四元组访客**
+// （`for_each_pair_opt` 的三个位置已被 `(形状, 样式, ZOrder)` 占满）。
+// `with` 与 `for_each*` 同为 `&self` 不可变借用 ⇒ 闭包内可再借用 `scene`。
+
+/// 对象级可见性判定（N3）：**缺席 = 全局可见**。
+pub fn visible_for<S: SceneRead>(
+    scene: &S,
+    id: ObjectId,
+    camera_tag: Option<ObjectId>,
+    groups: &GroupVisibility,
+) -> bool {
+    scene
+        .with::<Visibility, _>(id, |v| v.visible_for(camera_tag, groups))
+        .unwrap_or(true)
+}
+
+/// 对象级不透明度（N4）：**缺席 = 1.0**。
+pub fn opacity_of<S: SceneRead>(scene: &S, id: ObjectId) -> Opacity {
+    scene
+        .with::<Opacity, _>(id, |o| *o)
+        .unwrap_or(Opacity::FULL)
+}
+
+/// **把不透明度施加到已解析的样式上**（N4：全仓**唯一**的施加点）。
+///
+/// - 只缩放颜色的 **alpha**（`Opacity::apply` 的唯一乘法实现），不做别的改动；
+/// - `Opacity::FULL`（= 缺席）时**直接返回** ⇒ 画面逐位不变；
+/// - 描边与填充都乘 —— 淡入淡出对"填充 + 描边"同时生效（这正是独立 `Opacity`
+///   组件相对"改 `color` 的 alpha"的收益，见 `xc_render_ir::Opacity` 的说明）。
+pub fn apply_opacity(style: &mut Style2D, opacity: Opacity) {
+    if opacity.is_full() {
+        return;
+    }
+    style.fill = style.fill.map(|c| opacity.apply(c));
+    style.stroke = style.stroke.map(|c| opacity.apply(c));
+}
+
 /// 录制**一组** `(图元, 样式)` 组合：契约层访客形态 → [`DrawQueue`]。
 ///
-/// 拆出来是为了让 [`record_scene`] 的 7 组调用保持"一组一行"的可读性，
-/// 同时把"降级 + 剔除 + 入队"的逻辑只写一遍。
+/// 拆出来是为了让 [`record_scene_tagged`] 的 7 组调用保持"一组一行"的可读性，
+/// 同时把"**可见性过滤** + 降级 + **不透明度施加** + 剔除 + 入队"的逻辑只写一遍。
 ///
 /// 层级（M4）：对象上**可选**的 [`ZOrder`] 优先（网格 / 坐标轴靠它压在内容之下），
 /// 缺席则用 `z_default`（内容默认层）。可缺席是必须的：绝大多数对象不分层。
-fn record_group<S, A, B>(scene: &S, t: &Affine2D, scale: f32, queue: &mut DrawQueue, z_default: f32)
-where
+///
+/// 顺序（N5）：**先判可见性**（不可见 ⇒ 连降级都不做），再降级，最后施加不透明度。
+fn record_group<S, A, B>(
+    scene: &S,
+    t: &Affine2D,
+    scale: f32,
+    camera_tag: Option<ObjectId>,
+    groups: &GroupVisibility,
+    queue: &mut DrawQueue,
+    z_default: f32,
+) where
     S: SceneRead,
     A: ToShape2D + Send + Sync + 'static,
     B: ResolveStyle + Send + Sync + 'static,
 {
-    scene.for_each_pair_opt::<A, B, ZOrder>(|_, a, b, z| {
-        if let Some((shape, style)) = (a, b).to_primitive(t, scale) {
+    scene.for_each_pair_opt::<A, B, ZOrder>(|id, a, b, z| {
+        if !visible_for(scene, id, camera_tag, groups) {
+            return;
+        }
+        if let Some((shape, mut style)) = (a, b).to_primitive(t, scale) {
+            apply_opacity(&mut style, opacity_of(scene, id));
             let z = z.map_or(z_default as i32, |z| z.0);
             queue.push(DrawCommand::new(ZIndex::new(z), shape, style));
         }
@@ -478,10 +535,29 @@ where
 
 /// 把场景实体录制进 [`DrawQueue`]（z 恒为 0）。
 ///
-/// **组件组合的枚举只在此处**：每种组合交给 [`record_group`]——录制逻辑本身
-/// 不认识具体组件类型。
+/// **签名冻结**（多次重申，不得改）：本函数 = [`record_scene_tagged`] 的
+/// "**不过滤**"形态（`camera_tag = None`、无隐藏组）⇒ **行为逐位不变**。
+/// 需要按相机/组过滤的调用方（`SceneRecordSystem`）请用
+/// [`record_scene_tagged`]（N5 新增，见那里对"为什么拆一个函数"的说明）。
+pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut DrawQueue) {
+    record_scene_tagged(scene, camera, None, &GroupVisibility::default(), queue);
+}
+
+/// 带**对象级可见性**判定的录制入口（N5）。
 ///
-/// 描边宽度在此按 `camera.scale` 解析（**唯一换算点**，见 [`ResolveStyle`]）。
+/// # 为什么拆一个新函数而不是给 `record_scene` 加参数
+///
+/// `record_scene` 的签名是**冻结契约**（多次重申）；而且它只拿得到 `&Camera2D`，
+/// **拿不到相机的 `ObjectId`** —— 而 `VisibilityTag::Camera(..)` 的判定恰恰需要它。
+/// ⇒ 新增本函数承载"tag 感知"的录制，`record_scene` 以 `None` 调它 ⇒
+/// 冻结签名不动、行为不变。
+///
+/// - `camera_tag`：当前 2D 相机的 [`ObjectId`]（`None` = 不过滤相机 tag）；
+/// - `groups`：组级开关（[`GroupVisibility`]，默认空 ⇒ 所有组可见）。
+///
+/// **组件组合的枚举只在此处**：每种组合交给 [`record_group`]——录制逻辑本身
+/// 不认识具体组件类型。描边宽度也在此按 `camera.scale` 解析
+/// （**唯一换算点**，见 [`ResolveStyle`]）。
 ///
 /// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
 /// 与重构前逐位一致。
@@ -492,20 +568,33 @@ where
 ///
 /// **M4：层级来自对象。** 带 [`ZOrder`] 的对象用它自己的层级（网格 z = -100、
 /// 坐标轴 z = -90，见 `xc_object::axes`），其余对象落在 `Z`（内容层）。
-pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut DrawQueue) {
+///
+/// **N5：可见性来自对象。** 带 [`Visibility`] 的对象按"对谁可见"过滤
+/// （缺席 = 全局可见）；不透明度见 [`apply_opacity`]。
+///
+/// ⚠️ **总闸优先（N3）**：图层级总闸（`UiConfig::show_2d`，在 `build_scene_view`
+/// 门控）关掉时**根本不会走到这里**（整层不声明 ⇒ 不录制）——本函数的对象级
+/// `Visibility` 判定只在总闸开启后生效，二者是"整层 / 逐对象"两级，不互相取消。
+pub fn record_scene_tagged<S: SceneRead>(
+    scene: &S,
+    camera: &Camera2D,
+    camera_tag: Option<ObjectId>,
+    groups: &GroupVisibility,
+    queue: &mut DrawQueue,
+) {
     // 内容对象的默认绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
     // 相机 → 屏幕的仿射（唯一降级点）。
     let t = camera.to_transform2d();
     let scale = camera.scale;
 
-    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Circle, FillSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Path, StrokeSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Path, FillSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Line, StrokeSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Rect, FillSolid>(scene, &t, scale, queue, Z);
-    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Circle, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Path, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Path, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
 }
 
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
@@ -540,14 +629,18 @@ pub fn push_morph_item(
     t: f32,
     samples: u32,
     stroke: &StrokeSolid,
+    opacity: Opacity,
     camera: &Camera2D,
 ) {
+    let mut style = stroke.resolve_style(camera.scale);
+    // N4：不透明度在此施加（与 `record_group` 同一函数 ⇒ 唯一的施加点）。
+    apply_opacity(&mut style, opacity);
     queue.0.push(MorphItem {
         from: Path::new(from.clone()).to_screen(camera).0,
         to: Path::new(to.clone()).to_screen(camera).0,
         t,
         samples,
-        style: stroke.resolve_style(camera.scale),
+        style,
     });
 }
 
@@ -562,13 +655,17 @@ pub fn push_reveal_item(
     start: f32,
     end: f32,
     stroke: &StrokeSolid,
+    opacity: Opacity,
     camera: &Camera2D,
 ) {
+    let mut style = stroke.resolve_style(camera.scale);
+    // N4：不透明度在此施加（与 `record_group` 同一函数 ⇒ 唯一的施加点）。
+    apply_opacity(&mut style, opacity);
     queue.0.push(RevealItem {
         path: Path::new(path.clone()).to_screen(camera).0,
         start,
         end,
-        style: stroke.resolve_style(camera.scale),
+        style,
     });
 }
 

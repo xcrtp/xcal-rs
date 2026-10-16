@@ -60,6 +60,67 @@ impl FillSolid {
     }
 }
 
+// ─── 不透明度（N4：淡入淡出的通道） ────────────────────────────────────────
+
+/// **不透明度组件**：`0.0` 全透明、`1.0` 完全不透明。**缺席 = 1.0**（不调制）。
+///
+/// # 为什么是独立组件，而不是改 `StrokeSolid::color` 的 alpha
+///
+/// 1. `Color32` 的 alpha 是 `u8`，而动画值是 `f32` ⇒ 每帧量化，并且要走
+///    "读回原色再改 alpha"的往返（对象上的组件是无状态的声明，不是可变缓冲）；
+/// 2. 淡入淡出通常要**同时**作用于描边与填充、以及 `Reveal` / `Morph` 项 ⇒
+///    独立组件天然覆盖全部绘制路径，施加点只有一处（`xcal-render::draw`）。
+///
+/// # 预乘 alpha（硬约束，务必按此理解）
+///
+/// 本管线里 `Style2D` 存的是**直色**（straight，未预乘）；预乘发生在 GPU 侧
+/// （`wgpu_2d::uniform_bytes` 写 `rgb * a`）。因此"施加不透明度 `o`"= **把直色的
+/// `a` 乘上 `o`（`rgb` 不动）**：预乘后自然得到 `rgb_premult * o` 与 `a * o`，
+/// 恰是"整层透明度乘 o"的正确结果。
+///
+/// - ❌ 反例（本计划的初稿写法）：把 `rgb` 与 `a` **都**乘 `o` ⇒ GPU 再乘一次 `a`
+///   ⇒ 预乘后 rgb 变成 `o²` 倍，画面**偏暗**（`o = 0.5` 时应为 `r ≈ a ≈ 128`，
+///   那样会得到 `r ≈ 64、a ≈ 128`）；
+/// - ⚠️ "rgb 与 a 同乘"这条法则适用于**已经预乘**的数据 —— 即合成器的 per-layer
+///   opacity（C 线）—— 不要照搬到直色上。
+///
+/// # `Default` = 1.0
+///
+/// 与 `ZOrder` 的"缺席即默认"惯例一致，但中性值不是 0 而是 1.0 ——
+/// 故**不 derive** `Default`，显式实现以免得到 `0.0`（全透明）这种危险缺省。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Opacity(pub f32);
+
+impl Opacity {
+    /// 完全不透明（= 缺席语义）。
+    pub const FULL: Self = Self(1.0);
+
+    /// 以给定不透明度构造（`0.0` 全透明、`1.0` 完全不透明）。
+    pub const fn new(value: f32) -> Self {
+        Self(value)
+    }
+
+    /// 把不透明度施加到一个**直色**上（只缩放 alpha；见类型文档的预乘约束）。
+    ///
+    /// 这是全仓**唯一**的"不透明度乘法"。`o == 1.0` 时逐位恒等
+    /// （`a * 1.0` 取整回来还是 `a`）⇒ 未挂组件的对象画面不变。
+    pub fn apply(self, color: Color32) -> Color32 {
+        let a = (color.a() as f32 * self.0).round().clamp(0.0, 255.0) as u8;
+        Color32::new(color.r(), color.g(), color.b(), a)
+    }
+
+    /// 是否等价于"不调制"（唯一真值：恰好 1.0）。
+    pub fn is_full(self) -> bool {
+        self.0 == 1.0
+    }
+}
+
+impl Default for Opacity {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
 /// 填充样式（当前只有纯色）。
 pub enum FillStyle {
     Solid(FillSolid),
@@ -157,5 +218,52 @@ mod tests {
         assert_eq!(s.fill, Some(Color32::from_rgba(1, 2, 3, 4)));
         assert_eq!(s.stroke, None);
         assert_eq!(s.stroke_width, 0.0);
+    }
+
+    /// **N4 核心（可证伪）**：不透明度只缩 **alpha**，`rgb` 一位不动。
+    ///
+    /// 证伪：改成 `rgb` 与 `a` 同乘 ⇒ 断言失败 —— 而这正是"看起来对、
+    /// 实际预乘后偏暗一档"的错法（见 `Opacity` 的预乘约束）。
+    #[test]
+    fn opacity_scales_alpha_only() {
+        let opaque = Color32::new(255, 0, 0, 255);
+        let half = Opacity::new(0.5).apply(opaque);
+        assert_eq!(
+            (half.r(), half.g(), half.b()),
+            (255, 0, 0),
+            "rgb 不得被不透明度改动（预乘发生在 GPU 侧，rgb 乘了会变 o²）"
+        );
+        // 255 * 0.5 = 127.5 → 四舍五入 128（与交付验收的 `r ≈ a ≈ 128` 同口径）。
+        assert_eq!(half.a(), 128, "alpha 应减半（127.5 四舍五入到 128）");
+
+        // 半透明直色：alpha 再乘一次，rgb 仍不动（预乘后 = 原预乘值 × 0.5）。
+        let semi = Color32::new(200, 100, 50, 128);
+        let quarter = Opacity::new(0.5).apply(semi);
+        assert_eq!((quarter.r(), quarter.g(), quarter.b()), (200, 100, 50));
+        assert_eq!(quarter.a(), 64, "128 * 0.5 = 64");
+    }
+
+    /// `Opacity::FULL`（= 缺席语义）**逐位恒等**；`Default` 也是 1.0（不是 0）。
+    #[test]
+    fn opacity_full_is_bitwise_identity_and_default_is_one() {
+        assert_eq!(Opacity::default(), Opacity::FULL);
+        assert_eq!(Opacity::default().0, 1.0, "Default 必须是 1.0 而不是 0.0");
+        assert!(Opacity::FULL.is_full());
+        for c in [
+            Color32::new(255, 0, 0, 255),
+            Color32::new(1, 2, 3, 4),
+            Color32::TRANSPARENT,
+            Color32::new(10, 20, 30, 128),
+        ] {
+            assert_eq!(Opacity::FULL.apply(c), c, "不透明度 1.0 必须逐位恒等");
+        }
+    }
+
+    /// `o = 0` ⇒ alpha 归零（预乘后 rgb 也零 ⇒ 不产生可见像素）。
+    #[test]
+    fn opacity_zero_clears_alpha() {
+        let zero = Opacity::new(0.0).apply(Color32::new(255, 255, 255, 255));
+        assert_eq!(zero.a(), 0);
+        assert_eq!((zero.r(), zero.g(), zero.b()), (255, 255, 255));
     }
 }

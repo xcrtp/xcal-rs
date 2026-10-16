@@ -65,7 +65,16 @@
 | `object_id_of` / `entity_of` | 句柄互转 | `ObjectId ↔ hecs::Entity`（位模式直通）|
 
 `spawn_dyn` 走**组件登记表**（`xc-object` 的图元 / 相机 / 摆放 / 装配对象 + 样式 +
-动画组件 + `Parent`）；未登记的组件类型 ⇒ 返回 `None`（不造半成品对象）。
+动画组件（含 `Reveal`）+ **组织组件（`Name` / `Group` / `Visibility` / `Opacity`）** +
+`Parent`）；未登记的组件类型 ⇒ 返回 `None`（不造半成品对象）。
+
+组织与可见性（N1–N4，契约层定义、本 crate 登记与转发）：
+
+- `find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`：按 `for_each::<Name>` 遍历，
+  返回**第一个**命中（**不新增契约层 trait 方法** —— 加方法要动 4 个实现，不划算）。
+- `Name` / `Group` / `GroupId` / `Visibility` / `VisibilityTag` / `GroupVisibility`
+  经 `xcal_scene::contract` **对外转发**（消费方不必直连 `xc-scene-contract`）。
+- `Opacity`（对象级不透明度，落点在 `xc-render-ir`）同样进登记表。
 
 组件分两处：
 
@@ -140,7 +149,7 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 |------|----------|
 | [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
 | [`contract`] | 契约层 hecs 实现：`WorldView` / `WorldScene` / `object_id_of` / `entity_of` + `SceneRead` 转发 |
-| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`+`TargetKind`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming` / **`RevealRange`**）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
+| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`+`TargetKind`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming` / **`RevealRange`** / **`OpacityValue`**）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
 | [`camera_input`] | `CameraInputSystem`（P1：相机状态归场景对象；K0：**按 `CameraMode` 分派**）+ 控制器纯函数 `apply_pan_zoom` / `apply_orbit` / `apply_fps` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |

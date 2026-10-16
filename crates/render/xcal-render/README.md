@@ -41,6 +41,16 @@ xcal-render 同时承载两套渲染抽象：
   **可选**的 `ZOrder` 组件优先（网格 z = -100 / 坐标轴 z = -90），缺席用默认层（0）。
   旧「逐组件穷举宏」已删除 ⇒
   **新增图元只需实现 `ToShape2D`，不必改动录制逻辑**。
+- **对象级可见性与不透明度**（N3–N5）：录制入口除**签名冻结**的
+  `record_scene`（= 不过滤形态）外，另有 `record_scene_tagged(scene, camera,
+  camera_tag: Option<ObjectId>, groups: &GroupVisibility, queue)` —— 它承载
+  `VisibilityTag::Camera` 判定所需的相机 `ObjectId`（`record_scene` 只有 `&Camera2D`，
+  **拿不到 id**，故拆函数而不是改冻结签名）。过滤与不透明度施加都在 `record_group`
+  闭包内：闭包首参即 `ObjectId` ⇒ 用 `scene.with::<Visibility, _>(id, ..)` /
+  `with::<Opacity, _>(id, ..)` **点查询**（契约层不必新增访客）。
+  缺席语义 = 默认值：`Visibility` 缺席 = 全局可见、`Opacity` 缺席 = 1.0，
+  故**未挂组件的对象画面逐位不变**。施加点唯一：`apply_opacity`（**只缩 `Style2D`
+  的直色 alpha**；预乘在 GPU 侧发生，`rgb` 不能再乘一次 —— 否则会偏暗一档）。
 - **描边宽度的度量空间**（`StrokeSolid.space: MeasureSpace`，默认 `Screen`）：
   `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_notion::resolve_width`
   解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
@@ -113,8 +123,8 @@ position/attrib0/attrib1/attrib2）：
 | 模块 | 说明 |
 |------|------|
 | `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
-| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item + push_reveal_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
-| `record_systems` | P4 从 `xcal-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle`，不读 UI 类型） |
+| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + **record_scene_tagged（N5）** + push_morph_item + push_reveal_item + **visible_for / opacity_of / apply_opacity（N5）**`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`，可见性读对象上的 `Visibility`） |
+| `record_systems` | P4 从 `xcal-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle` + **N5 的 `GroupVisibility`**，不读 UI 类型）。**N5**：三个 2D 录制 System 都消费对象级 `Visibility` / `Opacity`（相机 tag 取自 `Camera2DHandle`）；`ContentTextureRecordSystem` 是纹理源、**本轮不参与过滤**（记账） |
 | `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |
 | `filters` | **C 线（纯数据）**：`PostFilterChain`（Resource；顺序即应用顺序、最多 `MAX_FILTER_SLOTS = 4` 个）+ `FilterSlot` + `FilterKind`（`code()` 与 WGSL 常量表一一对应）+ 160 B uniform 编码；**空链 ⇒ 渲染层走直通、画面逐位不变** |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / **`tessellate_reveal`（R0 书写动画）** / `REVEAL_STEP_PX` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |

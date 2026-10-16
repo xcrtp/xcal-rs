@@ -2353,4 +2353,250 @@ mod tests {
         assert_eq!(wgpu_layout.attributes[2].offset, 16);
         assert_eq!(wgpu_layout.attributes[3].offset, 20);
     }
+
+    // ── N6：对象级可见性 / 不透明度的 GPU 像素级验收 ─────────────────────
+    //
+    // 这些用例走**完整录制路径**（`record_scene_tagged` 消费真实 ECS 场景）——
+    // 覆盖"过滤发生在录制层、像素效果发生在后端"两段的**联合**行为。
+    // hecs 只作为 **dev-dependency** 出现在此（库本体仍不认识 hecs）。
+
+    use hecs::World;
+    use xcal_render::{FillSolid, Opacity, record_scene_tagged};
+    use xcal_scene::contract::{GroupId, GroupVisibility, ObjectId, Visibility, WorldView};
+    use xc_object::{Camera2D, Circle};
+
+    /// N6 视口矩形：与 `geometry(200, 100, 1.0, [400, 200])` 的 viewport 一致。
+    fn n6_viewport() -> Rect2D {
+        Rect2D::from_min_size(Vec2::new(100.0, 50.0), Vec2::new(200.0, 100.0))
+    }
+
+    /// 世界原点 → 视口中心 (200,100) → 离屏本地 (100,50)（scale 40）。
+    fn n6_camera() -> Camera2D {
+        Camera2D::new(Vec2::new(0.0, 0.0), 40.0, n6_viewport())
+    }
+
+    /// 走录制路径：世界 → `DrawQueue`（可见性过滤 + 不透明度施加都在其中）。
+    fn n6_record(
+        world: &World,
+        camera_tag: Option<ObjectId>,
+        groups: &GroupVisibility,
+    ) -> DrawQueue {
+        let mut q = DrawQueue::new();
+        record_scene_tagged(&WorldView::new(world), &n6_camera(), camera_tag, groups, &mut q);
+        q
+    }
+
+    /// 把一条 `DrawQueue` 推给 2D 后端并回读离屏像素（`200×100`，紧凑 `w*4`）。
+    fn render_draw_queue(
+        backend: &mut WgpuBackend2D,
+        ctx: &crate::RenderContext,
+        g: Frame2DGeometry,
+        queue: &DrawQueue,
+    ) -> Vec<u8> {
+        backend.begin_frame_at(g);
+        for cmd in queue.commands() {
+            backend.push(&cmd.shape, &Transform2D::identity(), &cmd.style, cmd.z.0);
+        }
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("xcal-2d-n6-frame"),
+            });
+        backend.finish_frame(&mut enc, LayerId(0), &g);
+        ctx.queue.submit([enc.finish()]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("N6 帧提交后 poll");
+        read_texture(
+            ctx,
+            backend.offscreen_texture(LayerId(0)).unwrap(),
+            (200, 100),
+        )
+    }
+
+    /// 离屏像素 `(x, y)`（`w = 200` 紧凑回读，内存序 `[R, G, B, A]`）。
+    fn px_200x100(px: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let o = ((y * 200 + x) * 4) as usize;
+        [px[o], px[o + 1], px[o + 2], px[o + 3]]
+    }
+
+    /// 世界原点处一个**填充**圆（半径 0.5 × scale 40 = 20px，圆心落在本地 (100,50)）。
+    fn n6_circle() -> (Circle, FillSolid) {
+        (Circle::new((0.0, 0.0), 0.5), FillSolid::new((255, 0, 0, 255)))
+    }
+
+    /// 非零 alpha 像素数（"是否投影到画面"的统一判据）。
+    fn covered(px: &[u8]) -> usize {
+        px.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    /// 🔴 N6-1/4：`Visibility::global` + `Opacity::FULL` 与**两者都缺席**逐位一致。
+    #[test]
+    fn visibility_and_opacity_absent_match_global_full() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let mut bare = World::new();
+        bare.spawn(n6_circle());
+        let base = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&bare, None, &GroupVisibility::new()),
+        );
+
+        let mut tagged = World::new();
+        let (c, f) = n6_circle();
+        tagged.spawn((c, f, Visibility::global(), Opacity::FULL));
+        let same = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&tagged, None, &GroupVisibility::new()),
+        );
+
+        assert!(px_200x100(&base, 100, 50)[3] > 0, "基线圆心必须有像素");
+        assert_eq!(
+            base, same,
+            "`Visibility::global` + `Opacity::FULL` 必须与缺席**逐位一致**"
+        );
+    }
+
+    /// 🔴 N6-2：相机 tag 过滤 —— 相机 A 下有像素、相机 B 下**零像素**。
+    #[test]
+    fn visibility_camera_tag_filters_pixels() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return;
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let cam_a = ObjectId::new(7, 1);
+        let cam_b = ObjectId::new(8, 1);
+        let mut world = World::new();
+        let (c, f) = n6_circle();
+        world.spawn((c, f, Visibility::for_camera(cam_a)));
+
+        let hit = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&world, Some(cam_a), &GroupVisibility::new()),
+        );
+        let miss = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&world, Some(cam_b), &GroupVisibility::new()),
+        );
+
+        assert!(covered(&hit) > 0, "相机 A 下必须有像素");
+        assert_eq!(covered(&miss), 0, "相机 B 下必须零覆盖像素");
+    }
+
+    /// 🔴 N6-3：组级开关过滤 —— 组开有像素、组关零像素。
+    #[test]
+    fn visibility_group_switch_filters_pixels() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return;
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let group = GroupId::new(3);
+        let mut world = World::new();
+        let (c, f) = n6_circle();
+        world.spawn((c, f, Visibility::of_group(group)));
+
+        let on = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&world, None, &GroupVisibility::new()),
+        );
+        let mut groups = GroupVisibility::new();
+        groups.hide(group);
+        let off = render_draw_queue(&mut backend, &ctx, g, &n6_record(&world, None, &groups));
+
+        assert!(covered(&on) > 0, "组开 ⇒ 有像素");
+        assert_eq!(covered(&off), 0, "组关 ⇒ 零覆盖像素");
+    }
+
+    /// 🔴 N6-5/7：`Opacity = 0.5` ⇒ 预乘后 `r ≈ a ≈ 128`，且半透明边缘无黑边
+    /// （全图 `|r − a| ≤ 2`）——**这是"只缩 alpha"的可证伪断言**：若 `rgb` 与 `a`
+    /// 同乘，预乘后 `r` 会变成 `o²` 档（≈64）而非 128。
+    #[test]
+    fn opacity_half_premultiplies_and_has_no_dark_halo() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return;
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let mut world = World::new();
+        let (c, f) = n6_circle();
+        world.spawn((c, f, Opacity::new(0.5)));
+        let px = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&world, None, &GroupVisibility::new()),
+        );
+
+        let center = px_200x100(&px, 100, 50);
+        assert!(
+            (center[0] as i32 - 128).abs() <= 2,
+            "预乘后 r ≈ 128（o=0.5）：{center:?}"
+        );
+        assert!(
+            (center[3] as i32 - 128).abs() <= 2,
+            "alpha ≈ 128：{center:?}"
+        );
+        assert_eq!(center[1], 0, "绿色分量应保持 0");
+
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if p[3] > 0 {
+                assert!(
+                    (p[0] as i32 - p[3] as i32).abs() <= 2,
+                    "半透明像素出现黑边/halo（r 与 a 不等）：#{i} {p:?}"
+                );
+            }
+        }
+    }
+
+    /// 🔴 N6-6：`Opacity = 0` ⇒ 零覆盖像素（预乘后 rgb 与 a 同时为 0）。
+    #[test]
+    fn opacity_zero_yields_no_pixels() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return;
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let mut world = World::new();
+        let (c, f) = n6_circle();
+        world.spawn((c, f, Opacity::new(0.0)));
+        let px = render_draw_queue(
+            &mut backend,
+            &ctx,
+            g,
+            &n6_record(&world, None, &GroupVisibility::new()),
+        );
+
+        assert_eq!(covered(&px), 0, "opacity = 0 ⇒ 零覆盖像素");
+        assert!(px.iter().all(|b| *b == 0), "预乘后 rgb 与 a 都应为 0");
+    }
 }

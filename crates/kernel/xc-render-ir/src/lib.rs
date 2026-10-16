@@ -29,7 +29,8 @@ pub mod style;
 pub use degrade::ToShape2D;
 pub use shape::{CustomShapeData, CustomTypeId, Shape2D, Style2D};
 pub use style::{
-    FillSolid, FillStyle, ResolveStyle, StrokeSolid, StrokeStyle, fill_style, stroke_style_raw,
+    FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,
+    stroke_style_raw,
 };
 
 /// 呈现层度量空间：宽度属**世界**（随缩放）还是**屏幕**（不随缩放）。

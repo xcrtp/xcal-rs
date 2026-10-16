@@ -311,6 +311,10 @@ egui                   (optional)  ← egui-wgpu
 egui-wgpu              (optional)  ← egui-wgpu
 ```
 
+> **dev-dependency**：`hecs`（仅测试）—— N6 的 GPU 像素级验收要构造真实 ECS 场景，
+> 而 `record_scene_tagged` 的入参是契约层 `SceneRead`（hecs 侧适配器 `WorldView`
+> 需要 `&hecs::World`）。**库本体仍不认识 hecs**。
+
 ## 测试
 
 ```bash
@@ -333,6 +337,17 @@ S4.2 / S4.3 新增的可证伪断言（真实设备门控）：
   首帧 `geom_misses == 1`、之后恒为 0（`mark_used` 保活）；
 - `morph_t_uniform_drives_geometry_and_stays_cached`：同一个形变项跑 `t = 0…1` →
   描边边界随 `t` 逐帧外移（像素级），且 `morph_misses` 首帧后恒为 0（`t` 不进缓存键）。
+
+N6（对象级可见性 / 不透明度，**走完整录制路径**：`record_scene_tagged` 消费真实 ECS
+场景 → `DrawQueue` → 2D 后端 → 回读像素；hecs 仅作 **dev-dependency**）：
+- `visibility_and_opacity_absent_match_global_full`：`Visibility::global` + `Opacity::FULL`
+  与**两者都缺席逐位一致**（缺席 = 默认值）；
+- `visibility_camera_tag_filters_pixels`：相机 A 下有像素、相机 B 下**零覆盖像素**；
+- `visibility_group_switch_filters_pixels`：组开有像素、组关零像素；
+- `opacity_half_premultiplies_and_has_no_dark_halo`：`Opacity = 0.5` ⇒ 预乘后
+  `r ≈ a ≈ 128`，且全图半透明像素 `|r − a| ≤ 2`（**无黑边/halo**）——
+  可证伪点：若 `rgb` 与 `a` 同乘，预乘后 `r` 会落到 `o²` 档（≈64）而非 128；
+- `opacity_zero_yields_no_pixels`：`Opacity = 0` ⇒ 零覆盖像素（预乘后 rgb 与 a 同时为 0）。
 
 `compositor` 测试（真实设备门控，无适配器时跳过）：
 `blend_state_matches_declared_semantics`、`composite_quad_is_full_ndc_box_with_uv`、

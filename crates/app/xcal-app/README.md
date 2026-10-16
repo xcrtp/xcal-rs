@@ -113,6 +113,7 @@ r.insert(render_ctx.clone());
 r.insert(forest);
 r.insert(bindings);
 r.insert(DirectorState::new());
+r.insert(GroupVisibility::default());     // N3：组级可见性开关（默认空 ⇒ 所有组可见）
 
 // ── 6. Scheduler 注册 System（参见下方"阶段分配"） ──
 let mut sched = Scheduler::new(world, r);
@@ -149,10 +150,10 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);        // 3D 专用�
 | **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
 | **Prepare**     | AxesRefresh (M4) | —（写 hecs 组件）         | ViewRect, Camera2DHandle, UiConfig |
 |                 | FunctionGraphRefresh (M4) | —（写 hecs 组件）| — |
-| **RenderCommit**| SceneRecord (2D) | DrawQueue (2D)          | ViewRect, Camera2DHandle |
+| **RenderCommit**| SceneRecord (2D) | DrawQueue (2D)          | ViewRect, Camera2DHandle, **GroupVisibility (N3)** |
 |                 | ContentTextureRecord (S3-3) | ContentTextureQueue | ContentTextureSpec |
-|                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, Camera2DHandle |
-|                 | RevealRecord (R0) | RevealQueue             | ViewRect, Camera2DHandle |
+|                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, Camera2DHandle, **GroupVisibility (N3)** |
+|                 | RevealRecord (R0) | RevealQueue             | ViewRect, Camera2DHandle, **GroupVisibility (N3)** |
 |                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
 | **FrameEnd**    | —（空）         | —                        | — |
 

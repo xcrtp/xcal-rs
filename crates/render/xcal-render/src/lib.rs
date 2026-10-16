@@ -57,12 +57,13 @@ pub mod resource_cache;
 // 此处转发以保持 `xcal_render::*` 路径不变（下游 / 后端无需改动）。
 pub use draw::{
     ContentTextureQueue, DrawCommand, DrawQueue, Drawable, MorphItem, MorphQueue, Painter2D,
-    RevealItem, RevealQueue, SceneRender, ZIndex, push_morph_item, push_reveal_item,
-    record_drawables, record_path_stroke, record_scene,
+    RevealItem, RevealQueue, SceneRender, ZIndex, apply_opacity, opacity_of, push_morph_item,
+    push_reveal_item, record_drawables, record_path_stroke, record_scene, record_scene_tagged,
+    visible_for,
 };
 pub use xc_render_ir::{
-    CustomShapeData, CustomTypeId, FillSolid, FillStyle, ResolveStyle, Shape2D, StrokeSolid,
-    StrokeStyle, Style2D, ToShape2D,
+    CustomShapeData, CustomTypeId, FillSolid, FillStyle, Opacity, ResolveStyle, Shape2D,
+    StrokeSolid, StrokeStyle, Style2D, ToShape2D,
 };
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────

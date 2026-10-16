@@ -25,7 +25,7 @@ use xcal_render_backends::RenderContext;
 use xcal_scene::animation::CameraEye;
 use xcal_scene::animation::{Binding, BindingApplySystem, TargetKind};
 use xcal_scene::camera_input::CameraInputSystem;
-use xcal_scene::contract::object_id_of;
+use xcal_scene::contract::{GroupVisibility, object_id_of};
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::domain::{CameraMode, ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
@@ -332,6 +332,9 @@ impl App {
         resources.insert(forest);
         resources.insert(bindings);
         resources.insert(DirectorState::new());
+        // N3：组级可见性开关（纯数据资源；默认空 ⇒ 所有组可见）。
+        // 录制路径（`SceneRecordSystem` 等）以"可缺席资源"方式读取，缺席同样按空处理。
+        resources.insert(GroupVisibility::default());
 
         let mut scheduler = Scheduler::new(world, resources);
         register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
