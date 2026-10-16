@@ -46,6 +46,15 @@ impl Camera2D {
         self.to_transform2d().apply_point(p)
     }
 
+    /// 屏幕空间的**位移增量**（像素，Y-down）→ 世界空间位移（Y-up）。
+    ///
+    /// 与 [`Camera2D::screen_to_world`] 同源，只是"点"与"增量"的区别：增量不含视口平移，
+    /// 只做缩放与 Y 翻转。供 UI 适配器把指针拖拽的像素位移换算为世界位移
+    /// （M4 收尾：换算归对象层，UI 只做事件转发）。
+    pub fn screen_delta_to_world(&self, delta: Vec2) -> Vec2 {
+        Vec2::new(delta.x / self.scale, -delta.y / self.scale)
+    }
+
     /// 把相机**降级为「世界 → 屏幕」的仿射矩阵**（M2-3）。
     ///
     /// 这是渲染 IR 层唯一被允许看到的相机形态：`ToShape2D` 只吃
@@ -246,6 +255,25 @@ mod tests {
                 "world roundtrip failed: {wp:?} -> {sp:?} -> {back:?}"
             );
         }
+    }
+
+    /// 屏幕位移增量 → 世界位移：只做缩放与 Y 翻转，不含视口平移（M4 收尾）。
+    ///
+    /// 与"屏幕两点之差"口径一致：`screen_delta_to_world(b - a) == screen_to_world(b) - screen_to_world(a)`。
+    #[test]
+    fn screen_delta_to_world_is_scale_and_yflip_only() {
+        let camera = cam2d();
+        let d = camera.screen_delta_to_world(Vec2::new(24.0, -36.0));
+        assert_eq!(d, Vec2::new(24.0 / 12.0, 36.0 / 12.0));
+
+        let a = Vec2::new(100.0, 200.0);
+        let b = Vec2::new(124.0, 164.0);
+        let by_points = camera.screen_to_world(b) - camera.screen_to_world(a);
+        let by_delta = camera.screen_delta_to_world(b - a);
+        assert!(
+            (by_points - by_delta).length() < 1e-5,
+            "增量换算与两点之差必须一致：{by_points:?} vs {by_delta:?}"
+        );
     }
 
     /// 降级矩阵与 `world_to_screen` 一致（容差 1e-2 像素：两式只差浮点结合律）。

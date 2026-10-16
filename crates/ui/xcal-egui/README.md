@@ -63,7 +63,7 @@ xcal-app (装配 + ParamPanelSystem)
 其他阶段由别的 crate 提供：Input 的 `DirectorAdvance`、SceneSync 的 `BindingApply`
 （xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
 
-> **M4：UI 层不含几何计算。** 原 `GridBuildSystem`（相机裁剪 / 步长自适应 / 刻度线 /
+> **M4：UI 层不含几何计算。** 原网格构建 System（相机裁剪 / 步长自适应 / 刻度线 /
 > 坐标轴，279 行）已退役，四段逻辑整体归 `xc_object::Axes2D`；函数采样归
 > `xc_object::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
 > 世界↔屏幕换算（换算只在 `xcal-render` 的唯一换算点）。

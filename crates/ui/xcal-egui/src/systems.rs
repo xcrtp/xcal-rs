@@ -71,11 +71,11 @@ impl System for CameraInputSystem {
     }
 }
 
-// ─── AxesRefreshSystem（M4-4：GridBuildSystem 退役）─────────────────────────
+// ─── AxesRefreshSystem（M4-4：原网格构建 System 退役）───────────────────────
 
 /// 坐标轴 / 网格刷新（Prepare 阶段）。
 ///
-/// **M4-4：`GridBuildSystem` 已退役。** 原先 279 行的四段几何逻辑
+/// **M4-4：原网格构建 System（本层旧 `Grid` 构建器）已退役。** 原先 279 行的四段几何逻辑
 /// （相机裁剪、步长自适应、刻度线、坐标轴）全部归场景对象层的
 /// [`xc_object::Axes2D`]；本 System 只剩**接线**：取本帧相机 → 逐个刷新场景里的
 /// 坐标轴对象。本文件因此**不再有任何几何计算**，也不再把相机缩放带进任何
@@ -141,6 +141,25 @@ impl System for FunctionGraphRefreshSystem {
 
 // ─── SceneRecordSystem ─────────────────────────────────────────────────────
 
+/// 2D 场景录制（RenderCommit 阶段）：把场景对象录进 [`DrawQueue`]。
+///
+/// # 与 hecs 的接触面（替换 `Scene` 实现时要改的地方）
+///
+/// 本 System **自己不认识具体组件**：7 个 `(图元, 样式)` 组合的枚举与翻译都在
+/// `xcal-render::record_scene` 里 —— `Circle` / `Path` / `Line` / `Rect` 分别配
+/// `StrokeSolid` / `FillSolid`（`Line` 只有描边、`Rect` 两种都有），共 7 组。
+/// 本 System 只负责"**取数据**"：拿到世界与队列，交给 `record_scene` 翻译。
+///
+/// 具体两步接线（也即"换实现时要重写"之处）：
+/// 1. `ctx.with_world_and_resource_mut::<DrawQueue, _>` —— `ExecutorContext` 目前只提供
+///    `&hecs::World`（不可变），用它同时借到世界与 `&mut DrawQueue`；
+/// 2. `WorldView::new(world)` —— 把 hecs 世界接成契约层 `SceneRead`（hecs 侧适配器）。
+///
+/// 换成非 ECS 的场景实现时，`record_scene` 与组件组合枚举都不必改：只需把这 1、2 两步
+/// 换成新实现的取数据方式（这正是 M3-7「record_scene 不认识 hecs」的收益）。
+///
+/// ⚠️ 与本文件另外两个录制 System 的区别：`ContentTextureRecordSystem` /
+/// `MorphRecordSystem` **内联**了 hecs 查询（见各自的 doc），它们才需要随实现整体重写。
 pub struct SceneRecordSystem;
 impl System for SceneRecordSystem {
     type Reads = (ViewRect, AppCamera);
@@ -184,6 +203,9 @@ impl System for SceneRecordSystem {
 ///
 /// 为什么是独立 System 而不是并进 `SceneRecordSystem`：既有 System 的
 /// `Reads` / `Writes` 是冻结契约（§6），不能给它新增写资源。
+///
+/// ⚠️ **内联 hecs 查询**：本 System 直接 `world.query::<(&MorphShape, &StrokeSolid)>()`，
+/// **替换场景实现时需整体重写**。
 pub struct MorphRecordSystem;
 impl System for MorphRecordSystem {
     type Reads = (ViewRect, AppCamera);
@@ -225,6 +247,11 @@ impl System for MorphRecordSystem {
 ///
 /// 位置与描边宽度经 [`record_path_stroke`] 按 `spec.camera` 换算——与主 2D
 /// 层同一口径（唯一换算点在 xcal-render 内）。
+///
+/// ⚠️ **内联 hecs 查询**：本 System 直接
+/// `world.query::<(&Path, &StrokeSolid, &ContentTextureItem)>()` —— 标记过滤与组件组合
+/// 都写在 System 里。**替换场景实现时本 System 需整体重写**（不能像
+/// [`SceneRecordSystem`] 那样只换"取数据"的两步接线）。
 pub struct ContentTextureRecordSystem;
 impl System for ContentTextureRecordSystem {
     type Reads = (ContentTextureSpec,);
@@ -351,7 +378,7 @@ mod tests {
         assert_eq!(cam.scale, 40.0);
     }
 
-    // ─── AxesRefreshSystem（M4-4：GridBuildSystem 退役）────────────────────
+    // ─── AxesRefreshSystem（M4-4：原网格构建 System 退役）──────────────────
 
     use xcal_scene::contract::entity_of;
     use xc_object::{AxesLine, Circle, ZOrder};

@@ -163,7 +163,7 @@ impl App {
         ));
 
         // ── 坐标轴 / 网格（M4-2）：规格与装配都在场景对象层 `Axes2D` ──────
-        // 原先由 UI 层 `GridBuildSystem` 每帧直写 DrawQueue 的几何
+        // 原先由 UI 层网格构建 System（M4 已退役）每帧直写 DrawQueue 的几何
         // （相机裁剪 / 步长自适应 / 刻度线 / 坐标轴）已整体归位；
         // 这里只装配一次，逐帧刷新由 `AxesRefreshSystem` 接线。
         let axes = Axes2D::unbounded();

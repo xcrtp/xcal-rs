@@ -408,6 +408,23 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 每层多一次全屏 blit（层数少时可接受，层多时优化）；**CPU 路径不支持真合成**
 （退化为顺序绘制，2D 仍在下，S3-4 退役旧管线后消失）；`opacity` × `blend` 组合未穷举验证。
 
+### 已知未接线项（Known unwired，记账非缺陷）
+
+以下四项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。
+按本项目原则「有明确用途而非凭空设计 → 不是问题，但不能忘记」，集中记账于此。
+
+| 项 | 位置 | 现状 | 何时接 |
+|---|---|---|---|
+| `Parent` 父子变换累乘 System | 契约层 `xc_scene_contract::Parent` / `Children` | 类型与 `Scene::attach` 已就位，**零生产消费方**（父子变换尚未累乘） | 做相机跟随 / 对象整体变换时 |
+| `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
+| `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
+| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：实测 10 个 crate / 41 文件 / **172 处** `glam::` 直接引用未收敛（M4 计划记为 216 处，系 M2.5 消灭 newtype 之前的实测值） | 分阶段收敛；不阻塞任何功能 |
+
+> M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
+> （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
+> `xcal_scene::Scene` 并存），以及契约层的 `Scene::set` 写路径
+> （消费方 `FunctionGraph::refresh`）。
+
 ### cargo-archtest 适配状态
 
 `cargo-archtest v0.2.3` 的架构模型是「单 crate 内按 `src/` 子目录分层」，
@@ -475,7 +492,16 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `xcal-app` 0/9 → 0/10；
 > - 结构判据（本轮）：`Parent` 定义 1 处、`record_scene` 不认识 hecs、
 >   UI 层无几何计算（`GridBuildSystem` 退役）、装配对象 `Axes2D` / `FunctionGraph`
->   在对象层。已知未接线项（`Parent` 累乘 System、`Scene` 的第二实现等）见 M4 交付说明。
+>   在对象层。已知未接线项（`Parent` 累乘 System、`Scene` 的第二实现等）见上文
+>   「已知未接线项」章节。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
+>
+> 备注（2026-10-16，M4 收尾）：本轮**无行为变更**（只改注释 / 文档 + 一处换算归位）。
+> - UI 层最后一处几何换算（指针拖拽像素 → 世界位移）归位到对象层
+>   `Camera2D::screen_delta_to_world`，`host.rs` 只保留"取负"这一**控制器**语义；
+> - `SceneRecordSystem` / `ContentTextureRecordSystem` / `MorphRecordSystem` 补写
+>   "与 hecs 的接触面"标注（替换 `Scene` 实现时各自要改哪里）；
+> - `Axes2D::refresh` 补写性能记账（每帧约 39 个实体 + 图元下沉判据 / 触发条件）；
+> - 新增上文「已知未接线项」章节。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

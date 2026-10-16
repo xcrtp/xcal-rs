@@ -165,15 +165,16 @@ impl EguiSceneHost {
                 });
             }
 
-            // 右键/中键拖拽 → 平移（屏幕位移在此换算为世界坐标位移量，
-            // Y 翻转集中在这一处换算，控制器拿到的是 Y-up 世界量）。
+            // 右键/中键拖拽 → 平移（屏幕位移经对象层的
+            // `Camera2D::screen_delta_to_world` 换算为世界位移：缩放 + Y 翻转都在那里；
+            // 「拖拽方向 → 取景中心反向移动」取负是**控制器语义**，留在本层）。
             if i.pointer.secondary_down() || i.pointer.middle_down() {
                 let d = i.pointer.delta();
                 if d != egui::Vec2::ZERO {
                     events.push(SceneEvent::Camera {
                         layer: *layer,
                         command: CameraCommand::Pan {
-                            delta: (-d.x / camera.scale, d.y / camera.scale).into(),
+                            delta: -camera.screen_delta_to_world((d.x, d.y).into()),
                         },
                     });
                 }

@@ -1,7 +1,7 @@
 // axes.rs — 坐标轴 / 网格场景对象（M4-2）。
 //
 // 归位依据（M4 计划 §4.1）：网格与坐标轴的**几何**（相机裁剪、步长自适应、
-// 刻度线生成）原本在 UI 层的 `GridBuildSystem` 里（279 行四段独立逻辑）。
+// 刻度线生成）原本在 UI 层的网格构建 System 里（279 行四段独立逻辑）。
 // 它是纯几何 + 纯数据，与 egui 无关 ⇒ 归场景对象层。
 //
 // 形态（数据纯、行为不纯）：
@@ -88,7 +88,7 @@ pub struct Axes2D {
 }
 
 impl Default for Axes2D {
-    /// 无界定义域 + 迁移前 `GridBuildSystem` 的样式（灰网格 / 白轴线，屏幕空间）。
+    /// 无界定义域 + 迁移前网格构建 System 的样式（灰网格 / 白轴线，屏幕空间）。
     fn default() -> Self {
         Self {
             x_range: (f32::NEG_INFINITY, f32::INFINITY),
@@ -180,6 +180,17 @@ impl Axes2D {
     }
 
     /// 按相机刷新几何：**清掉旧的再建新的**（线段数量随缩放变化，复用同一组不可行）。
+    ///
+    /// # 性能特征（记账，非缺陷）
+    ///
+    /// 当前实现每帧 despawn + spawn ≈39 个实体（默认视口 800×600、scale 40 的实测值：
+    /// x / y 各 21 / 16 条刻度 + 2 条轴线）。这与迁移前的即时模式（直写 `DrawQueue`、
+    /// 零实体开销）相比是 **Scene 化的真实代价**：F1 overlay 的实体计数会随之上升，
+    /// 每帧有约 39 次 spawn/despawn。视觉无变化。
+    ///
+    /// 按本项目的「图元下沉判据」（实体数爆炸 + 每帧重算），`Axes2D` 是将来**第一个
+    /// 该下沉成单一图元**的候选（例如一个"网格图元"承载全部线段，由后端一次性展开）。
+    /// **下沉触发条件**：做真实动画时若网格刷新成为性能瓶颈 —— 而不是"看起来不够优雅"。
     pub fn refresh<S: Scene>(&self, scene: &mut S, handle: ObjectId, camera: &Camera2D) {
         self.clear(scene, handle);
         for line in self.grid_lines(camera) {
