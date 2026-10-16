@@ -355,9 +355,10 @@ mod tests {
     use xcal_render::ZIndex;
     use xcal_render::components::FillSolid;
     use xcal_scene::scene::components::{
-        Camera3D, Material3D, MeshGeometry, PrimitiveTopology, Projection, TextureHandle,
+        Material3D, MeshGeometry, PrimitiveTopology, TextureHandle,
     };
-    use xcal_scene::types::{Camera2D, Rect};
+    use xc_notion::Rect2D;
+    use xc_object::{Camera2D, Camera3D, Projection};
     use xc_notion::Color32;
 
     /// 内容纹理尺寸（与 3D 视口同尺寸，便于逐像素对应）。
@@ -470,7 +471,7 @@ mod tests {
         let mut content_queue = DrawQueue::new();
         content_queue.rect_fill(
             ZIndex::new(0),
-            Rect::new((0.0, 0.0).into(), (TEX as f32, TEX as f32).into()),
+            Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::splat(TEX as f32)),
             FillSolid::new(Color32::RED),
         );
         let content = vec![(CONTENT_LAYER, snapshot_queue(&content_queue))];
@@ -520,7 +521,7 @@ mod tests {
                     camera: Camera2D::new(
                         (TEX as f32 / 2.0, TEX as f32 / 2.0).into(),
                         1.0,
-                        Rect::new((0.0, 0.0).into(), (TEX as f32, TEX as f32).into()),
+                        Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::splat(TEX as f32)),
                     ),
                     size_px: [TEX, TEX],
                     texture: TextureHandle::new(CONTENT_ID),

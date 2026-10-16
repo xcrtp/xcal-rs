@@ -14,7 +14,8 @@
 //
 // SA（绘制录制解耦）：
 // - 录制入口拆成两层——[`record_drawables`] 只接受 [`Drawable`]（**不知道 ECS 存在**），
-//   [`record_scene`] 负责把 hecs 组件组合成 `Drawable` 后调用它；
+//   [`record_scene`] 负责把**契约层 `Scene`** 里的组件组合成 `Drawable` 后调用它
+//   （M3-7 起不认识 hecs —— `impl Scene for hecs::World` 在 xcal-scene）；
 // - 旧「逐组件穷举宏」已删除。新增图元只需实现 [`ToShape2D`]
 //   （形状）+ 复用既有 [`ResolveStyle`]（样式），**不必改动本模块的录制逻辑**。
 //
@@ -25,8 +26,11 @@
 
 use crate::components::{Circle, FillSolid, Line, Path, Rect, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
-use xcal_scene::types::Camera2D;
 use xc_notion::Transform2D as Affine2D;
+use xc_object::Camera2D;
+// 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
+// 且**只需要读能力**）。
+use xc_scene_contract::SceneRead;
 // 降级 trait 与样式组件定义在渲染 IR 层（M2）：
 // - `ToShape2D` 吃**仿射矩阵**（相机在调用点降级），`ResolveStyle` 吃标量 scale
 //   ⇒ IR 层不认识相机类型，不成环（见 xc_render_ir::degrade）。
@@ -391,95 +395,57 @@ impl<T: Painter2D> SceneRender<T> {
     /// 录制复用 [`record_scene`]（与生产路径同一份组件枚举，不再有第二份列表）；
     /// [`record_scene`] 写入的 `z` 恒为 0，排序稳定 ⇒ 绘制顺序与逐组合的查询顺序
     /// 逐位一致，与重构前行为相同。
-    pub fn render(&self, world: &hecs::World, camera: &Camera2D) {
+    pub fn render<S: SceneRead>(&self, scene: &S, camera: &Camera2D) {
         let mut queue = DrawQueue::new();
-        record_scene(world, camera, &mut queue);
+        record_scene(scene, camera, &mut queue);
         queue.execute(&self.painter);
     }
 }
 
+/// 录制**一组** `(图元, 样式)` 组合：契约层访客形态 → [`DrawQueue`]。
+///
+/// 拆出来是为了让 [`record_scene`] 的 7 组调用保持"一组一行"的可读性，
+/// 同时把"降级 + 剔除 + 入队"的逻辑只写一遍。
+fn record_group<S, A, B>(scene: &S, t: &Affine2D, scale: f32, queue: &mut DrawQueue, z: f32)
+where
+    S: SceneRead,
+    A: ToShape2D + Send + Sync + 'static,
+    B: ResolveStyle + Send + Sync + 'static,
+{
+    scene.for_each_pair::<A, B>(|_, a, b| {
+        if let Some((shape, style)) = (a, b).to_primitive(t, scale) {
+            queue.push(DrawCommand::new(ZIndex::new(z as i32), shape, style));
+        }
+    });
+}
+
 /// 把场景实体录制进 [`DrawQueue`]（z 恒为 0）。
 ///
-/// **组件组合的枚举只在此处**：每种组合构造一个 `(形状, 样式)` 引用对交给
-/// [`record_drawables`]——录制逻辑本身不认识具体组件类型。
+/// **组件组合的枚举只在此处**：每种组合交给 [`record_group`]——录制逻辑本身
+/// 不认识具体组件类型。
 ///
 /// 描边宽度在此按 `camera.scale` 解析（**唯一换算点**，见 [`ResolveStyle`]）。
 ///
 /// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
 /// 与重构前逐位一致。
 ///
-/// M2-3：相机在此**降级为仿射矩阵**（`Camera2D::to_transform2d()`），
-/// 故本函数调用链（`record_drawables` / `Drawable` / `ToShape2D`）都不认识相机类型。
-pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueue) {
+/// **M3-7：不认识 hecs。** 参数是契约层 [`Scene`]（`for_each_pair` 完成 7 组
+/// `(图元, 样式)` 组合查询）；hecs 的实现（适配器 `WorldScene`）在 `xcal-scene`，
+/// 本 crate 的依赖里没有 hecs。
+pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut DrawQueue) {
     // 场景图元的绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
     // 相机 → 屏幕的仿射（唯一降级点）。
     let t = camera.to_transform2d();
     let scale = camera.scale;
 
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Circle, &StrokeSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Circle, &FillSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Path, &StrokeSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Path, &FillSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Line, &StrokeSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Rect, &FillSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
-    record_drawables(
-        queue,
-        &t,
-        scale,
-        world
-            .query::<(&Rect, &StrokeSolid)>()
-            .iter()
-            .map(|(s, t)| ((s, t), Z)),
-    );
+    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Circle, FillSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Path, StrokeSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Path, FillSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Line, StrokeSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Rect, FillSolid>(scene, &t, scale, queue, Z);
+    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, queue, Z);
 }
 
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
@@ -506,7 +472,124 @@ pub fn record_path_stroke(
 mod tests {
     use super::*;
     use xcal_scene::scene::components::*;
+    use std::any::Any;
     use xc_notion::{MeasureSpace, Path2D};
+    use xc_scene_contract::{Components, ObjectId, Parent, Scene, SceneRead};
+
+    // ─── 非 ECS 的测试 Scene（M3-7 判据：`record_scene` 不依赖 hecs）──────────
+    //
+    // 这是契约层抽象的**第二个实现**：一个纯 `Vec` 存储的场景。它同时证明
+    // "可替换"不是纸面承诺 —— `record_scene` 能被非 ECS 场景驱动。
+
+    #[derive(Default)]
+    struct TestScene {
+        items: Vec<(ObjectId, Vec<Box<dyn Any + Send + Sync>>)>,
+    }
+
+    /// 让 `TestScene::spawn((A, B))` 与 hecs 的元组写法保持一致。
+    trait IntoComponents {
+        fn into_components(self) -> Vec<Box<dyn Any + Send + Sync>>;
+    }
+
+    macro_rules! impl_into_components {
+        ($($name:ident),+) => {
+            impl<$($name: Send + Sync + 'static),+> IntoComponents for ($($name,)+) {
+                fn into_components(self) -> Vec<Box<dyn Any + Send + Sync>> {
+                    let ($($name,)+) = self;
+                    vec![$(Box::new($name)),+]
+                }
+            }
+        };
+    }
+    impl_into_components!(A);
+    impl_into_components!(A, B);
+    impl_into_components!(A, B, C);
+    impl_into_components!(A, B, C, D);
+
+    impl TestScene {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn spawn(&mut self, bundle: impl IntoComponents) -> ObjectId {
+            let id = ObjectId::new(self.items.len() as u32, 1);
+            self.items.push((id, bundle.into_components()));
+            id
+        }
+    }
+
+    impl SceneRead for TestScene {
+        fn contains(&self, id: ObjectId) -> bool {
+            self.items.iter().any(|(i, _)| *i == id)
+        }
+
+        fn len(&self) -> usize {
+            self.items.len()
+        }
+
+        fn for_each<T: 'static + Send + Sync>(&self, mut f: impl FnMut(ObjectId, &T)) {
+            for (id, comps) in &self.items {
+                if let Some(t) = comps.iter().find_map(|c| c.downcast_ref::<T>()) {
+                    f(*id, t);
+                }
+            }
+        }
+
+        fn for_each_pair<A: 'static + Send + Sync, B: 'static + Send + Sync>(
+            &self,
+            mut f: impl FnMut(ObjectId, &A, &B),
+        ) {
+            for (id, comps) in &self.items {
+                let a = comps.iter().find_map(|c| c.downcast_ref::<A>());
+                let b = comps.iter().find_map(|c| c.downcast_ref::<B>());
+                if let (Some(a), Some(b)) = (a, b) {
+                    f(*id, a, b);
+                }
+            }
+        }
+    }
+
+    impl Scene for TestScene {
+        fn spawn_dyn(&mut self, components: Components) -> Option<ObjectId> {
+            let id = ObjectId::new(self.items.len() as u32, 1);
+            self.items.push((id, components));
+            Some(id)
+        }
+
+        fn despawn(&mut self, id: ObjectId) -> bool {
+            let before = self.items.len();
+            self.items.retain(|(i, _)| *i != id);
+            self.items.len() != before
+        }
+
+        fn attach(&mut self, child: ObjectId, parent: Parent) -> bool {
+            self.set(child, parent)
+        }
+
+        fn get_mut<T: 'static + Send + Sync>(&mut self, id: ObjectId) -> Option<&mut T> {
+            self.items
+                .iter_mut()
+                .find(|(i, _)| *i == id)?
+                .1
+                .iter_mut()
+                .find_map(|c| c.downcast_mut::<T>())
+        }
+
+        fn set<T: 'static + Send + Sync>(&mut self, id: ObjectId, component: T) -> bool {
+            let Some(slot) = self.items.iter_mut().find(|(i, _)| *i == id) else {
+                return false;
+            };
+            match slot
+                .1
+                .iter_mut()
+                .find(|c| (**c).type_id() == std::any::TypeId::of::<T>())
+            {
+                Some(existing) => *existing = Box::new(component),
+                None => slot.1.push(Box::new(component)),
+            }
+            true
+        }
+    }
 
     struct MockPainter;
 
@@ -518,15 +601,14 @@ mod tests {
         Camera2D::new(
             (0.0, 0.0).into(),
             1.0,
-            // 视口矩形是**场景层**类型（`xcal_scene::types::Rect`），
-            // 与绘制用矩形对象（`xc_object::Rect`）同名不同物。
-            xcal_scene::types::Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+            // 视口矩形 = 理念层 `Rect2D`（M3-2 后场景层的视口 `Rect` 已删除）。
+            xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(100.0, 100.0)),
         )
     }
 
     #[test]
     fn test_scene_render_circle_stroke() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             Circle::new((0.0, 0.0), 10.0),
             StrokeSolid::new(2.0, (255, 0, 0, 255)),
@@ -539,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_circle_fill() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             Circle::new((5.0, 5.0), 20.0),
             FillSolid::new((0, 255, 0, 128)),
@@ -552,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_path_stroke() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         let path = Path::new(Path2D::from_polyline(
             &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0)],
             false,
@@ -566,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_empty_world() {
-        let world = hecs::World::new();
+        let world = TestScene::new();
         let renderer = SceneRender {
             painter: MockPainter,
         };
@@ -575,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_mixed_entities() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             Circle::new((0.0, 0.0), 10.0),
             StrokeSolid::new(2.0, (255, 0, 0, 255)),
@@ -646,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_line_stroke() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((mk_line(5.0), mk_stroke()));
         let renderer = SceneRender {
             painter: MockPainter,
@@ -656,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_rect_fill_and_stroke() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((mk_rect(), mk_fill()));
         world.spawn((mk_rect(), mk_stroke()));
         let renderer = SceneRender {
@@ -667,7 +749,7 @@ mod tests {
 
     #[test]
     fn test_scene_render_line_to_screen() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((mk_line(5.0), mk_stroke()));
         let renderer = SceneRender {
             painter: RecordingPainter::default(),
@@ -681,7 +763,7 @@ mod tests {
         Camera2D::new(
             (0.0, 0.0).into(),
             scale,
-            xcal_scene::types::Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+            xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(100.0, 100.0)),
         )
     }
 
@@ -693,7 +775,7 @@ mod tests {
     /// `World` 描边：屏幕宽度随 camera.scale 线性变化。
     #[test]
     fn world_stroke_scales_with_camera_scale() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             mk_line(1.0),
             StrokeSolid::new_in(2.0, (0, 0, 0, 255), MeasureSpace::World),
@@ -711,7 +793,7 @@ mod tests {
     /// `Screen` 描边（默认）：屏幕宽度与 camera.scale 无关（缩放不变性）。
     #[test]
     fn screen_stroke_is_scale_invariant() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((mk_line(1.0), StrokeSolid::new(2.0, (0, 0, 0, 255))));
 
         let mut q10 = DrawQueue::new();
@@ -726,7 +808,7 @@ mod tests {
     /// `WorldWithMinPx`：小 scale 下钳到下限像素。
     #[test]
     fn world_with_min_px_clamps_in_record_scene() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             mk_line(1.0),
             StrokeSolid::new_in(0.01, (0, 0, 0, 255), MeasureSpace::WorldWithMinPx(1.5)),
@@ -739,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_record_scene_into_queue() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((mk_circle(1.0), mk_fill()));
         world.spawn((mk_line(2.0), mk_stroke()));
         let mut queue = DrawQueue::new();
@@ -869,7 +951,7 @@ mod tests {
     /// 变换后 `Shape2D::Path` 仍保留 `Close`。
     #[test]
     fn closed_path_keeps_close_command() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((
             Path::new(Path2D::from_polyline(
                 &[
@@ -895,7 +977,7 @@ mod tests {
     /// 圆半径随 camera.scale 缩放（`Circle::to_screen` 语义经 `Shape2D` 保留）。
     #[test]
     fn circle_radius_scales_with_camera() {
-        let mut world = hecs::World::new();
+        let mut world = TestScene::new();
         world.spawn((Circle::new((0.0, 0.0), 2.0), mk_stroke()));
         let mut q = DrawQueue::new();
         record_scene(&world, &cam_with_scale(10.0), &mut q);

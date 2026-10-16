@@ -1,60 +1,29 @@
 // resource_cache.rs（过渡 shim）
 //
 // GPU 资源缓存的纯数据部分（ResourceKey / DeferredDestroyer / ResourceCache / GpuResourceCache）
-// 已下沉 kernel/xc-resource。本模块只保留仍需 hecs 的兼容层：
-//   G2: 旧 CacheKey 兼容（impl From<CacheKey> for ResourceKey）
+// 已下沉 kernel/xc-resource。本模块保留 glob 重导出以维持
+// `xcal_render::resource_cache::*` 路径不变。
 //
-// 保留 glob 重导出以维持 `xcal_render::resource_cache::*` 路径不变。
+// M3-7：原先的旧 `CacheKey { entity: hecs::Entity, .. }` 兼容 shim 已删除 ——
+// 它在本仓**零外部消费方**（只有自己的测试在用），却把 hecs 拖进了本 crate。
+// 测试改为直接构造 `ResourceKey::Versioned`，语义不变。
 
 pub use xc_resource::resource_cache::*;
-
-use std::any::TypeId;
-
-// ─── 旧 CacheKey 兼容（实现 Into<ResourceKey>） ──────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CacheKey {
-    pub type_id: TypeId,
-    pub entity: hecs::Entity,
-    pub version: u64,
-}
-
-impl CacheKey {
-    pub fn of<C: 'static>(entity: hecs::Entity, version: u64) -> Self {
-        Self {
-            type_id: TypeId::of::<C>(),
-            entity,
-            version,
-        }
-    }
-}
-
-impl From<CacheKey> for ResourceKey {
-    fn from(k: CacheKey) -> Self {
-        let bits = k.entity.to_bits().get();
-        let eid = bits as u32;
-        let egen = (bits >> 32) as u32;
-        let id = (eid as u64) | ((egen as u64) << 32);
-        Self::Versioned {
-            type_id: k.type_id,
-            id,
-            version: k.version,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::render_backend::{AccessError, GpuHandle, RenderBackend};
+    use std::any::TypeId;
 
-    fn dummy_entity(n: u32) -> hecs::Entity {
-        let mut world = hecs::World::new();
-        let mut e = world.spawn(());
-        for _ in 0..n {
-            e = world.spawn(());
+    /// 测试用键：与旧 `CacheKey` → `ResourceKey` 的转换逐字段等价
+    /// （`id` 扮演对象身份、`version` 扮演几何版本）。
+    fn key<C: 'static>(object: u64, version: u64) -> ResourceKey {
+        ResourceKey::Versioned {
+            type_id: TypeId::of::<C>(),
+            id: object,
+            version,
         }
-        e
     }
 
     // ── 回归测试（7 个） ───────────────────────────────────────────────
@@ -63,25 +32,23 @@ mod tests {
     fn test_cachekey_of_uses_typeid() {
         struct Mesh;
         struct Texture;
-        let e = dummy_entity(0);
-        let k1 = CacheKey::of::<Mesh>(e, 0);
-        let k2 = CacheKey::of::<Texture>(e, 0);
-        let k3 = CacheKey::of::<Mesh>(e, 1);
-        assert_ne!(k1, k2);
-        assert_ne!(k1, k3);
-        assert_eq!(k1, CacheKey::of::<Mesh>(e, 0));
+        let k1 = key::<Mesh>(1, 0);
+        let k2 = key::<Texture>(1, 0);
+        let k3 = key::<Mesh>(1, 1);
+        assert_ne!(k1, k2, "同对象不同类型 ⇒ 不同键");
+        assert_ne!(k1, k3, "同对象不同版本 ⇒ 不同键");
+        assert_eq!(k1, key::<Mesh>(1, 0));
     }
 
     #[test]
     fn test_get_or_insert_miss_then_hit() {
         let mut cache = ResourceCache::<()>::new();
         cache.begin_frame();
-        let e = dummy_entity(1);
-        let key = CacheKey::of::<u32>(e, 0);
+        let k = key::<u32>(1, 0);
 
         let mut upload_count = 0;
         cache.get_or_insert(
-            key,
+            k,
             (),
             |_, _| {
                 upload_count += 1;
@@ -92,9 +59,9 @@ mod tests {
         assert_eq!(upload_count, 1);
         assert_eq!(cache.len(), 1);
 
-        let h1 = cache.get(key).map(|h| *h.downcast_ref::<u32>().unwrap());
+        let h1 = cache.get(k).map(|h| *h.downcast_ref::<u32>().unwrap());
         cache.get_or_insert(
-            key,
+            k,
             (),
             |_, _| {
                 upload_count += 1;
@@ -103,7 +70,7 @@ mod tests {
             &mut StubBackend {},
         );
         assert_eq!(upload_count, 1);
-        let h2 = cache.get(key).map(|h| *h.downcast_ref::<u32>().unwrap());
+        let h2 = cache.get(k).map(|h| *h.downcast_ref::<u32>().unwrap());
         assert_eq!(h1, Some(7));
         assert_eq!(h2, Some(7));
     }
@@ -112,10 +79,9 @@ mod tests {
     fn test_version_change_isolates_entries() {
         let mut cache = ResourceCache::<()>::new();
         cache.begin_frame();
-        let e = dummy_entity(2);
 
-        let key_v0 = CacheKey::of::<u32>(e, 0);
-        let key_v1 = CacheKey::of::<u32>(e, 1);
+        let key_v0 = key::<u32>(1, 0);
+        let key_v1 = key::<u32>(1, 1);
 
         cache.get_or_insert(
             key_v0,
@@ -153,29 +119,27 @@ mod tests {
     #[test]
     fn test_mark_used_prevents_evict() {
         let mut cache = ResourceCache::<()>::new();
-        let e = dummy_entity(3);
-        let key = CacheKey::of::<u32>(e, 0);
+        let k = key::<u32>(1, 0);
 
         cache.begin_frame();
-        cache.get_or_insert(key, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
+        cache.get_or_insert(k, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
 
         for _ in 0..3 {
             cache.begin_frame();
-            assert!(cache.mark_used(&key));
+            assert!(cache.mark_used(&k));
         }
         assert_eq!(cache.evict_unused(1), 0);
-        assert!(cache.contains(key));
+        assert!(cache.contains(k));
     }
 
     #[test]
     fn test_evict_unused_returns_count_and_cleans_dirty() {
         let mut cache = ResourceCache::<()>::new();
-        let e = dummy_entity(4);
-        let key = CacheKey::of::<u32>(e, 0);
+        let k = key::<u32>(1, 0);
 
         cache.begin_frame();
-        cache.get_or_insert(key, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
-        cache.mark_dirty(key);
+        cache.get_or_insert(k, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
+        cache.mark_dirty(k);
         assert_eq!(cache.dirty_len(), 1);
 
         cache.begin_frame();
@@ -184,19 +148,18 @@ mod tests {
         let evicted = cache.evict_unused(1);
         assert_eq!(evicted, 1);
         assert_eq!(cache.dirty_len(), 0);
-        assert!(!cache.mark_used(&key));
+        assert!(!cache.mark_used(&k));
     }
 
     #[test]
     fn test_mark_dirty_and_upload_dirty() {
         let mut cache = ResourceCache::<()>::new();
         cache.begin_frame();
-        let e = dummy_entity(5);
-        let key = CacheKey::of::<u32>(e, 0);
+        let k = key::<u32>(1, 0);
 
-        cache.get_or_insert(key, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
+        cache.get_or_insert(k, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
 
-        cache.mark_dirty(key);
+        cache.mark_dirty(k);
         assert_eq!(cache.dirty_len(), 1);
 
         let rebuilt = cache.upload_dirty(&mut StubBackend {}, |rk, _, _| {
@@ -215,7 +178,7 @@ mod tests {
         assert_eq!(rebuilt, 1);
         assert_eq!(cache.dirty_len(), 0);
         assert_eq!(
-            cache.get(key).and_then(|h| h.downcast_ref::<u32>()),
+            cache.get(k).and_then(|h| h.downcast_ref::<u32>()),
             Some(&42)
         );
     }
@@ -223,13 +186,12 @@ mod tests {
     #[test]
     fn test_upload_dirty_skips_evicted_keys() {
         let mut cache = ResourceCache::<()>::new();
-        let e = dummy_entity(6);
-        let key = CacheKey::of::<u32>(e, 0);
+        let k = key::<u32>(1, 0);
 
         cache.begin_frame();
-        cache.get_or_insert(key, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
+        cache.get_or_insert(k, (), |_, _| GpuHandle::new(1_u32), &mut StubBackend {});
 
-        cache.mark_dirty(key);
+        cache.mark_dirty(k);
         cache.begin_frame();
         cache.begin_frame();
         cache.begin_frame();
@@ -247,14 +209,13 @@ mod tests {
     fn test_stale_id_returns_access_error() {
         let mut cache = ResourceCache::<()>::new();
         cache.begin_frame();
-        let e = dummy_entity(0);
-        let key: ResourceKey = CacheKey::of::<u32>(e, 0).into();
+        let k: ResourceKey = key::<u32>(0, 0);
 
         let id = {
             let mut id_out = None;
-            cache.get_or_insert(key, (), |_, _| GpuHandle::new(7_u32), &mut StubBackend {});
+            cache.get_or_insert(k, (), |_, _| GpuHandle::new(7_u32), &mut StubBackend {});
             // 通过 key 获取 id
-            if let Some(&rid) = cache.key_id_of(&key) {
+            if let Some(&rid) = cache.key_id_of(&k) {
                 id_out = Some(rid);
             }
             // evict 它：手动走 destroy（让它空闲并 evict）

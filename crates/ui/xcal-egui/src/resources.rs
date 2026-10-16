@@ -7,8 +7,8 @@
 //   egui 原生输入（滚轮/拖拽）的读取与翻译全部在 host。
 
 use xcal_scene::domain::CameraCommand;
-use xcal_scene::types::{Camera2D, Rect};
-use xc_notion::Vec2;
+use xc_notion::{Rect2D, Vec2};
+use xc_object::Camera2D;
 
 // ─── AppCamera ─────────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ impl AppCamera {
     ///
     /// 这是相机统一的接缝点：将来 Camera2D 成为 `Camera3D + Orthographic`
     /// 的薄壳时，2D 相机的**唯一构造处**就是这里，LayerKind / 渲染层无需改动。
-    pub fn to_camera_2d(&self, rect: Rect) -> Camera2D {
+    pub fn to_camera_2d(&self, rect: Rect2D) -> Camera2D {
         Camera2D::new((self.center.x, self.center.y).into(), self.scale, rect)
     }
 
@@ -109,13 +109,13 @@ impl Default for UiConfig {
 
 #[derive(Debug, Clone)]
 pub struct ViewRect {
-    pub rect: Rect,
+    pub rect: Rect2D,
 }
 
 impl Default for ViewRect {
     fn default() -> Self {
         Self {
-            rect: Rect::new((0.0, 0.0).into(), (800.0, 600.0).into()),
+            rect: Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)),
         }
     }
 }

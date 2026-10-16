@@ -7,8 +7,8 @@
 use xc_time::{AnimValue, ClockForest};
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::{Camera3D, MorphShape, PhaseAnim};
-use xc_object::Circle;
+use xcal_scene::scene::components::{MorphShape, PhaseAnim};
+use xc_object::{Camera3D, Circle};
 use xcal_scene::TimeState;
 
 use crate::animation::binding::{BindingTarget, BindingTable};

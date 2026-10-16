@@ -89,42 +89,13 @@ impl MorphShape {
     }
 }
 
-#[derive(Debug, Clone, derive_builder::Builder)]
-pub struct Parent {
-    pub parent: hecs::Entity,
-}
-
-/// 标记组件：该实体参与内容纹理层渲染（S3-3）。
-///
-/// 只有带此标记的实体才会被 `ContentTextureRecordSystem` 录进内容纹理
-/// （避免网格线 / 坐标轴等也进贴图，见计划 D5）。
 #[derive(Debug, Clone, Copy)]
 pub struct ContentTextureItem;
 
-/// 3D 实体变换：平移 + 旋转 + 缩放（glam 原生类型）。
-#[derive(Debug, Clone, derive_builder::Builder)]
-pub struct Transform {
-    pub position: glam::Vec3,
-    pub rotation: glam::Quat,
-    pub scale: glam::Vec3,
-}
-
-impl Transform {
-    /// 组合模型矩阵：scale → rotation → translation（列主序，右乘约定）。
-    pub fn matrix(&self) -> glam::Mat4 {
-        glam::Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
-    }
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self {
-            position: glam::Vec3::ZERO,
-            rotation: glam::Quat::IDENTITY,
-            scale: glam::Vec3::ONE,
-        }
-    }
-}
+// M3-4：`Transform`（摆放组件）与 `Parent`（关系）已迁出本层 ——
+// 前者归场景对象层 `xc-object`，后者统一用契约层
+// `xc_scene_contract::Parent(pub ObjectId)`。原场景层的 `Parent` 组件把父对象
+// 存成 ECS 实体句柄，是"场景层绑死具体 ECS"的最后一处组件形态，已删除。
 
 macro_rules! define_comp {
     ($name:ident, $ty:ty) => {

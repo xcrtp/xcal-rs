@@ -16,6 +16,8 @@ xc-notion = { path = "../../kernel/xc-notion" }
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
 # 场景对象层（图元 newtype）：Circle / Path / Line / Rect 的定义在此。
 xc-object = { path = "../../object/xc-object" }
+# 契约层：`record_scene<S: Scene>` 的唯一入参抽象（M3-7 —— 本 crate 无 hecs）。
+xc-scene-contract = { path = "../../kernel/xc-scene-contract" }
 xc-content = { path = "../../kernel/xc-content" }
 # 渲染契约层已下沉 kernel：
 #   xc-vertex   ← vertex/（顶点格式契约，纯数据）
@@ -28,7 +30,6 @@ glam.workspace = true
 derive_more.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
-hecs.workspace = true
 thiserror.workspace = true
 # 顶点格式契约（vertex 模块）：VertexLayout 需可序列化（V4，pipeline 变体缓存 key 前置）
 serde.workspace = true
@@ -39,7 +40,6 @@ lyon_path = "1.0"
 
 [dev-dependencies]
 glam.workspace = true
-hecs.workspace = true
 serde_json.workspace = true
 
 [features]

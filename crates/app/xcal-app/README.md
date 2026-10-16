@@ -75,6 +75,8 @@ if let Some(ir) = formula::rebuild(&engine, &spec) {
         ));
     }
 }
+let mut world = scene.into_world();
+world.insert_one(func_entity, PhaseAnim::new(0.0, 1.5)).unwrap();  // 相位组件（装配层不认识动画）
 
 // ── 4. 动画唯一驱动链路：ClockForest + BindingTable ──
 let mut forest = ClockForest::new();      // 3 个 root：振动圆 / 曲线相位 / 3D 轨道

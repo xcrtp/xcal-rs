@@ -9,6 +9,8 @@ license.workspace = true
 xcal-scene = { path = "../xcal-scene", default-features = false }
 xcal-render = { path = "../xcal-render", default-features = false }
 xc-notion = { path = "../../kernel/xc-notion" }
+# 场景对象层：相机与图元（Camera2D / Camera3D / Projection / Rect / …）的定义在此。
+xc-object = { path = "../../object/xc-object" }
 
 glam.workspace = true
 thiserror.workspace = true

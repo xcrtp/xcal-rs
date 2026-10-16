@@ -19,3 +19,12 @@ license.workspace = true
 [dependencies]
 xc-notion = { path = "../../kernel/xc-notion" }
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
+# 契约层：`Describable` trait 与 `*Desc`（由 `#[derive(Describable)]` 展开引用）。
+xc-scene-contract = { path = "../../kernel/xc-scene-contract" }
+# `#[derive(Describable)]` 派生宏（生成 Deref + impl Describable）。
+xc-macro = { path = "../../kernel/xc-macro" }
+
+# Transform 摆放组件的 Builder 派生（与归位前一致）。
+derive_builder.workspace = true
+# Camera2D / Camera3D 的 `new` 派生。
+derive-new.workspace = true

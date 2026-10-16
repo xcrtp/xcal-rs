@@ -1261,9 +1261,8 @@ fn fallback_uvs(positions: &[Vec3], projection: UvProjection) -> Vec<Vec2> {
 mod tests {
     use super::*;
     use crate::render_context::RenderContext;
-    use xcal_scene::scene::components::{
-        Camera3D, Material3D, MeshGeometry, Projection, TextureHandle,
-    };
+    use xcal_scene::scene::components::{Material3D, MeshGeometry, TextureHandle};
+    use xc_object::{Camera3D, Projection};
     use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
     use xc_notion::{SurfaceFn, Vec3};
     use xcal_render::{DrawQueue3D, Viewport};

@@ -62,7 +62,11 @@ use xc_macro::Transform2DInto;     // 派生宏
 ### 使用示例
 
 ```rust
-use xcal_scene::{Camera2D, Transform2D, Transform2DInto};
+// trait 仍在场景层（`Transform2DInto` 是 `xcal-scene` 的本地 trait，
+// 见 M4 计划 §1.6：它已不依赖场景层向量的具体身份，无需搬家）；
+// 但方法签名里的 `Camera2D` 归**场景对象层** `xc-object`（M3-2 归位）。
+use xcal_scene::{Transform2D, Transform2DInto};
+use xc_object::Camera2D;
 use xc_macro::Transform2DInto;
 
 #[derive(Clone, Transform2DInto)]

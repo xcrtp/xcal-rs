@@ -108,7 +108,7 @@ xcal-render 同时承载两套渲染抽象：
 | `render_backend` | 重导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源，始终可用）+ `RenderBackend / RenderBackend3D` (`wgpu`) |
 | `render_layer` (`wgpu`) | `RenderLayer`（framebuffer + 清屏描述 + 视口） |
 | `render_target` (`wgpu`) | `RenderTarget`（`TextureView` RAII + 描述符） |
-| `resource_cache` (`wgpu`) | 过渡 shim：glob 重导出 `xc-resource` 的 `ResourceCache / ResourceKey / DeferredDestroyer / GpuResourceCache`，并保留仍需 hecs 的 `CacheKey` 兼容层 |
+| `resource_cache` (`wgpu`) | 过渡 shim：glob 重导出 `xc-resource` 的 `ResourceCache / ResourceKey / DeferredDestroyer / GpuResourceCache`（M3-7 起**不再有 hecs 的 `CacheKey` 兼容层**）|
 | `scene` (mod) | `use xcal_render::scene::{comp, Scene}` 重新导出 components + xcal_scene Scene |
 | `content_ir` | `ir_to_draw_cmds`：xc-content `ContentIR` → `Shape2D + Style2D + Transform2D`（scale = target / nominal_font_size，描边宽度同步换算为世界单位并标 `MeasureSpace::World`） |
 | `vertex` | 顶点格式契约（已下沉 kernel `xc-vertex`，经 `pub use xc_vertex as vertex;` 保持路径）：`VertexLayout` / `VertexAttrib` / `AaModel` / `CacheStrategy` / `StaticConsistencyChecker`；需 `serde` 可序列化 |
@@ -196,7 +196,7 @@ cargo doc  -p xcal-render --no-deps --all-features
   `shader_offset_reproduces_lyon_contour_points`（`position + normal * w/2`
   与旧管线 lyon `position()` 逐顶点 < 1e-6，即"与旧 CPU 管线同源"的数值证明）、
   `stroke_area_scales_linearly_with_width`（宽 2→8 面积比 = 4）
-- `resource_cache`（shim 层）：`CacheKey` 版本隔离、`get_or_insert` 命中/未命中、
+- `resource_cache`（shim 层）：`ResourceKey` 版本隔离、`get_or_insert` 命中/未命中、
   `mark_used` 保活、`evict_unused`、脏标记与 `upload_dirty`、stale id 返回 `AccessError`
   （`ResourceCache`/`GpuHandle` 主体与 pending 有界性压测已随模块迁至 `xc-resource`）
 - `GpuHandle` 跨线程可 Send（测试用 `std::sync::mpsc` 验证）

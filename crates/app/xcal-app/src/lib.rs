@@ -18,12 +18,12 @@ use xcal_scene::errors::Error;
 use xcal_schedule::resource::Resources;
 use xcal_scene::domain::{ContentTextureSpec, InputEvents};
 use xcal_scene::scene::components::{
-    Camera3D, ContentTextureItem, Material3D, MorphShape, Projection, TextureHandle, Transform,
+    ContentTextureItem, Material3D, MorphShape, TextureHandle,
 };
 use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::TimeState;
-use xcal_scene::types::{Camera2D, Color32, Rect};
+use xcal_scene::types::Color32;
 use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{
@@ -36,7 +36,8 @@ use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, MorphQueue, scene::Scene,
 };
 use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
-use xc_notion::{Path2D, SurfaceFn};
+use xc_notion::{Path2D, Rect2D, SurfaceFn};
+use xc_object::{Camera2D, Camera3D, Projection, Transform};
 
 /// 内容纹理（S3-3）：纹理句柄 id 与尺寸。
 ///
@@ -215,9 +216,9 @@ impl App {
                     content_camera = Some(Camera2D::new(
                         (center.x, center.y).into(),
                         scale,
-                        Rect::new(
-                            (0.0, 0.0).into(),
-                            (CONTENT_TEX_W as f32, CONTENT_TEX_H as f32).into(),
+                        Rect2D::new(
+                            xc_notion::Vec2::ZERO,
+                            xc_notion::Vec2::new(CONTENT_TEX_W as f32, CONTENT_TEX_H as f32),
                         ),
                     ));
                 }
@@ -348,9 +349,9 @@ impl App {
             Camera2D::new(
                 (0.0, 0.0).into(),
                 25.0,
-                Rect::new(
-                    (0.0, 0.0).into(),
-                    (CONTENT_TEX_W as f32, CONTENT_TEX_H as f32).into(),
+                Rect2D::new(
+                    xc_notion::Vec2::ZERO,
+                    xc_notion::Vec2::new(CONTENT_TEX_W as f32, CONTENT_TEX_H as f32),
                 ),
             )
         });

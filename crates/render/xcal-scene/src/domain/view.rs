@@ -6,8 +6,9 @@
 // `ContentHandle` 刻意保持不透明——内容的具体形态是 S3 统一管线的职责，
 // B 不阻塞 S3，S3 也不用等 B。
 
-use crate::scene::components::{Camera3D, TextureHandle};
-use crate::types::{Camera2D, Color32};
+use crate::scene::components::TextureHandle;
+use crate::types::Color32;
+use xc_object::{Camera2D, Camera3D};
 
 /// 图层唯一标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -143,7 +144,7 @@ impl Default for SceneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Rect;
+    use xc_notion::{Rect2D, Vec2};
 
     fn layer(opacity: f32, blend: LayerBlend) -> LayerDescriptor {
         LayerDescriptor {
@@ -152,7 +153,7 @@ mod tests {
                 camera: Camera2D::new(
                     (0.0, 0.0).into(),
                     40.0,
-                    Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+                    Rect2D::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
                 ),
             },
             content: ContentHandle::OPAQUE,

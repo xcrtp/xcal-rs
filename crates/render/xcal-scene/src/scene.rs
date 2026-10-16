@@ -9,6 +9,17 @@
 //   Material3D 等，以 `three_d` 模块名挂载；components/animation/orbit.rs 的 OrbitAnim）
 // - primitives：内置图元生成器（primitives/cube.rs 的线框/实心立方体）
 
+// M3-8（ECS 泄漏收敛）：
+// - 原来的 `render<T, F>(f: FnOnce(&hecs::World, &ResourceMap) -> T)` **已删除** ——
+//   它把 `&hecs::World` 经闭包交给任意调用方，是 hecs 泄漏里最重的一处，
+//   也是 M3-7（`record_scene` 不认识 hecs）的前提。需要读场景时走契约层的
+//   [`xc_scene_contract::SceneRead`]（`for_each` / `for_each_pair`），
+//   需要"同时拿 world 与 resource"时走 `xcal-schedule` 的
+//   `ExecutorContext::with_world_and_resource_mut`。
+// - 其余 4 个入口（`world` / `world_mut` / `into_world` / `spawn`）**保留**，
+//   它们是**ECS 特定**的：替换实现（例如非 ECS 场景）时这几个方法必须**随之重写**，
+//   不得被当作契约层能力使用。
+
 use std::{any::TypeId, collections::HashMap};
 
 type ResourceMap = HashMap<TypeId, Box<dyn std::any::Any>>;
@@ -36,11 +47,14 @@ impl Scene {
         }
     }
 
-    pub fn render<T, F>(&mut self, f: F) -> T
-    where
-        F: FnOnce(&hecs::World, &ResourceMap) -> T,
-    {
-        f(&self.world, &self.resources)
+    /// 对象数（ECS 特定入口：替换实现时随之重写）。
+    pub fn len(&self) -> usize {
+        self.world.len() as usize
+    }
+
+    /// 是否为空（ECS 特定入口：替换实现时随之重写）。
+    pub fn is_empty(&self) -> bool {
+        self.world.is_empty()
     }
 
     pub fn add_resource<T: 'static>(&mut self, resource: T) {
@@ -57,20 +71,27 @@ impl Scene {
             .and_then(|boxed| boxed.downcast_mut::<T>())
     }
 
+    /// ECS 特定入口（替换实现时随之重写）：spawn 一个 hecs bundle。
+    ///
+    /// 契约层的动态创建入口是 [`xc_scene_contract::Scene::spawn_dyn`]；
+    /// 本方法只服务"启动时用元组一次性建场景"的 App 侧代码。
     pub fn spawn(&mut self, bundle: impl hecs::DynamicBundle) -> hecs::Entity {
         self.world.spawn(bundle)
     }
 
-    // ─── 访问底层 World / 所有权转移 ──────────────────────────────
+    // ─── 访问底层 World / 所有权转移（全部为 ECS 特定入口）──────────────
 
+    /// ECS 特定入口（替换实现时随之重写）。
     pub fn world(&self) -> &hecs::World {
         &self.world
     }
 
+    /// ECS 特定入口（替换实现时随之重写）。
     pub fn world_mut(&mut self) -> &mut hecs::World {
         &mut self.world
     }
 
+    /// ECS 特定入口（替换实现时随之重写）：把场景所有权交给调度器。
     pub fn into_world(self) -> hecs::World {
         self.world
     }
@@ -89,17 +110,16 @@ mod tests {
 
     #[test]
     fn test_scene_new_is_empty() {
-        let mut scene = Scene::new();
-        let count = scene.render(|w, _| w.len());
-        assert_eq!(count, 0);
+        let scene = Scene::new();
+        assert_eq!(scene.len(), 0);
+        assert!(scene.is_empty());
     }
 
     #[test]
     fn test_scene_spawn() {
         let mut scene = Scene::new();
         scene.spawn((Circle::new((0.0, 0.0), 1.0),));
-        let count = scene.render(|w, _| w.len());
-        assert_eq!(count, 1);
+        assert_eq!(scene.len(), 1);
     }
 
     #[test]
@@ -107,8 +127,7 @@ mod tests {
         let mut scene = Scene::new();
         scene.spawn((Circle::new((0.0, 0.0), 1.0),));
         scene.spawn((Circle::new((1.0, 0.0), 2.0),));
-        let count = scene.render(|w, _| w.len());
-        assert_eq!(count, 2);
+        assert_eq!(scene.len(), 2);
     }
 
     #[test]
@@ -149,19 +168,13 @@ mod tests {
         assert_eq!(scene.borrow_resource::<f64>(), Some(&2.5));
     }
 
+    /// M3-8 后不再有 `render(&hecs::World)` 闭包逃逸：读场景经契约层 / 本类型的
+    /// 值访问器，读 Resource 走 `borrow_resource`。
     #[test]
-    fn test_scene_render_returns_value() {
+    fn test_scene_len_and_resource_readback() {
         let mut scene = Scene::new();
         scene.add_resource(7_i32);
-        let result = scene.render(|w, r| {
-            let count = w.len();
-            let res = r
-                .get(&std::any::TypeId::of::<i32>())
-                .and_then(|b| b.downcast_ref::<i32>())
-                .copied();
-            (count, res)
-        });
-        assert_eq!(result.0, 0);
-        assert_eq!(result.1, Some(7));
+        assert_eq!(scene.len(), 0);
+        assert_eq!(scene.borrow_resource::<i32>(), Some(&7));
     }
 }

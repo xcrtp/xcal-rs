@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use xcal_schedule::context::ExecutorContext;
-use xcal_scene::scene::components::{Material3D, MeshGeometry, Transform};
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
+use xc_object::Transform;
 use xcal_schedule::system::System;
 use xcal_render::DrawQueue3D;
 

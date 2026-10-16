@@ -25,6 +25,8 @@ xc-content = { path = "../../kernel/xc-content" }
 xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 # 几何原语：S1 形变 demo 需要直接构造 Path2D（MorphShape 的 from/to）。
 xc-notion = { path = "../../kernel/xc-notion" }
+# 场景对象层：图元 newtype 与摆放组件（Circle / Path / Line / Rect / Transform）。
+xc-object = { path = "../../object/xc-object" }
 
 eframe.workspace = true
 egui.workspace = true

@@ -74,8 +74,8 @@ pub(crate) mod transform2d {
                     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
                     return quote! {
                         impl #impl_g xcal_scene::transform::Transform2DInto for #name #ty_g #where_g {
-                            fn to_logical_into(self, _: &xcal_scene::types::Camera2D) -> Self { Self }
-                            fn to_screen_into(self, _: &xcal_scene::types::Camera2D) -> Self { Self }
+                            fn to_logical_into(self, _: &xc_object::Camera2D) -> Self { Self }
+                            fn to_screen_into(self, _: &xc_object::Camera2D) -> Self { Self }
                         }
                     };
                 }
@@ -160,10 +160,10 @@ pub(crate) mod transform2d {
 
         quote! {
             impl #impl_generics xcal_scene::transform::Transform2DInto for #name #ty_generics #where_clauses {
-                fn to_logical_into(self, camera: &xcal_scene::types::Camera2D) -> Self {
+                fn to_logical_into(self, camera: &xc_object::Camera2D) -> Self {
                     #constructor_logical
                 }
-                fn to_screen_into(self, camera: &xcal_scene::types::Camera2D) -> Self {
+                fn to_screen_into(self, camera: &xc_object::Camera2D) -> Self {
                     #constructor_screen
                 }
             }
@@ -178,9 +178,148 @@ pub(crate) mod details {
     }
 }
 
+/// `#[derive(Describable)]`：为**单字段 tuple struct**（newtype 封装）生成
+///
+/// 1. `Deref` / `DerefMut` 到内层类型（`circle.radius` 直接可用）；
+/// 2. `impl xc_scene_contract::Describable`：`Descriptors` 元组由
+///    `#[describable(..)]` 参数**逐项决定**。
+///
+/// # 为什么 descriptor 是"多个独立类型组合成元组"
+///
+/// 不是总结构体 —— 于是"线段不能填色"在**类型层面**成立：
+/// `Line::Descriptors` 里根本没有 `FillDesc` 槽位，写不出来。
+///
+/// # 用法
+///
+/// ```ignore
+/// #[derive(Describable)]
+/// #[describable(Stroke, Fill)]
+/// pub struct Circle(pub Circle2D);
+///
+/// #[derive(Describable)]
+/// #[describable(Stroke)]          // 线段无面积 ⇒ 无 Fill 槽位
+/// pub struct Line(pub Line2D);
+/// ```
+///
+/// 支持槽位：`Stroke` / `Fill`（`Material` 待 M4 随材质系统下沉后再补）。
+pub(crate) mod describable {
+    use proc_macro2::TokenStream;
+    use quote::quote;
+    use syn::{Data, DeriveInput, Fields, Token, punctuated::Punctuated};
+
+    /// 槽位名 → (描述符类型, 合并函数, 掩码常量) —— 与 `xc-scene-contract` 的公共项对应。
+    fn slot(id: &syn::Ident) -> Option<(&'static str, &'static str, &'static str)> {
+        match id.to_string().as_str() {
+            "Stroke" => Some(("StrokeDesc", "apply_stroke_desc", "SLOT_STROKE")),
+            "Fill" => Some(("FillDesc", "apply_fill_desc", "SLOT_FILL")),
+            _ => None,
+        }
+    }
+
+    pub fn derive(input: DeriveInput) -> TokenStream {
+        let name = &input.ident;
+
+        // ① `#[describable(Stroke, Fill)]` → 槽位列表（可以叠写多个属性）。
+        let mut slots: Vec<syn::Ident> = Vec::new();
+        for attr in &input.attrs {
+            if !attr.path().is_ident("describable") {
+                continue;
+            }
+            match attr.parse_args_with(Punctuated::<syn::Ident, Token![,]>::parse_terminated) {
+                Ok(list) => slots.extend(list),
+                Err(e) => return e.to_compile_error(),
+            }
+        }
+
+        // ② Deref 目标 = 唯一的字段类型（newtype 语义）。
+        let inner = match &input.data {
+            Data::Struct(data) => match &data.fields {
+                Fields::Unnamed(f) if f.unnamed.len() == 1 => f.unnamed[0].ty.clone(),
+                _ => {
+                    return syn::Error::new(
+                        name.span(),
+                        "Describable 只支持单字段 tuple struct（newtype：Deref 到内层）",
+                    )
+                    .to_compile_error();
+                }
+            },
+            _ => {
+                return syn::Error::new(name.span(), "Describable 只能用于 struct")
+                    .to_compile_error();
+            }
+        };
+
+        // ③ 元组类型 + apply 主体（缺失槽位即"该类型不接受此样式"）。
+        let mut types = Vec::new();
+        let mut applies = Vec::new();
+        let mut mask_parts = Vec::new();
+        for (i, s) in slots.iter().enumerate() {
+            let Some((ty_name, fn_name, mask_name)) = slot(s) else {
+                return syn::Error::new(
+                    s.span(),
+                    "未知的 descriptor 槽位（当前支持：Stroke / Fill）",
+                )
+                .to_compile_error();
+            };
+            let ty = syn::Ident::new(ty_name, s.span());
+            let f = syn::Ident::new(fn_name, s.span());
+            let mask = syn::Ident::new(mask_name, s.span());
+            let idx = syn::Index::from(i);
+            types.push(quote!(::core::option::Option<::xc_scene_contract::#ty>));
+            mask_parts.push(quote!(::xc_scene_contract::#mask));
+            applies.push(quote! {
+                if let ::core::option::Option::Some(v) = d.#idx.as_ref() {
+                    ::xc_scene_contract::#f(v, &mut style);
+                }
+            });
+        }
+
+        quote! {
+            impl ::core::ops::Deref for #name {
+                type Target = #inner;
+                #[inline]
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+
+            impl ::core::ops::DerefMut for #name {
+                #[inline]
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    &mut self.0
+                }
+            }
+
+            impl ::xc_scene_contract::Describable for #name {
+                type Descriptors = (#(#types,)*);
+
+                fn apply(
+                    &self,
+                    d: &Self::Descriptors,
+                ) -> ::xc_render_ir::Style2D {
+                    // 主题默认值起步（**只保留本类型声明的槽位**，否则"线段不能填色"
+                    // 的类型层保证会被主题默认的 fill 破坏），槽位逐个增量覆盖。
+                    let mut style = ::xc_scene_contract::theme_style(#(#mask_parts)|*);
+                    #(#applies)*
+                    style
+                }
+            }
+        }
+    }
+}
+
 #[proc_macro_derive(SceneObject, attributes(with))]
 pub fn derive_scene_object(input: TokenStream) -> TokenStream {
     details::derive_scene_object(parse_macro_input!(input as syn::DeriveInput)).into()
+}
+
+/// `#[derive(Describable)]` + `#[describable(Stroke, Fill)]`。
+///
+/// 生成 `Deref` / `DerefMut`（到内层 newtype）与
+/// `impl Describable`（`Descriptors` 由属性逐项决定）。语义见 `describable` 模块。
+#[proc_macro_derive(Describable, attributes(describable))]
+pub fn derive_describable(input: TokenStream) -> TokenStream {
+    describable::derive(parse_macro_input!(input as syn::DeriveInput)).into()
 }
 
 #[proc_macro_derive(Transform2DInto, attributes(transform))]

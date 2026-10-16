@@ -99,11 +99,12 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 | 模块 | 核心类型 |
 |------|----------|
 | [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
+| [`contract`] | 契约层 hecs 实现：`WorldView` / `WorldScene` / `object_id_of` / `entity_of` + `SceneRead` 转发 |
 | [`animation`] | `Binding` / `BindingTarget` / `BindingTable` / `SeekKind` + `BindingApplySystem` / `MorphApplySystem` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |
 | [`transform`] | `Transform2D` / `Transform2DInto` trait 系统（结构体派生用 `xc_macro::Transform2DInto`）|
-| [`types`] | `Camera2D`, `Rect`, `Vec2/3/4`, `Color32`（整数向量 `U8Vec4` / `I8Vec4` M1 起由 `xc-notion::vec` 提供） |
+| [`types`] | 视口相关类型已归位：`Camera2D` 在 `xc-object`，视口 `Rect`（重复定义）已删除；此处只转发 `xc-notion` 的 `Vec2/3/4` / `Rect2D` / `Color32`（整数向量 `U8Vec4` / `I8Vec4` 亦由 `xc-notion::vec` 提供） |
 | [`time_state`] | `TimeState`（全局累积时间，Resource） |
 | [`errors`] | `Error` + `pub type Result<T> = Result<T, Error>` |
 | [`utils`] | `auto_into!` 宏 |
@@ -168,10 +169,13 @@ cargo doc   -p xcal-scene --no-deps  # API 文档
 ## 依赖
 
 ```toml
-xc-macro      = { path = "../../kernel/xc-macro" }            # Transform2DInto 派生
-xc-notion   = { path = "../../kernel/xc-notion" }         # 理念层（数学元语）
-xc-time       = { path = "../../kernel/xc-time" }             # 时钟树 / 曲线 / Director
-xcal-schedule = { path = "../../schedule/xcal-schedule" }     # ECS 调度框架 + Telemetry
+xc-macro           = { path = "../../kernel/xc-macro" }           # Transform2DInto 派生
+xc-notion          = { path = "../../kernel/xc-notion" }          # 理念层（数学元语）
+xc-render-ir       = { path = "../../kernel/xc-render-ir" }       # 样式组件 / 降级 trait
+xc-scene-contract  = { path = "../../kernel/xc-scene-contract" }  # 契约层（本 crate 是 hecs 实现）
+xc-object          = { path = "../../object/xc-object" }          # 图元 / 相机 / 摆放 / 装配对象
+xc-time            = { path = "../../kernel/xc-time" }            # 时钟树 / 曲线 / Director
+xcal-schedule      = { path = "../../schedule/xcal-schedule" }    # ECS 调度框架 + Telemetry
 
 glam = "0.33.6"
 derive_more (full) / thiserror / smart-default / derive-new / derive_builder

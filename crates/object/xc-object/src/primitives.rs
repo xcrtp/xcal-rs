@@ -11,9 +11,10 @@
 // 于是"同一个圆两处定义、字段完全相同"的两处真相消失：`Shape2D::Circle` 的扁平
 // 字段只是 IR 的**载荷形态**（后端按它匹配，故形状冻结），数值来源只有一处。
 //
-// `Deref` 到内层 ⇒ `circle.radius` / `line.a` / `rect.center()` 等原有写法不变。
-
-use std::ops::{Deref, DerefMut};
+// **M3-6 `Describable` 派生**：`#[derive(Describable)]` 同时生成
+// `Deref`/`DerefMut`（`circle.radius` 直接可用）与 `impl Describable`；
+// `#[describable(..)]` 的槽位清单**逐项决定** `Descriptors` 元组内容 ——
+// 因此"线段不能填色"在**类型层面**成立（`Line::Descriptors` 无 `FillDesc` 槽位）。
 
 use xc_notion::{Circle2D, Line2D, Path2D, Rect2D, Transform2D, Vec2};
 use xc_render_ir::{Shape2D, ToShape2D};
@@ -22,8 +23,9 @@ use crate::affine::{map_path_affine, uniform_scale};
 
 // ─── Circle ───────────────────────────────────────────────────────────────
 
-/// 圆图元对象。
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+/// 圆图元对象（可持有描边 / 填充样式）。
+#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[describable(Stroke, Fill)]
 pub struct Circle(pub Circle2D);
 
 impl Circle {
@@ -35,19 +37,6 @@ impl Circle {
     /// 内层理念层值。
     pub fn as_primitive(&self) -> &Circle2D {
         &self.0
-    }
-}
-
-impl Deref for Circle {
-    type Target = Circle2D;
-    fn deref(&self) -> &Circle2D {
-        &self.0
-    }
-}
-
-impl DerefMut for Circle {
-    fn deref_mut(&mut self) -> &mut Circle2D {
-        &mut self.0
     }
 }
 
@@ -69,8 +58,9 @@ impl ToShape2D for Circle {
 
 // ─── Path ─────────────────────────────────────────────────────────────────
 
-/// 2D 路径图元对象（直接持有理念层 [`Path2D`]，自带闭合语义）。
-#[derive(Debug, Clone, PartialEq, Default)]
+/// 2D 路径图元对象（直接持有理念层 [`Path2D`]，自带闭合语义；可描边 / 填充）。
+#[derive(Debug, Clone, PartialEq, Default, xc_macro::Describable)]
+#[describable(Stroke, Fill)]
 pub struct Path(pub Path2D);
 
 impl Path {
@@ -80,19 +70,6 @@ impl Path {
 
     pub fn as_primitive(&self) -> &Path2D {
         &self.0
-    }
-}
-
-impl Deref for Path {
-    type Target = Path2D;
-    fn deref(&self) -> &Path2D {
-        &self.0
-    }
-}
-
-impl DerefMut for Path {
-    fn deref_mut(&mut self) -> &mut Path2D {
-        &mut self.0
     }
 }
 
@@ -111,7 +88,11 @@ impl ToShape2D for Path {
 // ─── Line ─────────────────────────────────────────────────────────────────
 
 /// 线段图元对象（两端点独立映射）。
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+///
+/// ⚠️ **只有描边槽位**：线段没有面积，"填色"在本类型的 `Descriptors` 里
+/// 连槽位都不存在（编译期挡住，不是运行时忽略）。
+#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[describable(Stroke)]
 pub struct Line(pub Line2D);
 
 impl Line {
@@ -132,19 +113,6 @@ impl Line {
     }
 }
 
-impl Deref for Line {
-    type Target = Line2D;
-    fn deref(&self) -> &Line2D {
-        &self.0
-    }
-}
-
-impl DerefMut for Line {
-    fn deref_mut(&mut self) -> &mut Line2D {
-        &mut self.0
-    }
-}
-
 impl From<Line2D> for Line {
     fn from(v: Line2D) -> Self {
         Self(v)
@@ -162,11 +130,12 @@ impl ToShape2D for Line {
 
 // ─── Rect ─────────────────────────────────────────────────────────────────
 
-/// 轴对齐矩形图元对象。
+/// 轴对齐矩形图元对象（可描边 / 填充）。
 ///
 /// 保留 `min()` / `max()` 访问器方法（内层 [`Rect2D`] 是 `min` / `max` **字段**）——
 /// 既有调用点 `rect.min()` 因此无需改动。
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[describable(Stroke, Fill)]
 pub struct Rect(pub Rect2D);
 
 impl Rect {
@@ -184,19 +153,6 @@ impl Rect {
 
     pub fn max(&self) -> Vec2 {
         self.0.max
-    }
-}
-
-impl Deref for Rect {
-    type Target = Rect2D;
-    fn deref(&self) -> &Rect2D {
-        &self.0
-    }
-}
-
-impl DerefMut for Rect {
-    fn deref_mut(&mut self) -> &mut Rect2D {
-        &mut self.0
     }
 }
 
@@ -218,7 +174,8 @@ impl ToShape2D for Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_notion::{Mat3, Vec3};
+    use xc_scene_contract::{Describable, FillDesc, StrokeDesc};
+    use xc_notion::{Color32, Mat3, Vec3};
 
     /// 相机降级矩阵：`diag(s, -s)` + 平移。
     fn camera_like(s: f32, tx: f32, ty: f32) -> Transform2D {
@@ -245,6 +202,38 @@ mod tests {
         assert_eq!(r.min(), Vec2::ZERO);
         assert_eq!(r.max(), Vec2::new(10.0, 5.0));
         assert_eq!(r.size(), Vec2::new(10.0, 5.0), "Rect2D::size 经 Deref 可用");
+    }
+
+    /// **M3-6 判据（编译期）**：线段没有 Fill 槽位。
+    ///
+    /// 下面这行只有 `Line::Descriptors == (Option<StrokeDesc>,)` 才编译得过；
+    /// 若宏把 Fill 也塞进去，会出现 "expected 1 element, found 2"。
+    #[test]
+    fn describable_line_has_no_fill_slot() {
+        let d: <Line as Describable>::Descriptors = (Some(StrokeDesc::new(Color32::RED, 2.0)),);
+        let style = Line::new((0.0, 0.0), (1.0, 0.0)).apply(&d);
+        assert_eq!(style.stroke, Some(Color32::RED));
+        assert_eq!(style.stroke_width, 2.0);
+        assert_eq!(style.fill, None, "线段不可填充");
+    }
+
+    /// Circle 有 Stroke + Fill 两个槽位；缺失槽位取主题默认（增量覆盖）。
+    #[test]
+    fn describable_circle_fill_and_stroke_slots() {
+        let c = Circle::new((0.0, 0.0), 1.0);
+
+        let only_fill: <Circle as Describable>::Descriptors = (None, Some(FillDesc::new(Color32::GREEN)));
+        let s = c.apply(&only_fill);
+        assert_eq!(s.fill, Some(Color32::GREEN));
+        assert_eq!(s.stroke, None, "未给描边 ⇒ 保持主题默认（无描边）");
+
+        let both: <Circle as Describable>::Descriptors = (
+            Some(StrokeDesc::new(Color32::RED, 3.0)),
+            Some(FillDesc::new(Color32::BLUE)),
+        );
+        let s = c.apply(&both);
+        assert_eq!(s.stroke, Some(Color32::RED));
+        assert_eq!(s.fill, Some(Color32::BLUE));
     }
 
     /// 两处真相消失：`Shape2D::Circle` 的数值来源是理念层 `Circle2D`。

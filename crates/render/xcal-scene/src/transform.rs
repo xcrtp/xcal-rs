@@ -13,9 +13,8 @@
 // 逐命令映射的实现已统一到 `xc_object::map_path_affine`（单份），
 // 本文件的正反向都复用它 —— 不再各写一份。
 
-use crate::types::Camera2D;
 use xc_notion::{Path2D, Transform2D as Affine2D, Vec2};
-use xc_object::{Circle, Line, Path};
+use xc_object::{Camera2D, Circle, Line, Path};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。
 ///
@@ -175,15 +174,14 @@ fn camera_inverse_affine(camera: &Camera2D) -> Affine2D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Rect;
-    use xc_notion::PathCommand;
+    use xc_notion::{PathCommand, Rect2D};
 
     /// 非平凡相机（非零中心 + 非零平移视口），放大数值差异。
     fn camera() -> Camera2D {
         Camera2D::new(
             (-3.5, 7.25).into(),
             12.0,
-            Rect::new((0.0, 0.0).into(), (800.0, 600.0).into()),
+            Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)),
         )
     }
 

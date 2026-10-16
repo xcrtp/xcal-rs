@@ -27,8 +27,9 @@ pub mod relation;
 pub mod scene;
 
 pub use descriptor::{
-    Describable, FillDesc, MaterialDesc, StrokeDesc, apply_fill_desc, apply_stroke_desc,
+    Describable, FillDesc, MaterialDesc, SLOT_FILL, SLOT_STROKE, StrokeDesc, apply_fill_desc,
+    apply_stroke_desc, theme_style,
 };
 pub use id::ObjectId;
 pub use relation::{Children, Parent};
-pub use scene::{Components, Scene};
+pub use scene::{Components, Scene, SceneRead};

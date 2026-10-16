@@ -15,7 +15,8 @@ use std::time::Instant;
 
 use glam::Mat4;
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry, Projection};
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
+use xc_object::{Camera3D, Projection};
 use xcal_scene::scene::primitives::wireframe_cube;
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::{

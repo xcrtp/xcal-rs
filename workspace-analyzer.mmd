@@ -4,8 +4,10 @@ graph TD
     xc-graph-eval --> xc-node
     xc-node-schema --> xc-node
     xc-node-schema --> xc-node-schema-macros
+    xc-object --> xc-macro
     xc-object --> xc-notion
     xc-object --> xc-render-ir
+    xc-object --> xc-scene-contract
     xc-prerender --> xc-content
     xc-prerender --> xc-notion
     xc-render-ir --> xc-notion
@@ -13,17 +15,18 @@ graph TD
     xc-scene-contract --> xc-render-ir
     xc-time --> xc-notion
     xcal-app --> xc-content
-    xcal-app --> xc-notion
     xcal-app --> xc-macro
+    xcal-app --> xc-notion
+    xcal-app --> xc-object
     xcal-app --> xc-prerender
     xcal-app --> xcal-egui
     xcal-app --> xcal-render
     xcal-app --> xcal-render-backends
     xcal-app --> xcal-scene
     xcal-app --> xcal-schedule
+    xcal-egui --> xc-macro
     xcal-egui --> xc-notion
     xcal-egui --> xc-object
-    xcal-egui --> xc-macro
     xcal-egui --> xcal-render
     xcal-egui --> xcal-render-backends
     xcal-egui --> xcal-scene
@@ -40,14 +43,18 @@ graph TD
     xcal-render --> xc-object
     xcal-render --> xc-render-ir
     xcal-render --> xc-resource
+    xcal-render --> xc-scene-contract
     xcal-render --> xc-vertex
     xcal-render --> xcal-scene
     xcal-render-backends --> xc-notion
+    xcal-render-backends --> xc-object
     xcal-render-backends --> xcal-render
     xcal-render-backends --> xcal-scene
+    xcal-scene --> xc-macro
     xcal-scene --> xc-notion
     xcal-scene --> xc-object
-    xcal-scene --> xc-macro
+    xcal-scene --> xc-render-ir
+    xcal-scene --> xc-scene-contract
     xcal-scene --> xc-time
     xcal-scene --> xcal-schedule
 classDef red stroke:#ff0000,stroke-width:2px;

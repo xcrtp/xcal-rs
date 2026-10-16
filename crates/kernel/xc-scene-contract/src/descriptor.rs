@@ -109,6 +109,29 @@ impl MaterialDesc {
 
 // ─── 合并辅助（供 `#[derive(Describable)]` 展开调用）────────────────────────
 
+/// 槽位掩码位：描边。
+pub const SLOT_STROKE: u8 = 1 << 0;
+/// 槽位掩码位：填充。
+pub const SLOT_FILL: u8 = 1 << 1;
+
+/// 主题默认样式：从 [`Style2D::default`] 起手，但**只保留对象声明的槽位**。
+///
+/// 为什么必须按槽位裁剪：`Style2D::default()` 是"有填充、无描边"的主题默认。
+/// 若原样用于 `Line`（无 Fill 槽位），会得到一个 `fill = Some(WHITE)` 的样式
+/// —— "线段不能填色"的**类型层保证**就会被运行时的主题默认偷偷破坏。
+/// 故未被声明的槽位在此显式关闭（`fill = None` / `stroke = None`）。
+pub fn theme_style(slot_mask: u8) -> Style2D {
+    let mut style = Style2D::default();
+    if slot_mask & SLOT_FILL == 0 {
+        style.fill = None;
+    }
+    if slot_mask & SLOT_STROKE == 0 {
+        style.stroke = None;
+        style.stroke_width = 0.0;
+    }
+    style
+}
+
 /// 把描边描述符合并进 `Style2D`（**不换算**：`width` / `space` 原样带入）。
 pub fn apply_stroke_desc(d: &StrokeDesc, style: &mut Style2D) {
     style.stroke = Some(d.color);
@@ -157,5 +180,17 @@ mod tests {
         };
         apply_fill_desc(&FillDesc::new(Color32::GREEN), &mut style);
         assert_eq!(style.fill, Some(Color32::GREEN));
+    }
+
+    /// **证伪点**：只声明 Stroke 的对象（线段），其主题默认样式里**不得**有填充
+    /// —— 否则"线段不能填色"的类型层保证会被主题默认破坏。
+    #[test]
+    fn theme_style_clears_undeclared_slots() {
+        let line = theme_style(SLOT_STROKE);
+        assert_eq!(line.fill, None, "未声明 Fill 槽位 ⇒ 不得有填充");
+        assert_eq!(line.stroke, None, "主题默认无描边（由 descriptor 提供）");
+
+        let circle = theme_style(SLOT_STROKE | SLOT_FILL);
+        assert_eq!(circle.fill, Some(Color32::WHITE), "声明的槽位保留主题默认");
     }
 }

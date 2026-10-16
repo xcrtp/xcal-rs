@@ -8,6 +8,7 @@
 // 独立的 `xcal-schedule` crate。
 
 pub mod animation;
+pub mod contract;
 pub mod director_state;
 pub mod domain;
 pub mod errors;
@@ -24,7 +25,9 @@ pub use time_state::TimeState;
 pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, PlayMode};
 pub use animation::{BindingTable, Binding, BindingTarget, SeekKind};
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
-pub use types::{Camera2D, Color32, Rect, Vec2, Vec3, Vec4};
+pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
+// 相机（M3-2）与摆放组件（M3-4）归场景对象层 `xc-object`：本层**不转发**，
+// 消费方直接 `use xc_object::{Camera2D, Camera3D, Projection, Transform}`。
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），
 // 下游通过 `#[macro_use]` 或 `xcal_scene::auto_into!` 访问。
 

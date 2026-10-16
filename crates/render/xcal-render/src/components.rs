@@ -10,15 +10,14 @@
 // `xcal_render::components::*` 路径不变。
 
 pub use xcal_scene::scene::components::{
-    CPUDevice, Parent, PathMesh, PhaseAnim, QuadMesh, Transform, TriangleMesh, WGPUDevice, marker,
-    mesh,
+    CPUDevice, PathMesh, PhaseAnim, QuadMesh, TriangleMesh, WGPUDevice, marker, mesh,
 };
 pub use xc_notion::{
     FunctionX2Y, Interpolator, ParameterCurveT2XY, ParameterCurveT2XYZ, Sampler1D, Sampler2D,
     SyncSendFn,
 };
-// 图元对象（M3-5：定义在场景对象层 `xc-object`，此处转发）。
-pub use xc_object::{Circle, Line, Path, Rect};
+// 图元对象与摆放组件（M3-4/M3-5：定义在场景对象层 `xc-object`，此处转发）。
+pub use xc_object::{Circle, Line, Path, Rect, Transform};
 pub use xc_render_ir::{FillSolid, FillStyle, StrokeSolid, StrokeStyle};
 
 #[cfg(test)]

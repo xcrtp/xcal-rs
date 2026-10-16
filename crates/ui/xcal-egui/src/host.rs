@@ -27,8 +27,7 @@ use xcal_scene::domain::{
     LayerDescriptor, LayerId, LayerKind, SceneEvent, SceneView,
 };
 use xcal_schedule::resource::Resources;
-use xcal_scene::scene::components::Camera3D;
-use xcal_scene::types::Rect;
+use xc_object::Camera3D;
 use xcal_scene::{Curve, TimeState};
 use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue};
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
@@ -145,11 +144,12 @@ impl EguiSceneHost {
         };
 
         // 指针是否落在视口矩形内（悬停/点击只在视口内上报）。
+        // M3-2：`camera.rect` 已是理念层 `Rect2D`（`min`/`max` 是字段）。
         let in_view = |p: egui::Pos2| {
-            p.x >= camera.rect.min().x
-                && p.x <= camera.rect.max().x
-                && p.y >= camera.rect.min().y
-                && p.y <= camera.rect.max().y
+            p.x >= camera.rect.min.x
+                && p.x <= camera.rect.max.x
+                && p.y >= camera.rect.min.y
+                && p.y <= camera.rect.max.y
         };
 
         let mut events = Vec::new();
@@ -380,9 +380,9 @@ impl EguiSceneHost {
 
     /// 面板布局完成后写入中央视口矩形（原 ViewRectUpdateSystem 的职责）。
     pub fn update_view_rect(ui: &egui::Ui, res: &mut Resources) {
-        // egui::Rect → xcal_scene::Rect 的就地转换（后端转换由使用方负责）。
+        // egui::Rect → 理念层 `Rect2D` 的就地转换（后端转换由使用方负责）。
         let egui_rect = ui.available_rect_before_wrap();
-        let rect = Rect::new(
+        let rect = Rect2D::new(
             (egui_rect.min.x, egui_rect.min.y).into(),
             (egui_rect.max.x, egui_rect.max.y).into(),
         );
@@ -414,8 +414,8 @@ impl EguiSceneHost {
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
         let egui_rect = egui::Rect::from_min_max(
-            egui::pos2(view_rect.min().x, view_rect.min().y),
-            egui::pos2(view_rect.max().x, view_rect.max().y),
+            egui::pos2(view_rect.min.x, view_rect.min.y),
+            egui::pos2(view_rect.max.x, view_rect.max.y),
         );
 
         let painter = ui.painter_at(egui_rect);
@@ -460,7 +460,7 @@ impl EguiSceneHost {
             .collect();
 
         // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
-        let viewport = Rect2D::new(view_rect.min(), view_rect.max());
+        let viewport = Rect2D::new(view_rect.min, view_rect.max);
 
         let (Some(queue_2d), Some(queue_3d)) = (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
         else {
@@ -503,7 +503,7 @@ impl EguiSceneHost {
 mod tests {
     use super::*;
     use xcal_schedule::resource::Resources;
-    use xcal_scene::scene::components::{Camera3D, Projection};
+    use xc_object::{Camera3D, Projection};
 
     /// headless：无任何 egui 上下文即可构建 SceneView。
     #[test]

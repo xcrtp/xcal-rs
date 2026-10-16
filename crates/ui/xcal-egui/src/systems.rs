@@ -23,7 +23,9 @@ use xcal_scene::domain::{CameraCommand, ContentTextureSpec, InputEvents, SceneEv
 use xcal_schedule::system::System;
 use xcal_scene::scene::components::{ContentTextureItem, MorphShape};
 use xcal_scene::transform::Transform2D;
-use xcal_scene::types::{Camera2D, Rect};
+use xc_notion::Rect2D;
+use xc_object::Camera2D;
+use xcal_scene::contract::WorldView;
 use xcal_render::components::{
     FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
@@ -78,7 +80,7 @@ impl System for CameraInputSystem {
 
 pub struct GridBuildSystem;
 impl GridBuildSystem {
-    fn push_grid(queue: &mut DrawQueue, camera: &Camera2D, rect: Rect) {
+    fn push_grid(queue: &mut DrawQueue, camera: &Camera2D, rect: Rect2D) {
         let center = camera.center;
         let scale = camera.scale;
         let half_w = rect.size().x / 2.0 / scale;
@@ -174,7 +176,10 @@ impl System for SceneRecordSystem {
         // 同时需要 &hecs::World（不可变）与 &mut DrawQueue；
         // 通过 split-borrow 辅助 API 在闭包内同时持有两个引用。
         ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, queue| {
-            record_scene(world, &camera, queue);
+            // M3-7：`record_scene` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
+            // `WorldView`（`xcal_scene::contract`）接入 —— 渲染管线不认识 hecs，
+            // 且这里用的是不可变借用（渲染只需要读）。
+            record_scene(&WorldView::new(world), &camera, queue);
 
             for (func, sampler, stroke, phase) in world
                 .query::<(
@@ -427,7 +432,7 @@ mod tests {
         Camera2D::new(
             (0.0, 0.0).into(),
             25.0,
-            Rect::new((0.0, 0.0).into(), (TEX_W as f32, TEX_H as f32).into()),
+            Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(TEX_W as f32, TEX_H as f32)),
         )
     }
 
@@ -537,7 +542,7 @@ mod tests {
         let wrong = Camera2D::new(
             (100.0, 100.0).into(),
             25.0,
-            Rect::new((0.0, 0.0).into(), (TEX_W as f32, TEX_H as f32).into()),
+            Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(TEX_W as f32, TEX_H as f32)),
         );
         let mut wrong_queue = ContentTextureQueue::default();
         for (path, stroke, _) in sched

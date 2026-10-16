@@ -98,7 +98,7 @@ pub use render_layer::RenderLayer;
 pub use render_target::RenderTarget;
 #[cfg(feature = "wgpu")]
 pub use resource_cache::{
-    CacheKey, DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey,
+    DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey,
 };
 
 // GpuHandle / GpuResourceId / AccessError 是纯 Any 包装 + 类型，无 wgpu 依赖，始终可用。

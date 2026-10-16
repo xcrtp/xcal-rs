@@ -18,8 +18,8 @@
 
 ## 依赖图
 
-依赖方向自上而下：`kernel → graph → schedule → render → ui → app`，反向禁止。
-（`schedule` 无内部依赖，是通用底座；`render` / `ui` / `app` 亦可直接依赖 `kernel` / `graph`。）
+依赖方向自上而下：`kernel → object / graph → schedule → render → ui → app`，反向禁止。
+（`schedule` 无内部依赖，是通用底座；`render` / `ui` / `app` 亦可直接依赖 `kernel` / `object` / `graph`。）
 
 ```mermaid
 graph TD
@@ -151,30 +151,30 @@ graph TD
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xcal-app | 0 | 9 | 1.00 |
+| xcal-app | 0 | 10 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
-| xc-scene-contract | 0 | 2 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
 | xcal-egui | 1 | 7 | 0.88 |
-| xcal-render | 3 | 7 | 0.70 |
+| xcal-render | 3 | 8 | 0.73 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
 | xc-prerender | 1 | 2 | 0.67 |
-| xcal-render-backends | 2 | 3 | 0.60 |
-| xcal-scene | 4 | 5 | 0.56 |
+| xcal-render-backends | 2 | 4 | 0.67 |
+| xcal-scene | 4 | 7 | 0.64 |
 | xc-graph-algo | 1 | 1 | 0.50 |
 | xc-time | 1 | 1 | 0.50 |
-| xc-object | 3 | 2 | 0.40 |
-| xc-render-ir | 3 | 1 | 0.25 |
+| xc-object | 5 | 4 | 0.44 |
+| xc-scene-contract | 3 | 2 | 0.40 |
 | xc-content | 3 | 1 | 0.25 |
+| xc-render-ir | 4 | 1 | 0.20 |
 | xcal-schedule | 3 | 0 | 0.00 |
 | xc-vertex | 1 | 0 | 0.00 |
 | xc-resource | 1 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
 | xc-notion | 11 | 0 | 0.00 |
-| xc-macro | 3 | 0 | 0.00 |
+| xc-macro | 4 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 

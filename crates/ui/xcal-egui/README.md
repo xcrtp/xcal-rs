@@ -2,8 +2,8 @@
 
 > **UI 适配层**：`EguiSceneHost` 是 egui 与场景之间的**唯一**适配层——把每帧 egui
 > 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容；
-> 另有 4 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
-> 网格背景、场景录制），只依赖纯数据 Resource，可 headless 测试。
+> 另有 5 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
+> 坐标轴刷新、函数图像刷新、场景录制），只依赖纯数据 Resource，可 headless 测试。
 
 ```
 xcal-scene (场景组件 + 场景 System + domain 契约)
@@ -35,7 +35,7 @@ xcal-app (装配 + ParamPanelSystem)
 | `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
 | `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
 | `InputEvents`（`Vec<SceneEvent>`）| xcal-scene::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
-| `DrawQueue`（来自 xcal-render）| — | 2D 绘制命令队列（Prepare 写网格、RenderCommit 录场景）|
+| `DrawQueue`（来自 xcal-render）| — | 2D 绘制命令队列（RenderCommit 由 `SceneRecordSystem` 录场景；网格线已是场景对象，与内容同路录制）|
 | `DrawQueue3D`（来自 xcal-render）| — | 3D 绘制命令队列（`EguiSceneHost::present` 消费）|
 | `ContentTextureQueue`（来自 xcal-render，S3-3）| — | 内容纹理层的当帧录制结果（标记实体）|
 | `MorphQueue`（来自 xcal-render，S4.3）| — | 形变项当帧快照（`from`/`to` 常量 + 逐帧 `t`），由 `MorphRecordSystem` 写 |

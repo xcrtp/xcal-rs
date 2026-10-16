@@ -16,7 +16,8 @@ use std::sync::Arc;
 use xcal_schedule::resource::Resources;
 use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use xcal_scene::scene::components::{Camera3D, Material3D, MeshGeometry};
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
+use xc_object::Camera3D;
 use xcal_egui::resources::{AppCamera, TimeState, UiConfig, ViewRect};
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
