@@ -17,6 +17,11 @@
 //   [`record_scene`] 负责把 hecs 组件组合成 `Drawable` 后调用它；
 // - 旧「逐组件穷举宏」已删除。新增图元只需实现 [`ToShape2D`]
 //   （形状）+ 复用既有 [`ResolveStyle`]（样式），**不必改动本模块的录制逻辑**。
+//
+// S4.3（形变上 GPU）：
+// - 形变不走 [`DrawCommand`]（那是冻结结构，装不下 `to` / `t`），而是经
+//   [`MorphQueue`] 以"两端几何 + `t`"的原样形态直达 2D 后端；
+// - 两端几何与 `t` 无关 ⇒ 三角化与 GPU 缓冲都帧间命中，每帧只写一个 `t` uniform。
 
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
@@ -25,6 +30,15 @@ use xcal_scene::types::{Camera2D, Rect};
 use xc_geometry::{MeasureSpace, Rect2D, Vec2 as GeoVec2, resolve_width};
 
 /// 2D 绘制器 Trait。
+///
+/// # 当前状态（S4.1 后）
+///
+/// 本 trait **零生产实现**——实际 2D 渲染路径是 [`DrawQueue`] 录制 + 后端直消费
+/// （`xcal-render-backends::wgpu_2d` 走 lyon 三角化）。旧 CPU 回放实现已在 S4.1
+/// 随其编译期 feature 一并删除；本 trait 与
+/// [`DrawQueue::execute`] 仅由测试 mock 使用。按
+/// [`crate::Painter3D`] 的先例**保留 + 标注状态**：去留待后续阶段决定
+/// （删掉后 `DrawQueue` 只剩 GPU 一条消费路径，将来加非 GPU 后端要重建）。
 pub trait Painter2D {
     fn paint(&self, shape: &Shape2D, style: &Style2D);
 }
@@ -75,7 +89,14 @@ fn rect_shape(r: &Rect) -> Shape2D {
 }
 
 /// 场景图元 → 屏幕空间 [`Shape2D`]。
-trait ToShape2D {
+///
+/// 公开以允许**下游 crate**为新图元组件提供实现（本 crate 自身只覆盖
+/// `Circle` / `Path` / `Line` / `Rect`）。
+///
+/// ⚠️ `xcal-scene` **不能**实现它（依赖方向为 xcal-scene ← xcal-render，
+/// 反向会成环）——图元组件若定义在 scene，其 `ToShape2D` 只能放在
+/// 依赖 xcal-render 的 crate 里。彻底解决需把 `record_scene` 下沉，已延后。
+pub trait ToShape2D {
     fn to_shape2d(&self, camera: &Camera2D) -> Shape2D;
 }
 
@@ -121,7 +142,10 @@ impl ToShape2D for Rect {
 /// ⚠️ **本任务是唯一换算点**：描边宽度在此经 [`resolve_width`] 结合
 /// `camera.scale` 解析为屏幕像素。项目中其它任何地方都**不得**再乘除 `scale`——
 /// 否则会出现"某些描边乘过、某些没乘"的不一致。
-trait ResolveStyle {
+///
+/// 公开以允许下游 crate 为新样式组件提供实现（本 crate 只覆盖
+/// `StrokeSolid` / `FillSolid`）。
+pub trait ResolveStyle {
     fn resolve_style(&self, scale: f32) -> Style2D;
 }
 
@@ -303,6 +327,10 @@ impl DrawQueue {
         }
     }
 
+    /// 排序后逐条 `paint`。
+    ///
+    /// ⚠️ S4.1 后**零生产调用者**（仅测试 mock）——生产路径是后端直接消费
+    /// [`DrawQueue::commands`]；保留原因见 [`Painter2D`] 的"当前状态"。
     pub fn execute<P: Painter2D>(&mut self, painter: &P) {
         self.ensure_sorted();
         for cmd in &self.commands {
@@ -331,6 +359,71 @@ impl Default for DrawQueue {
 #[derive(Default)]
 pub struct ContentTextureQueue(pub DrawQueue);
 
+// ─── 形变绘制项（S4.3） ───────────────────────────────────────────────────
+
+/// 形变绘制项：形变的两端 `from` / `to` 是**常量**，逐帧变的只有 `t`。
+///
+/// 因此几何可一次性三角化并缓存（帧间零重算、零上传），每帧只写一个 `t`
+/// uniform —— 与 G7「描边宽度参数化」完全同一模式（几何静态、变量走 uniform）。
+///
+/// 为什么不走 [`Shape2D`] / [`DrawCommand`]：那两者是**冻结结构**，承载不了
+/// `to` / `t` 这对额外信息；形变以"两端几何 + `t`"的原样形态直达 2D 后端。
+///
+/// ⚠️ 两端都会被**弧长等点重采样**到 `samples` 个点（见
+/// [`MorphItem::sampled_endpoints`]），保证两条几何的顶点/索引一一对应，
+/// 于是 GPU 的 `mix(from, to, t)` 是逐点插值而不是错位连接。
+#[derive(Debug, Clone)]
+pub struct MorphItem {
+    /// 形变起点路径（世界/屏幕空间由 `style.space` 与相机决定，与 [`Path`] 同口径）。
+    pub from: xc_geometry::Path2D,
+    /// 形变终点路径。
+    pub to: xc_geometry::Path2D,
+    /// 形变参数 ∈ [0, 1]（由 `BindingApplySystem` 写 `MorphShape.t`）。
+    pub t: f32,
+    /// 等点采样数（顶点数与该值无关，只决定两端几何的点数）。
+    pub samples: u32,
+    /// 已解析为屏幕空间的样式（唯一换算点仍是 [`ResolveStyle`]）。
+    pub style: Style2D,
+}
+
+impl MorphItem {
+    /// 两端经**弧长等点重采样**后的闭合折线（点数恒为 `samples`）。
+    ///
+    /// 与 [`xc_geometry::Path2D::morph_points`] 的采样口径完全一致
+    /// （同样的 `n` / `MORPH_TOLERANCE` / `closed = true`），但**与 `t` 无关**
+    /// ⇒ 结果可逐帧缓存，是"几何帧间不变"的关键。
+    ///
+    /// 退化处理与 `morph_points` 相同：任一侧为空时用另一侧补齐两端。
+    pub fn sampled_endpoints(&self) -> (xc_geometry::Path2D, xc_geometry::Path2D) {
+        use xc_geometry::{MORPH_TOLERANCE, Path2D};
+        let n = self.samples.max(1) as usize;
+        let a = self.from.resample_arc_length(n, MORPH_TOLERANCE, true);
+        let b = self.to.resample_arc_length(n, MORPH_TOLERANCE, true);
+        match (a.is_empty(), b.is_empty()) {
+            (true, true) => (Path2D::new(), Path2D::new()),
+            (true, false) => {
+                let p = Path2D::from_polyline(&b, true);
+                (p.clone(), p)
+            }
+            (false, true) => {
+                let p = Path2D::from_polyline(&a, true);
+                (p.clone(), p)
+            }
+            (false, false) => (
+                Path2D::from_polyline(&a, true),
+                Path2D::from_polyline(&b, true),
+            ),
+        }
+    }
+}
+
+/// 形变绘制队列（S4.3）：当帧的形变项，与 [`DrawQueue`] 并行持有。
+///
+/// 渲染顺序说明见 `xcal-render-backends::wgpu_2d::finish_frame`：形变项排在
+/// `DrawQueue` 的全部几何之后（二者同为 z = 0 的内容；网格/轴线的 z < 0 不受影响）。
+#[derive(Default)]
+pub struct MorphQueue(pub Vec<MorphItem>);
+
 // ─── 可绘制对象（ECS 无关的录制入口）────────────────────────────────────────
 
 /// 已降级的绘制描述：能把自己转换成**屏幕空间**的 [`Shape2D`] / [`Style2D`]。
@@ -352,7 +445,6 @@ pub trait Drawable {
 ///
 /// 之所以是"引用对"而非裸组件：`to_primitive` 必须同时产出形状与样式，
 /// 而二者在 ECS 里是两个独立组件类型。
-#[allow(private_bounds)] // ToShape2D / ResolveStyle 是模块内实现细节，不外泄为公开 API
 impl<S: ToShape2D, T: ResolveStyle> Drawable for (&S, &T) {
     fn to_primitive(&self, camera: &Camera2D) -> Option<(Shape2D, Style2D)> {
         Some((self.0.to_shape2d(camera), self.1.resolve_style(camera.scale)))

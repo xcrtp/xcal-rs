@@ -2,10 +2,11 @@
 //
 // 新风格 2D Painter trait（预留）。
 //
-// 注意：现有 2D 管线（draw.rs 中的 Painter2D + Shape/Style + record_scene）
-// 是冻结 API，保持不变并继续工作。本模块定义的 Painter2DTarget 是面向
-// Shape2D（shape.rs）新图元体系的光栅化目标，供新后端（SVG/未来 GPU 2D）
-// 实现，后续逐步替换旧管线。
+// 注意：`draw.rs` 中的 `Painter2D` + `Shape2D`/`Style2D` + `record_scene` 是既有
+// 录制 API，保持不变并继续工作。本模块定义的 `Painter2DTarget` 是面向
+// `Shape2D` 新图元体系的光栅化目标，供新后端实现。
+// S4.1 后生产 2D 路径为 `DrawQueue` + `wgpu_2d`（lyon 三角化），本研究性
+// trait 尚无实现。
 
 use xc_geometry::{Transform2D, Vec2};
 

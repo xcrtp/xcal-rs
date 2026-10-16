@@ -176,10 +176,9 @@ FrameEnd:      —（内容提交由 host.present 承担；
 ```
 
 3D 合成方式：`EguiSceneHost::present` 先铺 `SceneView::background`，再**遍历**
-`SceneView::layers`（索引序 = 合成序，先 = 下），把全部 GPU 图层（3D，及
-`UiConfig::gpu_2d = true` 时的 2D）交给**单个** `SceneCompositorCallback`
-（`Shape::Callback` 注册在有效序中**首个** GPU 图层的位置），由它一次性离屏渲染并
-合成全部图层；`gpu_2d = false` 的 CPU 2D 层则在其声明位置经 `EguiPainter` 就地回放。
+`SceneView::layers`（索引序 = 合成序，先 = 下），把**全部**图层（S4.1 后 2D / 3D /
+内容纹理都走 GPU）交给**单个** `SceneCompositorCallback`（`Shape::Callback` 注册在
+有效序**起点**），由它一次性离屏渲染并合成全部图层。
 不使用 `Order::Background`，clip rect 自动限制到中央视口。
 
 ### 技术约束
@@ -304,17 +303,20 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 从不读该标签，故标签**仅作声明**。
 
 **S3-1 wGPU 2D 后端**（`xcal-render-backends::wgpu_2d`）：离屏 `Rgba8Unorm`（非 sRGB，
-存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化 → 顶点哈希缓存
-（`ResourceCache<()>` + `DeferredDestroyer`）→ `UniformArena`（**复用 `wgpu_3d`**，
-256B 对齐 dynamic offset，`UNIFORM_SIZE = 96` = mat4 + color + **params**，
-`params.x = stroke_width`）→ 离屏绘制。`SceneCompositorCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
+存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化（**CPU 侧结果缓存，
+命中 `mark_used` 防误驱逐**）→ **按 `(color, stroke_width)` 合批**（成员顶点拼接 +
+索引 rebase 成一套缓冲，整批一次 `draw_indexed`；`draw_count` 仍是几何条数，
+新增 `batch_count` = 实际 draw call 数）→ **形变项**（`from`/`to` 等点重采样后各三角化
+一次并按内容哈希缓存，缓存键不含 `t`，逐帧只写 `t` uniform；`shape_2d_morph.wgsl`
+双 vertex buffer 做 `mix`）→ `UniformArena`（**复用 `wgpu_3d`**，256B 对齐 dynamic offset，
+`UNIFORM_SIZE = 96` = mat4 + color + **params**，`params.x = stroke_width`、`params.y = t`）
+→ 离屏绘制。`SceneCompositorCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
 **S3-2 起本文件不再自带合成管线**（`pipeline_composite` / `composite_bgl` / `sampler` /
 `composite()` / `COMPOSITE_QUAD` 已移除），离屏清屏改为**透明**，合成统一交给
 `xcal-render-backends::compositor::Compositor`。
-**运行期开关** `UiConfig::gpu_2d`（默认 on）在 `xcal-egui::EguiSceneHost::present` 二选一：
-`SceneCompositorCallback` GPU 路径 ↔ `EguiPainter` CPU 回放（旧管线退役属 S3-4）。
-CPU 回放路径另受 `xcal-render-backends` 的**编译期** feature `cpu-2d` 门控
-（关闭后 `egui_2d` 不被编译）；运行期开关与编译期 feature 语义不同，不可互相替代。
+**S4.1 起本文件是唯一的 2D 渲染路径**：旧 CPU 回放后端（`egui_2d`）与其
+**编译期** feature、运行期管线开关已一并删除——2D 不再有"两条并存管线"，
+全部 `Shape2D` 都经 lyon 三角化 + 离屏 MSAA + 合成。
 
 **egui-wgpu 回调 viewport 契约（踩坑记录）**：egui-wgpu 处理 `Primitive::Callback` 时会把
 render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一个 primitive 才复位）。

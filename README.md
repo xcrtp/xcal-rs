@@ -33,7 +33,7 @@ crates/
 ├── render/          # 场景层 + 渲染层
 │   ├── xcal-scene         场景层：场景组件 + 场景 System + domain 契约 + Transform2D + 3D 场景类型
 │   ├── xcal-render       2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer）
-│   └── xcal-render-backends  wgpu / egui-wgpu 具体后端（WgpuBackend3D / EguiPainter）
+│   └── xcal-render-backends  wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D）
 │
 ├── ui/              # UI 与编辑器层
 │   ├── xcal-egui         egui UI overlay System（控制面板 / 网格 / 相机）
@@ -69,7 +69,7 @@ crates/
 | `xcal-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs，不含任何场景/渲染概念 |
 | `xcal-scene` | render | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply）+ domain 契约（CameraCommand / SceneView / ContentHandle）+ Transform2D 体系 + 3D 场景类型 + TimeState；依赖 `xcal-schedule` |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape / RenderLayer / Viewport） |
-| `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback / EguiPainter） |
+| `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback） |
 | `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
 | `xcal-node-editor` | ui | 纯逻辑节点编辑器状态机（Command / Undo / 可插拔 HitTestPolicy） |
 | `xcal-node-egui` | ui | egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸） |

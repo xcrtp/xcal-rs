@@ -5,16 +5,18 @@
 // （RenderTarget / RenderLayer / RenderBackend / ResourceCache 等 GPU 抽象）。
 //
 // 包含：
-//   - 冻结的 2D 管线（draw.rs：Painter2D / DrawQueue / Shape / Style / record_scene）
+//   - 2D 绘制管线（draw.rs：Painter2D / DrawQueue / Shape2D / Style2D /
+//     Drawable / record_drawables / record_scene）
 //   - 3D 队列与绘制器 trait（draw_queue_3d.rs / painter_3d.rs）
 //   - 视口/渲染目标/渲染层（viewport.rs / render_target.rs / render_layer.rs）
 //   - 后端 trait 与资源缓存的过渡 shim（render_backend.rs / resource_cache.rs，wgpu gate）
-//   - 新图元体系（shape.rs / painter_2d.rs / draw_queue_2d.rs）
+//   - 图元体系（shape.rs / painter_2d.rs / draw_queue_2d.rs）
 //
 // 渲染契约层（顶点格式 / 资源缓存纯数据）已下沉 kernel（xc-vertex / xc-resource），
 // 这里通过 `pub use xc_vertex as vertex;` 与 shim 模块保留原有公开路径。
 //
-// 具体后端（wgpu_3d / egui_2d / eframe）位于 xcal-render-backends。
+// 具体后端（wgpu_2d / wgpu_3d / eframe）位于 xcal-render-backends。
+// S4.1：旧 CPU 2D 回放后端（`egui_2d` 模块）已删除。
 
 pub mod components;
 pub mod content_ir;
@@ -43,8 +45,9 @@ pub mod resource_cache;
 // ─── 2D 管线 re-export ────────────────────────────────────────────────────
 // M0 起载荷统一为 Shape2D / Style2D（旧 Shape / Style 枚举已删除）。
 pub use draw::{
-    ContentTextureQueue, DrawCommand, DrawQueue, Drawable, Painter2D, SceneRender, ZIndex,
-    record_drawables, record_path_stroke, record_scene,
+    ContentTextureQueue, DrawCommand, DrawQueue, Drawable, MorphItem, MorphQueue, Painter2D,
+    ResolveStyle, SceneRender, ToShape2D, ZIndex, record_drawables, record_path_stroke,
+    record_scene,
 };
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────

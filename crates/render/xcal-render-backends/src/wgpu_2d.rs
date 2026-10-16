@@ -2,7 +2,8 @@
 //
 // S3-1：wGPU 2D 后端 + 离屏纹理 + MSAA（4x）。
 //
-// 与 `egui_2d.rs`（旧 CPU 管线）**并行存在**，由运行期开关切换（见 host::present）。
+// S4.1 后本文件是**唯一**的 2D 渲染路径（旧 CPU 回放 `egui_2d.rs` 已随其
+// 编译期 feature 一并删除）——所有 `Shape2D` 都经此渲染。
 // 本后端把 `Shape2D` 三角化（S3-0 的 lyon 适配层）后渲染到**离屏纹理**，
 // 再交给 [`crate::Compositor`] 按声明顺序合成进 eframe 主 pass
 // —— 为 S3-2（合成器）/ S3-3（2D/3D 互为纹理）铺路。
@@ -34,13 +35,14 @@ use wgpu::util::DeviceExt as _;
 
 use xcal_render::resource_cache::{ResourceCache, ResourceKey};
 use xcal_render::{
-    AaModel, CacheStrategy, DrawQueue, GpuHandle, Painter2DTarget, Shape2D, Style2D, TessKind,
-    Tessellation2D, VertexLayout, hash_bytes, tessellate, tolerance_for_scale,
+    AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, Shape2D, Style2D,
+    TessKind, Tessellation2D, Vertex2D, VertexInputDesc, VertexLayout, hash_bytes, tessellate,
+    tolerance_for_scale,
 };
 use xcal_scene::domain::LayerId;
 use xc_geometry::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 
-use crate::vertex_layout::to_wgpu;
+use crate::vertex_layout::{to_wgpu, to_wgpu_buffers};
 use crate::wgpu_3d::UniformArena;
 
 /// MSAA 采样数（验收项：`multisample.count == 4`）。
@@ -72,6 +74,9 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 /// 2D 几何着色器（几何 pass）。
 pub const SHAPE_2D_SHADER: &str = include_str!("../shaders/shape_2d.wgsl");
+
+/// 2D **形变**几何着色器（S4.3）：双 vertex buffer + `t` uniform（见 shader 头注）。
+pub const SHAPE_2D_MORPH_SHADER: &str = include_str!("../shaders/shape_2d_morph.wgsl");
 
 // ─── 帧几何 ───────────────────────────────────────────────────────────────
 
@@ -174,8 +179,22 @@ pub fn snapshot_queue(queue: &DrawQueue) -> Vec<Recorded2D> {
 
 // ─── GPU 资源 ─────────────────────────────────────────────────────────────
 
-/// 缓存条目：一条 draw 的几何缓冲。
-struct GeometryBuffers {
+/// 缓存条目：一条几何的**三角化结果（CPU 侧）**。
+///
+/// S4.2 起不再持有 GPU 缓冲——GPU 缓冲由**合批**（见 [`BatchBuffers`]）按
+/// `(color, stroke_width)` 统一持有：顶点/索引按批上传一次，批内容不变即命中，
+/// 稳态零上传。本条目只负责**免重复三角化**，并作为合批装配的数据源。
+struct CachedGeometry {
+    vertices: Vec<Vertex2D>,
+    indices: Vec<u32>,
+}
+
+/// 合批缓存条目：同 `(color, stroke_width)` 的若干几何合并后的**一套** GPU 缓冲。
+///
+/// 成员的顶点按序拼接；成员索引已按各自顶点基址**重排**（rebase），故整批
+/// 只需**一次** `draw_indexed(0..index_count, 0, ..)`——这是 draw call 数
+/// 从"几何条数"降到"批数"的关键。
+struct BatchBuffers {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
@@ -183,11 +202,32 @@ struct GeometryBuffers {
 
 // Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（与 wgpu_3d.rs 的
 // CachedMeshBuffers 同口径）。
-unsafe impl Send for GeometryBuffers {}
-unsafe impl Sync for GeometryBuffers {}
+unsafe impl Send for BatchBuffers {}
+unsafe impl Sync for BatchBuffers {}
 
-/// `ResourceKey` 类型标签：2D 三角化几何缓冲。
+/// `ResourceKey` 类型标签：2D 三角化几何（CPU 侧，免重复三角化）。
 struct Geometry2DTag;
+
+/// `ResourceKey` 类型标签：合批后的 GPU 缓冲。
+struct Batch2DTag;
+
+/// 形变缓存条目（S4.3）：`from` / `to` 两侧几何的 GPU 顶点缓冲 + 共享索引缓冲。
+///
+/// 两侧顶点数/索引数**一一对应**（等点重采样保证），故共用一份索引表；
+/// 逐帧变的只有 `t`（uniform），本条目内容帧间不变 ⇒ 稳态零上传。
+struct MorphBuffers {
+    from_vertex_buffer: wgpu::Buffer,
+    to_vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+}
+
+// Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（同 [`BatchBuffers`]）。
+unsafe impl Send for MorphBuffers {}
+unsafe impl Sync for MorphBuffers {}
+
+/// `ResourceKey` 类型标签：形变（from/to 双侧）GPU 缓冲。
+struct Morph2DTag;
 
 /// 离屏渲染目标（随视口尺寸重建）。
 struct OffscreenTargets {
@@ -202,7 +242,7 @@ struct OffscreenTargets {
     msaa_view: wgpu::TextureView,
 }
 
-/// 已准备的单条绘制。
+/// 已准备的一次**合批**绘制（`draw_indexed` 一次）。
 struct Prepared2D {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -210,19 +250,50 @@ struct Prepared2D {
     uniform_offset: u32,
 }
 
+/// 已准备的一次**形变**绘制（双 vertex buffer + `t` uniform，`draw_indexed` 一次）。
+struct Prepared2DMorph {
+    from_vertex_buffer: wgpu::Buffer,
+    to_vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    uniform_offset: u32,
+}
+
+/// 本帧缓存命中统计（S4.2 / S4.3：让"合批 + 缓存"可观测、可证伪）。
+///
+/// 稳态（内容不变）下 `geom_misses == 0`：几何条目只要本帧被再次用到就会
+/// 刷新 `last_used_frame`，因此不会被帧末 `evict_unused(0)` 驱逐。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameCacheStats {
+    /// 本帧请求的几何数（三角化产出条数）。
+    pub geom_requests: usize,
+    /// 其中缓存未命中（需重新三角化并建条目）的数。
+    pub geom_misses: usize,
+    /// 本帧请求的形变几何数（S4.3）。
+    pub morph_requests: usize,
+    /// 其中缓存未命中的数。⚠️ `t` 变化**不**计入 − 形变几何与 `t` 无关，
+    /// 稳态（只有 `t` 在变）下本值恒为 0。
+    pub morph_misses: usize,
+}
+
 /// 一帧的离屏结果（`prepare` 阶段产出、由回调交给合成器）。
 pub struct Frame2DData {
     /// 离屏纹理（单采样）视图（合成器的采样源）。
     pub offscreen: wgpu::TextureView,
-    /// 本帧实际 draw 数（0 表示只有清屏）。
+    /// 本帧的**几何条数**（三角化产出条数；语义自 S3-1 起未变）。
     pub draw_count: usize,
-    /// 保活：各 draw 的 bind group 引用的 uniform arena 缓冲。
+    /// 本帧实际 `draw_indexed` 次数 = 合批后的**批数**（≤ `draw_count`）。
+    pub batch_count: usize,
+    /// 本帧缓存命中统计。
+    pub cache: FrameCacheStats,
+    /// 保活：各批的 bind group 引用的 uniform arena 缓冲。
     pub _arena_buffer: wgpu::Buffer,
 }
 
 // ─── WgpuBackend2D ────────────────────────────────────────────────────────
 
-/// wGPU 2D 后端：2D 几何管线 + 离屏/MSAA 目标 + uniform arena + 几何缓存。
+/// wGPU 2D 后端：2D 几何管线 + 离屏/MSAA 目标 + uniform arena +
+/// 两级缓存（三角化结果 / 合批 GPU 缓冲）。
 ///
 /// **不含合成管线**（S3-2/C2 起统一由 [`crate::Compositor`] 承担）。
 pub struct WgpuBackend2D {
@@ -230,18 +301,27 @@ pub struct WgpuBackend2D {
     queue: wgpu::Queue,
     /// 2D 几何管线（4x MSAA，目标 = 离屏 MSAA 纹理）。
     pipeline_2d: wgpu::RenderPipeline,
+    /// 2D **形变**管线（S4.3）：双 vertex buffer + `t` uniform，其余状态同 `pipeline_2d`。
+    pipeline_2d_morph: wgpu::RenderPipeline,
     /// 动态 uniform 绑定布局（与 [`UniformArena`] 配套）。
     bind_group_layout: wgpu::BindGroupLayout,
     arena: UniformArena,
     /// uniform arena 的 bind group（缓存：arena generation + bind group），
     /// 仅在 arena 扩容重建 buffer 时失效重建。
     arena_bind_group: Option<(u64, wgpu::BindGroup)>,
+    /// 三角化结果缓存（CPU 侧，按内容哈希）：命中即免三角化。
     geom_cache: ResourceCache<()>,
+    /// 合批后的 GPU 缓冲缓存（按"批内容"哈希）：命中即免装配 + 免上传。
+    batch_cache: ResourceCache<()>,
+    /// 形变（from/to 双侧）GPU 缓冲缓存（S4.3）：`t` 不参与键 ⇒ 稳态零上传。
+    morph_cache: ResourceCache<()>,
     /// 按 [`LayerId`] 分别持有的离屏目标（尺寸变化时重建）。
     targets: HashMap<LayerId, OffscreenTargets>,
     /// 本帧几何（`begin_frame` 设置，`finish_frame` 消费）。
     geometry: Frame2DGeometry,
     recorder: Vec<Recorded2D>,
+    /// 本帧形变项（S4.3，`begin_frame_at` 清空）。
+    morph_recorder: Vec<MorphItem>,
 }
 
 impl WgpuBackend2D {
@@ -325,6 +405,66 @@ impl WgpuBackend2D {
             cache: None,
         });
 
+        // ── 形变管线（S4.3）：双 vertex buffer（各用同一 `standard` 布局）+ `t` uniform ──
+        // ⚠️ 不动 `VertexLayout::standard`：只是把**同一个契约布局**绑到两个 slot，
+        // shader location 由 `to_wgpu_buffers` 跨 buffer 全局连续编号（0..2 / 3..5）。
+        let morph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("xcal-2d-morph-shader"),
+            source: wgpu::ShaderSource::Wgsl(SHAPE_2D_MORPH_SHADER.into()),
+        });
+        let morph_input = VertexInputDesc {
+            buffers: vec![vertex_layout.clone(), vertex_layout],
+        };
+        let mut morph_attrs = Vec::new();
+        let morph_buffers: Vec<Option<wgpu::VertexBufferLayout<'_>>> =
+            to_wgpu_buffers(&morph_input, &mut morph_attrs)
+                .into_iter()
+                .map(Some)
+                .collect();
+        let pipeline_2d_morph = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("xcal-2d-morph-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &morph_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &morph_buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &morph_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: OFFSCREEN_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
         // ── 合成管线已外移 ──
         // S3-2/C2：本后端只负责画离屏几何纹理；主 pass 的合成由
         // [`crate::Compositor`] 统一承担（含 sRGB / 非 sRGB 双入口 + opacity）。
@@ -333,10 +473,13 @@ impl WgpuBackend2D {
             device,
             queue,
             pipeline_2d,
+            pipeline_2d_morph,
             bind_group_layout,
             arena: UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT),
             arena_bind_group: None,
             geom_cache: ResourceCache::new(),
+            batch_cache: ResourceCache::new(),
+            morph_cache: ResourceCache::new(),
             targets: HashMap::new(),
             geometry: Frame2DGeometry {
                 viewport_points: Rect2D::default(),
@@ -344,6 +487,7 @@ impl WgpuBackend2D {
                 screen_size_px: [1, 1],
             },
             recorder: Vec::new(),
+            morph_recorder: Vec::new(),
         }
     }
 
@@ -351,6 +495,17 @@ impl WgpuBackend2D {
     pub fn begin_frame_at(&mut self, geometry: Frame2DGeometry) {
         self.geometry = geometry;
         self.recorder.clear();
+        self.morph_recorder.clear();
+    }
+
+    /// 追加一个**形变**绘制项（S4.3）：`from` / `to` 常量化，逐帧只变 `t`。
+    pub fn push_morph(&mut self, item: MorphItem) {
+        self.morph_recorder.push(item);
+    }
+
+    /// 录制器中的形变项数（S4.3 诊断）。
+    pub fn recorded_morph_len(&self) -> usize {
+        self.morph_recorder.len()
     }
 
     /// 追加一条绘制指令（`z` 用于稳定排序；同 z 保调用顺序）。
@@ -385,14 +540,27 @@ impl WgpuBackend2D {
         (self.arena.used_blocks(), self.arena.capacity_blocks())
     }
 
-    /// G7 诊断（R5-2）：几何缓存的存活条目数（帧末 `evict_unused(0)` 之后）。
+    /// G7 诊断（R5-2）：几何（三角化结果）缓存的存活条目数（帧末 `evict_unused(0)` 之后）。
     pub fn geometry_cache_len(&self) -> usize {
         self.geom_cache.len()
     }
 
-    /// G7 诊断（R5-2）：graveyard 中等待延迟销毁的几何条目数。
+    /// S4.2 诊断：合批（GPU 缓冲）缓存的存活条目数。
+    pub fn batch_cache_len(&self) -> usize {
+        self.batch_cache.len()
+    }
+
+    /// S4.3 诊断：形变（from/to 双侧 GPU 缓冲）缓存的存活条目数。
+    pub fn morph_cache_len(&self) -> usize {
+        self.morph_cache.len()
+    }
+
+    /// G7 诊断（R5-2）：graveyard 中等待延迟销毁的 GPU 条目数。
+    ///
+    /// S4.2：GPU 缓冲现由合批缓存持有，故这里报**合批缓存**的 graveyard ——
+    /// 它才是"显存有界性"的观测点（几何条目只剩 CPU 数据）。
     pub fn pending_geometry_destroy(&self) -> usize {
-        self.geom_cache.pending_destroy_count()
+        self.batch_cache.pending_destroy_count()
     }
 
     fn ensure_targets(&mut self, layer_id: LayerId, size: (u32, u32)) {
@@ -461,13 +629,19 @@ impl WgpuBackend2D {
 
         self.arena.begin_frame();
         self.geom_cache.begin_frame();
+        self.batch_cache.begin_frame();
 
         let local = geometry.local_transform();
         // 展平容差按"≤0.25 物理像素"推导（几何在 points 空间，故除以 ppp）。
         let tolerance = tolerance_for_scale(geometry.pixels_per_point);
         let clip = geometry.clip_matrix();
 
-        let mut prepared: Vec<Prepared2D> = Vec::new();
+        // ── 趟 1：三角化（带缓存）→ 收集本帧几何请求 ──
+        // 请求按绘制顺序记录：`(几何内容哈希, 颜色, 描边宽度)`。
+        // 本趟不做任何 GPU 上传：几何条目只存 CPU 侧三角化结果（免重复三角化），
+        // 顶点/索引的 GPU 缓冲由趟 2 的合批统一持有。
+        let mut geoms: Vec<(u64, Color32, f32)> = Vec::new();
+        let mut stats = FrameCacheStats::default();
         for draw in &draws {
             // GPU 2D 后端只接受屏幕空间样式（`record_scene` 的输出恒为此）；
             // 世界度量需要相机 scale，不在本后端的职责内。
@@ -484,63 +658,200 @@ impl WgpuBackend2D {
                 if tess.vertices.is_empty() || tess.indices.is_empty() {
                     continue;
                 }
-                let key = ResourceKey::content::<Geometry2DTag>(hash_tessellation(&tess));
-                let hit = self.geom_cache.get(key).map(|handle| {
-                    let c = handle
-                        .downcast_ref::<GeometryBuffers>()
-                        .expect("2D 几何缓存条目必须是 GeometryBuffers");
-                    (c.vertex_buffer.clone(), c.index_buffer.clone(), c.index_count)
-                });
-                let (vertex_buffer, index_buffer, index_count) = match hit {
-                    Some(triple) => triple,
-                    None => {
-                        let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("xcal-2d-vertices"),
-                            contents: bytes_of(&tess.vertices),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-                        let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("xcal-2d-indices"),
-                            contents: bytes_of(&tess.indices),
-                            usage: wgpu::BufferUsages::INDEX,
-                        });
-                        let index_count = tess.indices.len() as u32;
-                        let handle = self.geom_cache.insert_handle(
-                            key,
-                            (),
-                            GpuHandle::new(GeometryBuffers {
-                                vertex_buffer: vb.clone(),
-                                index_buffer: ib.clone(),
-                                index_count,
-                            }),
-                        );
-                        let c = handle
-                            .downcast_ref::<GeometryBuffers>()
-                            .expect("刚插入的条目必须是 GeometryBuffers");
-                        (c.vertex_buffer.clone(), c.index_buffer.clone(), c.index_count)
-                    }
-                };
-
+                let hash = hash_tessellation(&tess);
+                let key = ResourceKey::content::<Geometry2DTag>(hash);
+                stats.geom_requests += 1;
+                // ⚠️ 命中必须 `mark_used`：`ResourceCache::get` 不刷新 `last_used_frame`，
+                // 只用 `get` 的话帧末 `evict_unused(0)` 会把稳态内容一并驱逐
+                // （缓存跨帧永不生效，`geom_misses` 永远等于请求数）。
+                if !self.geom_cache.mark_used(&key) {
+                    stats.geom_misses += 1;
+                    self.geom_cache.insert_handle(
+                        key,
+                        (),
+                        GpuHandle::new(CachedGeometry {
+                            vertices: tess.vertices,
+                            indices: tess.indices,
+                        }),
+                    );
+                }
                 let color = match tess.kind {
                     TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
                     TessKind::Stroke => style.stroke.unwrap_or(Color32::BLACK),
                 };
-                let block = self
-                    .arena
-                    .push(&uniform_bytes(clip, color, style.stroke_width));
-                prepared.push(Prepared2D {
-                    vertex_buffer,
-                    index_buffer,
-                    index_count,
-                    uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
-                });
+                geoms.push((hash, color, style.stroke_width));
             }
         }
 
-        // 帧末驱逐：动画内容的几何哈希每帧不同，必须驱逐否则缓存无界增长。
-        // 被驱逐的 GPU 缓冲进入 deferred destroyer（graveyard 3 次 submit 后才真正 drop）。
+        // ── 趟 2：按 `(color, stroke_width)` 合批 → 每批**一次** draw call ──
+        // 分组保序（首次出现的组按首个成员在绘制序中的位置排列），使同 z 下的
+        // 覆盖关系与合批前逐条绘制一致。
+        let mut groups: Vec<(Color32, f32, Vec<u64>)> = Vec::new();
+        for (hash, color, width) in &geoms {
+            match groups
+                .iter_mut()
+                .find(|(c, w, _)| c == color && w == width)
+            {
+                Some((_, _, keys)) => keys.push(*hash),
+                None => groups.push((*color, *width, vec![*hash])),
+            }
+        }
+
+        let mut prepared: Vec<Prepared2D> = Vec::with_capacity(groups.len());
+        for (color, width, keys) in &groups {
+            let bkey = ResourceKey::content::<Batch2DTag>(hash_batch(*color, *width, keys));
+            if !self.batch_cache.mark_used(&bkey) {
+                // 装配：成员顶点按序拼接，成员索引按各自顶点基址**重排**（rebase）。
+                let mut vertices: Vec<Vertex2D> = Vec::new();
+                let mut indices: Vec<u32> = Vec::new();
+                for &h in keys {
+                    let Some(handle) =
+                        self.geom_cache.get(ResourceKey::content::<Geometry2DTag>(h))
+                    else {
+                        continue;
+                    };
+                    let geom = handle
+                        .downcast_ref::<CachedGeometry>()
+                        .expect("2D 几何缓存条目必须是 CachedGeometry");
+                    let base = vertices.len() as u32;
+                    vertices.extend_from_slice(&geom.vertices);
+                    indices.extend(geom.indices.iter().map(|i| i + base));
+                }
+                if indices.is_empty() {
+                    continue;
+                }
+                let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-batch-vertices"),
+                    contents: bytes_of(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-batch-indices"),
+                    contents: bytes_of(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                self.batch_cache.insert_handle(
+                    bkey,
+                    (),
+                    GpuHandle::new(BatchBuffers {
+                        vertex_buffer: vb,
+                        index_buffer: ib,
+                        index_count: indices.len() as u32,
+                    }),
+                );
+            }
+            let batch = self
+                .batch_cache
+                .get(bkey)
+                .and_then(|h| h.downcast_ref::<BatchBuffers>())
+                .expect("合批条目必须存在（刚插入或已命中）");
+            // 同批共享一个 uniform：颜色与描边宽度是分组键，clip 是帧级常量。
+            let block = self.arena.push(&uniform_bytes(clip, *color, *width));
+            prepared.push(Prepared2D {
+                vertex_buffer: batch.vertex_buffer.clone(),
+                index_buffer: batch.index_buffer.clone(),
+                index_count: batch.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+
+        // ── 趟 3（S4.3）：形变项 ──
+        // 两端几何（等点重采样后）与 `t` 无关 ⇒ 缓存键**不含 `t`**，稳态零上传；
+        // 逐帧只多写一个 `t` uniform。每个形变项一次 `draw_indexed`（`t` 逐项不同，
+        // 不做跨项合批）。
+        //
+        // 顺序：形变项排在全部 `DrawQueue` 几何**之后**。二者同为 z = 0 的内容，
+        // 网格 / 轴线（z < 0）不受影响；形变与其它 z = 0 内容的重叠次序因此
+        // 变为"形变在上"（详见 `MorphQueue` 的 doc）。
+        let mut prepared_morph: Vec<Prepared2DMorph> =
+            Vec::with_capacity(self.morph_recorder.len());
+        for item in mem::take(&mut self.morph_recorder) {
+            stats.morph_requests += 1;
+            let (from_path, to_path) = item.sampled_endpoints();
+            if from_path.commands.is_empty() || to_path.commands.is_empty() {
+                continue;
+            }
+            let style = Style2D {
+                space: MeasureSpace::Screen,
+                ..item.style
+            };
+            let from_tess = tessellate(&Shape2D::Path(from_path), &local, &style, tolerance);
+            let to_tess = tessellate(&Shape2D::Path(to_path), &local, &style, tolerance);
+            // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
+            let (Some(from_tess), Some(to_tess)) = (from_tess.first(), to_tess.first()) else {
+                continue;
+            };
+            if from_tess.indices.len() != to_tess.indices.len()
+                || from_tess.vertices.len() != to_tess.vertices.len()
+            {
+                // 拓扑不一致 ⇒ 逐点插值无意义。等点重采样后理论上不会发生；
+                // 真发生则跳过（宁可少画，不可画出错位形变）。
+                debug_assert!(
+                    false,
+                    "形变两端拓扑不一致：顶点 {} vs {}、索引 {} vs {}",
+                    from_tess.vertices.len(),
+                    to_tess.vertices.len(),
+                    from_tess.indices.len(),
+                    to_tess.indices.len()
+                );
+                continue;
+            }
+            let mkey = ResourceKey::content::<Morph2DTag>(hash_morph(from_tess, to_tess));
+            if !self.morph_cache.mark_used(&mkey) {
+                stats.morph_misses += 1;
+                let fvb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-morph-from-vertices"),
+                    contents: bytes_of(&from_tess.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let tvb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-morph-to-vertices"),
+                    contents: bytes_of(&to_tess.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                // 两侧拓扑一致 ⇒ 共用 from 的索引表。
+                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-morph-indices"),
+                    contents: bytes_of(&from_tess.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                self.morph_cache.insert_handle(
+                    mkey,
+                    (),
+                    GpuHandle::new(MorphBuffers {
+                        from_vertex_buffer: fvb,
+                        to_vertex_buffer: tvb,
+                        index_buffer: ib,
+                        index_count: from_tess.indices.len() as u32,
+                    }),
+                );
+            }
+            let morph = self
+                .morph_cache
+                .get(mkey)
+                .and_then(|h| h.downcast_ref::<MorphBuffers>())
+                .expect("形变条目必须存在（刚插入或已命中）");
+            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
+            let block = self
+                .arena
+                .push(&uniform_bytes_morph(clip, color, style.stroke_width, item.t));
+            prepared_morph.push(Prepared2DMorph {
+                from_vertex_buffer: morph.from_vertex_buffer.clone(),
+                to_vertex_buffer: morph.to_vertex_buffer.clone(),
+                index_buffer: morph.index_buffer.clone(),
+                index_count: morph.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+
+        // 帧末驱逐：未被本帧用到的条目投入 deferred destroyer
+        // （graveyard 3 次 submit 后才真正 drop），保证动画内容下缓存与显存有界。
         self.geom_cache.evict_unused(0);
         self.geom_cache.notify_submit();
+        self.batch_cache.evict_unused(0);
+        self.batch_cache.notify_submit();
+        self.morph_cache.evict_unused(0);
+        self.morph_cache.notify_submit();
 
         // 一次性上传全部 uniform。bind group 绑定 arena buffer，因此只在 arena
         // 扩容重建 buffer（generation 变化）时重建，避免每帧创建。
@@ -595,6 +906,8 @@ impl WgpuBackend2D {
             });
             if !prepared.is_empty() {
                 pass.set_pipeline(&self.pipeline_2d);
+                // 每个 `prepared` 元素 = 一个**批**（同色/同宽度的若干几何合并），
+                // 整批一次 `draw_indexed`（成员索引已 rebase 到同一顶点缓冲基址）。
                 for d in &prepared {
                     pass.set_bind_group(0, &arena_bind_group, &[d.uniform_offset]);
                     pass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
@@ -602,12 +915,27 @@ impl WgpuBackend2D {
                     pass.draw_indexed(0..d.index_count, 0, 0..1);
                 }
             }
+            if !prepared_morph.is_empty() {
+                pass.set_pipeline(&self.pipeline_2d_morph);
+                // 每个形变项一次 `draw_indexed`：双顶点缓冲（from/to）+ `t` uniform。
+                for m in &prepared_morph {
+                    pass.set_bind_group(0, &arena_bind_group, &[m.uniform_offset]);
+                    pass.set_vertex_buffer(0, m.from_vertex_buffer.slice(..));
+                    pass.set_vertex_buffer(1, m.to_vertex_buffer.slice(..));
+                    pass.set_index_buffer(m.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..m.index_count, 0, 0..1);
+                }
+            }
         }
 
         // ── 产出离屏结果（合成由调用方 / 回调经合成器完成） ──
         Frame2DData {
             offscreen: targets.view.clone(),
-            draw_count: prepared.len(),
+            // 「几何条数」= 合批前的三角化几何数 + 形变项数（每项 1 条图元）。
+            draw_count: geoms.len() + prepared_morph.len(),
+            // 实际 `draw_indexed` 次数 = 批数 + 形变项数（每项自成一次绘制）。
+            batch_count: prepared.len() + prepared_morph.len(),
+            cache: stats,
             _arena_buffer: arena_buffer,
         }
     }
@@ -656,7 +984,7 @@ fn bytes_of<T: Copy>(data: &[T]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, mem::size_of_val(data)) }
 }
 
-/// 三角化结果的内容哈希（顶点 + 索引 + 种类），用于几何缓冲复用。
+/// 三角化结果的内容哈希（顶点 + 索引 + 种类），用于几何缓存复用。
 fn hash_tessellation(t: &Tessellation2D) -> u64 {
     let mut h = hash_bytes(bytes_of(&t.vertices));
     for &i in &t.indices {
@@ -668,6 +996,29 @@ fn hash_tessellation(t: &Tessellation2D) -> u64 {
         TessKind::Stroke => 0x9E37_79B9_7F4A_7C15,
     };
     h
+}
+
+/// **合批键**：完全决定一批 GPU 缓冲的内容。
+///
+/// 组成 = 颜色 + 描边宽度（同批共享一个 uniform）+ **有序**成员几何哈希
+/// （成员顺序决定缓冲布局，故顺序必须参与哈希）。任一成员内容变化 ⇒ 键变化
+/// ⇒ 重新装配；内容不变 ⇒ 命中，零装配零上传。
+fn hash_batch(color: Color32, stroke_width: f32, keys: &[u64]) -> u64 {
+    let mut buf = Vec::with_capacity(8 + keys.len() * 8);
+    buf.extend_from_slice(&[color.r, color.g, color.b, color.a]);
+    buf.extend_from_slice(&stroke_width.to_bits().to_le_bytes());
+    for &k in keys {
+        buf.extend_from_slice(&k.to_le_bytes());
+    }
+    hash_bytes(&buf)
+}
+
+/// **形变缓存键**（S4.3）：只由两侧几何决定，**不含 `t`**。
+///
+/// 这正是"逐帧只写 t"能成立的原因：`t` 变 ⇒ 键不变 ⇒ 命中 ⇒ 零装配零上传。
+fn hash_morph(from: &Tessellation2D, to: &Tessellation2D) -> u64 {
+    hash_tessellation(from).rotate_left(13)
+        ^ hash_tessellation(to).wrapping_mul(0x100_0000_01b3)
 }
 
 /// uniform 字节：mat4 列主序（64）+ 预乘颜色 vec4（16）+ params vec4（16）。
@@ -690,6 +1041,19 @@ fn uniform_bytes(
     ];
     data[64..80].copy_from_slice(bytes_of(&c));
     data[80..84].copy_from_slice(bytes_of(&[stroke_width]));
+    data
+}
+
+/// 形变 uniform 字节（S4.3）：与 [`uniform_bytes`] 同块，额外写
+/// **`params.y = t`**（偏移 84）——`shape_2d_morph.wgsl` 用它做 `mix(from, to, t)`。
+fn uniform_bytes_morph(
+    transform: Mat4,
+    color: Color32,
+    stroke_width: f32,
+    t: f32,
+) -> [u8; UNIFORM_SIZE as usize] {
+    let mut data = uniform_bytes(transform, color, stroke_width);
+    data[84..88].copy_from_slice(bytes_of(&[t]));
     data
 }
 
@@ -1327,6 +1691,220 @@ mod tests {
             capacity_after_first,
             "arena 容量扩容一次后应稳定（不单调增长）"
         );
+    }
+
+    /// 🔴 S4.2 可证伪断言：同 `(color, stroke_width)` 的多条几何被合并成**一次**
+    /// draw call —— `batch_count < draw_count`。
+    ///
+    /// 证伪：去掉趟 2 的合批（逐条 `Prepared2D`）后 `batch_count == draw_count`，
+    /// 本断言必然失败。
+    #[test]
+    fn same_color_geometries_batch_into_one_draw_call() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        backend.begin_frame_at(g);
+        // 6 条同色同宽的线（几何各不相同 → 6 条几何，应合并为 1 批）。
+        for i in 0..6 {
+            let y = 60.0 + i as f32 * 6.0;
+            backend.push(
+                &Shape2D::Line {
+                    start: Vec2::new(120.0, y),
+                    end: Vec2::new(280.0, y),
+                },
+                &Transform2D::identity(),
+                &stroke_style(2.0),
+                0,
+            );
+        }
+        // 1 条异色线（自成一 批）。
+        backend.push(
+            &Shape2D::Line {
+                start: Vec2::new(120.0, 95.0),
+                end: Vec2::new(280.0, 95.0),
+            },
+            &Transform2D::identity(),
+            &Style2D {
+                fill: None,
+                stroke: Some(Color32::new(255, 0, 0, 255)),
+                stroke_width: 2.0,
+                space: MeasureSpace::Screen,
+                ..Default::default()
+            },
+            1,
+        );
+
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("xcal-2d-batch-test"),
+            });
+        let frame = backend.finish_frame(&mut enc, LayerId(0), &g);
+        ctx.queue.submit([enc.finish()]);
+
+        assert_eq!(frame.draw_count, 7, "7 条几何");
+        assert_eq!(frame.batch_count, 2, "同色 6 条合并为 1 批 + 异色 1 批");
+        assert!(
+            frame.batch_count < frame.draw_count,
+            "合批生效时 batch_count({}) 必须小于 draw_count({})",
+            frame.batch_count,
+            frame.draw_count
+        );
+        assert_eq!(backend.batch_cache_len(), 2, "两批各一个合批缓冲条目");
+    }
+
+    /// 🔴 S4.2 缓存可观测：稳态（内容逐帧不变）下 `geom_misses` **不随帧数增长**
+    /// （第 2 帧起恒为 0），且几何/合批条目数稳定。
+    ///
+    /// 证伪：若命中不刷新 `last_used_frame`（或帧末驱逐策略变严），条目会在帧末
+    /// 被驱逐 → `geom_misses` 恒等于 `geom_requests`，本断言失败。
+    #[test]
+    fn steady_state_geometry_cache_misses_stop_growing() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        const FRAMES: usize = 10;
+        let mut misses: Vec<usize> = Vec::with_capacity(FRAMES);
+        for _ in 0..FRAMES {
+            backend.begin_frame_at(g);
+            backend.push(
+                &Shape2D::Circle {
+                    center: Vec2::new(200.0, 100.0),
+                    radius: 20.0,
+                },
+                &Transform2D::identity(),
+                &stroke_style(2.0),
+                0,
+            );
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("xcal-2d-steady-frame"),
+                });
+            let out = backend.finish_frame(&mut enc, LayerId(0), &g);
+            ctx.queue.submit([enc.finish()]);
+            assert_eq!(out.cache.geom_requests, 1);
+            assert_eq!(out.batch_count, 1);
+            misses.push(out.cache.geom_misses);
+        }
+
+        assert_eq!(misses[0], 1, "首帧必然未命中（需三角化 + 建条目）");
+        assert!(
+            misses[1..].iter().all(|&m| m == 0),
+            "稳态下不得再出现 miss（miss 数不随帧数增长）：{misses:?}"
+        );
+        assert_eq!(backend.geometry_cache_len(), 1);
+        assert_eq!(backend.batch_cache_len(), 1);
+    }
+
+    /// 🔴 S4.3 可证伪断言：形变由 **`t` uniform** 驱动，几何帧间不变。
+    ///
+    /// 1. `t = 0` 光栅化出 `from` 的边界、`t = 1` 光栅化出 `to` 的边界
+    ///    —— 若 `t` 没进 uniform（或没插值），各帧像素会完全相同，断言失败；
+    /// 2. 逐帧改 `t` 时 `morph_misses` 恒为 0（几何与 `t` 无关 ⇒ 缓存命中）
+    ///    —— 若把 `t` 混进缓存键，`morph_misses` 会逐帧 +1，断言失败。
+    #[test]
+    fn morph_t_uniform_drives_geometry_and_stays_cached() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        // 屏幕坐标下的同心方框（视口 (100,50) 起点 ⇒ 屏幕 (200,100) = 离屏本地 (100,50)）：
+        // half 由 20 → 40 形变。
+        let center = Vec2::new(200.0, 100.0);
+        let square = |half: f32| {
+            xc_geometry::Path2D::from_polyline(
+                &[
+                    Vec2::new(center.x - half, center.y - half),
+                    Vec2::new(center.x + half, center.y - half),
+                    Vec2::new(center.x + half, center.y + half),
+                    Vec2::new(center.x - half, center.y + half),
+                ],
+                true,
+            )
+        };
+        let from = square(20.0);
+        let to = square(40.0);
+        let style = Style2D {
+            fill: None,
+            stroke: Some(Color32::new(255, 180, 0, 255)),
+            stroke_width: 4.0,
+            space: MeasureSpace::Screen,
+            ..Default::default()
+        };
+        // 离屏纹理格式是 `OFFSCREEN_FORMAT = Rgba8Unorm` ⇒ 内存字节序 [R, G, B, A]。
+        let orange = [255u8, 180, 0, 255];
+
+        let mut misses: Vec<usize> = Vec::new();
+        for (frame, t) in [0.0f32, 0.25, 0.5, 0.75, 1.0].into_iter().enumerate() {
+            backend.begin_frame_at(g);
+            backend.push_morph(MorphItem {
+                from: from.clone(),
+                to: to.clone(),
+                t,
+                samples: 4,
+                style,
+            });
+            assert_eq!(backend.recorded_morph_len(), 1);
+
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("xcal-2d-morph-frame"),
+                });
+            let out = backend.finish_frame(&mut enc, LayerId(0), &g);
+            ctx.queue.submit([enc.finish()]);
+            ctx.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("形变帧提交后 poll");
+
+            assert_eq!(out.cache.morph_requests, 1);
+            assert_eq!(out.batch_count, 1, "一个形变项 = 一次 draw call");
+            misses.push(out.cache.morph_misses);
+
+            let px = read_texture(
+                &ctx,
+                backend.offscreen_texture(LayerId(0)).unwrap(),
+                (200, 100),
+            );
+            let at = |x: u32, y: u32| {
+                let o = ((y * 200 + x) * 4) as usize;
+                [px[o], px[o + 1], px[o + 2], px[o + 3]]
+            };
+            // 右上边界随 t 线性外移：half = 20 + 20t（全部落在整数像素上 ⇒ 命中带心）。
+            let edge = (100.0 + 20.0 + 20.0 * t).round() as u32;
+            assert_eq!(
+                at(edge, 50),
+                orange,
+                "第 {frame} 帧（t = {t}）：局部 x = {edge} 处应命中描边"
+            );
+            assert_eq!(
+                at(100, 50),
+                [0, 0, 0, 0],
+                "第 {frame} 帧（t = {t}）：方框内部应透明（仅描边）"
+            );
+        }
+
+        assert_eq!(misses[0], 1, "首帧建形变条目（必然未命中）");
+        assert!(
+            misses[1..].iter().all(|&m| m == 0),
+            "`t` 变化不得导致缓存未命中（几何与 t 无关）：{misses:?}"
+        );
+        assert_eq!(backend.morph_cache_len(), 1);
     }
 
     /// 契约布局：stride 20 / 三槽（无硬编码字面量的可测证明）。

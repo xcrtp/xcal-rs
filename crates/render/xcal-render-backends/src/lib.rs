@@ -6,10 +6,11 @@
 //   - render_context：RenderContext（device/queue/format 句柄，wgpu/pollster）
 //   - wgpu_3d：WgpuBackend3D / PreparedDraw3D / Frame3DData（3D MVE 后端）
 //   - scene_callback：SceneCompositorCallback（唯一 egui_wgpu 回调，一次合成全部图层，feature = "egui-wgpu"）
-//   - egui_2d：EguiPainter + color_to_egui（Painter2D 的 egui 实现，feature = "cpu-2d"）
 //   - eframe_backend：EframeWgpuBackend（RenderBackend 的 egui-wgpu 实现）
-//   - svg_recorder：SVG 录制后端（预留空壳）
 //   - text：文本引擎（Typst/LaTeX，预留空壳，feature = "text"）
+//
+// S4.1：旧 CPU 2D 管线（`egui_2d` 模块 + 其编译期 feature）已删除——
+// 2D 统一走 `wgpu_2d` 离屏渲染（lyon 三角化），不再有逐变体手写的 egui 回放路径。
 
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod render_context;
@@ -32,11 +33,6 @@ pub mod eframe_backend;
 // （`CallbackResources` 是全局 TypeMap，每层一个 callback 会互相覆盖合成资源。）
 #[cfg(feature = "egui-wgpu")]
 pub mod scene_callback;
-
-// CPU 2D 管线（编译期 feature `cpu-2d`）：`Painter2D` 的 egui 就地回放实现。
-// 是否真的走该路径由运行期开关 `xcal_egui::UiConfig::gpu_2d` 决定（见 host::present）。
-#[cfg(feature = "cpu-2d")]
-pub mod egui_2d;
 
 // 旧 svg_recorder / text 空壳已删除（见上注）。
 // 下游若有使用，改为：xc-prerender::engine → xc-content::ContentIR → xcal-render::ir_to_draw_cmds。
@@ -61,6 +57,3 @@ pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 pub use eframe_backend::EframeWgpuBackend;
 #[cfg(feature = "egui-wgpu")]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};
-
-#[cfg(feature = "cpu-2d")]
-pub use egui_2d::{EguiPainter, color_to_egui};

@@ -62,7 +62,14 @@ impl eframe::App for Cube3dApp {
             opacity: 1.0,
         }];
         let queue_2d = DrawQueue::new(); // 本 demo 无 2D 图层
-        let callback = SceneCompositorCallback::new(viewport, layers, &queue_2d, &queue, Vec::new());
+        let callback = SceneCompositorCallback::new(
+            viewport,
+            layers,
+            &queue_2d,
+            &queue,
+            Vec::new(),
+            Vec::new(),
+        );
         ui.painter().add(egui::epaint::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(rect, callback),
         ));

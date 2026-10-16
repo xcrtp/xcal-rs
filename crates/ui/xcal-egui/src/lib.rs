@@ -11,8 +11,8 @@
 // B 阶段红线：除 host.rs 外，本 crate 模块不得出现 egui 类型
 // （场景逻辑可 headless 测试；迁移 UI 只需另写一个 host）。
 //
-// Painter2D 的 egui 实现（EguiPainter）与图层合成回调（SceneCompositorCallback）
-// 位于 xcal-render-backends。
+// 图层合成回调（SceneCompositorCallback）位于 xcal-render-backends。
+// S4.1：Painter2D 的 egui 回放实现与旧 CPU 2D 管线已删除。
 
 pub mod host;
 pub mod resources;
@@ -23,5 +23,3 @@ pub use host::EguiSceneHost;
 pub use resources::{AppCamera, TimeState, UiConfig, ViewRect};
 pub use systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
 pub use time_control::TimeControlSystem;
-#[cfg(feature = "cpu-2d")]
-pub use xcal_render_backends::EguiPainter;

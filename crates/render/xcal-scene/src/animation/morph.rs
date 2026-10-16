@@ -3,16 +3,20 @@
 // 阶段：SceneSync（必须在 BindingApply 之后——后者写 `MorphShape.t`）。
 // 纯组件读写（`ctx.world`），不读写任何 Resource。
 //
-// 与 S3 的接口：本 System 现在每帧 CPU 算 N 个顶点；上 GPU 时改的只是
-// "谁来做 lerp"（shader 读 from/to + t），`MorphShape` 的数据结构不动。
+// ⚠️ **S4.3 起本 System 是 CPU 回退路径，App 不再注册它**：形变改由 GPU 插值
+// （`MorphItem` 的 `from`/`to` 常量 + `t` 走 uniform，见
+// `xcal-render-backends::wgpu_2d` 的形变管线与 `xcal_egui::systems::MorphRecordSystem`）。
+// 保留它的意义：无需 GPU 的宿主（headless / 测试）仍可用它把形变落成 `Path`
+// 再交给普通 2D 录制。用法：形变实体同时带 `MorphShape` + `Path` 时本 System 生效；
+// App 的形变实体**不带 `Path`**，故本 System 在 App 里自然不命中。
 
 use xc_geometry::Path2D;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 use xcal_scene::scene::components::{MorphShape, Path};
 
-/// 形变应用：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的 `Path.path`
-/// （闭合折线，`from_polyline(..., true)` 携带闭合语义）。render 层由
+/// 形变应用（CPU 回退）：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的
+/// `Path.path`（闭合折线，`from_polyline(..., true)` 携带闭合语义）。render 层由
 /// `record_scene` 消费 `(Path, StrokeSolid)`。
 pub struct MorphApplySystem;
 

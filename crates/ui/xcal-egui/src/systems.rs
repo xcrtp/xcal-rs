@@ -21,13 +21,16 @@
 use xcal_schedule::context::ExecutorContext;
 use xcal_scene::domain::{CameraCommand, ContentTextureSpec, InputEvents, SceneEvent};
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::ContentTextureItem;
+use xcal_scene::scene::components::{ContentTextureItem, MorphShape};
 use xcal_scene::transform::Transform2D;
 use xcal_scene::types::{Camera2D, Rect};
 use xcal_render::components::{
     FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
-use xcal_render::{ContentTextureQueue, DrawQueue, MeasureSpace, ZIndex, record_path_stroke, record_scene};
+use xcal_render::{
+    ContentTextureQueue, DrawQueue, MeasureSpace, MorphItem, MorphQueue, ResolveStyle, ZIndex,
+    record_path_stroke, record_scene,
+};
 use xc_geometry::Path2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
@@ -195,6 +198,52 @@ impl System for SceneRecordSystem {
                     Path::new(Path2D::from_polyline(&pts, false)).to_screen(&camera),
                     stroke.clone(),
                 );
+            }
+        });
+    }
+}
+
+// ─── MorphRecordSystem（S4.3）──────────────────────────────────────────────
+
+/// 形变录制（RenderCommit 阶段，S4.3）：把 `(MorphShape, StrokeSolid)` 实体
+/// 录成 [`MorphItem`]（`from` / `to` 原样 + 逐帧 `t`）。
+///
+/// **不做 CPU 插值**：两端几何交给 2D 后端的形变管线（双 vertex buffer + `t`
+/// uniform），因此几何帧间不变 ⇒ 三角化结果与 GPU 缓冲都命中缓存，
+/// 每帧只多写一个 `t` uniform。CPU 侧的 `MorphApplySystem` 因此不再参与
+/// 形变实体的渲染（本 System 与它二选一；App 用本 System）。
+///
+/// 换算口径与 [`SceneRecordSystem`] 完全一致：位置经 `to_screen(camera)`
+/// 落到屏幕空间，描边宽度经 [`ResolveStyle`] 按 `camera.scale` 解析
+/// —— 唯一换算点纪律不变。
+///
+/// 为什么是独立 System 而不是并进 `SceneRecordSystem`：既有 System 的
+/// `Reads` / `Writes` 是冻结契约（§6），不能给它新增写资源。
+pub struct MorphRecordSystem;
+impl System for MorphRecordSystem {
+    type Reads = (ViewRect, AppCamera);
+    type Writes = (MorphQueue,);
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        let rect = ctx
+            .get::<ViewRect>()
+            .map(|v| v.rect)
+            .unwrap_or_else(|| ViewRect::default().rect);
+        let cam = ctx.get::<AppCamera>().cloned().unwrap_or_default();
+        let camera = cam.to_camera_2d(rect);
+
+        ctx.with_world_and_resource_mut::<MorphQueue, _>(|world, queue| {
+            queue.0.clear();
+            for (morph, stroke) in world.query::<(&MorphShape, &StrokeSolid)>().iter() {
+                let from = Path::new(morph.from.clone()).to_screen(&camera).path;
+                let to = Path::new(morph.to.clone()).to_screen(&camera).path;
+                queue.0.push(MorphItem {
+                    from,
+                    to,
+                    t: morph.t,
+                    samples: morph.samples,
+                    style: stroke.resolve_style(camera.scale),
+                });
             }
         });
     }

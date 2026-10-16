@@ -11,7 +11,7 @@ use std::time::Instant;
 
 pub use xcal_scene::Result;
 use xcal_scene::animation::{
-    Binding, BindingApplySystem, BindingTable, BindingTarget, MorphApplySystem, SeekKind,
+    Binding, BindingApplySystem, BindingTable, BindingTarget, SeekKind,
 };
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::errors::Error;
@@ -27,11 +27,14 @@ use xcal_scene::types::{Camera2D, Color32, Rect};
 use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{
-    CameraInputSystem, ContentTextureRecordSystem, GridBuildSystem, SceneRecordSystem,
+    CameraInputSystem, ContentTextureRecordSystem, GridBuildSystem, MorphRecordSystem,
+    SceneRecordSystem,
 };
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
-use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, scene::Scene};
+use xcal_render::{
+    ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, MorphQueue, scene::Scene,
+};
 use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
 use xc_geometry::Path2D;
 
@@ -83,10 +86,9 @@ impl App {
                 WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
             rs.renderer.write().callback_resources.insert(backend_3d);
 
-            // 2D 后端（S3-1）：同一 TypeMap 里再放一份 WgpuBackend2D，
-            // 由 `UiConfig::gpu_2d` 开关决定 2D 是否走 GPU 离屏路径。
-            // 后端常驻（pipeline/缓存/离屏目标随视口尺寸惰性重建），
-            // 关掉开关时不产生任何 GPU 工作。
+            // 2D 后端（S3-1）：同一 TypeMap 里再放一份 WgpuBackend2D。
+            // S4.1 后它是唯一的 2D 路径（旧 CPU 回放已删除）。
+            // 后端常驻（pipeline/缓存/离屏目标随视口尺寸惰性重建）。
             let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue);
             rs.renderer.write().callback_resources.insert(backend_2d);
 
@@ -224,8 +226,10 @@ impl App {
         }
 
         // ── S1 形变 demo：圆 → 方（弧长对齐的 Path 形变）────────────────
-        // MorphShape 只持有 from/to（System 只写 t）；MorphApplySystem 每帧把
-        // 插值结果写进同实体的 Path，由现有 record_scene 消费（零录制改动）。
+        // S4.3：形变**上 GPU** —— 实体只带 `MorphShape`（`from`/`to` 常量）+ `StrokeSolid`，
+        // `t` 由 Binding 逐帧写入；`MorphRecordSystem` 把它录成 `MorphItem`，
+        // 由 2D 后端的形变管线做 `mix(from, to, t)`（每帧只写一个 `t` uniform）。
+        // 因此实体**不再带 `Path` 组件**（即不再走 CPU 插值 + 逐帧重三角化）。
         let morph_center = glam::Vec2::new(-6.0, -2.5);
         let morph_radius = 1.2;
         // 起点对齐（原型约定，见 S1 计划已知限制"旋转对齐"）：圆的起笔方向与
@@ -251,8 +255,6 @@ impl App {
                 Path2D::from_polyline(&circle_pts, true),
                 Path2D::from_polyline(&square_pts, true),
             ),
-            // Path 是形变输出目标（首帧由 MorphApplySystem 填充）。
-            Path::new(Path2D::new()),
             StrokeSolid::new_in(2.0, (255, 180, 0, 255), MeasureSpace::Screen),
         ));
 
@@ -270,7 +272,6 @@ impl App {
             for (from_path, to_path) in formula::compile_morph_pairs(&f, &t, &anchor_spec) {
                 semantic_morph_entities.push(scene.spawn((
                     MorphShape::new(from_path, to_path),
-                    Path::new(Path2D::new()),
                     StrokeSolid::new_in(1.0, (255, 120, 220, 255), MeasureSpace::Screen),
                 )));
             }
@@ -360,6 +361,8 @@ impl App {
             composite: false,
         });
         resources.insert(ContentTextureQueue::default());
+        // S4.3 形变：当帧的形变项（`from`/`to` 常量 + 逐帧 `t`），由 MorphRecordSystem 写。
+        resources.insert(MorphQueue::default());
         resources.insert(render_ctx.clone());
         resources.insert(forest);
         resources.insert(bindings);
@@ -384,8 +387,9 @@ impl App {
         scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
 
         scheduler.add_system(Phase::SceneSync, BindingApplySystem);
-        // MorphApply 必须在 BindingApply 之后：后者写 MorphShape.t，前者消费。
-        scheduler.add_system(Phase::SceneSync, MorphApplySystem);
+        // S4.3：形变改由 GPU 插值（`from`/`to` 常量化 + `t` 走 uniform），
+        // `MorphApplySystem`（CPU 插值写 `Path`）不再注册——形变实体已不带 `Path`
+        // 组件，故它即使注册也不会命中。CPU 路径保留在 xcal-scene 备查。
 
         scheduler.add_system(Phase::Prepare, GridBuildSystem);
 
@@ -395,6 +399,8 @@ impl App {
         // S3-3：内容纹理录制（R=ContentTextureSpec, W=ContentTextureQueue）——
         // 与 SceneRecord 同相，但读/写资源不相交，可同相注册。
         scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+        // S4.3：形变录制（R=ViewRect/AppCamera, W=MorphQueue）——同样与上面不相交。
+        scheduler.add_system(Phase::RenderCommit, MorphRecordSystem);
         scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
 
         Ok(Self {

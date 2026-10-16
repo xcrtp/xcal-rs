@@ -86,14 +86,6 @@ pub use xcal_scene::TimeState;
 pub struct UiConfig {
     pub show_grid: bool,
     pub show_field: bool,
-    /// S3-1：2D 管线开关（运行期 checkbox，**不是**编译期 feature——后者是
-    /// `xcal-render-backends` 的 `cpu-2d`）。
-    ///
-    /// - `true`（默认）：新路径——`SceneCompositorCallback` 走 wGPU 离屏纹理（MSAA 4x）+ 合成；
-    /// - `false`：旧路径——`DrawQueue` 经 `EguiPainter` 在 CPU 侧回放（需 `cpu-2d` feature）。
-    ///
-    /// 两条管线并存的意义就是逐帧对比验收（计划 §5.5/§8）；旧管线退役属 S3-4。
-    pub gpu_2d: bool,
     /// S3-2 验收开关：**声明的图层顺序**（`false`）= 先声明的在**下**；
     /// 翻转后 = 先声明的在**上**（2D 盖住 3D）。
     ///
@@ -107,7 +99,6 @@ impl Default for UiConfig {
         Self {
             show_grid: true,
             show_field: false,
-            gpu_2d: true,
             flip_layer_order: false,
         }
     }
@@ -146,8 +137,8 @@ mod tests {
         let cfg = UiConfig::default();
         assert!(cfg.show_grid);
         assert!(!cfg.show_field);
-        // S3-1：默认走 wGPU 2D 离屏路径（开关默认打开）。
-        assert!(cfg.gpu_2d);
+        // S3-2：默认保持声明顺序（不翻转）。
+        assert!(!cfg.flip_layer_order);
     }
 
     #[test]

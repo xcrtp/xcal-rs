@@ -21,9 +21,7 @@ cargo run -p xcal-app
    - 一个橙色**形变形状**：圆 ↔ 方 平滑来回（S1a；`MorphShape` + `MorphApplySystem`）
    - 一段粉色**语义形变公式**：`x²` ↔ `x³`（S1b；按源码锚点配对 —— `x` 配到 `x`）
    - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
-2. **egui 面板**：左侧时间/相机/网格 + **`GPU 2D 管线` 复选框**
-   （S3-1 运行期开关，默认开；勾选后 2D 走 `SceneCompositorCallback` 离屏 MSAA 合成，
-   取消勾选则走 `EguiPainter` CPU 回放）+ **`翻转图层顺序` 复选框**
+2. **egui 面板**：左侧时间/相机/网格 + **`翻转图层顺序` 复选框**
    （S3-2 验收开关：验证叠放顺序确实由 `SceneView::layers` 的声明序决定，默认关），
    右侧动画参数
    （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
@@ -48,7 +46,7 @@ let backend_3d = WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.ta
 rs.renderer.write().callback_resources.insert(backend_3d);  // 回调为 &self，资源存 TypeMap
 
 // S3-1：同一 TypeMap 再放一份 WgpuBackend2D（pipeline / 缓存 / 离屏目标惰性重建；
-// `UiConfig::gpu_2d` 关闭时不产生任何 GPU 工作）。
+// S4.1 后它是唯一的 2D 路径）。
 let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue);
 rs.renderer.write().callback_resources.insert(backend_2d);
 
@@ -123,9 +121,10 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（A
 | **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
 |                 | ParamPanel      | BindingTable             | InputEvents |
 | **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
-|                 | MorphApply      | hecs `Path`（无 Resource）| hecs `MorphShape`（读组件） |
 | **Prepare**     | GridBuild       | DrawQueue (2D)           | ViewRect, AppCamera, UiConfig |
 | **RenderCommit**| SceneRecord (2D)| DrawQueue (2D)           | ViewRect, AppCamera |
+|                 | ContentTextureRecord (S3-3) | ContentTextureQueue | ContentTextureSpec |
+|                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, AppCamera |
 |                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
 | **FrameEnd**    | —（空）         | —                        | — |
 
@@ -185,7 +184,7 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
            → xcal-render::ir_to_draw_cmds（scale = font_size / nominal_font_size）
            → formula::compile_to_stroke_paths（flatten_subpaths + apply_point）
            → 每个子轮廓一条 (Path, StrokeSolid) 实体
-           → 现有 SceneRecordSystem::record_scene → DrawQueue → EguiPainter
+           → 现有 SceneRecordSystem::record_scene → DrawQueue → WgpuBackend2D（GPU 离屏）
 ```
 
 关键点：
@@ -197,8 +196,9 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 - **字号解耦**：`FormulaSpec.nominal_font_size`（默认 12.0）是 Typst 编译标称字号，
   决定曲线提取精度与 IR 本地点尺度；`FormulaSpec.font_size` 是目标显示大小。
   展平容差是相对标称尺度的绝对值，显示尺寸缩小不会放大折线误差。
-- **空心字**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，因此公式
-  暂走 Stroke（轮廓）路径；实心填充待 S3 三角化后接管（挂 `CustomShapeData::to_triangles`）。
+- **空心字**：公式以 Stroke（轮廓）呈现。原为规避旧 CPU 管线 Fill 分支
+  `convex_polygon` 把非凸字形画成凸包的缺陷；S4.1 删除该路径后缺陷不复存在，
+  此处保留空心字形作为既定视觉。
 - **描边属世界空间**（`MeasureSpace::World`）：`ir_to_draw_cmds` 把宽度乘
   `target / nominal_font_size`（与几何同系数）换算为世界单位；fill-only 字形的默认细线宽
   同样按 `× scale` 换算。实机：缩放时公式描边与字形**成比例**变化
@@ -214,13 +214,17 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 两段 demo 共用同一条形变时钟 + `MorphT` 绑定链路（均落在 `SceneSync`）：
 
-- **S1a 几何形变**：橙色形状 `MorphShape(圆, 方)`。`BindingTarget::MorphT` 写 `t`，
-  `MorphApplySystem`（BindingApply 之后）每帧把
-  `Path2D::morph_points(from, to, t, samples)` 写进同实体的 `Path`（`Path2D` 末命令为 `Close`），
-  再由现有 `record_scene` 消费 —— **零录制改动**。
+- **S1a 几何形变**：橙色形状 `MorphShape(圆, 方)` + `StrokeSolid`（**不带 `Path`**）。
+  `BindingTarget::MorphT` 写 `t`；`MorphRecordSystem`（RenderCommit）把实体录成
+  `MorphItem`（`from`/`to` + `t`），由 2D 后端的**形变管线**做 GPU 插值
+  （双 vertex buffer + `t` uniform，见 S4.3）。两端几何经弧长等点重采样，
+  三角化结果与 GPU 缓冲都**帧间命中缓存** —— 每帧只多写一个 `t` uniform。
 - **S1b 语义形变**：`formula::compile_morph_pairs("x^2", "x^3")` 用
   `xc_content::pair_by_anchor` 按**源码锚点**配对（`x` 配到 `x`，而非按位置配到 `3`），
-  每对路径 spawn 一个 `MorphShape` 实体，共用同一形变时钟同步形变。
+  每对路径 spawn 一个 `MorphShape` 实体，共用同一形变时钟同步形变（渲染路径同上）。
+- **CPU 回退**：`xcal_scene::animation::MorphApplySystem` 仍可把形变落成 `Path`
+  （实体同时带 `MorphShape` + `Path` 时生效，供 headless / 无 GPU 宿主使用）。
+  App **不注册**它，形变走 GPU。
 
 时钟：`PlayMode::PingPong` span `(0, 1)` + `Curve::Phase { omega: 1.0 }`
 → 形变参数 `t` 在 `[0, 1]` 平滑往返。**起点对齐**（原型约定）：圆的起笔方向与方的
@@ -252,15 +256,12 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 > 后插入会覆盖先插入 → 两个 `paint()` 画同一帧（实机现象：顺序 A 只见 3D、顺序 B 只见 2D）。
 > 因此 2D / 3D 合并为**单个** `SceneCompositorCallback`，一次性合成全部图层。
 
-### 2D 管线开关（S3-1）
+### 2D 渲染路径（S3-1 / S4.1）
 
-2D 内容有两条**并存**管线，由 `UiConfig::gpu_2d`（面板复选框）在
-`EguiSceneHost::present` 运行期二选一：
+S4.1 后 2D 只有**一条**路径（旧 CPU 回放实现与其编译期 feature 已删除）：
 
-- `gpu_2d = true`（默认）：2D 进 `SceneCompositorCallback` → `WgpuBackend2D` 离屏 `Rgba8Unorm` + MSAA 4x，
-  再经 `Compositor` 按声明顺序混合回主 pass（与 3D 图层同在**同一个** `CompositeFrame` 内）。
-- `gpu_2d = false`：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放（基线；
-  受 backends 的**编译期** `cpu-2d` feature 门控，关闭后该分支不编译）；
+2D 进 `SceneCompositorCallback` → `WgpuBackend2D` 离屏 `Rgba8Unorm` + MSAA 4x，
+再经 `Compositor` 按声明顺序混合回主 pass（与 3D 图层同在**同一个** `CompositeFrame` 内）。
 
 > ⚠️ 合成四边形必须写死全 NDC 盒（`compositor::COMPOSITE_QUAD`）：egui-wgpu 会把 render pass
 > viewport 设为**回调自身矩形**，若按整屏尺寸换算裁剪坐标会导致视口被二次应用

@@ -30,9 +30,7 @@ use xcal_schedule::resource::Resources;
 use xcal_scene::scene::components::Camera3D;
 use xcal_scene::types::Rect;
 use xcal_scene::{Curve, TimeState};
-use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D};
-#[cfg(feature = "cpu-2d")]
-use xcal_render_backends::EguiPainter;
+use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue};
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
 use xc_geometry::Rect2D;
 
@@ -223,10 +221,6 @@ impl EguiSceneHost {
                 ui.checkbox(&mut ui_config.show_field, "显示向量场");
 
                 ui.separator();
-                // S3-1 验收开关：切换 2D 管线（旧 CPU 回放 ↔ 新 GPU 离屏 MSAA），
-                // 用于同一画面下逐帧对比两条管线的输出是否一致。
-                ui.checkbox(&mut ui_config.gpu_2d, "GPU 2D 管线");
-
                 // S3-2 验收开关：翻转图层叠放顺序（见 `UiConfig::flip_layer_order`）。
                 ui.checkbox(&mut ui_config.flip_layer_order, "翻转图层顺序");
 
@@ -410,13 +404,10 @@ impl EguiSceneHost {
     /// 若每个图层各注册一个回调，它们会互相覆盖同一份合成资源
     /// （见 [`xcal_render_backends::scene_callback`] 头部说明）。因此这里
     /// 只注册**一个** [`SceneCompositorCallback`]，由它一次性渲染并合成**全部**
-    /// GPU 图层。回调被放在有效序中**首个 GPU 图层**的位置，以保持与相邻 CPU
-    /// 图层的相对次序：
+    /// 图层（S4.1 后 2D / 3D / 内容纹理**全部**走 GPU，不再有 CPU 回放分支）。
     ///
     /// - 背景：先铺 `SceneView::background`（原 GridBuild 的 `-1000` 全屏矩形职责）；
-    /// - GPU 层（3D，或 `gpu_2d = true` 的 2D）：进唯一回调（离屏 + 合成）；
-    /// - CPU 2D 层（`gpu_2d = false`）：就地 `DrawQueue` → `EguiPainter` 回放
-    ///   （旧路径，退役属 S3-4）。
+    /// - 全部图层：进唯一回调（离屏 + 合成，按有效序）。
     pub fn present(ui: &mut egui::Ui, view: &SceneView, res: &mut Resources) {
         let view_rect = res
             .get::<ViewRect>()
@@ -437,92 +428,74 @@ impl EguiSceneHost {
             egui::Color32::from_rgba_unmultiplied(bg.r, bg.g, bg.b, bg.a),
         );
 
-        // 2D 管线开关与图层顺序开关（UI 状态）。缺省与 `UiConfig::default()` 一致（GPU 2D 开）。
-        let gpu_2d = res.get::<UiConfig>().map(|c| c.gpu_2d).unwrap_or(true);
+        // 图层顺序开关（UI 状态）。缺省与 `UiConfig::default()` 一致（不翻转）。
         let flip = res
             .get::<UiConfig>()
             .map(|c| c.flip_layer_order)
             .unwrap_or(false);
 
+        // 无图层时不注册回调（与 S4.1 前"无 GPU 图层则不加回调"一致）。
+        if view.layers.is_empty() {
+            return;
+        }
+
+        // 按有效序收集全部图层声明。S4.1 后所有 `LayerKind` 都走 GPU，
+        // 故不再需要"逐层判断是否 GPU"，回调固定落在有效序起点。
         let order: Vec<usize> = if flip {
             (0..view.layers.len()).rev().collect()
         } else {
             (0..view.layers.len()).collect()
         };
-
-        // 该层是否走 GPU 路径（3D 恒走；2D 仅在 `gpu_2d` 打开时走；
-        // 内容纹理层（S3-3）恒走 GPU —— 它就是靠 GPU 渲染到纹理的）。
-        let is_gpu = |idx: usize| {
-            matches!(view.layers[idx].kind, LayerKind::Viewport3D { .. })
-                || matches!(view.layers[idx].kind, LayerKind::ContentTexture { .. })
-                || (gpu_2d && matches!(view.layers[idx].kind, LayerKind::Viewport2D { .. }))
-        };
-
-        // pass 1：按有效序收集 GPU 图层声明，并记下首个 GPU 图层在有效序中的位置
-        // （唯一回调就落在那里）。
-        let mut gpu_specs: Vec<SceneLayer> = Vec::new();
-        let mut first_gpu_pos: Option<usize> = None;
-        for (pos, &idx) in order.iter().enumerate() {
-            if !is_gpu(idx) {
-                continue;
-            }
-            let layer = &view.layers[idx];
-            gpu_specs.push(SceneLayer {
-                id: layer.id,
-                kind: layer.kind.clone(),
-                blend: layer.blend,
-                opacity: layer.clamped_opacity(),
-            });
-            if first_gpu_pos.is_none() {
-                first_gpu_pos = Some(pos);
-            }
-        }
+        let mut gpu_specs: Vec<SceneLayer> = order
+            .iter()
+            .map(|&idx| {
+                let layer = &view.layers[idx];
+                SceneLayer {
+                    id: layer.id,
+                    kind: layer.kind.clone(),
+                    blend: layer.blend,
+                    opacity: layer.clamped_opacity(),
+                }
+            })
+            .collect();
 
         // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
         let viewport = Rect2D::new(*view_rect.min(), *view_rect.max());
 
-        // pass 2：按有效序发射 —— 首个 GPU 图层处注册唯一回调；CPU 2D 层就地回放。
-        for (pos, &idx) in order.iter().enumerate() {
-            if Some(pos) == first_gpu_pos {
-                let (Some(queue_2d), Some(queue_3d)) =
-                    (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
-                else {
-                    continue;
-                };
-                // 内容纹理层快照（S3-3）：单份 `ContentTextureQueue` → 关联到
-                // 唯一的 `ContentTexture` 图层 id（单层约束见 `ContentTextureSpec`）。
-                let content: Vec<(LayerId, Vec<Recorded2D>)> = res
-                    .get::<ContentTextureQueue>()
-                    .map(|q| {
-                        let snap = snapshot_queue(&q.0);
-                        gpu_specs
-                            .iter()
-                            .filter(|l| matches!(l.kind, LayerKind::ContentTexture { .. }))
-                            .map(|l| (l.id, snap.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let callback = SceneCompositorCallback::new(
-                    viewport,
-                    std::mem::take(&mut gpu_specs),
-                    queue_2d,
-                    queue_3d,
-                    content,
-                );
-                painter.add(egui::epaint::Shape::Callback(
-                    egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
-                ));
-            } else if !is_gpu(idx) {
-                // 旧路径：`DrawQueue` 经 `EguiPainter` 在 CPU 侧就地回放
-                // （特征化基线，退役属 S3-4）。仅在 `cpu-2d` feature 下编译。
-                #[cfg(feature = "cpu-2d")]
-                {
-                    if let Some(queue) = res.get_mut::<DrawQueue>() {
-                        queue.execute(&EguiPainter::new(&painter));
-                    }
-                }
-            }
-        }
+        let (Some(queue_2d), Some(queue_3d)) = (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
+        else {
+            return;
+        };
+        // 内容纹理层快照（S3-3）：单份 `ContentTextureQueue` → 关联到
+        // 唯一的 `ContentTexture` 图层 id（单层约束见 `ContentTextureSpec`）。
+        let content: Vec<(LayerId, Vec<Recorded2D>)> = res
+            .get::<ContentTextureQueue>()
+            .map(|q| {
+                let snap = snapshot_queue(&q.0);
+                gpu_specs
+                    .iter()
+                    .filter(|l| matches!(l.kind, LayerKind::ContentTexture { .. }))
+                    .map(|l| (l.id, snap.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // 形变项（S4.3）：回调在 `prepare` 阶段才消费，故需 owned 快照
+        // （与 `SceneLayer` / 内容纹理快照同一口径）。
+        let morphs = res
+            .get::<MorphQueue>()
+            .map(|q| q.0.clone())
+            .unwrap_or_default();
+        let callback = SceneCompositorCallback::new(
+            viewport,
+            std::mem::take(&mut gpu_specs),
+            queue_2d,
+            queue_3d,
+            content,
+            morphs,
+        );
+        painter.add(egui::epaint::Shape::Callback(
+            egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
+        ));
     }
 }
 

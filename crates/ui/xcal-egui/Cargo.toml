@@ -11,8 +11,8 @@ xcal-scene = { path = "../../render/xcal-scene" }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
 xcal-render = { path = "../../render/xcal-render", default-features = false }
-# Painter2D 的 egui 实现（EguiPainter）+ 图层合成 egui_wgpu 回调（SceneCompositorCallback）位于 backends crate。
-# 关掉 backends 的默认 features，改由本 crate 的 `cpu-2d` feature 显式转发（编译期门控）。
+# 图层合成 egui_wgpu 回调（SceneCompositorCallback）位于 backends crate。
+# 关掉 backends 的默认 features，改由本 crate 显式转发 egui-wgpu（编译期门控）。
 xcal-render-backends = { path = "../../render/xcal-render-backends", default-features = false, features = ["egui-wgpu"] }
 xc-macro = { path = "../../kernel/xc-macro" }
 # S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。
@@ -30,6 +30,5 @@ glam.workspace = true
 egui.workspace = true
 
 [features]
-# CPU 2D 管线保持默认开启（与迁移前行为一致）；关闭后不再编译 `EguiPainter` 回放路径。
-default = ["cpu-2d"]
-cpu-2d = ["xcal-render-backends/cpu-2d"]
+# S4.1：旧 CPU 2D 回放路径及其编译期 feature 已删除，本 crate 无自有 feature。
+default = []

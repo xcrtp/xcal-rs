@@ -3,10 +3,11 @@
 // 数据流：
 //   ContentIR →(ir_to_draw_cmds)→ ContentDrawCmd
 //             →(flatten_subpaths + transform.apply_point)→ Path 组件（Path2D）
-//             →(spawn)→ SceneRecordSystem → DrawQueue → EguiPainter。
+//             →(spawn)→ SceneRecordSystem → DrawQueue → WgpuBackend2D（GPU 离屏）。
 //
-// 走描边（Stroke）而非填充：旧管线 Fill 分支用 `convex_polygon`，非凸字形
-// （o/a/e/B 有孔洞与凹角）会被画成凸包，视觉错误。详见执行计划 §2.2。
+// 走描边（Stroke）而非填充：公式字形以**空心字**呈现。原本是为了规避旧 CPU 管线
+// Fill 分支用 `convex_polygon` 把非凸字形（o/a/e/B 的有孔洞与凹角）画成凸包的
+// 缺陷；S4.1 删除该路径后缺陷不复存在，此处保留空心字形作为**既定视觉**。
 //
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 

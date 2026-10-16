@@ -26,7 +26,7 @@
 // （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-use xcal_render::{DrawQueue, DrawQueue3D, Viewport};
+use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_geometry::{Rect2D, Vec2 as GeoVec2};
 
@@ -96,20 +96,23 @@ pub struct SceneCompositorCallback {
     /// 3D mesh / line 快照（仅当有效序中存在 3D 图层时才采集）。
     meshes_3d: Vec<MeshDraw>,
     lines_3d: Vec<LineDraw>,
+    /// 形变项快照（S4.3）：`from`/`to` 常量 + 逐帧 `t`，由 2D 图层用形变管线渲染。
+    morphs: Vec<MorphItem>,
 }
 
 #[cfg(feature = "egui-wgpu")]
 impl SceneCompositorCallback {
     /// 从视口矩形、图层声明（有效序）与两个绘制队列构造。
     ///
-    /// 只快照**有效序里真的存在**的那一类队列，避免 `gpu_2d = false`（2D 走 CPU
-    /// 回放）时白拷一份 2D 几何。
+    /// 只快照**有效序里真的存在**的那一类队列（S4.1 后仅内容纹理层那个例外），
+    /// 避免白拷一份用不到的几何。
     pub fn new(
         viewport_points: Rect2D,
         layers: Vec<SceneLayer>,
         queue_2d: &DrawQueue,
         queue_3d: &DrawQueue3D,
         content: Vec<(LayerId, Vec<Recorded2D>)>,
+        morphs: Vec<MorphItem>,
     ) -> Self {
         let needs_2d = layers.iter().any(|l| matches!(l.kind, LayerKind::Viewport2D { .. }));
         let needs_3d = layers.iter().any(|l| matches!(l.kind, LayerKind::Viewport3D { .. }));
@@ -119,6 +122,8 @@ impl SceneCompositorCallback {
             content,
             meshes_3d: if needs_3d { queue_3d.meshes().to_vec() } else { Vec::new() },
             lines_3d: if needs_3d { queue_3d.lines().to_vec() } else { Vec::new() },
+            // 形变项属于 2D 图层；没有 2D 图层时无处渲染，直接丢弃。
+            morphs: if needs_2d { morphs } else { Vec::new() },
             layers,
         }
     }
@@ -246,6 +251,10 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                             backend.begin_frame_at(geometry);
                             for d in &self.draws_2d {
                                 backend.push(&d.shape, &d.transform, &d.style, d.z);
+                            }
+                            // S4.3：形变项随 2D 图层走形变管线（`t` 走 uniform）。
+                            for m in &self.morphs {
+                                backend.push_morph(m.clone());
                             }
                             backend.finish_frame(egui_encoder, layer.id, &geometry)
                         })
@@ -528,6 +537,7 @@ mod tests {
             &DrawQueue::new(),
             &queue_3d,
             content,
+            Vec::new(),
         );
 
         let screen = egui_wgpu::ScreenDescriptor {

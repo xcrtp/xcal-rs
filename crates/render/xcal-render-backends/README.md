@@ -1,6 +1,6 @@
 # xcal-render-backends
 
-> **具体渲染后端实现**：wgpu 3D、wgpu 2D（S3-1）、egui 2D、eframe 集成、顶点契约翻译层。
+> **具体渲染后端实现**：wgpu 3D、wgpu 2D（S3-1，**唯一 2D 路径**）、eframe 集成、顶点契约翻译层。
 > **所有模块按 feature-gate 提供**，最终用户按需组合。
 >
 > （旧 `svg_recorder` / Typst / LaTeX 空壳已删除——内容管线改走
@@ -16,7 +16,6 @@ xcal-scene / xcal-render / xc-geometry
               ├ wgpu 2D 后端 (feature = "wgpu")          ← S3-1：离屏 MSAA；S3-2：透明清屏
               ├ 图层合成器 (feature = "wgpu")            ← S3-2：N 层按声明顺序混合
               ├ 顶点契约 → wgpu 翻译 (feature = "wgpu")
-              ├ egui 2D 后端 (feature = "cpu-2d")
               └ eframe + egui_wgpu 集成 (feature = "egui-wgpu")
 ```
 
@@ -26,18 +25,13 @@ xcal-scene / xcal-render / xc-geometry
 
 | feature | 引入的依赖 | 可用模块 |
 |---------|-----------|----------|
-| `default` (= `wgpu` + `cpu-2d`) | 同 `wgpu` + `cpu-2d` | 同二者（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
-| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout` |
-| `cpu-2d` | `egui 0.36`, `xcal-scene/egui` | `egui_2d` (`EguiPainter`, `color_to_egui`) |
-| `egui` | = `cpu-2d`（旧 feature 名，保留为等价别名） | 同 `cpu-2d` |
-| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` + `xcal-scene/egui` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
+| `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
+| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor` |
+| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
-四种 feature 组合都通过 CI 的 `cargo check -F` 验证。
-
-> **编译期 feature vs 运行期开关**：`cpu-2d` 是**编译期** feature，决定 CPU 回放路径
-> （`egui_2d`）是否被编译进来；与之对应的**运行期**开关是 `xcal_egui::UiConfig::gpu_2d`
-> （面板 checkbox），决定当帧是否真的走 GPU 离屏路径。二者语义不同、互不替代。
+> **S4.1**：旧 CPU 2D 回放的 feature（含其历史别名）与 `egui_2d` 模块已删除——
+> 2D 统一走 `wgpu_2d`，不再有逐变体手写的 egui 回放路径。
 
 ---
 
@@ -104,9 +98,10 @@ let ctx = RenderContext::from_render_state(rs);
 > `paint()` 拿到**同一帧**，于是把同一张离屏纹理画两遍（现象：顺序 A 只见 3D、
 > 顺序 B 只见 2D）。合成本就是"一次性消费全部图层"的操作，结构上不该每层一个回调。
 
-- `SceneCompositorCallback::new(viewport_points, layers, queue_2d, queue_3d)`：
+- `SceneCompositorCallback::new(viewport_points, layers, queue_2d, queue_3d, content, morphs)`：
   `layers` 是**有效序**（翻转开关已生效）的 `Vec<SceneLayer { id, kind, blend, opacity }>`；
-  仅快照**有效序里真的存在**的那一类队列（`gpu_2d = false` 时白拷 2D 几何无意义）。
+  `content` 是内容纹理层（S3-3）的当帧快照（层 id → 已降级的 2D 命令）；
+  `morphs` 是形变项（S4.3）快照，随 2D 图层走形变管线。
 - `prepare`：逐层渲染离屏（2D → `WgpuBackend2D`，3D → `WgpuBackend3D::render_layer_offscreen`）
   → 按**声明序**收集全部 `CompositeOp` → **一次** `Compositor::prepare` → 单个
   `CompositeFrame`，与各层 uniform arena buffer（保活）一起存入 TypeMap 的
@@ -120,36 +115,52 @@ let ctx = RenderContext::from_render_state(rs);
   目标，同一类可有多个图层（S3-2 的"每类最多一个图层"`debug_assert` 已解除）；
   目标尺寸随 `viewport` 变化时按图层重建。
 
-### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1 / S3-2
+### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1 / S3-2 / S4.2 / S4.3
 
-xcal-rs 的首个 GPU 2D 后端：**离屏纹理 + MSAA 4x**；合成自 S3-2 起外移到
-`compositor`（本文件不再自带合成管线）。
+xcal-rs 的 GPU 2D 后端（S4.1 起是**唯一** 2D 路径）：**离屏纹理 + MSAA 4x**；
+合成自 S3-2 起外移到 `compositor`（本文件不再自带合成管线）。
 
-- **`WgpuBackend2D`**：`new(device, queue)` 只建一条管线
-  `shaders/shape_2d.wgsl`（图元；硬边 + MSAA）。合成管线、绑定布局、采样器与
-  `composite()` 已移除（统一由 §6 `Compositor` 承担）。
+- **`WgpuBackend2D`**：`new(device, queue)` 建**两条**管线——
+  `shaders/shape_2d.wgsl`（图元；硬边 + MSAA）与
+  `shaders/shape_2d_morph.wgsl`（S4.3 形变；双 vertex buffer + `t` uniform）。
+  合成管线、绑定布局、采样器与 `composite()` 已移除（统一由 §6 `Compositor` 承担）。
 - 实现 `Painter2DTarget`（`begin_frame` / `draw_shape` / `end_frame`），
-  另有直达录制 API `push(shape, transform, style, z)`。
-- **每帧流程**（`finish_frame(encoder, geometry) -> Frame2DData`）：
+  另有直达录制 API `push(shape, transform, style, z)` 与 `push_morph(MorphItem)`。
+- **每帧流程**（`finish_frame(encoder, layer_id, geometry) -> Frame2DData`）：
   1. 录制项按 `z` 稳定排序（同 z 保录制序，画家算法）；
-  2. 每项 `tessellate`（S3-0）→ 顶点哈希 → `ResourceCache<()>` 命中即复用、
-     miss 则建缓冲（帧末 `evict_unused(0)` + deferred destroy，有界）；
-  3. uniform 经 `UniformArena`（复用 `wgpu_3d`，256B 对齐 dynamic offset）；
+  2. **趟 1**：每项 `tessellate`（S3-0）→ 顶点哈希 → 三角化结果（**CPU 侧**）进
+     `ResourceCache<()>`，命中即免三角化；**命中要 `mark_used`**（`get` 不刷新
+     `last_used_frame`，否则帧末 `evict_unused(0)` 会把稳态内容也驱逐，缓存跨帧失效）；
+     请求/未命中数记入 `FrameCacheStats`；
+  3. **趟 2（S4.2 合批）**：按 `(color, stroke_width)` 分组 → 成员顶点按序拼接、
+     成员索引按顶点基址**重排**（rebase）成**一套** GPU 缓冲 → 整批**一次**
+     `draw_indexed`。合批缓冲按"批内容"哈希缓存 ⇒ 稳态零装配零上传；
+     分组保序 ⇒ 同 `z` 下覆盖关系与逐条绘制一致；
+  4. **趟 3（S4.3 形变）**：`MorphItem` 的 `from`/`to` 先**弧长等点重采样**到
+     `samples` 点（两侧顶点一一对应），各三角化一次并按内容哈希缓存
+     —— 缓存键**不含 `t`**，故 `t` 逐帧变化仍全程命中；每帧只多写一个
+     `t` uniform（`params.y`），shader 侧 `mix(from, to, t)`（位置与法线都插值）。
+     形变项排在全部 `DrawQueue` 几何**之后**（同为 z = 0 的内容；网格/轴线 z < 0 不受影响）；
+  5. uniform 经 `UniformArena`（复用 `wgpu_3d`，256B 对齐 dynamic offset）；
      宽度由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析，**shader 不做空间换算**；
      几何本身与宽度无关（`position` 槽存 lyon `position_on_path()`），
      故同一路径换宽度只需换 uniform；
-  4. 在离屏 MSAA 纹理上绘制并 resolve；**离屏清屏透明**（S3-2/C2，背景由 host 提供）。
+  6. 在离屏 MSAA 纹理上绘制并 resolve；**离屏清屏透明**（S3-2/C2，背景由 host 提供）。
+- **`draw_count` 语义保持"几何条数"不变**（S4.2 起 = 合批前三角化条数 + 形变项数）；
+  新增 **`batch_count` = 实际 `draw_indexed` 次数**（合批后 ≤ `draw_count`）——
+  同色多条几何时 `batch_count < draw_count`（可证伪断言见 §测试）。
 - **离屏格式** `OFFSCREEN_FORMAT = Rgba8Unorm`（**非 sRGB**，存 gamma 值），
   `MSAA_SAMPLES = 4`；纹理开 `COPY_SRC` 支持像素回读。
-- **`Frame2DData`** = `{ offscreen, draw_count, _arena_buffer }`
-  （不再含 quad / 合成绑定组）。
+- **`Frame2DData`** = `{ offscreen, draw_count, batch_count, cache, _arena_buffer }`，
+  `cache: FrameCacheStats { geom_requests, geom_misses, morph_requests, morph_misses }`。
 - **`Frame2DGeometry`**：`viewport_points` + `pixels_per_point` + `screen_size_px`；
   `viewport_px()` 复刻 `epaint::ViewportInPixels::from_points` 的取整 + 钳制口径，
   使**离屏纹理尺寸恒等于 egui-wgpu 为该回调设置的 render pass viewport 尺寸**。
 - **`WgpuBackend2D`**（`feature = "wgpu"` / `"egui-wgpu"`）的 egui 回调职责已并入
   §3 `scene_callback`（`SceneCompositorCallback`）；本模块只提供渲染 API。
-- 导出：`WgpuBackend2D` / `Frame2DGeometry` / `Frame2DData` /
-  `Recorded2D` / `snapshot_queue` / `MSAA_SAMPLES` / `OFFSCREEN_FORMAT`。
+- 导出：`WgpuBackend2D` / `Frame2DGeometry` / `Frame2DData` / `FrameCacheStats` /
+  `Recorded2D` / `snapshot_queue` / `MSAA_SAMPLES` / `OFFSCREEN_FORMAT` /
+  `SHAPE_2D_SHADER` / `SHAPE_2D_MORPH_SHADER`。
 
 > ⚠️ **egui-wgpu 回调 viewport 陷阱**：egui-wgpu 处理 `Primitive::Callback` 时会
 > `set_viewport(callback.viewport_in_pixels())`（下一个 primitive 处才复位）。
@@ -158,7 +169,7 @@ xcal-rs 的首个 GPU 2D 后端：**离屏纹理 + MSAA 4x**；合成自 S3-2 �
 > 视口会被**二次应用**（宽度 × 视口宽/屏幕宽并右移），表现为 2D 视图在 X 方向被压扁。
 > 回归测试 `composite_lands_inside_scoped_viewport_on_real_device` 在旧实现下必然失败。
 
-### 6. `compositor` (`wgpu` / `egui-wgpu`) — S3-2
+### 5. `compositor` (`wgpu` / `egui-wgpu`) — S3-2
 
 **图层合成器**：每个图层（2D / 3D）渲染到自己的离屏纹理，由本模块按
 `SceneView::layers` 的**索引顺序**（先 = 下）混合进主 pass —— 于是 2D / 3D
@@ -184,15 +195,6 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
   （`Conversion::for_formats`）。3D 离屏沿用主目标格式（源 = 目标 → Identity）；
   2D 离屏为 `Rgba8Unorm`（存 gamma）。
 - 导出：`Compositor` / `CompositeOp` / `CompositeFrame`。
-
-### 7. `egui_2d` (`cpu-2d`)
-
-`EguiPainter`：xcal-render 统一 2D 管线 (`Painter2D`) 的 egui 实现。
-按 `Shape2D` 的 `Circle / Line / Rect / Polyline / Polygon / Ellipse / Path`
-分支，把 `fill` / `stroke` **独立**翻译成 egui 原生 `Shape::*`
-（`Path` 经 `FLATTEN_TOLERANCE = 0.1` 展平）。同时提供
-`color_to_egui(xc_geometry::Color32) -> egui::Color32` 辅助函数。
-由 xcal-egui 直接 re-export。
 
 ### 6. `eframe_backend` (`egui-wgpu`)
 
@@ -236,7 +238,7 @@ hecs
 thiserror
 pollster               (optional)  ← wgpu  / egui-wgpu
 wgpu                   (optional)  ← wgpu  / egui-wgpu
-egui                   (optional)  ← egui  / egui-wgpu
+egui                   (optional)  ← egui-wgpu
 egui-wgpu              (optional)  ← egui-wgpu
 ```
 
@@ -246,13 +248,22 @@ egui-wgpu              (optional)  ← egui-wgpu
 cargo test -p xcal-render-backends --features egui-wgpu   # 3D/2D 离屏渲染、图层合成、顶点布局翻译
 cargo test -p xcal-render-backends --no-default-features  # 空 crate（全部模块被 feature 门控关闭）
 cargo check -p xcal-render-backends --features wgpu
-cargo check -p xcal-render-backends --features egui
+cargo check -p xcal-render-backends --features egui-wgpu
 ```
 
 `--features egui-wgpu` 下的 2D 相关测试：`Frame2DGeometry::viewport_px` 取整/钳制口径、
 离屏尺寸下限、局部变换与裁剪矩阵、`gpu_frame_rasterizes_and_recreates_targets_on_resize`
 （离屏像素回读 + 视口 200×100 → 400×300 目标重建）、
-`gpu_pipeline_builds_for_srgb_and_non_srgb_targets`、`pipeline_vertex_layout_comes_from_contract`。
+`gpu_pipeline_builds_for_srgb_and_non_srgb_targets`、`pipeline_vertex_layout_comes_from_contract`、
+`animated_content_keeps_cache_and_arena_bounded`。
+
+S4.2 / S4.3 新增的可证伪断言（真实设备门控）：
+- `same_color_geometries_batch_into_one_draw_call`：6 条同色几何 + 1 条异色 →
+  `draw_count == 7`、`batch_count == 2` 且 `batch_count < draw_count`；
+- `steady_state_geometry_cache_misses_stop_growing`：跑 10 帧同内容 →
+  首帧 `geom_misses == 1`、之后恒为 0（`mark_used` 保活）；
+- `morph_t_uniform_drives_geometry_and_stays_cached`：同一个形变项跑 `t = 0…1` →
+  描边边界随 `t` 逐帧外移（像素级），且 `morph_misses` 首帧后恒为 0（`t` 不进缓存键）。
 
 `compositor` 测试（真实设备门控，无适配器时跳过）：
 `blend_state_matches_declared_semantics`、`composite_quad_is_full_ndc_box_with_uv`、
