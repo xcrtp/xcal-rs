@@ -31,7 +31,7 @@ use xcal_render::{
     ContentTextureQueue, DrawQueue, MeasureSpace, MorphItem, MorphQueue, ResolveStyle, ZIndex,
     record_path_stroke, record_scene,
 };
-use xc_geometry::Path2D;
+use xc_notion::Path2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 
@@ -416,7 +416,7 @@ mod tests {
 
     use xcal_render::Shape2D;
     use xcal_scene::scene::components::{Circle, TextureHandle};
-    use xc_geometry::PathCommand;
+    use xc_notion::PathCommand;
 
     const TEX_W: u32 = 512;
     const TEX_H: u32 = 512;

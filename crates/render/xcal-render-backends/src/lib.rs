@@ -1,6 +1,6 @@
 // xcal-render-backends: 具体渲染后端实现（feature-gated）
 //
-// 依赖方向：xcal-geometry / xcal-scene ← xcal-render ← xcal-render-backends
+// 依赖方向：xc-notion / xcal-scene ← xcal-render ← xcal-render-backends
 //
 // 模块：
 //   - render_context：RenderContext（device/queue/format 句柄，wgpu/pollster）

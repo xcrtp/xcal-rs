@@ -10,7 +10,7 @@
 
 use crate::scene::components::Circle;
 use crate::types::{Camera2D, Vec2};
-use xc_geometry::{Path2D, PathCommand};
+use xc_notion::{Path2D, PathCommand};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。
 ///

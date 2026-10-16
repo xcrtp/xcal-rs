@@ -8,7 +8,7 @@
 // S4.1 后生产 2D 路径为 `DrawQueue` + `wgpu_2d`（lyon 三角化），本研究性
 // trait 尚无实现。
 
-use xc_geometry::{Transform2D, Vec2};
+use xc_notion::{Transform2D, Vec2};
 
 use crate::shape::{Shape2D, Style2D};
 

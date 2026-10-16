@@ -1,24 +1,28 @@
-# xc-geometry
+# xc-notion
 
-> **纯几何数据层** — xcal-rs 渲染框架的地基。零 trait object、零后端依赖，
+> **理念层（数学元语）** — xcal-rs 渲染框架的地基。零 trait object、零后端依赖，
 > 仅依赖 [`glam`](https://docs.rs/glam/0.33) 提供高性能 SIMD 友好的线性代数原语。
+>
+> M1 起本 crate 由 `xc-geometry` 更名而来（四层重构第一刀，见执行计划）：定位从
+> "纯几何数据层"提升为**全仓唯一的数学元语出口** —— glam 只在此被包装 / 再导出。
 
 ---
 
 ## 设计定位
 
-xcal-rs 的三层渲染架构里，本 crate 是最底层：
+xcal-rs 的分层里，本 crate 是最底层：
 
 ```
-xc-geometry (纯数据 + 纯函数算法)  ← 本 crate
+xc-notion (理念层：数学值 + 代数运算)   ← 本 crate
         ▲
-xcal-render  (trait / 队列 / 资源管理)
+xcal-scene / xcal-render  (场景层 + 渲染抽象 / 队列 / 资源管理)
         ▲
 xcal-render-backends (wgpu / egui / SVG / 文本后端)
 ```
 
 **硬约束**：本 crate 绝不引入 `egui` / `wgpu` / `hecs` 或任何项目内部 crate，
-保证它可被任何上层工程（WASM、Headless 测试、离线 SVG 录制）安全复用。
+保证它可被任何上层工程（WASM、Headless 测试、离线 SVG 录制）安全复用；
+且**只依赖 glam（+ 可选 serde）**（验收口径：`cargo tree -p xc-notion`）。
 
 ---
 
@@ -26,15 +30,27 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 
 | 模块 | 类型 | 说明 |
 |------|------|------|
-| `vec` | `Vec2` / `Vec3` / `Vec4` | glam `Vec2/Vec3A/Vec4` 的再导出 |
+| `vec` | `Vec2` / `Vec3` / `Vec4` / `U8Vec4` / `I8Vec4` | glam 向量类型的再导出（整数向量 M1 从 `xcal-scene::types` 收回） |
 | `mat` | `Mat3` / `Mat4` / `Quat` | 3×3、4×4 矩阵与四元数 |
-| `color` | `Color32` | RGBA8888（`u8` 四通道），`From<(u8,u8,u8,u8)>` / `From<[u8;4]>` / 透明度混色 |
+| `color` | `Color32` | RGBA8888（`u8` 四通道），`From<(u8,u8,u8,u8)>` / `From<[u8;4]>` |
 | `lerp` | `Lerp` | 线性插值 trait（`f32` / `Vec2` / `Vec3` / `Color32` / `Path2D`）；纯函数、零 trait object |
 | `space` | `MeasureSpace` / `resolve_width` | 呈现层度量空间：宽度属**世界**（随缩放）还是**屏幕**（不随缩放）；唯一换算入口 |
-| `rect` | [`Rect2D`](#rect2d-轴对齐矩形) | 2D 轴对齐矩形，交/并/包含/扩展 |
-| `path` | `Path2D` / `PathCommand` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样；弧长重采样 / 形变 / 变换 |
-| `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（平移 × 旋转 × 缩放），可与 `Mat3`/`Mat4` 互转 |
-| `primitives` | `Point3D` / `Line3D` / `Triangle2D` | 基础图元数据结构 |
+| `rect` | `Rect2D` | 2D 轴对齐矩形，交/并/包含 |
+| `path` | `Path2D` / `PathCommand` / `Path3D` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样；弧长重采样 / 形变 / 变换；`Path3D` 为 M1 新增的 3D 折线承载类型 |
+| `primitives` | `Point3D` / `Line3D` / `Triangle2D` / `Circle2D` / `Ellipse2D` / `Line2D` / `Polyline2D` / `Polygon2D` | 基础图元数据结构 + 纯数学代数（包围盒 / 面积 / 长度 / 包含 / 仿射变换）；2D 值类型为 M1 补齐 |
+| `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（数学值），可与 `Mat3`/`Mat4` 互转 |
+| `func` | `FunctionX2Y` / `SurfaceFn` / `SyncSendFn` | 一元实函数 `y = f(x)`；参数曲面函数 `z = f(x, y)` + 参数域（纯数学，不含采样步数） |
+| `curve` | `ParameterCurveT2XY` / `ParameterCurveT2XYZ` | 参数曲线 `t ↦ 点`（采样动作归场景对象层，不在本 crate） |
+| `sample` | `Sampler1D` / `Sampler2D` / `Interpolator` | 采样规格（区间 + 步长）与插值函数包装 |
+| `proj` | `directx::perspective` / `orthographic` / `look_at_mat4` | 相机投影 / 视图矩阵构造（右手系 + wgpu/D3D NDC） |
+
+`func` / `curve` / `sample` 三模块的类型 M1 从 `xcal-scene::scene::components` 归位 ——
+它们本是纯数学，此前却与 `Parent` / `Transform` / `Circle` 等 ECS 组件挤在同一文件里。
+
+> ⚠️ 离散化产物的判据是**动作归属**而非类型归属：`Polyline2D` / `Polygon2D` 的 `points`
+> 是定义本身；"对函数采样 100 点得到的折线"才是离散化产物 —— 类型在理念层，
+> **采样动作在场景对象层 / 装配层**。
+
 
 ---
 
@@ -43,7 +59,7 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 ### Color32 — 8 位 RGBA
 
 ```rust
-use xc_geometry::Color32;
+use xc_notion::Color32;
 
 let c = Color32::new(255, 128, 0, 255);       // 半透明橙色
 let c: Color32 = (100u8, 200, 50, 255).into();
@@ -61,7 +77,7 @@ let mixed = Color32::from_hex("#FF6600").unwrap().with_alpha(180);
 "宽度属于哪个空间"是可声明的属性（仅 2D 描边宽度）：
 
 ```rust
-use xc_geometry::{MeasureSpace, resolve_width};
+use xc_notion::{MeasureSpace, resolve_width};
 
 // Screen：不随缩放变化（默认）
 assert_eq!(resolve_width(2.0, MeasureSpace::Screen, 40.0), 2.0);
@@ -82,7 +98,7 @@ assert_eq!(resolve_width(0.01, MeasureSpace::WorldWithMinPx(1.5), 1.0), 1.5);
 ### Rect2D — 轴对齐矩形
 
 ```rust
-use xc_geometry::{Rect2D, Vec2};
+use xc_notion::{Rect2D, Vec2};
 
 let r = Rect2D::from_min_max(Vec2::new(0.0, 0.0), Vec2::new(10.0, 5.0));
 assert_eq!(r.width(), 10.0);
@@ -102,7 +118,7 @@ let i: Option<Rect2D> = r.intersect(r2); // None
 ### Path2D — 路径 + 折线采样
 
 ```rust
-use xc_geometry::{Path2D, Vec2};
+use xc_notion::{Path2D, Vec2};
 
 let mut p = Path2D::new();
 p.move_to(Vec2::new(0.0, 0.0))
@@ -149,7 +165,7 @@ let moved: Path2D = p.transformed(&t2d);
 ### Transform2D / Transform3D
 
 ```rust
-use xc_geometry::{Transform2D, Vec2, Mat3};
+use xc_notion::{Transform2D, Vec2, Mat3};
 
 let t = Transform2D::identity()
     .then_translate(Vec2::new(10.0, 20.0))
@@ -172,8 +188,8 @@ let inv = t.inverse();       // 仿射逆（平移+旋转+正交缩放时解析�
 ## 测试
 
 ```bash
-cargo test -p xc-geometry           # 运行 46 个单元测试
-cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
+cargo test -p xc-notion           # 运行 77 个单元测试
+cargo doc  -p xc-notion --no-deps # 查看完整 API 文档
 ```
 
 覆盖点：
@@ -190,6 +206,13 @@ cargo doc  -p xc-geometry --no-deps # 查看完整 API 文档
   `transformed` 端点、空/单点路径不 panic
   （历史：修复过 de Casteljau 切分时 NaN 传播 bug）
 - `Transform2D/3D` — 逆矩阵精度、点/方向向量变换、与 `Mat*` 互转
+- `Circle2D` / `Ellipse2D` / `Line2D` / `Polyline2D` / `Polygon2D`（M1 新增）—
+  包围盒 / 面积 / 长度 / 包含（含边界与退化轴）/ 点到线段最近点与距离 /
+  仿射变换（直线与折线保型、多边形面积按行列式缩放、镜像翻转绕序）
+- `Path3D`（M1 新增）— 开放 / 闭合长度、包围盒、按弧长均匀重采样（开放含端点、
+  闭合绕环均分）、`morph` 顶点数恒为 samples、仿射变换、空 / 单点不 panic
+- `FunctionX2Y` / `ParameterCurve*` / `Interpolator`（M1 归位）— 求值、
+  `Send + Sync`（可作 ECS 组件的必要条件）、`SurfaceFn` 求值与参数域
 
 ---
 

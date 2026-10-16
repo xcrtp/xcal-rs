@@ -3,13 +3,13 @@
 // 3D 渲染器 trait（与 Painter2D 对应）。后端（wgpu / mock / ...）实现该 trait
 // 即可消费 DrawQueue3D 中的绘制命令。
 //
-// 坐标/颜色类型来自 xcal-geometry；几何/材质组件由 xcal-scene ECS 体系提供。
+// 坐标/颜色类型来自 xc-notion；几何/材质组件由 xcal-scene ECS 体系提供。
 
 use std::sync::Arc;
 
 use glam::Mat4;
 use xcal_scene::scene::components::{Material3D, MeshGeometry};
-use xc_geometry::{Color32, Vec3};
+use xc_notion::{Color32, Vec3};
 
 /// 3D 绘制器 trait。
 ///
@@ -29,7 +29,7 @@ use xc_geometry::{Color32, Vec3};
 /// use std::sync::Arc;
 /// use glam::Mat4;
 /// use xcal_scene::scene::components::{Material3D, MeshGeometry};
-/// use xc_geometry::{Color32, Vec3};
+/// use xc_notion::{Color32, Vec3};
 /// use xcal_render::Painter3D;
 ///
 /// /// 统计绘制次数的 mock painter。

@@ -5,7 +5,7 @@
 
 use std::num::NonZeroU64;
 use xc_content::ContentIR;
-use xc_geometry::Color32;
+use xc_notion::Color32;
 
 /// 不透明句柄。内部单调递增整数，跨引擎进程内唯一（同一引擎下）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From)]

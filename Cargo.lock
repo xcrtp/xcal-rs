@@ -5667,15 +5667,7 @@ name = "xc-content"
 version = "0.1.0"
 dependencies = [
  "serde",
- "xc-geometry",
-]
-
-[[package]]
-name = "xc-geometry"
-version = "0.1.0"
-dependencies = [
- "glam",
- "serde",
+ "xc-notion",
 ]
 
 [[package]]
@@ -5739,6 +5731,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-notion"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+]
+
+[[package]]
 name = "xc-prerender"
 version = "0.1.0"
 dependencies = [
@@ -5750,7 +5750,7 @@ dependencies = [
  "typst",
  "typst-library",
  "xc-content",
- "xc-geometry",
+ "xc-notion",
 ]
 
 [[package]]
@@ -5765,7 +5765,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "xc-geometry",
+ "xc-notion",
 ]
 
 [[package]]
@@ -5791,8 +5791,8 @@ dependencies = [
  "tracing",
  "wgpu",
  "xc-content",
- "xc-geometry",
  "xc-macro",
+ "xc-notion",
  "xc-prerender",
  "xcal-egui",
  "xcal-render",
@@ -5811,8 +5811,8 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "hecs",
- "xc-geometry",
  "xc-macro",
+ "xc-notion",
  "xcal-render",
  "xcal-render-backends",
  "xcal-scene",
@@ -5873,7 +5873,7 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu",
  "xc-content",
- "xc-geometry",
+ "xc-notion",
  "xc-resource",
  "xc-vertex",
  "xcal-scene",
@@ -5891,7 +5891,7 @@ dependencies = [
  "pollster 0.3.0",
  "thiserror 2.0.20",
  "wgpu",
- "xc-geometry",
+ "xc-notion",
  "xcal-render",
  "xcal-scene",
 ]
@@ -5907,8 +5907,8 @@ dependencies = [
  "hecs",
  "smart-default",
  "thiserror 2.0.20",
- "xc-geometry",
  "xc-macro",
+ "xc-notion",
  "xc-time",
  "xcal-schedule",
 ]

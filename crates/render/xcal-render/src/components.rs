@@ -3,16 +3,22 @@
 // 从 xcal_scene::scene::components 重导出 marker/mesh + Circle/Path/Line/PhaseAnim，
 // 并新增 render 子模块（StrokeSolid / FillSolid），因为这些组件依赖 Color32，
 // 而 Color32 在 xcal_scene::types 中。因此渲染样式组件归入 xcal-render。
+//
+// M1 T4：连续数学对象（FunctionX2Y / ParameterCurve* / Sampler* / Interpolator /
+// SyncSendFn）已归位理念层 `xc-notion`，本 facade 改为直接从理念层转发。
 
 pub use xcal_scene::scene::components::{
-    CPUDevice, Circle, FunctionX2Y, Interpolator, Line, ParameterCurveT2XY, ParameterCurveT2XYZ,
-    Parent, Path, PathMesh, PhaseAnim, QuadMesh, Sampler1D, Sampler2D, SyncSendFn, Transform,
-    TriangleMesh, WGPUDevice, marker, mesh,
+    CPUDevice, Circle, Line, Parent, Path, PathMesh, PhaseAnim, QuadMesh, Transform, TriangleMesh,
+    WGPUDevice, marker, mesh,
+};
+pub use xc_notion::{
+    FunctionX2Y, Interpolator, ParameterCurveT2XY, ParameterCurveT2XYZ, Sampler1D, Sampler2D,
+    SyncSendFn,
 };
 
 pub mod render {
     use xcal_scene::types::Color32;
-    use xc_geometry::MeasureSpace;
+    use xc_notion::MeasureSpace;
 
     /// 描边样式组件：颜色 + 宽度 + 宽度所属空间。
     ///
@@ -69,10 +75,10 @@ mod tests {
     #[test]
     fn stroke_solid_default_construction_is_screen() {
         let s = StrokeSolid::new(2.0, (255, 0, 0, 255));
-        assert_eq!(s.space, xc_geometry::MeasureSpace::Screen);
+        assert_eq!(s.space, xc_notion::MeasureSpace::Screen);
         assert_eq!(s.width, 2.0);
 
-        let w = StrokeSolid::new_in(1.0, (0, 0, 0, 255), xc_geometry::MeasureSpace::World);
-        assert_eq!(w.space, xc_geometry::MeasureSpace::World);
+        let w = StrokeSolid::new_in(1.0, (0, 0, 0, 255), xc_notion::MeasureSpace::World);
+        assert_eq!(w.space, xc_notion::MeasureSpace::World);
     }
 }

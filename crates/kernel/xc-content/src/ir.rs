@@ -2,7 +2,7 @@
 // 约定：每个 path 自带 fill/stroke 样式与源码锚点；坐标单位 pt；
 // bounds = 墨迹包围盒；baseline 供垂直对齐；nominal_font_size 供消费端换算。
 
-use xc_geometry::{Color32, Path2D, Rect2D, Stroke2D};
+use xc_notion::{Color32, Path2D, Rect2D, Stroke2D};
 
 /// 归一化后的源码 + 内容哈希（跨引擎可比）。
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -131,7 +131,7 @@ impl ContentIR {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_geometry::Vec2;
+    use xc_notion::Vec2;
 
     fn rect_path(x: f32, y: f32, w: f32, h: f32) -> Path2D {
         let mut p = Path2D::new();

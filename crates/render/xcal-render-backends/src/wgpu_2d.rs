@@ -40,7 +40,7 @@ use xcal_render::{
     tolerance_for_scale,
 };
 use xcal_scene::domain::LayerId;
-use xc_geometry::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
+use xc_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 
 use crate::vertex_layout::{to_wgpu, to_wgpu_buffers};
 use crate::wgpu_3d::UniformArena;
@@ -1827,7 +1827,7 @@ mod tests {
         // half 由 20 → 40 形变。
         let center = Vec2::new(200.0, 100.0);
         let square = |half: f32| {
-            xc_geometry::Path2D::from_polyline(
+            xc_notion::Path2D::from_polyline(
                 &[
                     Vec2::new(center.x - half, center.y - half),
                     Vec2::new(center.x + half, center.y - half),

@@ -32,7 +32,7 @@ use xcal_scene::types::Rect;
 use xcal_scene::{Curve, TimeState};
 use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue};
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
-use xc_geometry::Rect2D;
+use xc_notion::Rect2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 

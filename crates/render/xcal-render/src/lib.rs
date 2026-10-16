@@ -1,5 +1,5 @@
 // xcal-render: 渲染 trait + 调度 + 资源管理层（三层架构的中间层）
-// 依赖方向：xcal-geometry / xcal-scene ← xcal-render ← xcal-render-backends
+// 依赖方向：xc-notion / xcal-scene ← xcal-render ← xcal-render-backends
 //
 // 本 crate 禁止依赖 egui。wgpu 仅通过 feature = "wgpu" 引入
 // （RenderTarget / RenderLayer / RenderBackend / ResourceCache 等 GPU 抽象）。
@@ -53,7 +53,7 @@ pub use draw::{
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
 // 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度
 // 属于世界空间还是屏幕空间。
-pub use xc_geometry::MeasureSpace;
+pub use xc_notion::MeasureSpace;
 
 // ─── 3D 队列 / 绘制器 ─────────────────────────────────────────────────────
 pub use draw_queue_3d::{DrawQueue3D, LineDraw, MeshDraw};

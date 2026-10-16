@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "crates/kernel/xc-geometry",
+    "crates/kernel/xc-notion",
     "crates/kernel/xc-content",
     "crates/kernel/xc-prerender",
     "crates/kernel/xc-time",

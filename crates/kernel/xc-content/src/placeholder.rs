@@ -5,7 +5,7 @@
 // 每个矩形的 anchor 指回归一化源码中的对应字节区间。
 
 use crate::ir::{ContentIR, ContentSource, Span, StyledPath};
-use xc_geometry::{Color32, Path2D, Vec2};
+use xc_notion::{Color32, Path2D, Vec2};
 
 /// 占位 IR 生成选项。
 #[derive(Debug, Clone)]

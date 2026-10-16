@@ -16,7 +16,7 @@
 //   通过 ContentIR + hit-test 自己处理选中高亮。
 
 use xc_content::{ContentIR, StyledPath};
-use xc_geometry::{MeasureSpace, Stroke2D, Transform2D};
+use xc_notion::{MeasureSpace, Stroke2D, Transform2D};
 
 use crate::shape::{Shape2D, Style2D};
 
@@ -40,7 +40,7 @@ pub struct ContentDrawCmd {
 pub fn ir_to_draw_cmds<'a>(
     ir: &'a ContentIR,
     target_font_size: f32,
-    world_pos: xc_geometry::Vec2,
+    world_pos: xc_notion::Vec2,
 ) -> Box<dyn Iterator<Item = ContentDrawCmd> + 'a> {
     if ir.is_empty() {
         return Box::new(std::iter::empty());
@@ -52,7 +52,7 @@ pub fn ir_to_draw_cmds<'a>(
     };
     // T = translate(world_pos) ∘ scale(scale)。
     // 先把 IR 本地点按 scale 缩放到目标字号，再平移到 world_pos。
-    let s = Transform2D::scale(xc_geometry::Vec2::splat(scale));
+    let s = Transform2D::scale(xc_notion::Vec2::splat(scale));
     let t = Transform2D::translate(world_pos);
     // compose: self 之后再应用 other。这里先 scale，再 translate ⇒ s.compose(t)。
     let combined = s.compose(t);
@@ -80,7 +80,7 @@ fn styled_path_to_cmd(p: &StyledPath, transform: Transform2D, scale: f32) -> Con
 mod tests {
     use super::*;
     use xc_content::{ContentSource, Span, StyledPath};
-    use xc_geometry::{Color32, Path2D, Rect2D, Vec2};
+    use xc_notion::{Color32, Path2D, Rect2D, Vec2};
 
     fn make_ir(nominal: f32, items: Vec<StyledPath>) -> ContentIR {
         let mut ir = ContentIR::empty(ContentSource::from_raw("placeholder"), nominal);
@@ -168,7 +168,7 @@ mod tests {
         let cmds2: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir2, 1.3, Vec2::ZERO).collect();
         let world_w = cmds2[0].style.stroke_width;
         assert!((world_w - 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
-        let px = xc_geometry::resolve_width(world_w, MeasureSpace::World, 40.0);
+        let px = xc_notion::resolve_width(world_w, MeasureSpace::World, 40.0);
         assert!((px - 4.333).abs() < 0.01, "屏幕宽度应约 4.3px，实际 {px}");
     }
 

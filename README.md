@@ -12,7 +12,7 @@ workspace 采用分层目录结构 `crates/<layer>/`，通用基础 crate 用 `x
 ```text
 crates/
 ├── kernel/          # 纯数据层（xc-prerender 为例外：kernel 层唯一重 crate，重型依赖 feature-gated）
-│   ├── xc-geometry       纯几何数据（Color32 / Rect2D / Path2D / Transform2D）
+│   ├── xc-notion       理念层/数学元语（Color32 / Rect2D / Path2D / Path3D / 图元 / Transform2D）
 │   ├── xc-time           时钟树 + 曲线 + 导演（Director 唯一时间源，纯数据纯函数）
 │   ├── xc-content        内容中间表示（ContentIR + 源码归一化 + 确定性 SVG + 占位排版）
 │   ├── xc-prerender      内容预渲染引擎接入（Typst / placeholder + 哈希缓存），默认零重依赖
@@ -54,7 +54,7 @@ crates/
 
 | Crate | 层 | 职责 |
 |-------|----|------|
-| `xc-geometry` | kernel | 纯几何数据（Color32 / Rect2D / Path2D / Transform2D / Point3D） |
+| `xc-notion` | kernel | 理念层（数学元语）：Vec/Mat 再导出 / Color32 / Rect2D / Path2D·Path3D / 2D 图元 / Transform2D·3D / Lerp / 函数·曲线·采样器 / 投影辅助（全仓唯一 glam 出口） |
 | `xc-time` | kernel | 纯逻辑时间内核：ClockForest（时钟树+环检测+eval_local）/ Curve（Const/Sin/Orbit/Phase/Sampled 纯函数 sample）/ Director（global_t + speed + playing，唯一时间源） |
 | `xc-content` | kernel | 内容中间表示：ContentIR / StyledPath / Span 锚点 + 源码归一化 + 确定性 SVG 量具 + 零依赖占位排版 |
 | `xc-prerender` | kernel | 内容预渲染：ContentEngine 异步形状 API + InMemoryEngine + 哈希缓存 + Typst 接入（feature 全 optional，默认零重依赖） |

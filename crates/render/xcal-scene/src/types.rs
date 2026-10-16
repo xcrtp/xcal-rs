@@ -1,6 +1,10 @@
 // types.rs
 //
-// 数学包装类型：Vec2, Vec3, Vec4, I8Vec4, U8Vec4, Color32, Rect, Camera2D。
+// 数学包装类型：Vec2, Vec3, Vec4, Color32, Rect, Camera2D。
+//
+// M1 T6①：`I8Vec4` / `U8Vec4` 已收回理念层 `xc-notion::vec`（全仓零外部消费方）。
+// 二者此前是本文件的 `export_vec!` newtype，是"每层各自依赖 glam"的重复定义；
+// 收回后（含 tuple 转换）零下游影响。
 
 macro_rules! export_type {
     ($(#[$m:meta])? $v:vis $name:ident($ty:ty)) => {
@@ -47,25 +51,11 @@ impl From<(f32, f32, f32, f32)> for Vec4 {
         glam::Vec4::new(x, y, z, w).into()
     }
 }
-export_vec!(I8Vec4);
 
-impl From<(i8, i8, i8, i8)> for I8Vec4 {
-    fn from((x, y, z, w): (i8, i8, i8, i8)) -> Self {
-        glam::I8Vec4::new(x, y, z, w).into()
-    }
-}
-
-export_vec!(U8Vec4);
-impl From<(u8, u8, u8, u8)> for U8Vec4 {
-    fn from((x, y, z, w): (u8, u8, u8, u8)) -> Self {
-        glam::U8Vec4::new(x, y, z, w).into()
-    }
-}
-
-// Color32 的规范定义位于 xcal-geometry（纯数据层），此处再导出，使 ECS 组件、
+// Color32 的规范定义位于 xc-notion（理念层），此处再导出，使 ECS 组件、
 // 2D 变换体系与渲染层共用同一类型。egui/wgpu 等后端转换由各后端 crate 负责
 // （孤儿规则：xcal-scene 不能为外部类型实现外部 trait）。
-pub use xc_geometry::Color32;
+pub use xc_notion::Color32;
 
 #[derive(Debug, Clone, Copy, derive_new::new, xc_macro::Transform2DInto)]
 pub struct Rect {
@@ -155,24 +145,6 @@ mod tests {
         assert_eq!(v.y, 2.0);
         assert_eq!(v.z, 3.0);
         assert_eq!(v.w, 4.0);
-    }
-
-    #[test]
-    fn test_i8vec4_from_tuple() {
-        let v: I8Vec4 = (1_i8, 2, 3, 4).into();
-        assert_eq!(v.x, 1);
-        assert_eq!(v.y, 2);
-        assert_eq!(v.z, 3);
-        assert_eq!(v.w, 4);
-    }
-
-    #[test]
-    fn test_u8vec4_from_tuple() {
-        let v: U8Vec4 = (1_u8, 2, 3, 4).into();
-        assert_eq!(v.x, 1);
-        assert_eq!(v.y, 2);
-        assert_eq!(v.z, 3);
-        assert_eq!(v.w, 4);
     }
 
     #[test]

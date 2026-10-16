@@ -1,7 +1,8 @@
 // scene.rs
 //
 // 纯逻辑组件：marker, mesh, animation + Circle/Path/Line（不含 StrokeSolid/FillSolid，
-// 这些放到 xcal-render） + FunctionX2Y/Sampler/Scene，以及 3D 类型与图元生成器。
+// 这些放到 xcal-render） + Scene，以及 3D 类型与图元生成器。
+// 连续数学对象（FunctionX2Y / Sampler / ParameterCurve / Interpolator）M1 起归位理念层 `xc-notion`。
 //
 // 模块组织（文件模块，见 scene/ 目录）：
 // - components：所有 ECS 组件（含 components/3d.rs 的 Camera3D/MeshGeometry/

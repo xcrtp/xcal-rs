@@ -1,7 +1,7 @@
 # xc-content
 
 > **内容中间表示（Content IR）内核** — 公式/文本排版结果的引擎无关数据模型。
-> 纯数据 + 纯函数：只依赖 [xc-geometry](../xc-geometry)（及可选 `serde`），
+> 纯数据 + 纯函数：只依赖 [xc-notion](../xc-notion)（及可选 `serde`），
 > 无 typst / egui / wgpu / hecs，可被任何上层 crate 安全复用。
 
 ---
@@ -53,7 +53,7 @@ let _hash: u64 = src.hash;         // 缓存键用
 // nominal_font_size = 排版时字号，消费端 scale = 目标字号 / nominal_font_size
 let mut ir = ContentIR::empty(src.clone(), 16.0);
 ir.items.push(
-    StyledPath::filled(path, xc_geometry::Color32::BLACK)
+    StyledPath::filled(path, xc_notion::Color32::BLACK)
         .with_anchor(Span::new(0, 1)),   // 锚点：归一化源码字节区间
 );
 ir.recompute_bounds();
@@ -125,6 +125,6 @@ cargo tree -p xc-content          # 依赖卫生：不含 typst / egui / wgpu / 
 
 ```toml
 [dependencies]
-xc-geometry = { path = "../xc-geometry" }
+xc-notion = { path = "../xc-notion" }
 serde = { version = "1", optional = true }   # feature = "serde" 时启用
 ```

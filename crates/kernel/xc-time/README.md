@@ -21,9 +21,9 @@ xcal-rs 动画架构的时间单向管道中，本 crate 承担全部「时间 �
 seek（跳转）、倒放（负 rate/speed）、循环回绕因此**免费且必然正确**，
 且与渲染帧率完全解耦。
 
-**硬约束**：仅依赖 `glam` / `xc-geometry` / `serde` / `thiserror`；
+**硬约束**：仅依赖 `glam` / `xc-notion` / `serde` / `thiserror`；
 `hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止。
-**路线甲**：可依赖 `xc-geometry`（插值原语），但**不得**依赖 `xc-content`——
+**路线甲**：可依赖 `xc-notion`（插值原语），但**不得**依赖 `xc-content`——
 语义配对（按源码锚点）的知识留在外层。
 
 ---
@@ -182,7 +182,7 @@ cargo tree -p xc-time          # 依赖卫生：不含 xc-content / hecs / egui 
 ```toml
 [dependencies]
 glam = { workspace = true, features = ["serde"] }            # 数学类型 + 可序列化
-xc-geometry = { path = "../xc-geometry", features = ["serde"] }  # 插值原语（Lerp / Path2D 形变）
+xc-notion = { path = "../xc-notion", features = ["serde"] }  # 插值原语（Lerp / Path2D 形变）
 serde.workspace = true                                       # ClockForest / Curve 可导出
 thiserror.workspace = true                                   # 错误类型
 ```

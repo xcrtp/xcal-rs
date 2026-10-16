@@ -6,8 +6,10 @@
 //
 // 注：旧动画组件（ClockState / LocalClock / CircleAnim / OrbitAnim）已删除，
 // 动画统一由 Binding 表 + xc-time::Curve 纯函数驱动。
-
-use std::sync::Arc;
+//
+// M1 T4：连续数学对象（FunctionX2Y / ParameterCurveT2XY / ParameterCurveT2XYZ /
+// Sampler1D / Sampler2D / Interpolator / SyncSendFn）已归位理念层 `xc-notion`
+// （func / curve / sample），此处**不再 re-export** —— 消费方直接改 import。
 
 pub mod marker {
     pub trait Device {}
@@ -71,8 +73,8 @@ pub struct PhaseAnim {
 /// 由 xcal-render 提供，作为同一实体上的独立组件，本组件只管几何。
 #[derive(Debug, Clone)]
 pub struct MorphShape {
-    pub from: xc_geometry::Path2D,
-    pub to: xc_geometry::Path2D,
+    pub from: xc_notion::Path2D,
+    pub to: xc_notion::Path2D,
     /// 形变参数 ∈ [0, 1]，由 `BindingApplySystem`（`BindingTarget::MorphT`）写入。
     pub t: f32,
     /// 输出顶点数（恒定；与 from/to 复杂度无关）。
@@ -80,25 +82,25 @@ pub struct MorphShape {
 }
 
 impl MorphShape {
-    /// 用默认顶点数（[`xc_geometry::DEFAULT_MORPH_SAMPLES`]）构造，`t = 0`（= from）。
-    pub fn new(from: xc_geometry::Path2D, to: xc_geometry::Path2D) -> Self {
+    /// 用默认顶点数（[`xc_notion::DEFAULT_MORPH_SAMPLES`]）构造，`t = 0`（= from）。
+    pub fn new(from: xc_notion::Path2D, to: xc_notion::Path2D) -> Self {
         Self {
             from,
             to,
             t: 0.0,
-            samples: xc_geometry::DEFAULT_MORPH_SAMPLES as u32,
+            samples: xc_notion::DEFAULT_MORPH_SAMPLES as u32,
         }
     }
 }
 
-/// 2D 路径组件：直接持有 [`xc_geometry::Path2D`]（命令序列，自带闭合语义，
+/// 2D 路径组件：直接持有 [`xc_notion::Path2D`]（命令序列，自带闭合语义，
 /// `closed` 不再作为独立字段——避免两处真相）。
 ///
 /// 坐标变换（屏幕 ↔ 逻辑）由 `xc_macro::Transform2DInto` 派生，落到
 /// `xcal_scene::transform` 里 `Path2D` 的手动实现（逐命令映射，含椭圆弧解析改写）。
 #[derive(Debug, Clone, derive_builder::Builder, derive_new::new, xc_macro::Transform2DInto)]
 pub struct Path {
-    pub path: xc_geometry::Path2D,
+    pub path: xc_notion::Path2D,
 }
 
 /// 线段图元：两个端点独立完成坐标转换（派生 [`xcal_scene::transform::Transform2DInto`]）。
@@ -110,59 +112,6 @@ pub struct Line {
     pub a: Vec2,
     #[new(into)]
     pub b: Vec2,
-}
-
-pub trait SyncSendFn<X, Y>: Sync + Send + Fn(X) -> Y {}
-impl<X, Y, T: Send + Sync + Fn(X) -> Y> SyncSendFn<X, Y> for T {}
-
-#[derive(Clone)]
-pub struct FunctionX2Y<X = f32, Y = f32> {
-    pub f: Arc<dyn SyncSendFn<X, Y>>,
-}
-macro_rules! impl_rc_new {
-    ($ty:ident) => {
-        impl<X, Y> $ty<X, Y> {
-            pub fn new(f: impl SyncSendFn<X, Y> + 'static) -> Self {
-                Self {
-                    f: Arc::new(f) as Arc<dyn SyncSendFn<X, Y>>,
-                }
-            }
-        }
-    };
-}
-impl_rc_new!(FunctionX2Y);
-
-#[derive(Clone)]
-pub struct ParameterCurveT2XY<T = f32, XY = (f32, f32)> {
-    pub f: Arc<dyn Fn(T) -> XY>,
-}
-impl_rc_new!(ParameterCurveT2XY);
-
-#[derive(Clone)]
-pub struct ParameterCurveT2XYZ<T, XYZ = (f32, f32, f32)> {
-    pub f: Arc<dyn Fn(T) -> XYZ>,
-}
-impl_rc_new!(ParameterCurveT2XYZ);
-
-#[derive(Clone, derive_builder::Builder, derive_new::new)]
-pub struct Sampler1D<T = f32> {
-    pub start: T,
-    pub end: T,
-    pub step: T,
-}
-#[derive(Clone, derive_builder::Builder, derive_new::new)]
-pub struct Sampler2D<T = f32> {
-    pub u_start: T,
-    pub u_end: T,
-    pub u_step: T,
-    pub v_start: T,
-    pub v_end: T,
-    pub v_step: T,
-}
-
-#[derive(Clone, derive_builder::Builder, derive_new::new)]
-pub struct Interpolator<T = f32> {
-    pub f: Arc<dyn Fn(T) -> T>,
 }
 
 #[derive(Debug, Clone, derive_builder::Builder)]

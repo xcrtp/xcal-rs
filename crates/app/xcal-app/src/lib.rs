@@ -20,7 +20,7 @@ use xcal_scene::domain::{ContentTextureSpec, InputEvents};
 use xcal_scene::scene::components::{
     Camera3D, ContentTextureItem, Material3D, MorphShape, Projection, TextureHandle, Transform,
 };
-use xcal_scene::scene::primitives::{SurfaceSpec, parametric_surface, wireframe_cube};
+use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::TimeState;
 use xcal_scene::types::{Camera2D, Color32, Rect};
@@ -36,7 +36,7 @@ use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, MorphQueue, scene::Scene,
 };
 use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
-use xc_geometry::Path2D;
+use xc_notion::{Path2D, SurfaceFn};
 
 /// 内容纹理（S3-3）：纹理句柄 id 与尺寸。
 ///
@@ -113,13 +113,13 @@ impl App {
         // ── 3D 场景：参数曲面 z = 0.35·sin(3x)·cos(3y)，域 [-1.5, 1.5]² ──
         // 曲面自带真实法线，经 cube.wgsl 的头顶 Lambert 呈现明暗起伏（非纯色剪影）。
         // 平移到立方体侧下方（部分重叠），以体现深度测试决定的前后遮挡。
-        let surface = parametric_surface(SurfaceSpec::new(
-            (-1.5, 1.5),
-            (-1.5, 1.5),
+        let surface = parametric_surface(
+            SurfaceFn::new((-1.5, 1.5), (-1.5, 1.5), |x, y| {
+                0.35 * (3.0 * x).sin() * (3.0 * y).cos()
+            }),
             48,
             48,
-            |x, y| 0.35 * (3.0 * x).sin() * (3.0 * y).cos(),
-        ));
+        );
         // S3-3：曲面材质引用内容纹理（同一 TextureHandle）。
         // 着色式为**墨迹 over 已受光材质色**（见 `cube.wgsl` F2）：
         // `rgb = tex.rgb + color.rgb * lit * (1 - tex.a)`。内容纹理透明底 ⇒ 未覆盖像素
@@ -188,8 +188,8 @@ impl App {
                 let mut hi = glam::Vec2::splat(f32::NEG_INFINITY);
                 for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
                     for cmd in &path.commands {
-                        if let xc_geometry::PathCommand::MoveTo(p)
-                        | xc_geometry::PathCommand::LineTo(p) = cmd
+                        if let xc_notion::PathCommand::MoveTo(p)
+                        | xc_notion::PathCommand::LineTo(p) = cmd
                         {
                             lo = lo.min(*p);
                             hi = hi.max(*p);

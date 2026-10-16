@@ -10,7 +10,7 @@ xcal-scene (场景组件 + 场景 System + domain 契约)
 xcal-schedule (ECS 调度框架：Resource / System trait / 六阶段 Scheduler)
 xcal-render (2D 管线 Painter2D / DrawQueue / Shape2D)
 xcal-render-backends (Compositor / SceneCompositorCallback)
-xc-geometry (Rect2D：声明 GPU 2D 回调视口)
+xc-notion (Rect2D：声明 GPU 2D 回调视口)
 xc-macro (Transform2DInto 派生)
       │
       ▼
@@ -131,7 +131,7 @@ xcal-app (装配 + ParamPanelSystem)
 xcal-scene                                                    # 场景组件 + System + domain 契约
 xcal-render            = { default-features = false }         # 2D 录制管线（无 wgpu）
 xcal-render-backends   = { default-features = false, features = ["egui-wgpu"] } # Compositor / SceneCompositorCallback
-xc-geometry                                                   # S3-1：以 Rect2D 声明回调视口
+xc-notion                                                   # S3-1：以 Rect2D 声明回调视口
 xc-macro
 egui                   = "0.36"
 egui-wgpu                                                     # present 提交 3D/GPU2D 回调

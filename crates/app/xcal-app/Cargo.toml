@@ -24,7 +24,7 @@ xc-macro = { path = "../../kernel/xc-macro" }
 xc-content = { path = "../../kernel/xc-content" }
 xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 # 几何原语：S1 形变 demo 需要直接构造 Path2D（MorphShape 的 from/to）。
-xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-notion = { path = "../../kernel/xc-notion" }
 
 eframe.workspace = true
 egui.workspace = true

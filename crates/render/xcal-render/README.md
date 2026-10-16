@@ -3,7 +3,7 @@
 > **渲染 trait + 调度 + 资源管理层**。位于三层架构的中间层：
 >
 > ```text
-> xc-geometry / xcal-scene  ←── xcal-render ──→  xcal-render-backends
+> xc-notion / xcal-scene  ←── xcal-render ──→  xcal-render-backends
 > ```
 >
 > 定义 2D 与 3D 的绘制器 trait、绘制队列、视口/渲染目标/渲染层抽象与新图元体系。
@@ -39,7 +39,7 @@ xcal-render 同时承载两套渲染抽象：
   后调用它（z = 0）。旧「逐组件穷举宏」已删除 ⇒
   **新增图元只需实现 `ToShape2D`，不必改动录制逻辑**。
 - **描边宽度的度量空间**（`StrokeSolid.space: MeasureSpace`，默认 `Screen`）：
-  `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_geometry::resolve_width`
+  `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_notion::resolve_width`
   解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
   `StrokeSolid::new(w, c)` 两参保持（默认 `Screen`），显式声明用 `new_in(w, c, space)`。
   `World` = 随缩放变化（如公式描边），`Screen` = 恒定（网格 / 轴 / 曲线 / 圆 / 形变）。
@@ -119,7 +119,7 @@ xcal-render 同时承载两套渲染抽象：
 
 ```rust
 use xcal_render::{DrawCommand, DrawQueue, Painter2D, Shape2D, Style2D, ZIndex};
-use xc_geometry::{Color32, Rect2D, Vec2};
+use xc_notion::{Color32, Rect2D, Vec2};
 
 struct ConsolePainter;
 impl Painter2D for ConsolePainter {
@@ -143,7 +143,7 @@ dq.execute(&ConsolePainter); // 遍历执行
 
 ```rust
 use xcal_render::{tessellate, tolerance_for_scale, Style2D, Shape2D};
-use xc_geometry::{Color32, Rect2D, Transform2D, Vec2};
+use xc_notion::{Color32, Rect2D, Transform2D, Vec2};
 
 let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(100.0, 50.0)));
 let style = Style2D { fill: Some(Color32::GREEN), stroke: None, ..Default::default() };
@@ -152,7 +152,7 @@ let items = tessellate(&shape, &Transform2D::identity(), &style, tolerance_for_s
 assert!(items.iter().all(|t| t.layout == xcal_render::tessellation_layout()));
 ```
 
-> `Transform2D::identity()` 的实际构造以 `xc-geometry` 为准（示例仅示意流程）。
+> `Transform2D::identity()` 的实际构造以 `xc-notion` 为准（示例仅示意流程）。
 
 ## 使用示例（3D DrawQueue3D）
 
@@ -161,7 +161,7 @@ use std::sync::Arc;
 use xcal_render::DrawQueue3D;
 use xcal_scene::scene::components::Material3D;
 use xcal_scene::scene::primitives::wireframe_cube;
-use xc_geometry::Color32;
+use xc_notion::Color32;
 
 let white = Color32::new(255, 255, 255, 255);
 let mut q3 = DrawQueue3D::new();
@@ -207,7 +207,7 @@ cargo doc  -p xcal-render --no-deps --all-features
 
 ```toml
 xcal-scene     = { path = "../xcal-scene", default-features = false }
-xc-geometry = { path = "../xc-geometry" }
+xc-notion = { path = "../xc-notion" }
 xc-content  = { path = "../../kernel/xc-content" }   # content_ir 消费侧：ir_to_draw_cmds
 xc-vertex   = { path = "../../kernel/xc-vertex" }    # 顶点格式契约（已下沉 kernel）
 xc-resource = { path = "../../kernel/xc-resource" }  # 资源缓存 / GpuHandle（已下沉 kernel）

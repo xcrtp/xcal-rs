@@ -23,7 +23,7 @@
 ```mermaid
 graph TD
     subgraph kernel[crates/kernel]
-        xc_geometry["xc-geometry"]
+        xc_notion["xc-notion"]
         xc_content["xc-content"]
         xc_prerender["xc-prerender"]
         xc_time["xc-time"]
@@ -62,14 +62,14 @@ graph TD
     end
 
     %% kernel
-    xc_geometry
+    xc_notion
     xc_vertex
     xc_resource
     xc_macro
-    xc_content --> xc_geometry
+    xc_content --> xc_notion
     xc_prerender --> xc_content
-    xc_prerender --> xc_geometry
-    xc_time --> xc_geometry
+    xc_prerender --> xc_notion
+    xc_time --> xc_notion
 
     %% graph → kernel
     xc_graph_algo --> xc_node
@@ -80,21 +80,21 @@ graph TD
     %% schedule（无内部依赖，仅依赖 hecs）
 
     %% render → kernel + schedule
-    xcal_scene --> xc_geometry
+    xcal_scene --> xc_notion
     xcal_scene --> xc_time
     xcal_scene --> xc_macro
     xcal_scene --> xcal_schedule
     xcal_render --> xc_content
-    xcal_render --> xc_geometry
+    xcal_render --> xc_notion
     xcal_render --> xc_vertex
     xcal_render --> xc_resource
     xcal_render --> xcal_scene
-    xcal_render_backends --> xc_geometry
+    xcal_render_backends --> xc_notion
     xcal_render_backends --> xcal_scene
     xcal_render_backends --> xcal_render
 
     %% ui → kernel + graph + render + schedule
-    xcal_egui --> xc_geometry
+    xcal_egui --> xc_notion
     xcal_egui --> xc_macro
     xcal_egui --> xcal_scene
     xcal_egui --> xcal_schedule
@@ -117,7 +117,7 @@ graph TD
     xcal_app --> xcal_render_backends
     xcal_app --> xc_content
     xcal_app --> xc_prerender
-    xcal_app --> xc_geometry
+    xcal_app --> xc_notion
 ```
 
 ## 合规校验
@@ -152,7 +152,7 @@ graph TD
 | xc-resource | 1 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
-| xc-geometry | 8 | 0 | 0.00 |
+| xc-notion | 8 | 0 | 0.00 |
 | xc-macro | 3 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
@@ -227,13 +227,13 @@ FrameEnd:      —（内容提交由 host.present 承担；
 ### S1 插值内核与形变（路线甲）
 
 ```
-xc-geometry：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
+xc-notion：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
 xc-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
 xc-content ：pair_by_anchor（语义配对，按源码锚点）
 xcal-scene  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（SceneSync）
 ```
 
-- **路线甲**：`xc-time` 依赖 `xc-geometry`（插值原语），但**不得**依赖 `xc-content`
+- **路线甲**：`xc-time` 依赖 `xc-notion`（插值原语），但**不得**依赖 `xc-content`
   （语义配对知识留外层）。验收：`cargo tree -p xc-time | grep -c xc-content` = 0。
 - 对齐按**弧长**（非索引）：`flatten` 输出点分布不均，按索引配对会让直线段被拉伸、
   曲线段被压缩，形变过程"抽动"。
@@ -264,7 +264,7 @@ xcal-scene  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（Sc
 Stroke2D.space / StrokeSolid.space / Style2D.space（声明）
         │
         ▼
-xc_geometry::resolve_width(width, space, scale)   ← 唯一换算入口
+xc_notion::resolve_width(width, space, scale)   ← 唯一换算入口
         │
         ▼
 xcal-render::record_scene（从 camera.scale 取值）  ← 唯一换算点
@@ -395,15 +395,15 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > `cargo metadata --format-version 1`（仅生产依赖，`kind != dev`）等价重算。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 >
-> 备注（2026-10-13）：S1 引入 `xc-time → xc-geometry` 边后按同一口径再次重算
-> FanIn/FanOut（`xc-time` FanOut 0→1、`xc-geometry` FanIn 5→7、`xcal-app` FanOut 5→8）。
+> 备注（2026-10-13）：S1 引入 `xc-time → xc-notion` 边后按同一口径再次重算
+> FanIn/FanOut（`xc-time` FanOut 0→1、`xc-notion` FanIn 5→7、`xcal-app` FanOut 5→8）。
 >
 > 备注（2026-10-15）：依赖图与 `workspace-analyzer.mmd` 按同一 `cargo metadata` 口径
 > 手工补齐（工具仍不可用），合计补 9 条边：
 > - 本文件图区：修正 `xcal_node_egui → xc_node`、`xcal_node_egui_ui → xc_node_schema`
 >   两处前缀笔误，并补 `xc-node-schema → xc-node` / `→ xc-node-schema-macros`（2 条）；
-> - `workspace-analyzer.mmd`：补 `xc-prerender → xc-content` / `→ xc-geometry`、
->   `xc-time → xc-geometry`、`xcal-app → xc-content` / `→ xc-geometry` / `→ xc-prerender`、
+> - `workspace-analyzer.mmd`：补 `xc-prerender → xc-content` / `→ xc-notion`、
+>   `xc-time → xc-notion`、`xcal-app → xc-content` / `→ xc-notion` / `→ xc-prerender`、
 >   `xcal-render → xc-content`（7 条，29 → 36）。
 >
 > FanIn/FanOut 表经复核无需改动。工具恢复后重跑 `cargo-workspace-analyzer -d .`
@@ -417,7 +417,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   ui 层移除 proc-macro；
 > - 补边（相对 R1 基线）：`xcal-scene → xcal-schedule`、`xcal-app → xcal-schedule`、
 >   `xcal-egui → xcal-schedule`、`xcal-render → xc-vertex`、`xcal-render → xc-resource`、
->   `xcal-egui → xc-geometry`；
+>   `xcal-egui → xc-notion`；
 > - 图与 `workspace-analyzer.mmd` 保持「仅含 workspace 内部 crate 节点」的既有约定，
 >   `xcal-schedule → hecs`（外部 crate）不入图。
 >

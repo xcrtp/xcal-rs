@@ -2,7 +2,7 @@
 // 要求：输出确定性（固定浮点精度 + 稳定迭代顺序）；锚点写入 data-span 属性。
 
 use crate::ir::{ContentIR, StyledPath};
-use xc_geometry::{PathCommand, Vec2};
+use xc_notion::{PathCommand, Vec2};
 
 /// SVG 序列化选项。
 #[derive(Debug, Clone)]
@@ -111,7 +111,7 @@ fn arc_point(center: Vec2, radii: Vec2, rot: f32, angle: f32) -> Vec2 {
     Vec2::new(center.x + c * l.x - s * l.y, center.y + s * l.x + c * l.y)
 }
 
-fn write_hex(out: &mut String, c: xc_geometry::Color32) {
+fn write_hex(out: &mut String, c: xc_notion::Color32) {
     out.push_str(&format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b));
 }
 
@@ -119,7 +119,7 @@ fn write_hex(out: &mut String, c: xc_geometry::Color32) {
 mod tests {
     use super::*;
     use crate::ir::{ContentSource, Span};
-    use xc_geometry::{Color32, Path2D, Stroke2D, Vec2};
+    use xc_notion::{Color32, Path2D, Stroke2D, Vec2};
 
     fn sample_ir() -> ContentIR {
         let src = ContentSource::from_normalized("ab");

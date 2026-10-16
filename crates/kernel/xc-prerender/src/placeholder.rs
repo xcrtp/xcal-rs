@@ -32,7 +32,7 @@ fn generate_placeholder_from_normalized(src: &ContentSource, opts: &PlaceholderO
     let baseline = h * 0.8;
 
     use xc_content::{Span, StyledPath};
-    use xc_geometry::{Path2D, Vec2};
+    use xc_notion::{Path2D, Vec2};
 
     let mut ir = ContentIR::empty(src.clone(), font_size);
     ir.baseline = baseline;

@@ -230,7 +230,7 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 → 形变参数 `t` 在 `[0, 1]` 平滑往返。**起点对齐**（原型约定）：圆的起笔方向与方的
 首顶点方向取一致（均指向 -45°），避免形变过程"绕圈"。
 
-> 铁律（路线甲）：`xc-time` 可依赖 `xc-geometry`，但**不得**依赖 `xc-content`——
+> 铁律（路线甲）：`xc-time` 可依赖 `xc-notion`，但**不得**依赖 `xc-content`——
 > 语义配对留在 `xc-content`，`xc-time` 只提供插值原语。
 >
 > 度量空间：形变形状 / 网格 / 坐标轴 / sin 曲线 / 圆均为 `MeasureSpace::Screen`
@@ -294,7 +294,7 @@ xcal-egui
 xc-macro
 xc-content                              # 公式 IR 类型
 xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
-xc-geometry                             # 形变 demo：直接构造 Path2D（MorphShape 的 from/to）
+xc-notion                             # 形变 demo：直接构造 Path2D（MorphShape 的 from/to）
 
 eframe = { version = "0.36", default-features = false, features = ["wgpu","x11","wayland"] }
 egui / egui-wgpu / wgpu 30

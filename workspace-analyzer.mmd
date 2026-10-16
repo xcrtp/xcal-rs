@@ -1,14 +1,14 @@
 graph TD
-    xc-content --> xc-geometry
+    xc-content --> xc-notion
     xc-graph-algo --> xc-node
     xc-graph-eval --> xc-node
     xc-node-schema --> xc-node
     xc-node-schema --> xc-node-schema-macros
     xc-prerender --> xc-content
-    xc-prerender --> xc-geometry
-    xc-time --> xc-geometry
+    xc-prerender --> xc-notion
+    xc-time --> xc-notion
     xcal-app --> xc-content
-    xcal-app --> xc-geometry
+    xcal-app --> xc-notion
     xcal-app --> xc-macro
     xcal-app --> xc-prerender
     xcal-app --> xcal-egui
@@ -16,7 +16,7 @@ graph TD
     xcal-app --> xcal-render-backends
     xcal-app --> xcal-scene
     xcal-app --> xcal-schedule
-    xcal-egui --> xc-geometry
+    xcal-egui --> xc-notion
     xcal-egui --> xc-macro
     xcal-egui --> xcal-render
     xcal-egui --> xcal-render-backends
@@ -30,14 +30,14 @@ graph TD
     xcal-node-egui-ui --> xc-node-schema
     xcal-node-egui-ui --> xcal-node-egui
     xcal-render --> xc-content
-    xcal-render --> xc-geometry
+    xcal-render --> xc-notion
     xcal-render --> xc-resource
     xcal-render --> xc-vertex
     xcal-render --> xcal-scene
-    xcal-render-backends --> xc-geometry
+    xcal-render-backends --> xc-notion
     xcal-render-backends --> xcal-render
     xcal-render-backends --> xcal-scene
-    xcal-scene --> xc-geometry
+    xcal-scene --> xc-notion
     xcal-scene --> xc-macro
     xcal-scene --> xc-time
     xcal-scene --> xcal-schedule

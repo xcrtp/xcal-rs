@@ -9,7 +9,7 @@ license.workspace = true
 # kernel 铁律：禁止依赖 graph / render / ui / app（xc-* / xcal-* 上层）。
 
 [dependencies]
-xc-geometry = { path = "../xc-geometry" }
+xc-notion = { path = "../xc-notion" }
 xc-content = { path = "../xc-content" }
 thiserror = { workspace = true }
 derive_more = { workspace = true }

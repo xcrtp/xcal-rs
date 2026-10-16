@@ -48,7 +48,7 @@ use lyon_tessellation::{
     StrokeOptions, StrokeTessellator, StrokeVertex, StrokeVertexConstructor, VertexBuffers,
 };
 
-use xc_geometry::{Transform2D, Triangle2D, Vec2};
+use xc_notion::{Transform2D, Triangle2D, Vec2};
 
 use crate::shape::{CustomShapeData, Shape2D, Style2D};
 use crate::vertex::{AaModel, CacheStrategy, VertexLayout};
@@ -441,7 +441,7 @@ pub fn total_area(t: &Tessellation2D, stroke_width: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_geometry::{Color32, MeasureSpace, Path2D, Rect2D};
+    use xc_notion::{Color32, MeasureSpace, Path2D, Rect2D};
 
     fn style_fill() -> Style2D {
         Style2D {

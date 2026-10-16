@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 xc-macro = { path = "../../kernel/xc-macro" }
-xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-notion = { path = "../../kernel/xc-notion" }
 xc-time = { path = "../../kernel/xc-time" }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 

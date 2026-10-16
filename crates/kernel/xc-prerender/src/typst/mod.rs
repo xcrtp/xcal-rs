@@ -110,7 +110,7 @@ mod tests {
     use crate::request::ContentConfig;
     use crate::ContentEngine;
     use xc_content::ContentSource;
-    use xc_geometry::Color32;
+    use xc_notion::Color32;
 
     fn cfg(font_size: f32) -> ContentConfig {
         ContentConfig {

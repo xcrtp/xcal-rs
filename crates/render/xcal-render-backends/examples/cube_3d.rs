@@ -21,7 +21,7 @@ use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::{
     Compositor, SceneCompositorCallback, SceneLayer, WgpuBackend3D,
 };
-use xc_geometry::{Color32, Rect2D, Vec2};
+use xc_notion::{Color32, Rect2D, Vec2};
 
 struct Cube3dApp {
     start: Instant,

@@ -16,8 +16,8 @@
 
 use crate::types::Color32;
 use glam::Mat4;
-use glam::camera::rh::proj::directx;
-use glam::camera::rh::view::look_at_mat4;
+// 投影 / 视图是纯数学函数，M1 T6② 起由理念层统一出口（本篇不再直接摸 glam 相机模块）。
+use xc_notion::proj::{directx, look_at_mat4};
 
 /// 3D 图元拓扑方式。
 ///

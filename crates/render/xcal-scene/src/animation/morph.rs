@@ -10,7 +10,7 @@
 // 再交给普通 2D 录制。用法：形变实体同时带 `MorphShape` + `Path` 时本 System 生效；
 // App 的形变实体**不带 `Path`**，故本 System 在 App 里自然不命中。
 
-use xc_geometry::Path2D;
+use xc_notion::Path2D;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 use xcal_scene::scene::components::{MorphShape, Path};
@@ -97,7 +97,7 @@ mod tests {
         assert!(
             matches!(
                 path.path.commands.last(),
-                Some(xc_geometry::PathCommand::Close)
+                Some(xc_notion::PathCommand::Close)
             ),
             "形变输出应闭合（末命令为 Close）"
         );

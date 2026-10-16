@@ -6,7 +6,7 @@
 // 本模块是面向 Shape2D/Style2D 新图元体系的命令队列，排序语义保持
 // 与旧队列一致（稳定排序：先按 z 升序，同 z 保序），供新管线使用。
 
-use xc_geometry::Transform2D;
+use xc_notion::Transform2D;
 
 use crate::shape::{Shape2D, Style2D};
 
@@ -80,7 +80,7 @@ impl DrawQueue2D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_geometry::Vec2;
+    use xc_notion::Vec2;
 
     #[test]
     fn test_stable_order_preserved_within_same_z() {

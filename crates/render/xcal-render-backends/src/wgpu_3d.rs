@@ -59,7 +59,7 @@ use wgpu::util::DeviceExt as _;
 
 use xcal_scene::domain::LayerId;
 use xcal_scene::scene::components::{PrimitiveTopology, ShaderVariant, UvProjection};
-use xc_geometry::Color32;
+use xc_notion::Color32;
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xcal_render::{
     GpuHandle, RenderBackend3D, RenderLayer, RenderTarget, ResourceCache, ResourceKey, Viewport,
@@ -1264,8 +1264,8 @@ mod tests {
     use xcal_scene::scene::components::{
         Camera3D, Material3D, MeshGeometry, Projection, TextureHandle,
     };
-    use xcal_scene::scene::primitives::{SurfaceSpec, parametric_surface, wireframe_cube};
-    use xc_geometry::Vec3;
+    use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
+    use xc_notion::{SurfaceFn, Vec3};
     use xcal_render::{DrawQueue3D, Viewport};
 
     fn headless_backend() -> Option<(WgpuBackend3D, RenderContext)> {
@@ -1895,13 +1895,11 @@ mod tests {
     ///
     /// `view_proj = IDENTITY` 时 `mvp = transform`，平移的 z 分量即 NDC 深度。
     fn flat_plane(half_w: f32, half_h: f32, z: f32, color: Color32) -> MeshDraw {
-        let geometry = parametric_surface(SurfaceSpec::new(
-            (-half_w, half_w),
-            (-half_h, half_h),
+        let geometry = parametric_surface(
+            SurfaceFn::new((-half_w, half_w), (-half_h, half_h), |_, _| 0.0),
             1,
             1,
-            |_, _| 0.0,
-        ));
+        );
         MeshDraw::new(
             std::sync::Arc::new(geometry),
             Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z)),

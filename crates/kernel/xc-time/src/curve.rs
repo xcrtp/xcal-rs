@@ -4,7 +4,7 @@
 
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
-use xc_geometry::{DEFAULT_MORPH_SAMPLES, Path2D};
+use xc_notion::{DEFAULT_MORPH_SAMPLES, Path2D};
 
 use crate::easing::Easing;
 

@@ -11,14 +11,14 @@
 两阶段内容管线的引擎侧，与 [xc-content](../xc-content) 的契约关系：
 
 ```
-xc-geometry (纯几何) ← xc-content (ContentIR + 归一化 + SVG + 占位)
+xc-notion (理念层/数学元语) ← xc-content (ContentIR + 归一化 + SVG + 占位)
         ▲
 xc-prerender（本 crate：引擎抽象 + 缓存 + Typst 接入）
         ▲
 上层渲染（xcal-render：ir_to_draw_cmds → Shape2D 直接光栅化）
 ```
 
-**依赖方向**：`xc-geometry ← xc-content ← xc-prerender`。
+**依赖方向**：`xc-notion ← xc-content ← xc-prerender`。
 **铁律**：禁止依赖任何 graph / render / ui / app（`xc-*` / `xcal-*` 上层）；
 重引擎依赖全部 `optional`，未启用 feature 时零重依赖。
 
@@ -148,7 +148,7 @@ typst = ["dep:typst", "dep:typst-library", "dep:ecow", "dep:fontdb", "dep:ttf-pa
 placeholder = []   # 占位引擎，默认可用，无额外依赖
 
 [dependencies]
-xc-geometry = { path = "../xc-geometry" }
+xc-notion = { path = "../xc-notion" }
 xc-content  = { path = "../xc-content" }
 thiserror.workspace = true
 derive_more.workspace = true

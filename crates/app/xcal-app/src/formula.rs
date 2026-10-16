@@ -14,7 +14,7 @@
 use xcal_scene::types::Color32;
 use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
-use xc_geometry::Path2D;
+use xc_notion::Path2D;
 use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
 
 /// 曲线展平容差（pt，相对 **标称字号** 尺度）。
@@ -195,7 +195,7 @@ fn is_closed(sub: &[glam::Vec2]) -> bool {
 mod tests {
     use super::*;
     use xc_content::{ContentSource, StyledPath};
-    use xc_geometry::{Color32 as GColor, Path2D, Stroke2D, Vec2 as GVec2};
+    use xc_notion::{Color32 as GColor, Path2D, Stroke2D, Vec2 as GVec2};
 
     /// 构造指定标称字号的 FormulaSpec（标称字号只影响编译精度，不影响显示尺寸）。
     fn spec_with_nominal(source: &str, font_size: f32, nominal: f32) -> FormulaSpec {
@@ -217,7 +217,7 @@ mod tests {
         path.commands
             .iter()
             .filter_map(|c| match c {
-                xc_geometry::PathCommand::MoveTo(p) | xc_geometry::PathCommand::LineTo(p) => {
+                xc_notion::PathCommand::MoveTo(p) | xc_notion::PathCommand::LineTo(p) => {
                     Some(*p)
                 }
                 _ => None,
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(paths.len(), 3);
         for (path, _, _, space) in &paths {
             assert!(
-                matches!(path.commands.last(), Some(xc_geometry::PathCommand::Close)),
+                matches!(path.commands.last(), Some(xc_notion::PathCommand::Close)),
                 "占位矩形应为闭合子路径"
             );
             // 公式描边恒为世界空间（随缩放成比例变化）。
@@ -279,7 +279,7 @@ mod tests {
         assert!((world_w - 1.0 * 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
         assert_eq!(paths[0].3, MeasureSpace::World);
 
-        let px = xc_geometry::resolve_width(world_w, MeasureSpace::World, 40.0);
+        let px = xc_notion::resolve_width(world_w, MeasureSpace::World, 40.0);
         assert!((px - 4.333).abs() < 0.01, "屏幕宽度应约 4.3px，实际 {px}");
     }
 
@@ -361,7 +361,7 @@ mod tests {
         for (path, _, _, _) in &paths {
             assert_eq!(path_points(path).len(), 5, "每个轮廓：4 顶点 + 回起点");
             assert!(
-                matches!(path.commands.last(), Some(xc_geometry::PathCommand::Close)),
+                matches!(path.commands.last(), Some(xc_notion::PathCommand::Close)),
                 "轮廓应闭合"
             );
         }
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(paths[0].1, Color32::from_rgb(0x00FF00));
         assert!((paths[0].2 - 2.5).abs() < 1e-6);
         assert!(
-            !matches!(paths[0].0.commands.last(), Some(xc_geometry::PathCommand::Close)),
+            !matches!(paths[0].0.commands.last(), Some(xc_notion::PathCommand::Close)),
             "开放折线不应标记为闭合"
         );
     }

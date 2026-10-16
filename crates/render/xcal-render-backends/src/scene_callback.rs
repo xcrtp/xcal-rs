@@ -28,7 +28,7 @@
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
 use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
-use xc_geometry::{Rect2D, Vec2 as GeoVec2};
+use xc_notion::{Rect2D, Vec2 as GeoVec2};
 
 use crate::compositor::{CompositeFrame, CompositeOp, Compositor};
 use crate::wgpu_2d::{
@@ -358,7 +358,7 @@ mod tests {
         Camera3D, Material3D, MeshGeometry, PrimitiveTopology, Projection, TextureHandle,
     };
     use xcal_scene::types::{Camera2D, Rect};
-    use xc_geometry::Color32;
+    use xc_notion::Color32;
 
     /// 内容纹理尺寸（与 3D 视口同尺寸，便于逐像素对应）。
     const TEX: u32 = 32;

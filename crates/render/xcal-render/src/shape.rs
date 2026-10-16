@@ -1,6 +1,6 @@
 // shape.rs
 //
-// 2D 形状定义（新渲染管线）：基于 xcal-geometry 的纯数据描述。
+// 2D 形状定义（新渲染管线）：基于 xc-notion 的纯数据描述。
 //
 // 设计要点：
 // - Shape2D 是"逻辑图元"枚举，后端可选择光栅化路径（triangulate / flatten）；
@@ -9,7 +9,7 @@
 //   为每个宿主图元增加变体即可统一处理裁剪/命中测试/离屏后端；
 // - 本模块不依赖 wgpu/egui，纯几何 + 函数指针。
 
-use xc_geometry::{Color32, MeasureSpace, Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
+use xc_notion::{Color32, MeasureSpace, Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
 
 /// 自定义图元携带的类型标识（用于调试 / 宿主侧反查）。
 pub type CustomTypeId = std::any::TypeId;

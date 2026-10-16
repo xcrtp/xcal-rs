@@ -8,9 +8,9 @@ license.workspace = true
 # 禁止依赖 typst / egui / wgpu / hecs。
 
 [dependencies]
-xc-geometry = { path = "../xc-geometry" }
+xc-notion = { path = "../xc-notion" }
 serde = { workspace = true, optional = true }
 
 [features]
 default = []
-serde = ["dep:serde", "xc-geometry/serde"]
+serde = ["dep:serde", "xc-notion/serde"]

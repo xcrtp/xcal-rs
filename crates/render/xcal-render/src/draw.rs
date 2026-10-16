@@ -27,7 +27,7 @@ use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
 use xcal_scene::transform::Transform2D;
 use xcal_scene::types::{Camera2D, Rect};
-use xc_geometry::{MeasureSpace, Rect2D, Vec2 as GeoVec2, resolve_width};
+use xc_notion::{MeasureSpace, Rect2D, Vec2 as GeoVec2, resolve_width};
 
 /// 2D 绘制器 Trait。
 ///
@@ -375,9 +375,9 @@ pub struct ContentTextureQueue(pub DrawQueue);
 #[derive(Debug, Clone)]
 pub struct MorphItem {
     /// 形变起点路径（世界/屏幕空间由 `style.space` 与相机决定，与 [`Path`] 同口径）。
-    pub from: xc_geometry::Path2D,
+    pub from: xc_notion::Path2D,
     /// 形变终点路径。
-    pub to: xc_geometry::Path2D,
+    pub to: xc_notion::Path2D,
     /// 形变参数 ∈ [0, 1]（由 `BindingApplySystem` 写 `MorphShape.t`）。
     pub t: f32,
     /// 等点采样数（顶点数与该值无关，只决定两端几何的点数）。
@@ -389,13 +389,13 @@ pub struct MorphItem {
 impl MorphItem {
     /// 两端经**弧长等点重采样**后的闭合折线（点数恒为 `samples`）。
     ///
-    /// 与 [`xc_geometry::Path2D::morph_points`] 的采样口径完全一致
+    /// 与 [`xc_notion::Path2D::morph_points`] 的采样口径完全一致
     /// （同样的 `n` / `MORPH_TOLERANCE` / `closed = true`），但**与 `t` 无关**
     /// ⇒ 结果可逐帧缓存，是"几何帧间不变"的关键。
     ///
     /// 退化处理与 `morph_points` 相同：任一侧为空时用另一侧补齐两端。
-    pub fn sampled_endpoints(&self) -> (xc_geometry::Path2D, xc_geometry::Path2D) {
-        use xc_geometry::{MORPH_TOLERANCE, Path2D};
+    pub fn sampled_endpoints(&self) -> (xc_notion::Path2D, xc_notion::Path2D) {
+        use xc_notion::{MORPH_TOLERANCE, Path2D};
         let n = self.samples.max(1) as usize;
         let a = self.from.resample_arc_length(n, MORPH_TOLERANCE, true);
         let b = self.to.resample_arc_length(n, MORPH_TOLERANCE, true);
@@ -584,7 +584,7 @@ pub fn record_path_stroke(
 mod tests {
     use super::*;
     use xcal_scene::scene::components::*;
-    use xc_geometry::Path2D;
+    use xc_notion::Path2D;
 
     struct MockPainter;
 
@@ -963,7 +963,7 @@ mod tests {
             panic!("expected Shape2D::Path");
         };
         assert!(
-            matches!(p.commands.last(), Some(xc_geometry::PathCommand::Close)),
+            matches!(p.commands.last(), Some(xc_notion::PathCommand::Close)),
             "闭合路径必须以 Close 结尾"
         );
     }

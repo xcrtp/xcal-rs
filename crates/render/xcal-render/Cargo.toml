@@ -6,12 +6,12 @@ edition.workspace = true
 license.workspace = true
 
 # trait + 调度 + 资源管理层。
-# 依赖方向：xc-geometry / xcal-scene ← xcal-render ← xcal-render-backends
+# 依赖方向：xc-notion / xcal-scene ← xcal-render ← xcal-render-backends
 # 本 crate 禁止依赖 egui；wgpu 仅通过 feature "wgpu" 引入（RenderTarget /
 # RenderLayer / RenderBackend 等 GPU 抽象需要），纯数据/队列/trait 定义不依赖 wgpu。
 [dependencies]
 xcal-scene = { path = "../xcal-scene", default-features = false }
-xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-notion = { path = "../../kernel/xc-notion" }
 xc-content = { path = "../../kernel/xc-content" }
 # 渲染契约层已下沉 kernel：
 #   xc-vertex   ← vertex/（顶点格式契约，纯数据）

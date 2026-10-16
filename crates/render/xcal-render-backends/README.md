@@ -7,7 +7,7 @@
 > `xc-prerender::engine → xc-content::ContentIR → xcal-render::ir_to_draw_cmds`。）
 
 ```
-xcal-scene / xcal-render / xc-geometry
+xcal-scene / xcal-render / xc-notion
               │
               ▼
     xcal-render-backends  ← 本 crate
@@ -232,7 +232,7 @@ cargo run -p xcal-render-backends --example cube_3d --features egui-wgpu
 ```toml
 xcal-scene              = { default-features = false }
 xcal-render            = { default-features = false }
-xc-geometry
+xc-notion
 glam
 hecs
 thiserror

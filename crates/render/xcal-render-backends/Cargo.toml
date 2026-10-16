@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 xcal-scene = { path = "../xcal-scene", default-features = false }
 xcal-render = { path = "../xcal-render", default-features = false }
-xc-geometry = { path = "../../kernel/xc-geometry" }
+xc-notion = { path = "../../kernel/xc-notion" }
 
 glam.workspace = true
 hecs.workspace = true

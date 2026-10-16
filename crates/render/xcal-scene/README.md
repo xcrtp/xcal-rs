@@ -14,7 +14,7 @@
 ## 在架构中的位置
 
 ```
-        kernel:  xc-geometry / xc-time / xc-macro   (纯数据 + proc-macro)
+        kernel:  xc-notion / xc-time / xc-macro   (纯数据 + proc-macro)
                             │
                             ▼
    xcal-schedule  ◄───  xcal-scene   ← 本 crate
@@ -48,10 +48,13 @@
 
 组件分两处：
 
-- 2D 纯逻辑组件（`Circle` / `Path` / `Line` / `MorphShape` / `FunctionX2Y` / marker …）
+- 2D 纯逻辑组件（`Circle` / `Path` / `Line` / `MorphShape` / `PhaseAnim` / marker …）
   与 3D 类型（`Camera3D` / `Projection` / `MeshGeometry` / `Material3D`）都在 `scene::components`
   （以 `comp` 别名再导出）。
 - **渲染专属**的组件（`StrokeSolid` / `FillSolid` 等）**不在这里**，它们在 `xcal-render`。
+- **连续数学对象**（`FunctionX2Y` / `Sampler1D` / `Sampler2D` / `ParameterCurve*` /
+  `Interpolator`）M1 起归位理念层 `xc-notion`（`func` / `curve` / `sample`），
+  `xcal-render::components` 直接从理念层转发，本 crate **不再 re-export**。
 
 ### 场景 System
 
@@ -95,12 +98,12 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 
 | 模块 | 核心类型 |
 |------|----------|
-| [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `FunctionX2Y`, …), `primitives`(`wireframe_cube` / `solid_cube`) |
+| [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
 | [`animation`] | `Binding` / `BindingTarget` / `BindingTable` / `SeekKind` + `BindingApplySystem` / `MorphApplySystem` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |
 | [`transform`] | `Transform2D` / `Transform2DInto` trait 系统（结构体派生用 `xc_macro::Transform2DInto`）|
-| [`types`] | `Camera2D`, `Rect`, `Vec2/3/4`, `Color32`, `U8Vec4 / I8Vec4` |
+| [`types`] | `Camera2D`, `Rect`, `Vec2/3/4`, `Color32`（整数向量 `U8Vec4` / `I8Vec4` M1 起由 `xc-notion::vec` 提供） |
 | [`time_state`] | `TimeState`（全局累积时间，Resource） |
 | [`errors`] | `Error` + `pub type Result<T> = Result<T, Error>` |
 | [`utils`] | `auto_into!` 宏 |
@@ -166,7 +169,7 @@ cargo doc   -p xcal-scene --no-deps  # API 文档
 
 ```toml
 xc-macro      = { path = "../../kernel/xc-macro" }            # Transform2DInto 派生
-xc-geometry   = { path = "../../kernel/xc-geometry" }         # 纯几何数据层
+xc-notion   = { path = "../../kernel/xc-notion" }         # 理念层（数学元语）
 xc-time       = { path = "../../kernel/xc-time" }             # 时钟树 / 曲线 / Director
 xcal-schedule = { path = "../../schedule/xcal-schedule" }     # ECS 调度框架 + Telemetry
 

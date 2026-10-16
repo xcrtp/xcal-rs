@@ -19,7 +19,7 @@ use typst::syntax::Span;
 use typst::text::TextItem;
 use typst::visualize::{CurveItem, FixedStroke, Geometry, Paint};
 use ttf_parser::{GlyphId, OutlineBuilder};
-use xc_geometry::{Color32, Path2D, Stroke2D, Vec2};
+use xc_notion::{Color32, Path2D, Stroke2D, Vec2};
 use xc_content::{ContentIR, ContentSource, Span as XSpan, StyledPath};
 
 use crate::request::{ContentConfig, ContentError};
@@ -36,7 +36,7 @@ fn point_to_v2(p: Point) -> Vec2 {
     Vec2::new(abs_to_pt(p.x), abs_to_pt(p.y))
 }
 
-/// 3x3 仿射矩阵（行优先，与 xc-geometry Transform2D 对齐）：
+/// 3x3 仿射矩阵（行优先，与 xc-notion Transform2D 对齐）：
 /// [ sx  kx  tx ]
 /// [ ky  sy  ty ]
 /// [ 0   0   1  ]
@@ -170,7 +170,7 @@ fn span_to_normalized_range(
     Some(orig_start..orig_end)
 }
 
-/// 把 Typst CurveItem 序列 → xc-geometry Path2D。
+/// 把 Typst CurveItem 序列 → xc-notion Path2D。
 fn curve_to_path(curve_items: &[CurveItem]) -> Path2D {
     let mut p = Path2D::with_capacity(curve_items.len());
     for item in curve_items {
@@ -196,7 +196,7 @@ fn curve_to_path(curve_items: &[CurveItem]) -> Path2D {
 fn transform_path(path: &Path2D, m: M3) -> Path2D {
     let mut out = Path2D::with_capacity(path.commands.len());
     for cmd in &path.commands {
-        use xc_geometry::PathCommand::*;
+        use xc_notion::PathCommand::*;
         out.commands.push(match *cmd {
             MoveTo(p) => MoveTo(m.apply(p)),
             LineTo(p) => LineTo(m.apply(p)),

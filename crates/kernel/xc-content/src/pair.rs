@@ -6,7 +6,7 @@
 // 为什么按锚点而非弧长/索引：`x^2 → x^3` 里的 `x` 应该变到 `x^3` 的 `x`，
 // 而不是变到 `3`。锚点是"身份"（同一段源码），弧长是"位置"。
 
-use xc_geometry::Path2D;
+use xc_notion::Path2D;
 
 use crate::ir::ContentIR;
 
@@ -80,7 +80,7 @@ pub fn degenerate_at(path: &Path2D) -> Path2D {
 mod tests {
     use super::*;
     use crate::ir::{ContentSource, Span, StyledPath};
-    use xc_geometry::{Color32, Vec2};
+    use xc_notion::{Color32, Vec2};
 
     /// half 半宽的正方形（以 (cx, cy) 为中心）。
     fn square(cx: f32, cy: f32, half: f32) -> Path2D {
