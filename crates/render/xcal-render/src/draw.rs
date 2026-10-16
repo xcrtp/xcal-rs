@@ -1,7 +1,7 @@
 // draw.rs
 //
 // 2D 绘制抽象：Painter2D trait + Shape2D/Style2D + ZIndex + DrawQueue +
-// SceneRender + record_scene。
+// SceneRender + record_drawables / record_scene。
 // 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 xcal_scene::transform。
 //
 // M0（图元体系迁移）：载荷已统一为 [`Shape2D`](crate::shape::Shape2D) /
@@ -11,6 +11,12 @@
 //   再转成 `Shape2D`（`Shape2D::Path` 承载折线/闭合语义）；
 // - 描边宽度在 [`record_scene`] 里经 [`resolve_width`] 结合 `camera.scale`
 //   解析为屏幕像素（**唯一换算点**）。
+//
+// SA（绘制录制解耦）：
+// - 录制入口拆成两层——[`record_drawables`] 只接受 [`Drawable`]（**不知道 ECS 存在**），
+//   [`record_scene`] 负责把 hecs 组件组合成 `Drawable` 后调用它；
+// - 旧「逐组件穷举宏」已删除。新增图元只需实现 [`ToShape2D`]
+//   （形状）+ 复用既有 [`ResolveStyle`]（样式），**不必改动本模块的录制逻辑**。
 
 use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
@@ -316,17 +322,62 @@ impl Default for DrawQueue {
     }
 }
 
+/// 内容纹理层（S3-3）的当帧录制结果。
+///
+/// 内容层是**纹理源**而非显示层，其录制结果与主 2D 队列分开持有，
+/// 由 `SceneCompositorCallback` 渲染到独立纹理后交给 3D 材质采样。
+///
+/// ⚠️ 单份资源 → 当前只支持**一个**内容纹理层（见 `ContentTextureSpec` 的 doc）。
+#[derive(Default)]
+pub struct ContentTextureQueue(pub DrawQueue);
+
+// ─── 可绘制对象（ECS 无关的录制入口）────────────────────────────────────────
+
+/// 已降级的绘制描述：能把自己转换成**屏幕空间**的 [`Shape2D`] / [`Style2D`]。
+///
+/// [`record_drawables`] 只依赖本 trait，**不知道 ECS 存在**——任何类型只要实现它
+/// 即可进 [`DrawQueue`]。返回 `None` 表示本帧剔除（不产生绘制命令）。
+///
+/// ⚠️ 世界→屏幕换算只允许发生在实现体内（经 [`ToShape2D`] / [`ResolveStyle`]），
+/// 不得在别处乘除 `camera.scale`（唯一换算点纪律，见 [`ResolveStyle`]）。
+pub trait Drawable {
+    fn to_primitive(&self, camera: &Camera2D) -> Option<(Shape2D, Style2D)>;
+}
+
+/// `(形状组件, 样式组件)` 组合即一个可绘制图元。
+///
+/// 泛型实现把"新增图元"的成本压到**一个 [`ToShape2D`] impl**：形状实现
+/// [`ToShape2D`]、样式实现 [`ResolveStyle`] 即自动获得 `Drawable`，
+/// 无需改动本模块其它任何地方（旧「逐组件穷举宏」已删除）。
+///
+/// 之所以是"引用对"而非裸组件：`to_primitive` 必须同时产出形状与样式，
+/// 而二者在 ECS 里是两个独立组件类型。
+#[allow(private_bounds)] // ToShape2D / ResolveStyle 是模块内实现细节，不外泄为公开 API
+impl<S: ToShape2D, T: ResolveStyle> Drawable for (&S, &T) {
+    fn to_primitive(&self, camera: &Camera2D) -> Option<(Shape2D, Style2D)> {
+        Some((self.0.to_shape2d(camera), self.1.resolve_style(camera.scale)))
+    }
+}
+
+/// 把一组**已降级的绘制描述**录制进 [`DrawQueue`]（ECS 无关）。
+///
+/// `items` 每项 = `(可绘制对象, z)`。`z` 是绘制层级（越小越先画），写入
+/// `DrawCommand` 时取整为 [`ZIndex`]；同一 `z` 内保持 `items` 的迭代顺序
+/// （[`DrawQueue`] 的排序是稳定的）。`to_primitive` 返回 `None` 的项被跳过（剔除）。
+pub fn record_drawables<D: Drawable, I>(queue: &mut DrawQueue, camera: &Camera2D, items: I)
+where
+    I: IntoIterator<Item = (D, f32)>,
+{
+    for (item, z) in items {
+        if let Some((shape, style)) = item.to_primitive(camera) {
+            queue.push(DrawCommand::new(ZIndex::new(z as i32), shape, style));
+        }
+    }
+}
+
 /// 场景渲染器：遍历 World 中图元组件，使用 Camera2D 转换到屏幕坐标后交给 Painter2D。
 pub struct SceneRender<T: Painter2D> {
     painter: T,
-}
-
-macro_rules! for_each_scene_primitive {
-    ($w:ident $cma:ident $paint:expr; $(($shape:ident, $sty:ty))*) => {
-        $(for (s, c) in $w.query::<(&$shape, &$sty)>().iter() {
-            $paint(&s.to_shape2d($cma), &c.resolve_style($cma.scale));
-        })*
-    };
 }
 
 impl<T: Painter2D> SceneRender<T> {
@@ -334,36 +385,106 @@ impl<T: Painter2D> SceneRender<T> {
         Self { painter }
     }
 
+    /// 录制 → 按 [`ZIndex`] 排序 → 绘制。
+    ///
+    /// 录制复用 [`record_scene`]（与生产路径同一份组件枚举，不再有第二份列表）；
+    /// [`record_scene`] 写入的 `z` 恒为 0，排序稳定 ⇒ 绘制顺序与逐组合的查询顺序
+    /// 逐位一致，与重构前行为相同。
     pub fn render(&self, world: &hecs::World, camera: &Camera2D) {
-        for_each_scene_primitive!(
-            world camera
-            |sh: &Shape2D, st: &Style2D| self.painter.paint(sh, st);
-            (Circle, StrokeSolid)
-            (Circle, FillSolid)
-            (Path, StrokeSolid)
-            (Path, FillSolid)
-            (Line, StrokeSolid)
-            (Rect, FillSolid)
-            (Rect, StrokeSolid)
-        );
+        let mut queue = DrawQueue::new();
+        record_scene(world, camera, &mut queue);
+        queue.execute(&self.painter);
     }
 }
 
-/// 把场景实体录制进 [`DrawQueue`]（z=0）。
+/// 把场景实体录制进 [`DrawQueue`]（z 恒为 0）。
+///
+/// **组件组合的枚举只在此处**：每种组合构造一个 `(形状, 样式)` 引用对交给
+/// [`record_drawables`]——录制逻辑本身不认识具体组件类型。
 ///
 /// 描边宽度在此按 `camera.scale` 解析（**唯一换算点**，见 [`ResolveStyle`]）。
+///
+/// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
+/// 与重构前逐位一致。
 pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueue) {
-    for_each_scene_primitive!(
-        world camera
-        |sh: &Shape2D, st: &Style2D| queue.push(DrawCommand::new(ZIndex::new(0), sh.clone(), *st));
-        (Circle, StrokeSolid)
-        (Circle, FillSolid)
-        (Path, StrokeSolid)
-        (Path, FillSolid)
-        (Line, StrokeSolid)
-        (Rect, FillSolid)
-        (Rect, StrokeSolid)
+    // 场景图元的绘制层级：同层（保持查询顺序）。
+    const Z: f32 = 0.0;
+
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Circle, &StrokeSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
     );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Circle, &FillSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Path, &StrokeSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Path, &FillSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Line, &StrokeSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Rect, &FillSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+    record_drawables(
+        queue,
+        camera,
+        world
+            .query::<(&Rect, &StrokeSolid)>()
+            .iter()
+            .map(|(s, t)| ((s, t), Z)),
+    );
+}
+
+/// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
+///
+/// S3-3 内容纹理层按需录制（只录带 `ContentTextureItem` 标记的实体）时用它：
+/// 位置经 `to_screen(camera)` 落到相机屏幕空间，描边宽度经 [`ResolveStyle`]
+/// 按 `camera.scale` 解析为屏幕像素——与 [`record_scene`] 完全一致，换算
+/// 仍只发生在这里（唯一换算点不外泄）。
+pub fn record_path_stroke(
+    queue: &mut DrawQueue,
+    path: &Path,
+    stroke: &StrokeSolid,
+    camera: &Camera2D,
+) {
+    queue.push(DrawCommand::new(
+        ZIndex::new(0),
+        path.to_shape2d(camera),
+        stroke.resolve_style(camera.scale),
+    ));
 }
 
 #[cfg(test)]

@@ -68,8 +68,10 @@ let ctx = RenderContext::from_render_state(rs);
   - `line list` 管线：wireframe_cube、坐标轴
   - 两条管线均带 `Depth32Float` 深度测试（`Less`，写入开）——RC.3。
 - **材质绑定**（RC.1）：bind group 3 entry = uniform（dynamic offset）+
-  `texture_2d<f32>` + sampler；材质未指定纹理时绑定 1×1 白色兜底纹理
-  （`color * white == color`）。顶点布局 32 字节 = `Float32x3` 位置 + `Float32x2` UV
+  `texture_2d<f32>` + sampler；着色式为**墨迹 over 已受光材质色**
+  （`tex.rgb + color.rgb * lit * (1 - tex.a)`，见 `cube.wgsl`）——纹理作为 decal
+  不参与光照，材质未指定纹理时绑定 1×1 透明黑兜底纹理，此时退化为 `color * lit`。
+  顶点布局 32 字节 = `Float32x3` 位置 + `Float32x2` UV
   + `Float32x3` 法线（RC 补充；法线缺省填 `(0,0,1)`）。
 - **Uniform 绑定**：`ViewProj (Mat4) + TintColor (Vec4)` 每 draw 一提交，经
   `UniformArena`（256B 对齐 dynamic offset），使用 `wgpu 30` 新 API

@@ -31,8 +31,13 @@ xcal-render 同时承载两套渲染抽象：
   `ensure_sorted()` 用 `Vec::sort`（**稳定**排序，同 `ZIndex` 保插入序）；
   `execute(&painter)` 排序后逐条 `paint`；另有 `merge`（稳定归并）/
   `commands` / `clear` / `with_capacity`
-- `SceneRender` / `record_scene`：把 hecs World 的 `Circle/Path/Line/Rect/...`
-  组件拍平到 `DrawQueue`（z = 0）
+- `Drawable` / `record_drawables` / `record_scene` / `SceneRender`：
+  `record_drawables` 是 **ECS 无关**的录制入口，只接受实现了 `Drawable`
+  （`to_primitive(&camera) -> Option<(Shape2D, Style2D)>`）的对象——
+  `(形状, 样式)` 引用对经泛型 blanket impl 自动获得 `Drawable`；
+  `record_scene` 负责把 hecs World 的 `Circle/Path/Line/Rect` 组合成 `Drawable`
+  后调用它（z = 0）。旧「逐组件穷举宏」已删除 ⇒
+  **新增图元只需实现 `ToShape2D`，不必改动录制逻辑**。
 - **描边宽度的度量空间**（`StrokeSolid.space: MeasureSpace`，默认 `Screen`）：
   `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_geometry::resolve_width`
   解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
@@ -94,7 +99,7 @@ xcal-render 同时承载两套渲染抽象：
 | 模块 | 说明 |
 |------|------|
 | `components` | 统一 2D 管线需要的 hecs 组件（`Circle, StrokeSolid, FillSolid, Line, Path, FunctionX2Y, Sampler1D, LocalClock, ClockState, CircleAnim, PhaseAnim`）|
-| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + SceneRender + record_scene`（统一 2D 管线） |
+| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + SceneRender + record_scene`（统一 2D 管线） |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_2d` / `draw_queue_3d` | 预留 2D 指令队列 + 3D 双列表队列 |
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |

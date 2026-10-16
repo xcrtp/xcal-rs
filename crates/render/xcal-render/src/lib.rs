@@ -42,7 +42,10 @@ pub mod resource_cache;
 
 // ─── 2D 管线 re-export ────────────────────────────────────────────────────
 // M0 起载荷统一为 Shape2D / Style2D（旧 Shape / Style 枚举已删除）。
-pub use draw::{DrawCommand, DrawQueue, Painter2D, SceneRender, ZIndex, record_scene};
+pub use draw::{
+    ContentTextureQueue, DrawCommand, DrawQueue, Drawable, Painter2D, SceneRender, ZIndex,
+    record_drawables, record_path_stroke, record_scene,
+};
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
 // 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度

@@ -170,6 +170,13 @@ pub struct Parent {
     pub parent: hecs::Entity,
 }
 
+/// 标记组件：该实体参与内容纹理层渲染（S3-3）。
+///
+/// 只有带此标记的实体才会被 `ContentTextureRecordSystem` 录进内容纹理
+/// （避免网格线 / 坐标轴等也进贴图，见计划 D5）。
+#[derive(Debug, Clone, Copy)]
+pub struct ContentTextureItem;
+
 /// 3D 实体变换：平移 + 旋转 + 缩放（glam 原生类型）。
 #[derive(Debug, Clone, derive_builder::Builder)]
 pub struct Transform {

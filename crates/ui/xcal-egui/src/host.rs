@@ -23,17 +23,17 @@ use egui::Panel;
 use xcal_scene::animation::{BindingTable, BindingTarget};
 use xcal_scene::director_state::DirectorState;
 use xcal_scene::domain::{
-    ids, CameraCommand, ContentHandle, InputEvents, LayerBlend, LayerDescriptor, LayerId, LayerKind,
-    SceneEvent, SceneView,
+    ids, CameraCommand, ContentHandle, ContentTextureSpec, InputEvents, LayerBlend,
+    LayerDescriptor, LayerId, LayerKind, SceneEvent, SceneView,
 };
 use xcal_schedule::resource::Resources;
 use xcal_scene::scene::components::Camera3D;
 use xcal_scene::types::Rect;
 use xcal_scene::{Curve, TimeState};
-use xcal_render::{DrawQueue, DrawQueue3D};
+use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D};
 #[cfg(feature = "cpu-2d")]
 use xcal_render_backends::EguiPainter;
-use xcal_render_backends::{SceneCompositorCallback, SceneLayer};
+use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
 use xc_geometry::Rect2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
@@ -96,6 +96,23 @@ impl EguiSceneHost {
             view.layers.push(LayerDescriptor {
                 id: LayerId(view.layers.len() as u32),
                 kind: LayerKind::Viewport3D { camera: *camera3d },
+                content: ContentHandle::OPAQUE,
+                opacity: 1.0,
+                blend: LayerBlend::Alpha,
+            });
+        }
+
+        // 内容纹理层（S3-3）：仅当注册了 `ContentTextureSpec` 时声明。
+        // 它不是视口层——渲染到独立纹理供 3D 材质采样（默认不参与合成）。
+        if let Some(spec) = res.get::<ContentTextureSpec>() {
+            view.layers.push(LayerDescriptor {
+                id: LayerId(view.layers.len() as u32),
+                kind: LayerKind::ContentTexture {
+                    camera: spec.camera,
+                    size_px: spec.size_px,
+                    texture: spec.texture,
+                    composite: spec.composite,
+                },
                 content: ContentHandle::OPAQUE,
                 opacity: 1.0,
                 blend: LayerBlend::Alpha,
@@ -433,9 +450,11 @@ impl EguiSceneHost {
             (0..view.layers.len()).collect()
         };
 
-        // 该层是否走 GPU 路径（3D 恒走；2D 仅在 `gpu_2d` 打开时走）。
+        // 该层是否走 GPU 路径（3D 恒走；2D 仅在 `gpu_2d` 打开时走；
+        // 内容纹理层（S3-3）恒走 GPU —— 它就是靠 GPU 渲染到纹理的）。
         let is_gpu = |idx: usize| {
             matches!(view.layers[idx].kind, LayerKind::Viewport3D { .. })
+                || matches!(view.layers[idx].kind, LayerKind::ContentTexture { .. })
                 || (gpu_2d && matches!(view.layers[idx].kind, LayerKind::Viewport2D { .. }))
         };
 
@@ -470,11 +489,25 @@ impl EguiSceneHost {
                 else {
                     continue;
                 };
+                // 内容纹理层快照（S3-3）：单份 `ContentTextureQueue` → 关联到
+                // 唯一的 `ContentTexture` 图层 id（单层约束见 `ContentTextureSpec`）。
+                let content: Vec<(LayerId, Vec<Recorded2D>)> = res
+                    .get::<ContentTextureQueue>()
+                    .map(|q| {
+                        let snap = snapshot_queue(&q.0);
+                        gpu_specs
+                            .iter()
+                            .filter(|l| matches!(l.kind, LayerKind::ContentTexture { .. }))
+                            .map(|l| (l.id, snap.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let callback = SceneCompositorCallback::new(
                     viewport,
                     std::mem::take(&mut gpu_specs),
                     queue_2d,
                     queue_3d,
+                    content,
                 );
                 painter.add(egui::epaint::Shape::Callback(
                     egui_wgpu::Callback::new_paint_callback(egui_rect, callback),

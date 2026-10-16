@@ -4,6 +4,7 @@
 //
 // 与 `cube.rs` 的差异：本模块产出**真实 UV**（参数域归一化）与**法线**，
 // 是"公式贴在曲面上"的最小载体；UV 边界精确为 0 / 1，便于纹理对位。
+// v 轴按纹理约定反向（`v = 0` 对齐 `y = v_max`），使贴图在 Y-up 曲面上正立。
 
 use glam::{Vec2, Vec3};
 
@@ -63,6 +64,10 @@ impl SurfaceSpec {
 /// 顶点按行主序（外层 v、内层 u）排列，行列间距即参数步长；
 /// 每格拆成两个逆时针三角形（从 +z 侧观察）。
 ///
+/// UV 的 u 随 x 递增（`u_min → 0`，`u_max → 1`）；v 随 y 递减（`v_max → 0`，
+/// `v_min → 1`），即纹理 v = 0 对齐世界 y 的**上方**，与 wgpu「纹理左上为原点」
+/// 一致，使贴图在 Y-up 曲面上正立。
+///
 /// 法线由中心差分近似 `(-∂f/∂x, -∂f/∂y, 1)` 后单位化，
 /// 与解析法线在足够细分下一致，且对任意 `f` 都成立。
 pub fn parametric_surface(spec: SurfaceSpec) -> MeshGeometry {
@@ -87,8 +92,11 @@ pub fn parametric_surface(spec: SurfaceSpec) -> MeshGeometry {
             let x = lerp(u_min, u_max, u);
 
             positions.push(Vec3::new(x, y, (spec.f)(x, y)));
-            // UV 直接取归一化参数：i = 0 → 0.0，i = steps → 1.0（无浮点漂移）。
-            uvs.push(Vec2::new(u, v));
+            // UV 直接取归一化参数：u = i / steps，v = 1 - j / steps。
+            // v 取「1 - 」是为了对齐纹理坐标约定：wgpu 纹理 v = 0 在图像**顶部**，
+            // 而世界 Y 向上 ⇒ y 越大 v 越小（`v_max` ↔ v = 0），贴图在 Y-up 曲面上
+            // 正立。`i = 0 / steps` 与 `j = 0 / steps` 仍精确映射到 0.0 / 1.0。
+            uvs.push(Vec2::new(u, 1.0 - v));
 
             let dx = ((spec.f)(x + h_u, y) - (spec.f)(x - h_u, y)) / (2.0 * h_u);
             let dy = ((spec.f)(x, y + h_v) - (spec.f)(x, y - h_v)) / (2.0 * h_v);
@@ -135,18 +143,20 @@ mod tests {
         let mesh = parametric_surface(SurfaceSpec::new((-2.0, 3.0), (0.0, 5.0), 7, 5, |_, _| 0.0));
         let uvs = mesh.uvs.as_ref().expect("参数曲面必须带 UV");
 
-        // u 方向：第 0 列恒为 0.0，最后一列恒为 1.0。
+        // u 方向：第 0 列恒为 0.0，最后一列恒为 1.0；v 随 j 反向（j=0 → 1.0）。
         for j in 0..=5 {
-            assert_eq!(uvs[j * 8], Vec2::new(0.0, j as f32 / 5.0));
-            assert_eq!(uvs[j * 8 + 7], Vec2::new(1.0, j as f32 / 5.0));
+            let v = 1.0 - j as f32 / 5.0;
+            assert_eq!(uvs[j * 8], Vec2::new(0.0, v));
+            assert_eq!(uvs[j * 8 + 7], Vec2::new(1.0, v));
         }
-        // v 方向：第 0 行恒为 0.0，最后一行恒为 1.0。
+        // v 方向：第 0 行（y = v_min）恒为 1.0，最后一行（y = v_max）恒为 0.0。
         for i in 0..=7 {
-            assert_eq!(uvs[i], Vec2::new(i as f32 / 7.0, 0.0));
-            assert_eq!(uvs[5 * 8 + i], Vec2::new(i as f32 / 7.0, 1.0));
+            assert_eq!(uvs[i], Vec2::new(i as f32 / 7.0, 1.0));
+            assert_eq!(uvs[5 * 8 + i], Vec2::new(i as f32 / 7.0, 0.0));
         }
-        assert_eq!(uvs[0], Vec2::ZERO);
-        assert_eq!(uvs[uvs.len() - 1], Vec2::ONE);
+        // 边界仍精确（无浮点漂移），只是 v 的两个极点对调。
+        assert_eq!(uvs[0], Vec2::new(0.0, 1.0));
+        assert_eq!(uvs[uvs.len() - 1], Vec2::new(1.0, 0.0));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 // `ContentHandle` 刻意保持不透明——内容的具体形态是 S3 统一管线的职责，
 // B 不阻塞 S3，S3 也不用等 B。
 
-use crate::scene::components::Camera3D;
+use crate::scene::components::{Camera3D, TextureHandle};
 use crate::types::{Camera2D, Color32};
 
 /// 图层唯一标识。
@@ -26,6 +26,19 @@ pub struct LayerId(pub u32);
 pub enum LayerKind {
     Viewport2D { camera: Camera2D },
     Viewport3D { camera: Camera3D },
+    /// 内容纹理层（S3-3）：渲染到**独立纹理**，供 3D 材质采样。
+    ///
+    /// 与视口层的区别：不绑定屏幕视口，绑定一张固定尺寸纹理。
+    ContentTexture {
+        /// 内容相机：`rect` 为**纹理矩形**（决定世界 → 纹理坐标的映射）。
+        camera: Camera2D,
+        /// 纹理尺寸（物理像素）。
+        size_px: [u32; 2],
+        /// 该层渲染到的纹理句柄；3D 材质用**同一句柄**引用它。
+        texture: TextureHandle,
+        /// 是否参与合成。默认 `false`（仅作纹理源）；`true` 用于调试直视纹理。
+        composite: bool,
+    },
 }
 
 /// 内容来源句柄（不透明；S3 统一管线后指向 RenderQueue 的分片）。
@@ -87,6 +100,22 @@ impl LayerDescriptor {
     pub fn clamped_opacity(&self) -> f32 {
         self.opacity.clamp(0.0, 1.0)
     }
+}
+
+/// 内容纹理层的配置（S3-3）：图层声明与内容录制都从这里取，是唯一真相来源。
+///
+/// ⚠️ **只支持一个内容纹理层**（R4）：本资源是单份。若将来需要多个内容纹理，
+/// 需改成 `HashMap<LayerId, ContentTextureSpec>`，本轮不做（YAGNI）。
+#[derive(Debug, Clone, Copy)]
+pub struct ContentTextureSpec {
+    /// 内容相机：`rect` 为**纹理矩形**（世界 → 纹理坐标的映射）。
+    pub camera: Camera2D,
+    /// 纹理尺寸（物理像素）。
+    pub size_px: [u32; 2],
+    /// 该层渲染到的纹理句柄；3D 材质用**同一句柄**引用它。
+    pub texture: TextureHandle,
+    /// 是否参与合成。默认 `false`（仅作纹理源）；`true` 用于调试直视纹理。
+    pub composite: bool,
 }
 
 /// 合成器清屏色默认值（与改动前 2D 图层内的背景矩形一致）。

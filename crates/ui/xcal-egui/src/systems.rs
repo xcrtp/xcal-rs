@@ -19,14 +19,15 @@
 // （xcal-scene::animation）驱动。
 
 use xcal_schedule::context::ExecutorContext;
-use xcal_scene::domain::{CameraCommand, InputEvents, SceneEvent};
+use xcal_scene::domain::{CameraCommand, ContentTextureSpec, InputEvents, SceneEvent};
 use xcal_schedule::system::System;
+use xcal_scene::scene::components::ContentTextureItem;
 use xcal_scene::transform::Transform2D;
 use xcal_scene::types::{Camera2D, Rect};
 use xcal_render::components::{
     FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
 };
-use xcal_render::{DrawQueue, MeasureSpace, ZIndex, record_scene};
+use xcal_render::{ContentTextureQueue, DrawQueue, MeasureSpace, ZIndex, record_path_stroke, record_scene};
 use xc_geometry::Path2D;
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
@@ -199,6 +200,37 @@ impl System for SceneRecordSystem {
     }
 }
 
+// ─── ContentTextureRecordSystem ────────────────────────────────────────────
+
+/// 内容纹理层录制（RenderCommit 阶段，S3-3）。
+///
+/// 只录**带 [`ContentTextureItem`] 标记**的路径描边实体到
+/// [`ContentTextureQueue`]（网格线 / 坐标轴等未标记实体不进贴图，见计划 D5）。
+///
+/// 位置与描边宽度经 [`record_path_stroke`] 按 `spec.camera` 换算——与主 2D
+/// 层同一口径（唯一换算点在 xcal-render 内）。
+pub struct ContentTextureRecordSystem;
+impl System for ContentTextureRecordSystem {
+    type Reads = (ContentTextureSpec,);
+    type Writes = (ContentTextureQueue,);
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        let Some(spec) = ctx.get::<ContentTextureSpec>().copied() else {
+            return;
+        };
+
+        ctx.with_world_and_resource_mut::<ContentTextureQueue, _>(|world, queue| {
+            queue.0.clear();
+            for (path, stroke, _) in world
+                .query::<(&Path, &StrokeSolid, &ContentTextureItem)>()
+                .iter()
+            {
+                record_path_stroke(&mut queue.0, path, stroke, &spec.camera);
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +361,149 @@ mod tests {
                 "2D 图层不应再输出任何矩形填充（背景矩形残留）"
             );
         }
+    }
+
+    // ─── ContentTextureRecordSystem（S3-3） ────────────────────────────────
+
+    use xcal_render::Shape2D;
+    use xcal_scene::scene::components::{Circle, TextureHandle};
+    use xc_geometry::PathCommand;
+
+    const TEX_W: u32 = 512;
+    const TEX_H: u32 = 512;
+
+    /// 内容相机：`rect` 即纹理矩形（0,0–512,512），世界原点居中。
+    fn content_camera() -> Camera2D {
+        Camera2D::new(
+            (0.0, 0.0).into(),
+            25.0,
+            Rect::new((0.0, 0.0).into(), (TEX_W as f32, TEX_H as f32).into()),
+        )
+    }
+
+    fn content_spec(camera: Camera2D) -> ContentTextureSpec {
+        ContentTextureSpec {
+            camera,
+            size_px: [TEX_W, TEX_H],
+            texture: TextureHandle::new(1),
+            composite: false,
+        }
+    }
+
+    /// 从队列里取出全部路径点（屏幕/纹理空间）。
+    fn recorded_points(queue: &ContentTextureQueue) -> Vec<glam::Vec2> {
+        let mut pts = Vec::new();
+        for cmd in queue.0.commands() {
+            if let Shape2D::Path(path) = &cmd.shape {
+                for c in &path.commands {
+                    match c {
+                        PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
+                            pts.push(glam::Vec2::new(p.x, p.y));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        pts
+    }
+
+    /// 只录带 `ContentTextureItem` 标记的实体：未标记的干扰 `Circle` 不应进队列。
+    ///
+    /// 证伪：去掉 `ContentTextureItem` 过滤（录全部路径/圆）→ 长度变 2 而非 1。
+    #[test]
+    fn content_record_filters_unmarked() {
+        let mut world = hecs::World::new();
+        let path = Path::new(Path2D::from_polyline(
+            &[glam::Vec2::new(-0.5, -0.5), glam::Vec2::new(0.5, 0.5)],
+            false,
+        ));
+        world.spawn((
+            path,
+            StrokeSolid::new(0.02, (255, 255, 255, 255)),
+            ContentTextureItem,
+        ));
+        // 干扰项：带描边但**无标记**的圆。
+        world.spawn((
+            Circle::new((0.0, 0.0), 0.2),
+            StrokeSolid::new(0.02, (255, 0, 0, 255)),
+        ));
+
+        let mut resources = Resources::new();
+        resources.insert(content_spec(content_camera()));
+        resources.insert(ContentTextureQueue::default());
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let queue = sched.resources().get::<ContentTextureQueue>().unwrap();
+        assert_eq!(queue.0.len(), 1, "干扰项未被录制，队列应恰有 1 条命令");
+    }
+
+    /// 录制的点必须落在纹理矩形内（`0 <= x <= w`, `0 <= y <= h`）。
+    ///
+    /// 证伪：把 `record_path_stroke(..., &spec.camera)` 换成主相机/错位相机后，
+    /// 点会落到矩形外（见本测试尾部的反向断言）。
+    #[test]
+    fn content_record_maps_into_texture_rect() {
+        let mut world = hecs::World::new();
+        let path = Path::new(Path2D::from_polyline(
+            &[
+                glam::Vec2::new(-0.5, -0.5),
+                glam::Vec2::new(0.0, 0.0),
+                glam::Vec2::new(0.5, 0.5),
+            ],
+            false,
+        ));
+        world.spawn((
+            path,
+            StrokeSolid::new(0.02, (255, 255, 255, 255)),
+            ContentTextureItem,
+        ));
+
+        let mut resources = Resources::new();
+        resources.insert(content_spec(content_camera()));
+        resources.insert(ContentTextureQueue::default());
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let queue = sched.resources().get::<ContentTextureQueue>().unwrap();
+        let pts = recorded_points(queue);
+        assert!(!pts.is_empty(), "应至少录到一个路径点");
+        for p in &pts {
+            assert!(
+                p.x >= 0.0 && p.x <= TEX_W as f32 && p.y >= 0.0 && p.y <= TEX_H as f32,
+                "点 {p:?} 落在纹理矩形 [0,{TEX_W}]x[0,{TEX_H}] 之外"
+            );
+        }
+
+        // 证伪性：同样的世界点、换成错位相机（中心移到 (100,100)）后
+        // 映射结果必然出界 —— 证明上面的“落在矩形内”断言确实有区分度。
+        let wrong = Camera2D::new(
+            (100.0, 100.0).into(),
+            25.0,
+            Rect::new((0.0, 0.0).into(), (TEX_W as f32, TEX_H as f32).into()),
+        );
+        let mut wrong_queue = ContentTextureQueue::default();
+        for (path, stroke, _) in sched
+            .world()
+            .query::<(&Path, &StrokeSolid, &ContentTextureItem)>()
+            .iter()
+        {
+            record_path_stroke(&mut wrong_queue.0, path, stroke, &wrong);
+        }
+        let wrong_pts = recorded_points(&wrong_queue);
+        assert!(
+            wrong_pts.iter().any(|p| p.x < 0.0
+                || p.x > TEX_W as f32
+                || p.y < 0.0
+                || p.y > TEX_H as f32),
+            "错位相机应把点映射到矩形外（否则本测试无法证伪）"
+        );
     }
 }

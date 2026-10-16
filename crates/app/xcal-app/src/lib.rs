@@ -16,20 +16,35 @@ use xcal_scene::animation::{
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::errors::Error;
 use xcal_schedule::resource::Resources;
-use xcal_scene::domain::InputEvents;
-use xcal_scene::scene::components::{Camera3D, Material3D, MorphShape, Projection, Transform};
+use xcal_scene::domain::{ContentTextureSpec, InputEvents};
+use xcal_scene::scene::components::{
+    Camera3D, ContentTextureItem, Material3D, MorphShape, Projection, TextureHandle, Transform,
+};
 use xcal_scene::scene::primitives::{SurfaceSpec, parametric_surface, wireframe_cube};
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::TimeState;
-use xcal_scene::types::Color32;
+use xcal_scene::types::{Camera2D, Color32, Rect};
 use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
-use xcal_egui::systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
+use xcal_egui::systems::{
+    CameraInputSystem, ContentTextureRecordSystem, GridBuildSystem, SceneRecordSystem,
+};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
-use xcal_render::{DrawQueue, DrawQueue3D, MeasureSpace, scene::Scene};
+use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, scene::Scene};
 use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
 use xc_geometry::Path2D;
+
+/// 内容纹理（S3-3）：纹理句柄 id 与尺寸。
+///
+/// 3D 材质按同一 id 引用本帧渲染出的纹理（见 `WgpuBackend3D::register_texture`）。
+/// 尺寸固定 512×512（D1）：2 的幂、稳定不触发离屏目标反复重建；
+/// **正方形**与曲面域 `[-1.5,1.5]²` 同比，避免贴图被非等比拉伸。
+const CONTENT_TEXTURE_ID: u64 = 1;
+/// 内容纹理宽（物理像素）。
+const CONTENT_TEX_W: u32 = 512;
+/// 内容纹理高（物理像素）。
+const CONTENT_TEX_H: u32 = 512;
 
 mod formula;
 mod health;
@@ -103,9 +118,15 @@ impl App {
             48,
             |x, y| 0.35 * (3.0 * x).sin() * (3.0 * y).cos(),
         ));
+        // S3-3：曲面材质引用内容纹理（同一 TextureHandle）。
+        // 着色式为**墨迹 over 已受光材质色**（见 `cube.wgsl` F2）：
+        // `rgb = tex.rgb + color.rgb * lit * (1 - tex.a)`。内容纹理透明底 ⇒ 未覆盖像素
+        // 退化为 `材质色 × lit`（蓝色保留明暗起伏）；墨迹恒为纯白、不被光照压暗。
+        let mut surface_material = Material3D::color(Color32::new(120, 200, 255, 255));
+        surface_material.texture = Some(TextureHandle::new(CONTENT_TEXTURE_ID));
         scene.spawn((
             Arc::new(surface),
-            Material3D::color(Color32::new(120, 200, 255, 255)),
+            surface_material,
             Transform {
                 position: glam::Vec3::new(0.0, -1.35, 0.0),
                 ..Default::default()
@@ -113,10 +134,19 @@ impl App {
         ));
 
         // 3D 相机（eye 由 BindingApplySystem 驱动，旧 OrbitAnim 组件已移除）。
+        //
+        // target（注视点）取"立方体 + 曲面"合并包围盒的中心，而非世界原点：曲面整体
+        // 平移到 y = -1.35（见上），其几何 y ∈ [-2.85, 0.15]，与立方体 y ∈ [-1, 1] 合并后
+        // 的中心是 y ≈ -0.9。若仍注视原点，视锥会整体上移，曲面下缘（y = -2.85）会贴着
+        // 视口最底部。注视合并中心即可让两件物体在竖直方向居中。
+        //
+        // 注：eye 由 Orbit 绑定直接写入（半径 5、绕原点、eye.y ≡ 0），改变 target 只影响
+        // 朝向，不影响该旋转轨道。
+        const SCENE_LOOK_AT: glam::Vec3 = glam::Vec3::new(0.0, -0.9, 0.0);
         let camera_entity = scene.spawn((
             Camera3D::new(
                 glam::Vec3::new(0.0, 0.0, 5.0),
-                glam::Vec3::ZERO,
+                SCENE_LOOK_AT,
                 glam::Vec3::Y,
                 Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
             ),
@@ -145,13 +175,48 @@ impl App {
         // 字号按"窄窗口也能完整看到"取值（默认视口 x∈[-10,10]，但面板会压缩视口）。
         let engine = formula::build_engine();
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
+        // 内容纹理相机（S3-3）：由公式的世界包围盒导出——`rect` 即纹理矩形
+        // （0,0–512,512），`scale` 取「公式宽度 ≈ 纹理宽 × 0.8」，`center` 取包围盒中心。
+        // 这样录进纹理的点恰好落在 [0,512]×[0,512] 内（见 xcal-egui 单测
+        // `content_record_maps_into_texture_rect`）。
+        let mut content_camera: Option<Camera2D> = None;
         match formula::rebuild(&engine, &spec) {
             Some(ir) => {
+                let mut lo = glam::Vec2::splat(f32::INFINITY);
+                let mut hi = glam::Vec2::splat(f32::NEG_INFINITY);
                 for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+                    for cmd in &path.commands {
+                        if let xc_geometry::PathCommand::MoveTo(p)
+                        | xc_geometry::PathCommand::LineTo(p) = cmd
+                        {
+                            lo = lo.min(*p);
+                            hi = hi.max(*p);
+                        }
+                    }
                     scene.spawn((
                         Path::new(path),
                         // 公式描边是世界空间：与字形一同随缩放成比例变化。
                         StrokeSolid::new_in(width, color, space),
+                        // S3-3：标记该实体进内容纹理（D5：只录带标记的实体）。
+                        ContentTextureItem,
+                    ));
+                }
+                if lo.x.is_finite() && hi.x.is_finite() {
+                    let size = hi - lo;
+                    let center = (lo + hi) * 0.5;
+                    let scale = if size.x > 1e-3 {
+                        CONTENT_TEX_W as f32 * 0.8 / size.x
+                    } else {
+                        // 退化保护（无点 / 零宽）：给一个可见的默认缩放。
+                        40.0
+                    };
+                    content_camera = Some(Camera2D::new(
+                        (center.x, center.y).into(),
+                        scale,
+                        Rect::new(
+                            (0.0, 0.0).into(),
+                            (CONTENT_TEX_W as f32, CONTENT_TEX_H as f32).into(),
+                        ),
                     ));
                 }
             }
@@ -276,6 +341,25 @@ impl App {
         resources.insert(InputEvents::default());
         resources.insert(DrawQueue::new());
         resources.insert(DrawQueue3D::new());
+        // S3-3 内容纹理：配置（唯一真相来源）+ 当帧录制结果。
+        // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
+        let content_camera = content_camera.unwrap_or_else(|| {
+            Camera2D::new(
+                (0.0, 0.0).into(),
+                25.0,
+                Rect::new(
+                    (0.0, 0.0).into(),
+                    (CONTENT_TEX_W as f32, CONTENT_TEX_H as f32).into(),
+                ),
+            )
+        });
+        resources.insert(ContentTextureSpec {
+            camera: content_camera,
+            size_px: [CONTENT_TEX_W, CONTENT_TEX_H],
+            texture: TextureHandle::new(CONTENT_TEXTURE_ID),
+            composite: false,
+        });
+        resources.insert(ContentTextureQueue::default());
         resources.insert(render_ctx.clone());
         resources.insert(forest);
         resources.insert(bindings);
@@ -308,6 +392,9 @@ impl App {
         // RenderCommit：2D SceneRecord 写 DrawQueue(2D)，
         // 3D SceneRecord3D 写 DrawQueue3D，类型不相交。
         scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
+        // S3-3：内容纹理录制（R=ContentTextureSpec, W=ContentTextureQueue）——
+        // 与 SceneRecord 同相，但读/写资源不相交，可同相注册。
+        scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
         scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
 
         Ok(Self {

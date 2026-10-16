@@ -13,7 +13,8 @@
 // # RC.1 材质系统
 //
 // - 绑定组扩到 3 个 entry：binding 0 = uniform（dynamic）、binding 1 = `texture_2d<f32>`、
-//   binding 2 = sampler。未注册纹理时绑定 1×1 白色兜底纹理（`color * white == color`）；
+//   binding 2 = sampler。未注册纹理时绑定 1×1 透明黑兜底纹理（预乘 over 下退化为
+//   材质色，见 `cube.wgsl`）；
 // - 顶点布局扩到 20 字节：`Float32x3` 位置 @0 + `Float32x2` UV @12（`loc1`）。
 //   UV 优先取几何自带 [`MeshGeometry::uvs`]，缺省时按 [`Material3D::uv_projection`] 兜底；
 // - bind group 依赖 uniform buffer 与纹理视图，因此不再由 [`UniformArena`] 持有，
@@ -80,7 +81,7 @@ const VERTEX_UV_OFFSET: u64 = 12;
 /// 法线属性在顶点内的字节偏移（紧随 uv 之后）。
 const VERTEX_NORMAL_OFFSET: u64 = 20;
 
-/// 未指定纹理时使用的兜底纹理 id（1×1 白色）。
+/// 未指定纹理时使用的兜底纹理 id（1×1 透明黑）。
 const DEFAULT_TEXTURE_ID: u64 = 0;
 
 /// [`RenderBackend3D::submit_layer`] 没有 `LayerId` 参数，用保留 id 承载其
@@ -347,7 +348,7 @@ pub struct WgpuBackend3D {
     bind_group_layout: wgpu::BindGroupLayout,
     /// 材质采样器（binding 2）。
     sampler: wgpu::Sampler,
-    /// 兜底纹理视图（1×1 白色，binding 1）：材质未指定纹理时使用。
+    /// 兜底纹理视图（1×1 透明黑，binding 1）：材质未指定纹理时使用。
     default_texture_view: wgpu::TextureView,
     /// 已注册纹理视图（`TextureHandle::id` → view）。
     textures: Mutex<HashMap<u64, wgpu::TextureView>>,
@@ -515,7 +516,8 @@ impl WgpuBackend3D {
             );
         }
 
-        // RC.1: 1×1 白色兜底纹理 —— 材质无纹理时绑定它，`color * white == color`。
+        // RC.1: 1×1 **透明黑**兜底纹理 —— 材质无纹理时绑定它。着色式为预乘 over
+        // （`tex + color * (1 - tex.a)`），`tex = (0,0,0,0)` 时退化为 `color`。
         let default_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("xcal-3d-default-texture"),
             size: wgpu::Extent3d {
@@ -537,7 +539,7 @@ impl WgpuBackend3D {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &[255u8, 255, 255, 255],
+            &[0u8, 0, 0, 0],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4),
@@ -615,7 +617,7 @@ impl WgpuBackend3D {
         bind_groups.entries.clear();
     }
 
-    /// 解析材质纹理视图：未注册的 id 回退到 1×1 白色兜底纹理。
+    /// 解析材质纹理视图：未注册的 id 回退到 1×1 透明黑兜底纹理。
     fn resolve_texture_view(&self, texture_id: u64) -> wgpu::TextureView {
         let guard = self.textures.lock().expect("textures poisoned");
         match guard.get(&texture_id) {
@@ -943,7 +945,8 @@ impl WgpuBackend3D {
                 // line 默认走 Lambert（法线填 (0,0,1) → lit = 1，外观不受光照影响）。
                 variant: ShaderVariant::Lambert,
                 uniform_offset: offset_bytes,
-                // line 无材质纹理 → 兜底白色纹理。
+                // line 无材质纹理 → 绑定 1×1 **透明黑**兜底纹理（`DEFAULT_TEXTURE_ID = 0`
+                // 未注册，`resolve_texture_view` 回退），着色式退化为 `color * lit`。
                 texture_id: DEFAULT_TEXTURE_ID,
             });
         }
@@ -1270,6 +1273,32 @@ mod tests {
         let backend =
             WgpuBackend3D::with_default_shader(ctx.device(), ctx.queue(), ctx.target_format());
         Some((backend, ctx))
+    }
+
+    // ── P0-1：SHADER_VARIANTS 穷举（纯 CPU，无需 GPU） ────────────────
+
+    /// 编译期穷举：`ShaderVariant` 新增变体而此处未更新 → 编译失败。
+    fn all_variants() -> [ShaderVariant; 2] {
+        // 显式列出每个变体；漏一个即非穷尽 match → 编译失败。
+        match ShaderVariant::Lambert {
+            ShaderVariant::Lambert => {}
+            ShaderVariant::Flat => {}
+        }
+        [ShaderVariant::Lambert, ShaderVariant::Flat]
+    }
+
+    /// `SHADER_VARIANTS` 必须覆盖 `ShaderVariant` 的全部变体。
+    ///
+    /// 证伪：从 `SHADER_VARIANTS` 删一项 → 本测试变红。
+    #[test]
+    fn shader_variants_array_is_exhaustive() {
+        for v in all_variants() {
+            assert!(
+                SHADER_VARIANTS.contains(&v),
+                "{v:?} 未在 SHADER_VARIANTS 中注册"
+            );
+        }
+        assert_eq!(SHADER_VARIANTS.len(), all_variants().len());
     }
 
     // ── G2：几何缓存键单测（纯 CPU，headless，无需 GPU） ──────────────
@@ -1652,7 +1681,8 @@ mod tests {
 
     /// 注册 1×1 绿色纹理并让全屏四边形采样它；整屏像素应等于该绿色。
     ///
-    /// 若材质纹理未接线（回退到白色兜底纹理），像素会是白色而非绿色 → 失败。
+    /// 若材质纹理未接线（回退到 1×1 透明兜底纹理），预乘 over 下会退化为材质色
+    /// 白色而非绿色 → 失败。
     #[test]
     fn test_material_samples_registered_texture() {
         let Some((backend, ctx)) = headless_backend() else {

@@ -14,5 +14,6 @@ pub mod view;
 pub use camera::{CameraCommand, CameraMode};
 pub use event::{ids, InputEvents, SceneEvent, WidgetId};
 pub use view::{
-    ContentHandle, DEFAULT_BACKGROUND, LayerBlend, LayerDescriptor, LayerId, LayerKind, SceneView,
+    ContentHandle, ContentTextureSpec, DEFAULT_BACKGROUND, LayerBlend, LayerDescriptor, LayerId,
+    LayerKind, SceneView,
 };
