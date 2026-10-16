@@ -52,14 +52,14 @@ mod tests {
     use xc_object::Circle;
     use xcal_schedule::scheduler::{Phase, Scheduler};
     use crate::TimeState;
-    use glam::Vec3;
     use hecs::World;
+    use xc_notion::Vec3;
     use xc_time::{ClockForest as XcClockForest, ClockNode, Curve};
 
-    /// 场景向量（M2.5 后 `xcal_scene::types::Vec2` 就是 `glam::Vec2` 的转发，
+    /// 场景向量（M2.5 后 `xcal_scene::types::Vec2` 就是 `xc_notion::Vec2`（= glam）的转发，
     /// 图元对象用的也是同一类型 —— 原来的 `vec2` / `obj_vec2` 两个包装已被消灭）。
-    fn vec2(x: f32, y: f32) -> glam::Vec2 {
-        glam::Vec2::new(x, y)
+    fn vec2(x: f32, y: f32) -> xc_notion::Vec2 {
+        xc_notion::Vec2::new(x, y)
     }
 
     /// 等价性测试：旧公式 vs 新链路，1000 个采样点最大误差 < 1e-5。
@@ -121,7 +121,7 @@ mod tests {
             } else {
                 Vec3::Y
             };
-            glam::Quat::from_axis_angle(axis, angle) * Vec3::new(0.0, 0.0, radius)
+            xc_notion::Quat::from_axis_angle(axis, angle) * Vec3::new(0.0, 0.0, radius)
         }
 
         let mut forest = XcClockForest::new();

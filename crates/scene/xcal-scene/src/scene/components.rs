@@ -149,5 +149,5 @@ macro_rules! define_comp {
     };
 }
 
-define_comp!(Position2, glam::Vec2);
-define_comp!(Position3, glam::Vec3);
+define_comp!(Position2, xc_notion::Vec2);
+define_comp!(Position3, xc_notion::Vec3);

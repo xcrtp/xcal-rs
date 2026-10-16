@@ -223,4 +223,8 @@ derive_more (full) / thiserror / smart-default / derive-new / derive_builder
 hecs = "0.11"
 ```
 
+> **W4 记账**：`glam` 在本 crate 的**源码里已不再直接引用**（43 处 → 0；数学类型一律走
+> `xc-notion` 或本层的转发模块 [`types`](src/types.rs)）。Cargo.toml 里的条目仍保留
+> —— 清理清单不在 W4 范围内，留待下次一并处理。
+
 无 `egui`、无 `wgpu`、无 optional feature。

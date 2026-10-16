@@ -31,10 +31,8 @@ use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_notion::{Rect2D, Vec2 as GeoVec2};
 
 use crate::compositor::{CompositeFrame, CompositeOp, Compositor, PostBlit};
-use crate::wgpu_2d::{
-    Frame2DData, Frame2DGeometry, OFFSCREEN_FORMAT, Recorded2D, WgpuBackend2D, snapshot_queue,
-};
-use crate::wgpu_3d::WgpuBackend3D;
+use crate::standard_backends::{BackendStore, ScreenParams};
+use crate::wgpu_2d::{Frame2DData, Frame2DGeometry, OFFSCREEN_FORMAT, Recorded2D, snapshot_queue};
 
 /// 本帧一个图层的声明（有效序，由 `EguiSceneHost::present` 排好）。
 ///
@@ -67,22 +65,16 @@ pub struct SceneCompositorFrame {
     pub _keep_alive: Vec<wgpu::Buffer>,
 }
 
-/// 内容纹理层**专用**的 2D 后端资源。
-///
-/// 与 [`WgpuBackend2D`] 是同一类型的**独立实例**。原因：`prepare` 同一帧会对 2D
-/// 后端跑两次 `finish_frame`（趟 1 内容层、趟 2 视口层），而 `WgpuBackend2D` 的
-/// `UniformArena` 在 `finish_frame` 里 `begin_frame()` 重置、`flush()` 从 offset 0
-/// 重写——共用实例时后一次的 uniform 会覆盖前一次；又因两次 pass 都录进同一个
-/// `egui_encoder`、稍后才 `submit`，内容层的 pass 在 GPU 上实际读到的是视口层的
-/// uniform（clip 矩阵 / 颜色错乱），表现为"关掉网格（视口层无 draw → 不写 uniform）
-/// 才显示正确内容"。独立实例从结构上隔离两类的 uniform arena。
-///
-/// 惰性创建：首次遇到内容层时才 `insert`，纯 2D / 纯 3D 场景不产生额外开销。
-#[cfg(feature = "egui-wgpu")]
-struct ContentBackend2D(WgpuBackend2D);
+/// 内容纹理层**专用**的 2D 后端资源：已迁至
+/// [`crate::standard_backends::ContentBackend2D`]（W1：它属于"后端装配"而非"回调"）。
 
-/// 唯一回调：`prepare` 渲染全部图层并一次性合成，`paint` 只做一次混合。
-#[cfg(feature = "egui-wgpu")]
+/// 唯一回调（egui 路径）/ 一帧渲染请求（headless 路径，W1）。
+///
+/// **W1：本类型不再依赖 egui** —— 字段全是纯数据（`Rect2D` / 图层声明 / 队列快照 /
+/// 滤镜链），故 headless 路径（[`crate::standard_backends::render_frame_headless`]）
+/// 可以直接持有一个实例，与 egui 回调跑**同一份帧体**
+/// （[`SceneCompositorCallback::prepare_frame`] + `paint_frame`）。
+/// 只有 `impl egui_wgpu::CallbackTrait`（`prepare` / `paint`）仍门控在 `egui-wgpu` 下。
 pub struct SceneCompositorCallback {
     /// 视口矩形（egui points，屏幕坐标，原点左上）。
     viewport_points: Rect2D,
@@ -106,7 +98,6 @@ pub struct SceneCompositorCallback {
     reveals: Vec<RevealItem>,
 }
 
-#[cfg(feature = "egui-wgpu")]
 impl SceneCompositorCallback {
     /// 从视口矩形、图层声明（有效序）与两个绘制队列构造。
     ///
@@ -143,20 +134,33 @@ impl SceneCompositorCallback {
     pub fn layer_count(&self) -> usize {
         self.layers.len()
     }
-}
 
-#[cfg(feature = "egui-wgpu")]
-impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
-    fn prepare(
+    /// 本帧视口矩形（points）。
+    ///
+    /// headless 入口据此**自建同等尺寸的目标纹理**（egui 那边由宿主设 viewport）。
+    pub fn viewport_points(&self) -> Rect2D {
+        self.viewport_points
+    }
+
+    /// **帧体（唯一实现）**：渲染全部图层到各自离屏纹理 → 一次合成 → 产出
+    /// [`SceneCompositorFrame`]。
+    ///
+    /// egui 路径（`CallbackTrait::prepare`）与 headless 路径
+    /// （[`crate::standard_backends::render_frame_headless`]）**都调本函数**
+    /// ⇒ 两条路径逐位一致是**结构保证**。
+    ///
+    /// 后端经 [`BackendStore`] 取用（egui = TypeMap，headless = 自持有），
+    /// 故帧体本身不认识任何一种宿主。
+    pub fn prepare_frame(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        egui_encoder: &mut wgpu::CommandEncoder,
-        callback_resources: &mut egui_wgpu::CallbackResources,
-    ) -> Vec<wgpu::CommandBuffer> {
-        let ppp = screen_descriptor.pixels_per_point;
-        let screen_size_px = screen_descriptor.size_in_pixels;
+        encoder: &mut wgpu::CommandEncoder,
+        screen: ScreenParams,
+        store: &mut impl BackendStore,
+    ) -> SceneCompositorFrame {
+        let ppp = screen.pixels_per_point;
+        let screen_size_px = screen.size_in_pixels;
         let (left, top, w_pt, h_pt) = (
             self.viewport_points.min.x,
             self.viewport_points.min.y,
@@ -172,7 +176,7 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
         //
         // 必须早于视口层：3D 视口层在 prepare_draws 里按 `TextureHandle::id` 解析
         // 纹理视图，此刻该视图必须已注册（见计划 D2 / S4）。因为两趟都录进同一个
-        // `egui_encoder`，内容 pass 在 GPU 上先于 3D pass 执行。
+        // encoder，内容 pass 在 GPU 上先于 3D pass 执行。
         for layer in &self.layers {
             let LayerKind::ContentTexture {
                 size_px,
@@ -203,22 +207,14 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                 screen_size_px: *size_px,
             };
             // 内容层走**独立**的 2D 后端实例：与趟 2 的视口层隔离 uniform arena，
-            // 避免同帧两次 `finish_frame` 互相覆盖（见 [`ContentBackend2D`]）。
-            if callback_resources.get::<ContentBackend2D>().is_none() {
-                callback_resources.insert(ContentBackend2D(WgpuBackend2D::new(device, queue)));
-            }
-            let Some(frame) = callback_resources
-                .get_mut::<ContentBackend2D>()
-                .map(|cb| {
-                    let backend = &mut cb.0;
-                    backend.begin_frame_at(geometry);
-                    for d in draws {
-                        backend.push(&d.shape, &d.transform, &d.style, d.z);
-                    }
-                    backend.finish_frame(egui_encoder, layer.id, &geometry)
-                })
-            else {
-                continue;
+            // 避免同帧两次 `finish_frame` 互相覆盖（见 `ContentBackend2D`）。
+            let frame = {
+                let backend = store.content_backend_2d(device, queue);
+                backend.begin_frame_at(geometry);
+                for d in draws {
+                    backend.push(&d.shape, &d.transform, &d.style, d.z);
+                }
+                backend.finish_frame(encoder, layer.id, &geometry)
             };
 
             let Frame2DData {
@@ -230,7 +226,7 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
 
             // 注册给 3D 后端：会清空其材质 bind group 缓存，本帧视口层重建时
             // 即拿到新视图。无 3D 后端（纯 2D 场景）时静默跳过。
-            if let Some(backend_3d) = callback_resources.get::<WgpuBackend3D>() {
+            if let Some(backend_3d) = store.backend_3d() {
                 backend_3d.register_texture(texture.id(), offscreen.clone());
             }
 
@@ -255,26 +251,22 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                         pixels_per_point: ppp,
                         screen_size_px,
                     };
-                    // 可变借用在此块内结束，后面才能不可变借用 3D 后端。
-                    let Some(frame) = callback_resources
-                        .get_mut::<WgpuBackend2D>()
-                        .map(|backend| {
-                            backend.begin_frame_at(geometry);
-                            for d in &self.draws_2d {
-                                backend.push(&d.shape, &d.transform, &d.style, d.z);
-                            }
-                            // S4.3：形变项随 2D 图层走形变管线（`t` 走 uniform）。
-                            for m in &self.morphs {
-                                backend.push_morph(m.clone());
-                            }
-                            // R0：书写动画项随 2D 图层走（同一个 `pipeline_2d`，
-                            // 区间 `[a,b]` 走 uniform）。
-                            for r in &self.reveals {
-                                backend.push_reveal(r.clone());
-                            }
-                            backend.finish_frame(egui_encoder, layer.id, &geometry)
-                        })
-                    else {
+                    let Some(frame) = store.backend_2d().map(|backend| {
+                        backend.begin_frame_at(geometry);
+                        for d in &self.draws_2d {
+                            backend.push(&d.shape, &d.transform, &d.style, d.z);
+                        }
+                        // S4.3：形变项随 2D 图层走形变管线（`t` 走 uniform）。
+                        for m in &self.morphs {
+                            backend.push_morph(m.clone());
+                        }
+                        // R0：书写动画项随 2D 图层走（同一个 `pipeline_2d`，
+                        // 区间 `[a,b]` 走 uniform）。
+                        for r in &self.reveals {
+                            backend.push_reveal(r.clone());
+                        }
+                        backend.finish_frame(encoder, layer.id, &geometry)
+                    }) else {
                         continue;
                     };
                     let Frame2DData {
@@ -292,9 +284,6 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                     });
                 }
                 LayerKind::Viewport3D { camera } => {
-                    let Some(backend) = callback_resources.get::<WgpuBackend3D>() else {
-                        continue;
-                    };
                     // 离屏纹理按**物理像素**建（逻辑点 × ppp）。
                     let viewport = Viewport::new(
                         0,
@@ -303,14 +292,18 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                         ((h_pt * ppp).round() as u32).max(1),
                     );
                     let view_proj = camera.view_projection(viewport.aspect());
-                    let frame = backend.render_layer_offscreen(
-                        egui_encoder,
-                        layer.id,
-                        view_proj,
-                        viewport,
-                        &self.meshes_3d,
-                        &self.lines_3d,
-                    );
+                    let Some(frame) = store.backend_3d().map(|backend| {
+                        backend.render_layer_offscreen(
+                            encoder,
+                            layer.id,
+                            view_proj,
+                            viewport,
+                            &self.meshes_3d,
+                            &self.lines_3d,
+                        )
+                    }) else {
+                        continue;
+                    };
                     keep_alive.push(frame._arena_buffer);
                     ops.push(CompositeOp {
                         texture: frame.offscreen,
@@ -331,8 +324,12 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
         // C0/C1：滤镜链**非空**时走 post 路径 —— 先把全部图层合成到**中间全屏纹理**
         // （清屏透明），再由 `paint` 经滤镜链 blit 进主 pass；**空链走直通**（不建中间
         // 纹理、不多一次全屏 pass ⇒ 画面逐位不变）。
-        let Some(compositor) = callback_resources.get_mut::<Compositor>() else {
-            return Vec::new();
+        let Some(compositor) = store.compositor() else {
+            return SceneCompositorFrame {
+                frame: CompositeFrame::default(),
+                post_blit: None,
+                _keep_alive: keep_alive,
+            };
         };
         // C3：管线惰性建 —— 先确保本帧需要的 (blend, 域转换) 组合就绪。
         let _ = compositor.ensure_for(device, &ops);
@@ -344,17 +341,66 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                 ((w_pt * ppp).round() as u32).max(1),
                 ((h_pt * ppp).round() as u32).max(1),
             );
-            let src = compositor.render_post(device, egui_encoder, size_px, &frame);
+            let src = compositor.render_post(device, encoder, size_px, &frame);
             Some(compositor.build_post_blit(device, &self.filters, &src, size_px))
         } else {
             None
         };
 
-        callback_resources.insert(SceneCompositorFrame {
+        SceneCompositorFrame {
             frame,
             post_blit,
             _keep_alive: keep_alive,
-        });
+        }
+    }
+
+    /// **绘制帧体**：把上一段的合成结果画进当前 render pass（`paint` 的唯一实现）。
+    ///
+    /// 调用方负责在此之前设好 scissor / viewport：
+    /// - egui 路径由宿主（egui-wgpu 为每个回调设 viewport，`paint` 里再收 scissor）；
+    /// - headless 路径由 [`crate::standard_backends::render_frame_headless`] 设成
+    ///   目标纹理整幅。
+    pub fn paint_frame(
+        &self,
+        compositor: &Compositor,
+        composed: &SceneCompositorFrame,
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        // C0/C1：有滤镜链 ⇒ blit 中间纹理（经滤镜）；无 ⇒ 直通合成（画面逐位不变）。
+        match &composed.post_blit {
+            Some(blit) => compositor.blit_post(pass, blit),
+            None => compositor.composite_layers(pass, &composed.frame),
+        }
+    }
+}
+
+#[cfg(feature = "egui-wgpu")]
+impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        use crate::standard_backends::TypeMapStore;
+
+        // W1：本方法只是**唯一帧体**（[`SceneCompositorCallback::prepare_frame`]）的
+        // egui 适配层 —— 把 `ScreenDescriptor` 译成 [`ScreenParams`]、把 TypeMap 包成
+        // [`BackendStore`]、把产物写回 TypeMap 供 `paint` 取用。
+        // 帧体本身不在这里 ⇒ headless 路径跑的是**同一份代码**。
+        let frame = self.prepare_frame(
+            device,
+            queue,
+            egui_encoder,
+            ScreenParams::new(
+                screen_descriptor.size_in_pixels,
+                screen_descriptor.pixels_per_point,
+            ),
+            &mut TypeMapStore(callback_resources),
+        );
+        callback_resources.insert(frame);
         Vec::new()
     }
 
@@ -378,11 +424,8 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
             clip.width_px.max(0) as u32,
             clip.height_px.max(0) as u32,
         );
-        // C0/C1：有滤镜链 ⇒ blit 中间纹理（经滤镜）；无 ⇒ 直通合成（画面逐位不变）。
-        match &scene.post_blit {
-            Some(blit) => compositor.blit_post(render_pass, blit),
-            None => compositor.composite_layers(render_pass, &scene.frame),
-        }
+        // W1：绘制帧体与 headless 路径**同一份实现**（view/scissor 由本方法设好）。
+        self.paint_frame(compositor, scene, render_pass);
     }
 }
 
@@ -392,6 +435,8 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
 mod tests {
     use super::*;
     use crate::render_context::RenderContext;
+    use crate::standard_backends::{StandardBackends, render_frame_headless};
+    use crate::wgpu_3d::WgpuBackend3D;
     use xcal_render::ZIndex;
     use xcal_render::components::FillSolid;
     use xcal_scene::scene::components::{
@@ -412,62 +457,15 @@ mod tests {
     /// 源格式 `Rgba8Unorm` 字节序下的纯红。
     const RED_RGBA: [u8; 4] = [255, 0, 0, 255];
 
-    /// 回读纹理像素（`width * 4` 按 256 对齐补行距）。
+    /// 回读纹理像素（`width * 4` 按 256 对齐补行距）—— W1 起统一走
+    /// [`RenderContext::read_texture`]（本模块的测试副本已消除）。
     fn read_rgba8(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        ctx: &RenderContext,
         texture: &wgpu::Texture,
         width: u32,
         height: u32,
     ) -> Vec<u8> {
-        let unpadded = width * 4;
-        let padded = unpadded.div_ceil(256) * 256;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("test-content-readback"),
-            size: (padded * height) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("test-content-readback-encoder"),
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit([encoder.finish()]);
-
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map_async 失败"));
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll 失败");
-        let data = slice.get_mapped_range().expect("映射失败");
-        let mut out = Vec::with_capacity((unpadded * height) as usize);
-        for row in 0..height {
-            let start = (row * padded) as usize;
-            out.extend_from_slice(&data[start..start + unpadded as usize]);
-        }
-        drop(data);
-        buffer.unmap();
-        out
+        ctx.read_texture(texture, (width, height))
     }
 
     /// 取像素 `(x, y)` 的 4 字节（左上角为原点）。
@@ -498,14 +496,11 @@ mod tests {
         let device = ctx.device();
         let queue = ctx.queue();
 
+        // W1：走**拆分后的两步装配**（`StandardBackends::new` + `install_into`）——
+        // 与 `install_standard_backends(rs)` 同一份装配逻辑，只是换成 headless 上下文。
+        // 这一步本身就验证了"装配不再依赖 egui 的 RenderState"。
         let mut resources = egui_wgpu::CallbackResources::new();
-        resources.insert(WgpuBackend2D::new(device, queue));
-        resources.insert(WgpuBackend3D::with_default_shader(
-            device,
-            queue,
-            ctx.target_format(),
-        ));
-        resources.insert(Compositor::new(device, ctx.target_format()));
+        StandardBackends::new(&ctx).install_into(&mut resources);
 
         // ── 内容层：整张红底 ───────────────────────────────────────────
         let mut content_queue = DrawQueue::new();
@@ -605,11 +600,11 @@ mod tests {
 
         // 内容纹理本身（`Rgba8Unorm`）中心为纯红 ⇒ 录制/渲染路径正确。
         let tex_2d = resources
-            .get::<ContentBackend2D>()
+            .get::<crate::standard_backends::ContentBackend2D>()
             .map(|cb| &cb.0)
             .and_then(|b| b.offscreen_texture(CONTENT_LAYER))
             .expect("内容纹理应已创建");
-        let content_pixels = read_rgba8(device, queue, tex_2d, TEX, TEX);
+        let content_pixels = read_rgba8(&ctx, tex_2d, TEX, TEX);
         assert_eq!(
             pixel_at(&content_pixels, TEX, TEX / 2, TEX / 2),
             RED_RGBA,
@@ -623,11 +618,264 @@ mod tests {
             .get::<WgpuBackend3D>()
             .and_then(|b| b.offscreen_texture(VIEW_3D_LAYER))
             .expect("3D 离屏纹理应已创建");
-        let pixels = read_rgba8(device, queue, &tex_3d, TEX, TEX);
+        let pixels = read_rgba8(&ctx, &tex_3d, TEX, TEX);
         assert_eq!(
             pixel_at(&pixels, TEX, TEX / 2, TEX / 2),
             RED_BGRA,
             "3D 曲面中心应采样到内容纹理（红）⇒ 内容层先于 3D 层注册"
         );
+    }
+
+    /// **W1 核心断言**：headless 入口与 egui 宿主路径**逐字节一致**。
+    ///
+    /// 一帧的输入刻意取"三类图层齐全"的形态：内容纹理层（会用到**惰性创建**的
+    /// 第 4 个后端实例）+ 3D 视口（离屏 + 采样内容纹理）+ 2D 视口（两个图元）。
+    /// 两条路径分别渲染：
+    /// - **A（egui 路径）**：后端住 `CallbackResources`（TypeMap），走
+    ///   `CallbackTrait::prepare`；
+    /// - **B（headless 路径）**：[`render_frame_headless`]，后端住 [`StandardBackends`]。
+    ///
+    /// 断言两张目标纹理完全相同 —— 即"**装配方式与宿主差异不改变一个像素**"。
+    /// 滤镜链跑两遍：空链（直通）与非空链（post 路径）。
+    ///
+    /// # 它到底锁住了什么（诚实边界）
+    ///
+    /// 本用例覆盖的是 headless 入口的**全部宿主侧动作**：自建目标纹理、清屏色、
+    /// pass 的 viewport/scissor、`paint_frame` 分派、`submit`、回读 —— 以及
+    /// [`BackendStore`] 两个实现（TypeMap 的路由/惰性插入 vs 自持有）的等价性。
+    ///
+    /// ⚠️ 它**不**覆盖"回调矩形是帧缓冲子矩形"的偏移语义：本用例的目标纹理尺寸
+    /// 恰等于视口矩形、偏移为 0，故 headless 里显式设的 `set_viewport(0,0,w,h)`
+    /// 与默认值等价。子矩形（含控制面板的实机布局）由 `wgpu_2d` 的
+    /// `composite_lands_inside_scoped_viewport_on_real_device` 覆盖。
+    ///
+    /// **证伪**（任一改动都会让本用例 RED —— 注意只有**宿主侧**改动才可证伪；
+    /// 改 `prepare_frame` 内部会同时影响两条路径，故本用例挡不住那种改动）：
+    /// 1. 删掉 `render_frame_headless` 里的 `ctx.submit(encoder.finish())`
+    ///    ⇒ B 只剩清屏色；
+    /// 2. 把 B 的 `ScreenParams` 尺寸改成 `[TEX * 2, TEX * 2]` ⇒ 目标尺寸与视口
+    ///    不再一致，`viewport_px` 算出的尺寸与 A 不同；
+    /// 3. 把 B 传给 `ScreenParams` 的 `clear` 换成另一个颜色 ⇒ 背景不同；
+    /// 4. 让 [`StandardBackends::content_backend_2d_mut`] 与视口层**共用同一个**
+    ///    `WgpuBackend2D` ⇒ 同帧两次 `finish_frame` 互相覆盖 uniform arena，
+    ///    内容纹理错乱（这正是当年分离实例要解决的问题）。
+    #[test]
+    fn headless_path_matches_egui_path_bit_for_bit() {
+        use xcal_render::{FilterSlot, StrokeSolid};
+        use xc_object::Line;
+
+        let Ok(ctx) = RenderContext::headless() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let device = ctx.device();
+        let queue = ctx.queue();
+
+        // ── 内容层：整张红底（`composite = false`：只作纹理源）────────────────
+        let mut content_queue = DrawQueue::new();
+        content_queue.rect_fill(
+            ZIndex::new(0),
+            Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::splat(TEX as f32)),
+            FillSolid::new(Color32::RED),
+        );
+        let content = vec![(CONTENT_LAYER, snapshot_queue(&content_queue))];
+
+        // ── 2D 视口层：一个填充矩形 + 一条描边线段 ────────────────────────────
+        let mut queue_2d = DrawQueue::new();
+        queue_2d.rect_fill(
+            ZIndex::new(0),
+            Rect2D::new(
+                xc_notion::Vec2::new(2.0, 2.0),
+                xc_notion::Vec2::new(16.0, 10.0),
+            ),
+            FillSolid::new(Color32::GREEN),
+        );
+        queue_2d.line_stroke(
+            ZIndex::new(1),
+            Line::new((2.0, 18.0), (30.0, 30.0)),
+            StrokeSolid::new(3.0, (0, 0, 255, 255)),
+        );
+
+        // ── 3D 视口层：全屏四边形，材质采样内容纹理 ───────────────────────────
+        let quad = MeshGeometry::new(
+            vec![
+                glam::Vec3::new(-1.0, -1.0, 0.0),
+                glam::Vec3::new(1.0, -1.0, 0.0),
+                glam::Vec3::new(1.0, 1.0, 0.0),
+                glam::Vec3::new(-1.0, 1.0, 0.0),
+            ],
+            Some(vec![0, 1, 2, 0, 2, 3]),
+            PrimitiveTopology::Triangles,
+        )
+        .with_uvs(vec![
+            glam::Vec2::new(0.0, 1.0),
+            glam::Vec2::new(1.0, 1.0),
+            glam::Vec2::new(1.0, 0.0),
+            glam::Vec2::new(0.0, 0.0),
+        ])
+        .with_normals(vec![glam::Vec3::Z; 4]);
+        let mut material = Material3D::color(Color32::WHITE);
+        material.texture = Some(TextureHandle::new(CONTENT_ID));
+        let mut queue_3d = DrawQueue3D::new();
+        queue_3d.draw_mesh(std::sync::Arc::new(quad), glam::Mat4::IDENTITY, material);
+
+        let camera = Camera3D::new(
+            glam::Vec3::new(0.0, 0.0, 5.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+            Projection::orthographic(1.0, 1.0, 0.1, 100.0),
+        );
+        let viewport_points =
+            Rect2D::from_min_size(GeoVec2::ZERO, GeoVec2::new(TEX as f32, TEX as f32));
+        // 声明序刻意把**内容层放最后**：它必须被趟 1 提前渲染（结构保证，非声明序）。
+        let layers = vec![
+            SceneLayer {
+                id: VIEW_3D_LAYER,
+                kind: LayerKind::Viewport3D { camera },
+                blend: LayerBlend::Alpha,
+                opacity: 1.0,
+            },
+            SceneLayer {
+                id: LayerId(3),
+                // 视口 2D 的几何已是**屏幕空间**（`record_scene` 已烘进 `Shape2D`），
+                // 帧体只用它的视口矩形，不读相机 ⇒ 这里的相机取值不影响结果。
+                kind: LayerKind::Viewport2D {
+                    camera: Camera2D::new(
+                        (TEX as f32 / 2.0, TEX as f32 / 2.0).into(),
+                        1.0,
+                        Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::splat(TEX as f32)),
+                    ),
+                },
+                blend: LayerBlend::Alpha,
+                opacity: 1.0,
+            },
+            SceneLayer {
+                id: CONTENT_LAYER,
+                kind: LayerKind::ContentTexture {
+                    camera: Camera2D::new(
+                        (TEX as f32 / 2.0, TEX as f32 / 2.0).into(),
+                        1.0,
+                        Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::splat(TEX as f32)),
+                    ),
+                    size_px: [TEX, TEX],
+                    texture: TextureHandle::new(CONTENT_ID),
+                    composite: false,
+                },
+                blend: LayerBlend::Alpha,
+                opacity: 1.0,
+            },
+        ];
+
+        let mut non_empty_filters = PostFilterChain::new();
+        non_empty_filters.push(FilterSlot::brightness(1.2));
+        non_empty_filters.push(FilterSlot::blur(1.0));
+
+        for (label, filters) in [
+            ("空链（直通）", PostFilterChain::default()),
+            ("非空链（post 路径）", non_empty_filters),
+        ] {
+            let callback = SceneCompositorCallback::new(
+                viewport_points,
+                layers.clone(),
+                &queue_2d,
+                &queue_3d,
+                content.clone(),
+                Vec::new(),
+                Vec::new(),
+                filters,
+            );
+            let screen = egui_wgpu::ScreenDescriptor {
+                size_in_pixels: [TEX, TEX],
+                pixels_per_point: 1.0,
+            };
+            let clear = wgpu::Color {
+                r: 0.1,
+                g: 0.2,
+                b: 0.3,
+                a: 1.0,
+            };
+
+            // ── A：egui 路径（后端住 TypeMap，走 `CallbackTrait::prepare`）──
+            let mut resources = egui_wgpu::CallbackResources::new();
+            StandardBackends::new(&ctx).install_into(&mut resources);
+            let target_a = ctx.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("w1-egui-target"),
+                size: wgpu::Extent3d {
+                    width: TEX,
+                    height: TEX,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: ctx.target_format(),
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view_a = target_a.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("w1-egui-encoder"),
+            });
+            let _ = egui_wgpu::CallbackTrait::prepare(
+                &callback,
+                device,
+                queue,
+                &screen,
+                &mut enc,
+                &mut resources,
+            );
+            {
+                // 复刻 egui-wgpu 的 "courtesy" 行为：viewport == scissor == 回调矩形。
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("w1-egui-main-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view_a,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clear),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, TEX as f32, TEX as f32, 0.0, 1.0);
+                pass.set_scissor_rect(0, 0, TEX, TEX);
+                let compositor = resources.get::<Compositor>().expect("合成器在 TypeMap 里");
+                let composed = resources
+                    .get::<SceneCompositorFrame>()
+                    .expect("prepare 已写入合成帧");
+                callback.paint_frame(compositor, composed, &mut pass);
+            }
+            ctx.submit(enc.finish());
+            let px_a = ctx.read_texture(&target_a, (TEX, TEX));
+
+            // ── B：headless 路径（后端自持有，走 `render_frame_headless`）──
+            let mut backends = StandardBackends::new(&ctx);
+            let px_b = render_frame_headless(
+                &ctx,
+                &mut backends,
+                &callback,
+                ScreenParams::new([TEX, TEX], 1.0),
+                clear,
+            );
+
+            assert_eq!(
+                px_a.len(),
+                px_b.len(),
+                "{label}：两条路径的输出长度必须相同"
+            );
+            assert!(
+                px_a == px_b,
+                "{label}：headless 与 egui 路径必须**逐字节一致**（首个不同字节：{:?}）",
+                px_a.iter()
+                    .zip(&px_b)
+                    .position(|(a, b)| a != b)
+                    .map(|i| (i, px_a[i], px_b[i]))
+            );
+        }
     }
 }

@@ -29,9 +29,17 @@ pub mod compositor;
 
 #[cfg(feature = "egui-wgpu")]
 pub mod eframe_backend;
+// W1：**不依赖 egui 的渲染环境装配**（`StandardBackends`）+ headless 渲染入口。
+// 与 `wgpu_2d` 等同门控（只吃 `RenderContext`），故在 `wgpu` 下即可编译与测试。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod standard_backends;
 // S3-2 修复：合并 2D/3D 为**单个**回调，一次性合成全部图层。
 // （`CallbackResources` 是全局 TypeMap，每层一个 callback 会互相覆盖合成资源。）
-#[cfg(feature = "egui-wgpu")]
+//
+// W1：本模块**不再整体**门控在 `egui-wgpu` 下 —— `SceneCompositorCallback` 的字段
+// 全是纯数据，它同时是 headless 路径的"一帧渲染请求"；只有
+// `impl egui_wgpu::CallbackTrait` 留在 `egui-wgpu` 门控内。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod scene_callback;
 
 // 旧 svg_recorder / text 空壳已删除（见上注）。
@@ -55,5 +63,10 @@ pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 
 #[cfg(feature = "egui-wgpu")]
 pub use eframe_backend::{EframeWgpuBackend, install_standard_backends};
-#[cfg(feature = "egui-wgpu")]
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};
+// W1：不依赖 egui 的装配 + headless 渲染入口。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use standard_backends::{
+    BackendStore, ScreenParams, StandardBackends, render_frame_headless, render_single_frame,
+};

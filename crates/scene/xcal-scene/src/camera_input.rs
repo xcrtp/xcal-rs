@@ -27,7 +27,7 @@
 // `SceneEvent::Camera` 的 `layer` 字段因此**未被消费**（当前只有一个中央视口，
 // 且各模式互不重叠）；将来出现"多个 2D 视口各自一台相机"时才需要 layer→相机 映射。
 
-use glam::Vec3;
+use xc_notion::Vec3;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 use xc_object::{

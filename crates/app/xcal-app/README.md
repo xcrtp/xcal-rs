@@ -338,7 +338,7 @@ snapshots/
 ```toml
 xcal-scene                              # 场景组件 / 装配对象 / 动画（ClockForest + Binding + Timeline）
 xcal-schedule                           # 调度内核 + Telemetry
-xcal-render                             # 2D 管线（含 P4 归位的三个录制 System + ViewRect）
+xcal-render                             # 2D 管线（含四个录制 System：P4 三个 + R0 书写动画 + ViewRect）
 xcal-render-backends   = { features = ["egui-wgpu"] }
 xcal-egui
 xc-macro

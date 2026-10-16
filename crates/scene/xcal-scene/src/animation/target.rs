@@ -217,7 +217,7 @@ impl Target for RevealRange {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{Vec2, Vec3};
+    use xc_notion::{Vec2, Vec3};
     use xc_object::{Camera3D, Circle, Projection};
 
     /// 契约层句柄（`ObjectId`）↔ hecs 实体的往返。

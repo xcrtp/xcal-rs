@@ -254,9 +254,10 @@ cargo doc  -p xc-vertex --no-deps
 
 覆盖点：
 
-- **V1** — 标准布局 offset/stride（`0/8/16`、stride `20`）、对齐填充（`F32x3` 对齐到 12）、
+- **V1** — 标准布局 offset/stride（`0/8/16/20`、stride `24`，四槽）、对齐填充（`F32x3` 对齐到 12）、
   `compute_layout` 确定性、重叠/`stride` 过小/未对齐/空布局被拒
-- **V2** — AA 映射表全覆盖（每个模型都有明确语义、无未定义分支）、硬边模型两槽声明不可读
+- **V2** — AA 映射表全覆盖（每个模型都有明确语义、无未定义分支）、硬边模型三槽声明不可读、
+  `Analytic` 的第三个槽声明为 `Advance`（R0 书写动画依赖它）
 - **V3** — `ViewDependent` 与 `PerFrame` 行为逐项一致、`Static`/`MorphTarget` 内容寻址、
   `effective()` 归一后只剩三档行为
 - **V4** — serde 往返一致、未知语义可解析但 `validate()` 拒绝、空语义被拒、

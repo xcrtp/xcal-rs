@@ -26,8 +26,8 @@ xcal-scene / xcal-render / xc-notion
 | feature | 引入的依赖 | 可用模块 |
 |---------|-----------|----------|
 | `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
-| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor` |
-| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `eframe_backend`, `scene_callback` |
+| `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `standard_backends`, `scene_callback` |
+| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | 同 `wgpu` + `eframe_backend`（`scene_callback` 额外提供 `CallbackTrait` 实现） |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
 > **S4.1**：旧 CPU 2D 回放的 feature（含其历史别名）与 `egui_2d` 模块已删除——
@@ -195,8 +195,9 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
   `CompositeFrame` 提供 `len` / `is_empty` / `blend_at(i)` / `conversion_at(i)`。
 - `opacity` 走 uniform（x 分量乘进源色），不走 blend constant（部分后端受限）；
   `LayerDescriptor::clamped_opacity()` 是唯一取值口径。
-- **无动态 blend / 无动态入口点** → 预建 9 条管线
-  `HashMap<(LayerBlend, Conversion), RenderPipeline>`（3 blend × 3 conversion）。
+- **无动态 blend / 无动态入口点** ⇒ 管线**键空间**是 9 个组合
+  `(LayerBlend, Conversion)`（3 blend × 3 conversion）—— 但**不再预建**
+  （C3 起惰性，见本节末尾"管线惰性建"）。
 - 混合（预乘 alpha）：`Opaque` = REPLACE；`Alpha` = 色/alpha 均 `One / OneMinusSrcAlpha`；
   `Additive` = `One / One`。
 - **sRGB 域转换**：`textureSample` 对 sRGB 格式纹理**自动解码**，故按
@@ -211,13 +212,17 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
 `EframeWgpuBackend`：实现 `xcal_render::RenderBackend` trait 的 eframe 版本。
 对写纯 eframe/wgpu 示例时可直接复用。
 
-`install_standard_backends(rs) -> RenderContext`：**为宿主准备渲染环境的一行入口** ——
-依次把 `WgpuBackend3D`（默认着色器）/ `WgpuBackend2D` / `Compositor` 装进
-`Renderer::callback_resources`，并返回 `RenderContext`。
+`install_standard_backends(rs) -> RenderContext`：**为 egui 宿主准备渲染环境的一行入口**。
+**W1 起它只是两步的第二步的包装**：
 
-- 为什么在这里：这是"为宿主准备渲染环境"的职责，而被装的三个类型都是本 crate 的实现细节
-  —— 将来增删后端、改装配顺序只动本函数，`xcal-app` 一行不变。
+1. `StandardBackends::new(&RenderContext)`（见第 8 节）—— 纯构造（**零 egui 依赖**）；
+2. `StandardBackends::install_into(&mut CallbackResources)` —— 装进
+   `Renderer::callback_resources`（全局 TypeMap），返回 `RenderContext`。
+
 - 为什么装 TypeMap：回调执行时只有 `&self`，不能持有"重建中"的 GPU 资源（见 `scene_callback`）。
+- 为什么拆两步（W1）：装配知识此前**只能**吃 `egui_wgpu::RenderState`；拆开后
+  app / headless / 其他宿主共用同一份装配（headless 直接用第 1 步）。
+  **对外签名与行为不变**，插入顺序仍是 3D → 2D → 合成器。
 
 ### 7. `vertex_layout` (`wgpu` / `egui-wgpu`)
 
@@ -227,6 +232,35 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
 全局连续（wgpu 语义）。入口先 `validate()` fail-fast。**不碰 `wgpu_3d.rs`。**
 
 ---
+
+### 8. `standard_backends` (`wgpu` / `egui-wgpu`) — W1
+
+**不依赖 egui 的渲染环境装配 + headless 渲染入口**。
+
+```text
+StandardBackends::new(&RenderContext)          ← 纯构造，零 egui 依赖
+   ├── install_into(&mut CallbackResources)    ← egui 宿主（见第 6 节）
+   └── render_frame_headless(..)               ← 非 GUI 路径
+```
+
+`StandardBackends` 自持有 `WgpuBackend3D` + `WgpuBackend2D`（+ **惰性**的内容层实例）
++ `Compositor`；`BackendStore` trait 是"取用口"的两个实现（TypeMap / 自持有），
+**帧体只有一份**（`SceneCompositorCallback::prepare_frame` / `paint_frame`）⇒
+"两条宿主路径逐位一致"是**结构保证**。
+
+`render_frame_headless(ctx, &mut backends, &callback, screen, clear) -> Vec<u8>`：
+按回调的视口矩形自建目标纹理 → 跑帧体 → 显式设 viewport/scissor → 合成 → 回读
+**紧凑 RGBA8**（行距 `w*4`，左上原点，可直接喂 PNG 编码器）。
+`render_single_frame(..)` 是"抓单帧"的糖（⚠️ 序列帧导出**别**用它：每帧重建后端
+会丢管线与几何缓存）。
+
+- **验收**：`headless_path_matches_egui_path_bit_for_bit`（内容层 + 2D + 3D 三层齐全，
+  空链与非空链各跑一遍，两条路径的目标纹理**逐字节相同**）。
+- **回读 API**：`RenderContext::read_texture(texture, (w, h))` —— 256 字节
+  `bytes_per_row` 对齐在它内部处理（此前 `wgpu_2d` / `compositor` / `scene_callback`
+  三份重复实现已消除）。
+- **`scene_callback` 不再整体门控在 `egui-wgpu`**：`SceneCompositorCallback` 的字段全是
+  纯数据，它同时是 headless 的"一帧渲染请求"；只有 `impl egui_wgpu::CallbackTrait` 在门控内。
 
 ## 合成后滤镜链（C 线：C0–C3）
 

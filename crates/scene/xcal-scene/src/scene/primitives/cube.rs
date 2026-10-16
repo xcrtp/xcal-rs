@@ -2,7 +2,7 @@
 //
 // 立方体 MeshGeometry 生成器：线框（12 条边，Lines 拓扑）与实心（12 个三角形，Triangles 拓扑）。
 
-use glam::Vec3;
+use xc_notion::Vec3;
 
 use crate::scene::components::{MeshGeometry, PrimitiveTopology};
 

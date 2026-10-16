@@ -88,6 +88,8 @@ graph TD
     %% object → kernel（场景对象层只依赖 kernel）
     xc_object --> xc_notion
     xc_object --> xc_render_ir
+    xc_object --> xc_scene_contract
+    xc_object --> xc_macro
 
     %% graph → kernel
     xc_graph_algo --> xc_node
@@ -102,6 +104,8 @@ graph TD
     xcal_scene --> xc_time
     xcal_scene --> xc_macro
     xcal_scene --> xc_object
+    xcal_scene --> xc_render_ir
+    xcal_scene --> xc_scene_contract
     xcal_scene --> xcal_schedule
     xcal_render --> xc_content
     xcal_render --> xc_notion
@@ -110,9 +114,12 @@ graph TD
     xcal_render --> xc_vertex
     xcal_render --> xc_resource
     xcal_render --> xcal_scene
+    xcal_render --> xcal_schedule
+    xcal_render --> xc_scene_contract
     xcal_render_backends --> xc_notion
     xcal_render_backends --> xcal_scene
     xcal_render_backends --> xcal_render
+    xcal_render_backends --> xc_object
 
     %% ui → kernel + graph + render + schedule
     xcal_egui --> xc_notion
@@ -140,6 +147,7 @@ graph TD
     xcal_app --> xc_content
     xcal_app --> xc_prerender
     xcal_app --> xc_notion
+    xcal_app --> xc_object
 ```
 
 ## 合规校验
@@ -153,13 +161,18 @@ graph TD
 
 **依赖分析（cargo-workspace-analyzer 输出；本次数据由 `cargo metadata` 等价重算，见文末说明）：**
 
+> **W2 复核**：本表与上面的 mermaid 边集**都已同 Cargo.toml 程序化比对**过一遍
+> （解析每个 `[dependencies]`，dev-deps 不计入），修掉两处漂移：
+> `xcal-render` FanOut 8 → **9**（`xcal-schedule` / `xc-scene-contract` 两条边此前漏画）、
+> `xcal-schedule` FanIn 3 → **4**（同一漏边的另一侧）。
+
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
 | xcal-app | 0 | 10 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
 | xcal-egui | 1 | 7 | 0.88 |
-| xcal-render | 3 | 8 | 0.73 |
+| xcal-render | 3 | 9 | 0.75 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
@@ -172,7 +185,7 @@ graph TD
 | xc-scene-contract | 3 | 2 | 0.40 |
 | xc-content | 3 | 1 | 0.25 |
 | xc-render-ir | 4 | 1 | 0.20 |
-| xcal-schedule | 3 | 0 | 0.00 |
+| xcal-schedule | 4 | 0 | 0.00 |
 | xc-vertex | 1 | 0 | 0.00 |
 | xc-resource | 1 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
@@ -414,15 +427,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 
 ### 已知未接线项（Known unwired，记账非缺陷）
 
-以下四项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。
+以下各项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。
 按本项目原则「有明确用途而非凭空设计 → 不是问题，但不能忘记」，集中记账于此。
+（其中节点编辑器与其余各项性质不同：它**已排期**，只是触发条件未到 —— 见下表。）
 
 | 项 | 位置 | 现状 | 何时接 |
 |---|---|---|---|
 | `Parent` 父子变换累乘 System | 契约层 `xc_scene_contract::Parent` / `Children` | 类型与 `Scene::attach` 已就位，**零生产消费方**（父子变换尚未累乘） | 做相机跟随 / 对象整体变换时 |
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
-| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：实测 10 个 crate / 41 文件 / **172 处** `glam::` 直接引用未收敛（M4 计划记为 216 处，系 M2.5 消灭 newtype 之前的实测值） | 分阶段收敛；不阻塞任何功能 |
+| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：**W4 后实测 152 行**（行计数）`glam::` 直接引用未收敛，其中 `xcal-scene` **归零**（仅剩 2 行**说明性注释**：`types.rs` 的历史沿革 + `transform.rs` 的"翻转只有一份"约定）；其余分布在 9 个 crate（`xcal-render-backends` 55 / `xcal-app` 39 / 节点编辑器系列 17 / `xcal-render` 15 / `xc-notion` 定义侧 5 / `xcal-egui` 5 / `xc-time` 7 / 场景层注释 2 / …） | 分阶段收敛（**不新增** + 场景层已清零）；不阻塞任何功能 |
+| 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6352 行 + UI 4469 行 ≈ 10821 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
 | 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
@@ -431,6 +446,18 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
 > `xcal_scene::Scene` 并存），以及契约层的 `Scene::set` 写路径
 > （消费方 `FunctionGraph::refresh`）。
+>
+> **W3 记账约束**：节点编辑器**后期可能引入破坏性变更**（用户决策），因此
+> **现在任何跨层接口设计都不得以"将来节点编辑器要用"为理由** —— 这是
+> 「不为假想需求设计」原则的直接应用。（它的 graph/UI 接口届时自会重画，
+> 现在为它预留接口只会得到一份要拆掉的约束。）
+>
+> **W1 记账（非 UI 路径已被验证）**：`StandardBackends` + `render_frame_headless`
+> 让渲染有了一条**不依赖 egui** 的入口，且与 egui 宿主路径**逐字节一致**
+> （GPU 用例 `headless_path_matches_egui_path_bit_for_bit`）—— "Scene 可被任意消费"
+> 从**类型层面的声明**变成**被验证的事实**。**导出（序列帧）仍未做**：只提供
+> "抓一帧 → RGBA8 紧凑像素"的入口；且**没有 seek**（Scene 不保证纯）⇒ 导出只能是
+> **实时录制**（播放 → 逐帧抓 → PNG），不能随机访问 `t`。编码交给 ffmpeg（本轮不做）。
 
 ### cargo-archtest 适配状态
 
@@ -692,5 +719,38 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   **稳定排序**、无包围盒者排最后）—— 引擎输出顺序**不是** API 承诺，不能拿它当书写顺序。
 >   排序放在"编译产物 → spawn"之间（`compile_to_stroke_paths` 是通用工具，不知道书写语义）。
 >   **局限**：单键 `min_x` ⇒ 单行公式正确；多行 / 上下标需换键 `(min_y, min_x)` 或行聚类，本轮不做。
+
+**W 线（补词汇前收尾：W1–W4）**
+
+> - **W1 渲染入口解耦 + headless 入口**：新增 `standard_backends` 模块 ——
+>   `StandardBackends::new(&RenderContext)`（**零 egui 依赖**，三个 `new` 只吃
+>   device/queue/format，已核查）+ `install_into(&mut CallbackResources)`（egui 宿主）。
+>   `install_standard_backends(rs)` **对外签名不变**，内部改为这两步（插入顺序不变）。
+>   关键抽象是 `BackendStore`（取用口的两个实现：TypeMap / 自持有）——
+>   **帧体只有一份**（`SceneCompositorCallback::prepare_frame` / `paint_frame`），
+>   故"两条宿主路径逐位一致"是结构保证而非巧合；`scene_callback` 也随之**不再整体**
+>   门控在 `egui-wgpu`（字段全是纯数据，它同时是 headless 的"一帧渲染请求"）。
+>   `RenderContext::read_texture` 提升为公开 API（三份测试副本消除）。
+>   证据：`headless_path_matches_egui_path_bit_for_bit`（内容层 + 2D + 3D 三层齐全、
+>   空链与非空链各跑一遍，两条路径的目标纹理**逐字节相同**）。
+>   **导出未做**（记账）：只到"抓一帧 → RGBA8"；且无 seek ⇒ 只能实时录制。
+> - **W2 依赖图与文档修正**：8 条**漏画的** mermaid 边补齐（`xcal_render → xcal_schedule`
+>   / `xcal_render → xc_scene_contract` / `xcal_render_backends → xc_object` /
+>   `xcal_scene → xc_render_ir` / `xcal_scene → xc_scene_contract` /
+>   `xc_object → xc_scene_contract` / `xc_object → xc_macro` / `xcal_app → xc_object`），
+>   并**程序化比对**（解析每个 `[dependencies]`，dev-deps 不计入）：mermaid **59 条 ⇔
+>   Cargo.toml 59 条，零缺零余**。顺带扫出两处 FanIn/FanOut 漂移（`xcal-render` 8→9、
+>   `xcal-schedule` 3→4，同源于漏边）与两处 README 自相矛盾（`xc-vertex` 的
+>   stride 20 / `xcal-render-backends` 的"预建 9 条管线"）——均已修。
+> - **W3 节点编辑器排期记账**：见上文「已知未接线项」新增行 —— **已排期（当前冻结）**、
+>   触发条件是**UI 接口与交互层稳定之后**、**预告破坏性变更**；并记一条约束：
+>   任何跨层接口设计**不得**以"将来节点编辑器要用"为理由。
+> - **W4 `xcal-scene` 的 `glam::` 收敛**：43 处 → **0 处代码引用**（改用 `xc_notion`
+>   或场景层出口 `crate::types`），仅剩 **2 行说明性注释**（`types.rs` 历史沿革 /
+>   `transform.rs` 的"Y 翻转只有一份"约定）—— 按纪律**不为凑 grep 删注释**。
+>   `types.rs` **未**补 `Mat3/Mat4/Quat` 转发：`transform.rs` 的 11 处只有 Vec2/Vec3，
+>   不需要新增类型（不留纸面能力）；全仓 `glam::` 行计数 152（原记 172）。
+>   附带记账：`xcal-scene` 的 `glam` 依赖在源码层面**已不再使用**，
+>   但 Cargo.toml 未动（不在本轮范围）—— 留待下次清单清理时一并处理。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

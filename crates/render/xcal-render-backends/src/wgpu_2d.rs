@@ -1545,63 +1545,15 @@ mod tests {
     }
 
     /// 从纹理回读像素（未填充的紧凑 `w*4` 行距；解码交给调用方）。
+    ///
+    /// W1：256 对齐的行距处理已提升为 [`crate::RenderContext::read_texture`]，
+    /// 本处只保留薄包装（调用点不变）。
     fn read_texture(
         ctx: &crate::RenderContext,
         texture: &wgpu::Texture,
         size: (u32, u32),
     ) -> Vec<u8> {
-        let (w, h) = size;
-        // `copy_texture_to_buffer` 要求 bytes_per_row 为 256 的倍数。
-        let padded = (w * 4).div_ceil(256) * 256;
-        let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("xcal-2d-readback"),
-            size: (padded * h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut enc = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("xcal-2d-readback-encoder"),
-            });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        ctx.queue.submit([enc.finish()]);
-
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map_async 失败"));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll 失败");
-        let data = slice.get_mapped_range().expect("离屏回读映射失败");
-        let mut out = vec![0u8; (w * 4 * h) as usize];
-        for y in 0..h {
-            let src = (y * padded) as usize;
-            let dst = (y * w * 4) as usize;
-            out[dst..dst + (w * 4) as usize].copy_from_slice(&data[src..src + (w * 4) as usize]);
-        }
-        drop(data);
-        buffer.unmap();
-        out
+        ctx.read_texture(texture, size)
     }
 
     /// GPU 冒烟（真实 device）：完整跑通"三角化 → 几何上传 → uniform arena →

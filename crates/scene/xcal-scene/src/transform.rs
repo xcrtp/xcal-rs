@@ -13,7 +13,7 @@
 // 逐命令映射的实现已统一到 `xc_object::map_path_affine`（单份），
 // 本文件的正反向都复用它 —— 不再各写一份。
 
-use xc_notion::{Path2D, Transform2D as Affine2D, Vec2};
+use xc_notion::{Path2D, Transform2D as Affine2D, Vec2, Vec3};
 use xc_object::{Camera2D, Circle, Line, Path};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。
@@ -62,10 +62,10 @@ impl<T: Transform2DInto + Clone> Transform2D for T {
 // Vec2（取 xy 分量），不得各自再写翻转。Camera2D::screen_to_world /
 // world_to_screen 也只是薄封装，不另造换算。
 
-impl Transform2DInto for glam::Vec2 {
+impl Transform2DInto for Vec2 {
     fn to_logical_into(self, camera: &Camera2D) -> Self {
         let rect_center = camera.rect.center();
-        glam::Vec2::new(
+        Vec2::new(
             (self.x - rect_center.x) / camera.scale + camera.center.x,
             (rect_center.y - self.y) / camera.scale + camera.center.y,
         )
@@ -73,24 +73,24 @@ impl Transform2DInto for glam::Vec2 {
 
     fn to_screen_into(self, camera: &Camera2D) -> Self {
         let rect_center = camera.rect.center();
-        glam::Vec2::new(
+        Vec2::new(
             rect_center.x + (self.x - camera.center.x) * camera.scale,
             rect_center.y - (self.y - camera.center.y) * camera.scale,
         )
     }
 }
 
-impl Transform2DInto for glam::Vec3 {
+impl Transform2DInto for Vec3 {
     fn to_logical_into(self, camera: &Camera2D) -> Self {
         let p: Vec2 = (self.x, self.y).into();
         let p = p.to_logical_into(camera);
-        glam::Vec3::new(p.x, p.y, self.z)
+        Vec3::new(p.x, p.y, self.z)
     }
 
     fn to_screen_into(self, camera: &Camera2D) -> Self {
         let p: Vec2 = (self.x, self.y).into();
         let p = p.to_screen_into(camera);
-        glam::Vec3::new(p.x, p.y, self.z)
+        Vec3::new(p.x, p.y, self.z)
     }
 }
 
@@ -190,10 +190,10 @@ mod tests {
     #[test]
     fn path2d_closed_roundtrip_preserves_semantics() {
         let pts = [
-            glam::Vec2::new(0.0, 0.0),
-            glam::Vec2::new(2.0, 0.0),
-            glam::Vec2::new(2.0, 1.5),
-            glam::Vec2::new(0.0, 1.5),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2.0, 0.0),
+            Vec2::new(2.0, 1.5),
+            Vec2::new(0.0, 1.5),
         ];
         let original = Path::new(Path2D::from_polyline(&pts, true));
         let cam = camera();

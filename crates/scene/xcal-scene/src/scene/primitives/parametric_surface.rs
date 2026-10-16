@@ -13,8 +13,7 @@
 //     由调用方随调用传入；
 //   - **生成器本身产出三角化结果**（离散产物）→ 留在场景层，不进理念层。
 
-use glam::{Vec2, Vec3};
-use xc_notion::SurfaceFn;
+use xc_notion::{SurfaceFn, Vec2, Vec3};
 
 use crate::scene::components::{MeshGeometry, PrimitiveTopology};
 

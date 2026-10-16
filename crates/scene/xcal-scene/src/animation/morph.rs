@@ -43,15 +43,16 @@ mod tests {
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
     use crate::TimeState;
+    use xc_notion::Vec2;
     use xc_time::{ClockForest, ClockNode, Curve};
 
     fn square(half: f32) -> Path2D {
         Path2D::from_polyline(
             &[
-                glam::Vec2::new(-half, -half),
-                glam::Vec2::new(half, -half),
-                glam::Vec2::new(half, half),
-                glam::Vec2::new(-half, half),
+                Vec2::new(-half, -half),
+                Vec2::new(half, -half),
+                Vec2::new(half, half),
+                Vec2::new(-half, half),
             ],
             true,
         )

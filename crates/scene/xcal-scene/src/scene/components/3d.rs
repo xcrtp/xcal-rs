@@ -11,8 +11,12 @@
 //
 // M3-2：`Projection` / `Camera3D` 已迁往**场景对象层** `xc-object`
 // （相机是用户可见的场景对象；两个相机同居一层）。
+//
+// W4：向量类型不再直接写理念层之外的路径，改用场景层自己的数学类型出口
+// `crate::types`（= 理念层 `xc_notion` 的转发）—— 场景层是"数学概念的定义场所"，
+// 收敛在此最值（新增数学相关代码不再制造同型重复）。
 
-use crate::types::Color32;
+use crate::types::{Color32, Vec2, Vec3};
 
 /// 3D 图元拓扑方式。
 ///
@@ -52,13 +56,14 @@ fn next_geometry_id() -> u64 {
 /// # Example
 /// ```rust
 /// use xcal_scene::scene::components::{MeshGeometry, PrimitiveTopology};
+/// use xcal_scene::types::Vec3;
 ///
 /// // 一个无索引三角形。
 /// let mesh = MeshGeometry::new(
 ///     vec![
-///         glam::Vec3::new(-1.0, -1.0, 0.0),
-///         glam::Vec3::new(1.0, -1.0, 0.0),
-///         glam::Vec3::new(0.0, 1.0, 0.0),
+///         Vec3::new(-1.0, -1.0, 0.0),
+///         Vec3::new(1.0, -1.0, 0.0),
+///         Vec3::new(0.0, 1.0, 0.0),
 ///     ],
 ///     None,
 ///     PrimitiveTopology::Triangles,
@@ -69,11 +74,11 @@ fn next_geometry_id() -> u64 {
 #[derive(Debug, Clone)]
 pub struct MeshGeometry {
     /// 顶点位置（模型空间）。
-    pub positions: Vec<glam::Vec3>,
+    pub positions: Vec<Vec3>,
     /// 可选逐顶点法线；长度应与 `positions` 一致。
-    pub normals: Option<Vec<glam::Vec3>>,
+    pub normals: Option<Vec<Vec3>>,
     /// 可选逐顶点 UV；长度应与 `positions` 一致。
-    pub uvs: Option<Vec<glam::Vec2>>,
+    pub uvs: Option<Vec<Vec2>>,
     /// 可选索引；`None` 表示按顶点顺序连续解释。
     pub indices: Option<Vec<u32>>,
     /// 图元拓扑。
@@ -87,7 +92,7 @@ pub struct MeshGeometry {
 impl MeshGeometry {
     /// 构造几何：`id` 自动分配，`version` 从 0 开始。
     pub fn new(
-        positions: Vec<glam::Vec3>,
+        positions: Vec<Vec3>,
         indices: Option<Vec<u32>>,
         topology: PrimitiveTopology,
     ) -> Self {
@@ -103,13 +108,13 @@ impl MeshGeometry {
     }
 
     /// 附加逐顶点法线（builder 风格）。
-    pub fn with_normals(mut self, normals: Vec<glam::Vec3>) -> Self {
+    pub fn with_normals(mut self, normals: Vec<Vec3>) -> Self {
         self.normals = Some(normals);
         self
     }
 
     /// 附加逐顶点 UV（builder 风格）。
-    pub fn with_uvs(mut self, uvs: Vec<glam::Vec2>) -> Self {
+    pub fn with_uvs(mut self, uvs: Vec<Vec2>) -> Self {
         self.uvs = Some(uvs);
         self
     }
@@ -238,7 +243,7 @@ mod tests {
     fn test_mesh_geometry_and_material3d_independent() {
         // 1) 几何与材质可独立构造。
         let mut geometry = MeshGeometry::new(
-            vec![glam::Vec3::ZERO, glam::Vec3::X, glam::Vec3::Y],
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y],
             Some(vec![0, 1, 2]),
             PrimitiveTopology::Triangles,
         );
@@ -271,16 +276,16 @@ mod tests {
             let v = j as f32;
             for i in 0..=1 {
                 let u = i as f32;
-                positions.push(glam::Vec3::new(u * 2.0 - 1.0, v * 2.0 - 1.0, 0.0));
-                uvs.push(glam::Vec2::new(u, v));
+                positions.push(Vec3::new(u * 2.0 - 1.0, v * 2.0 - 1.0, 0.0));
+                uvs.push(Vec2::new(u, v));
             }
         }
         let mesh = MeshGeometry::new(positions, None, PrimitiveTopology::Triangles).with_uvs(uvs);
 
         let uvs = mesh.uvs.as_ref().expect("uvs 应存在");
-        assert_eq!(uvs[0], glam::Vec2::new(0.0, 0.0));
-        assert_eq!(uvs[1], glam::Vec2::new(1.0, 0.0));
-        assert_eq!(uvs[2], glam::Vec2::new(0.0, 1.0));
-        assert_eq!(uvs[3], glam::Vec2::new(1.0, 1.0));
+        assert_eq!(uvs[0], Vec2::new(0.0, 0.0));
+        assert_eq!(uvs[1], Vec2::new(1.0, 0.0));
+        assert_eq!(uvs[2], Vec2::new(0.0, 1.0));
+        assert_eq!(uvs[3], Vec2::new(1.0, 1.0));
     }
 }

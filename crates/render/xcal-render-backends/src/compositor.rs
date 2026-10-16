@@ -116,6 +116,10 @@ impl Conversion {
 /// 已准备的合成帧（`prepare` 产出、`composite_layers` 消费）。
 ///
 /// 顺序 = 输入 `ops` 顺序（先 = 下）。
+///
+/// `Default` = **空帧**（W1：合成器缺失时帧体要能产出"什么都没画"的合法结果，
+/// 而不是让调用方去构造一个不可能的实例）。
+#[derive(Default)]
 pub struct CompositeFrame {
     ops: Vec<PreparedCompositeOp>,
 }
@@ -923,48 +927,13 @@ mod tests {
             });
             comp.composite_layers(&mut pass, &frame);
         }
+        // 先提交合成 pass（回读是**另一次** encoder+submit）。
+        ctx.submit(enc.finish());
 
-        // 回读：bytes_per_row 必须 256 对齐。
-        let padded = 256u32;
-        let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("xcal-compositor-readback"),
-            size: (padded * 4) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(4),
-                },
-            },
-            wgpu::Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-        );
-        ctx.queue.submit([enc.finish()]);
-
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map_async 失败"));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll 失败");
-        let data = slice.get_mapped_range().expect("合成结果映射失败");
-        let px = [data[0], data[1], data[2], data[3]];
-        drop(data);
-        buffer.unmap();
-        px
+        // 回读：W1 起统一走 `RenderContext::read_texture`（256 对齐的行距处理在那边，
+        // 本模块的测试副本已消除）。取左上角像素。
+        let pixels = ctx.read_texture(&target, (4, 4));
+        [pixels[0], pixels[1], pixels[2], pixels[3]]
     }
 
     /// 无可用适配器时跳过（与仓库既有 headless 约定一致）。

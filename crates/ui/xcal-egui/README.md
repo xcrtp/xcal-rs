@@ -6,7 +6,8 @@
 > 刷新），只依赖纯数据 Resource，可 headless 测试。
 >
 > **P1 / P4 归位**：相机状态搬进场景（本层不再持 `AppCamera`）、三个录制 System
-> 搬到 `xcal-render`、`ViewRect` 随之下沉 —— 详见下方"已迁出"。
+> 搬到 `xcal-render`（R0 起该模块共**四个**：P4 三个 + 书写动画录制 `RevealRecordSystem`）、
+> `ViewRect` 随之下沉 —— 详见下方"已迁出"。
 
 ```
 xcal-scene (场景组件 + 场景 System + domain 契约)
