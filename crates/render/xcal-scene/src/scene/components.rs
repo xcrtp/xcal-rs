@@ -10,6 +10,11 @@
 // M1 T4：连续数学对象（FunctionX2Y / ParameterCurveT2XY / ParameterCurveT2XYZ /
 // Sampler1D / Sampler2D / Interpolator / SyncSendFn）已归位理念层 `xc-notion`
 // （func / curve / sample），此处**不再 re-export** —— 消费方直接改 import。
+//
+// M3-5：图元组件（Circle / Path / Line）已迁往**场景对象层** `xc-object`
+// （newtype 封装理念层 `Circle2D` / `Path2D` / `Line2D`，消掉"字段两处定义"）。
+// 本层（ECS 实现）只消费，不再定义；`Transform` / `Parent` / `MorphShape` 等
+// 仍在下方（它们的归位见交付说明的延后清单）。
 
 pub mod marker {
     pub trait Device {}
@@ -47,15 +52,6 @@ pub use marker::*;
 pub use mesh::*;
 pub use three_d::*;
 
-use crate::types::Vec2;
-
-#[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
-pub struct Circle {
-    #[new(into)]
-    pub center: Vec2,
-    pub radius: f32,
-}
-
 /// FunctionX2Y 相位滑动参数：`phase = t * omega`，
 /// 由 `SceneRecordSystem` 采样时取 `x + phase` 实现曲线水平平移。
 /// `omega` 为常量；`phase` 由 `BindingApplySystem` 每帧覆盖。
@@ -91,27 +87,6 @@ impl MorphShape {
             samples: xc_notion::DEFAULT_MORPH_SAMPLES as u32,
         }
     }
-}
-
-/// 2D 路径组件：直接持有 [`xc_notion::Path2D`]（命令序列，自带闭合语义，
-/// `closed` 不再作为独立字段——避免两处真相）。
-///
-/// 坐标变换（屏幕 ↔ 逻辑）由 `xc_macro::Transform2DInto` 派生，落到
-/// `xcal_scene::transform` 里 `Path2D` 的手动实现（逐命令映射，含椭圆弧解析改写）。
-#[derive(Debug, Clone, derive_builder::Builder, derive_new::new, xc_macro::Transform2DInto)]
-pub struct Path {
-    pub path: xc_notion::Path2D,
-}
-
-/// 线段图元：两个端点独立完成坐标转换（派生 [`xcal_scene::transform::Transform2DInto`]）。
-#[derive(
-    Debug, Clone, Copy, derive_builder::Builder, derive_new::new, xc_macro::Transform2DInto,
-)]
-pub struct Line {
-    #[new(into)]
-    pub a: Vec2,
-    #[new(into)]
-    pub b: Vec2,
 }
 
 #[derive(Debug, Clone, derive_builder::Builder)]

@@ -2,15 +2,20 @@
 //
 // 数学部分：Transform2D / Transform2DInto trait
 // + glam 底层类型的 Transform2DInto 实现
-// + Circle 的手动 Transform2DInto 实现（需要 radius 按 scale 放缩）
+// + 图元对象（`xc-object` 的 Circle / Line / Path）的 Transform2DInto 实现
 // + Path2D 的手动 Transform2DInto 实现（逐命令映射 + 椭圆弧解析改写）
 //
 // 注：Painter2D/DrawQueue/SceneRender 等"绘制"部分属于 xcal-render，
 // 不放在这里。
+//
+// M3-5：图元本体已迁往场景对象层 `xc-object`（newtype），故它们的
+// `Transform2DInto` 实现移到这里（trait 是本 crate 的本地 trait，合法）。
+// 逐命令映射的实现已统一到 `xc_object::map_path_affine`（单份），
+// 本文件的正反向都复用它 —— 不再各写一份。
 
-use crate::scene::components::Circle;
 use crate::types::{Camera2D, Vec2};
-use xc_notion::{Path2D, PathCommand};
+use xc_notion::{Path2D, Transform2D as Affine2D};
+use xc_object::{Circle, Line, Path};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。
 ///
@@ -90,105 +95,88 @@ impl Transform2DInto for glam::Vec3 {
     }
 }
 
-// ─── Circle 的 Transform2DInto 手动实现 ─────────────────────────────────────
+// ─── 图元对象（xc-object）的 Transform2DInto 实现 ──────────────────────────
+//
+// 圆半径与世界单位同尺度 ⇒ 屏幕宽度 = 半径 × scale（不能用裸 `apply_point`：
+// 半径是"长度"不是"点"）。
 
 impl Transform2DInto for Circle {
     fn to_logical_into(self, camera: &Camera2D) -> Self {
         Circle::new(
-            self.center.to_logical_into(camera),
-            self.radius / camera.scale,
+            self.0.center.to_logical_into(camera),
+            self.0.radius / camera.scale,
         )
     }
 
     fn to_screen_into(self, camera: &Camera2D) -> Self {
         Circle::new(
-            self.center.to_screen_into(camera),
-            self.radius * camera.scale,
+            self.0.center.to_screen_into(camera),
+            self.0.radius * camera.scale,
         )
+    }
+}
+
+/// 线段：两端点独立映射。
+impl Transform2DInto for Line {
+    fn to_logical_into(self, camera: &Camera2D) -> Self {
+        Line::new(
+            self.0.a.to_logical_into(camera),
+            self.0.b.to_logical_into(camera),
+        )
+    }
+
+    fn to_screen_into(self, camera: &Camera2D) -> Self {
+        Line::new(
+            self.0.a.to_screen_into(camera),
+            self.0.b.to_screen_into(camera),
+        )
+    }
+}
+
+/// 路径：直接委托内层 `Path2D`（命令序列逐条映射，含椭圆弧解析改写）。
+impl Transform2DInto for Path {
+    fn to_logical_into(self, camera: &Camera2D) -> Self {
+        Path::new(self.0.to_logical_into(camera))
+    }
+
+    fn to_screen_into(self, camera: &Camera2D) -> Self {
+        Path::new(self.0.to_screen_into(camera))
     }
 }
 
 // ─── Path2D 的 Transform2DInto 手动实现 ─────────────────────────────────────
 //
 // 相机变换是仿射 `A = diag(s, -s)`（s = scale 用于 to_screen，1/scale 用于
-// to_logical）加平移。逐命令映射：
-// - 点类命令（MoveTo / LineTo / QuadTo / CubicTo）：逐点委托 `glam::Vec2`
-//   （Y 翻转的唯一实现点），与旧 `Path.vertices` 经 `Vec3::to_screen_into`
-//   再取 xy 的语义完全一致；
-// - `Close`：原样保留（闭合语义不因变换丢失）；
-// - `Arc`：椭圆弧在该仿射下仍是椭圆弧，可**解析改写**而非折线采样：
-//     center' = A(center)，radii' = radii * s，rotation' = -rotation，
-//     start_angle' = -start_angle，end_angle' = -end_angle。
-//   依据恒等式 `diag(1,-1)·R(rot) = R(-rot)·diag(1,-1)`
-//   ⇒ `A·R(rot)·diag(radii.x, radii.y)·(cosθ, sinθ)`
-//     `= R(-rot)·diag(s·radii.x, s·radii.y)·(cos(-θ), sin(-θ))`，精确无信息损失。
+// to_logical）加平移；逐命令映射与椭圆弧解析改写的**唯一实现**在
+// `xc_object::map_path_affine`（理念层仿射 + 解析弧），此处只负责把
+// 「相机」降级成该仿射（正向用 `to_transform2d()`，反向取其逆矩阵）。
 //
 // 重建 `Path2D` 时 `bounds` 自然重置为 `None`（懒计算缓存随变换失效）。
-fn map_path2d(path: Path2D, camera: &Camera2D, to_screen: bool) -> Path2D {
-    let s = if to_screen {
-        camera.scale
-    } else {
-        1.0 / camera.scale
-    };
-    let map_pt = |p: glam::Vec2| {
-        if to_screen {
-            p.to_screen_into(camera)
-        } else {
-            p.to_logical_into(camera)
-        }
-    };
-    let commands = path
-        .commands
-        .into_iter()
-        .map(|cmd| match cmd {
-            PathCommand::MoveTo(p) => PathCommand::MoveTo(map_pt(p)),
-            PathCommand::LineTo(p) => PathCommand::LineTo(map_pt(p)),
-            PathCommand::QuadTo { ctrl, end } => PathCommand::QuadTo {
-                ctrl: map_pt(ctrl),
-                end: map_pt(end),
-            },
-            PathCommand::CubicTo { ctrl1, ctrl2, end } => PathCommand::CubicTo {
-                ctrl1: map_pt(ctrl1),
-                ctrl2: map_pt(ctrl2),
-                end: map_pt(end),
-            },
-            PathCommand::Arc {
-                center,
-                radii,
-                rotation,
-                start_angle,
-                end_angle,
-            } => PathCommand::Arc {
-                center: map_pt(center),
-                radii: radii * s,
-                rotation: -rotation,
-                start_angle: -start_angle,
-                end_angle: -end_angle,
-            },
-            PathCommand::Close => PathCommand::Close,
-        })
-        .collect();
-    Path2D {
-        commands,
-        bounds: None,
-    }
-}
-
 impl Transform2DInto for Path2D {
     fn to_logical_into(self, camera: &Camera2D) -> Self {
-        map_path2d(self, camera, false)
+        xc_object::map_path_affine(&self, &camera_inverse_affine(camera))
     }
 
     fn to_screen_into(self, camera: &Camera2D) -> Self {
-        map_path2d(self, camera, true)
+        xc_object::map_path_affine(&self, &camera.to_transform2d())
+    }
+}
+
+/// 反向（屏幕 → 世界）的仿射：正向矩阵的逆。
+///
+/// 与旧的解析式 `1/scale` 等价（`diag(s, -s)` 的逆是 `diag(1/s, -1/s)`），
+/// 保留既有的往返测试（容差 1e-4）作为基线。
+fn camera_inverse_affine(camera: &Camera2D) -> Affine2D {
+    Affine2D {
+        matrix: camera.to_transform2d().matrix.inverse(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::components::Path;
     use crate::types::Rect;
+    use xc_notion::PathCommand;
 
     /// 非平凡相机（非零中心 + 非零平移视口），放大数值差异。
     fn camera() -> Camera2D {
@@ -215,13 +203,13 @@ mod tests {
         let back = original.to_screen(&cam).to_logical(&cam);
 
         // 命令序列逐条对齐（数量与闭合语义都不丢）。
-        assert_eq!(back.path.commands.len(), original.path.commands.len());
+        assert_eq!(back.0.commands.len(), original.0.commands.len());
         assert!(
-            matches!(back.path.commands.last(), Some(PathCommand::Close)),
+            matches!(back.0.commands.last(), Some(PathCommand::Close)),
             "闭合语义必须往返保留"
         );
         // 各点数值可逆（容差 1e-4）。
-        for (a, b) in original.path.commands.iter().zip(&back.path.commands) {
+        for (a, b) in original.0.commands.iter().zip(&back.0.commands) {
             match (a, b) {
                 (PathCommand::MoveTo(p0), PathCommand::MoveTo(p1))
                 | (PathCommand::LineTo(p0), PathCommand::LineTo(p1)) => {

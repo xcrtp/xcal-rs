@@ -7,7 +7,14 @@
       "path": "crates/kernel",
       "prefix": "xc-",
       "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
-      "crates": ["xc-notion", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
+      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
+    },
+    {
+      "name": "object",
+      "path": "crates/object",
+      "prefix": "xc-",
+      "description": "场景对象层（M3）：用户可见的场景对象（图元 newtype / 相机 / 变换）；只依赖 kernel，禁止依赖任何 xcal-*",
+      "crates": ["xc-object"]
     },
     {
       "name": "graph",

@@ -4,8 +4,13 @@ graph TD
     xc-graph-eval --> xc-node
     xc-node-schema --> xc-node
     xc-node-schema --> xc-node-schema-macros
+    xc-object --> xc-notion
+    xc-object --> xc-render-ir
     xc-prerender --> xc-content
     xc-prerender --> xc-notion
+    xc-render-ir --> xc-notion
+    xc-scene-contract --> xc-notion
+    xc-scene-contract --> xc-render-ir
     xc-time --> xc-notion
     xcal-app --> xc-content
     xcal-app --> xc-notion
@@ -17,6 +22,7 @@ graph TD
     xcal-app --> xcal-scene
     xcal-app --> xcal-schedule
     xcal-egui --> xc-notion
+    xcal-egui --> xc-object
     xcal-egui --> xc-macro
     xcal-egui --> xcal-render
     xcal-egui --> xcal-render-backends
@@ -31,6 +37,8 @@ graph TD
     xcal-node-egui-ui --> xcal-node-egui
     xcal-render --> xc-content
     xcal-render --> xc-notion
+    xcal-render --> xc-object
+    xcal-render --> xc-render-ir
     xcal-render --> xc-resource
     xcal-render --> xc-vertex
     xcal-render --> xcal-scene
@@ -38,6 +46,7 @@ graph TD
     xcal-render-backends --> xcal-render
     xcal-render-backends --> xcal-scene
     xcal-scene --> xc-notion
+    xcal-scene --> xc-object
     xcal-scene --> xc-macro
     xcal-scene --> xc-time
     xcal-scene --> xcal-schedule

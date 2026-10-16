@@ -1,0 +1,19 @@
+[package]
+name = "xc-scene-contract"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 契约层（M2）：场景抽象 —— 身份 / 关系 / 样式描述符。
+#
+# 硬约束（与理念层同级）：
+#   - 不得出现 ECS / hecs / GPU / wgpu / egui / UI（故不含 `hecs::Entity`）
+#   - 不得依赖任何 xcal-* / xc-object
+#     （`cargo tree -p xc-scene-contract | grep -E "xcal-|xc-object"` = 0）
+#
+# 允许依赖：理念层 xc-notion、渲染 IR 层 xc-render-ir
+# （`Describable::apply` 要产出 `Style2D`；这是"能被引用的最小公共集"）。
+[dependencies]
+xc-notion = { path = "../xc-notion" }
+xc-render-ir = { path = "../xc-render-ir" }

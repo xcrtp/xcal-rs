@@ -494,6 +494,13 @@ impl Path2D {
 
 /// 3D 路径：折线顶点序列 + 闭合标记。
 ///
+/// ⚠️ **本类型为简化版（折线），与 [`Path2D`]（命令式）不同构**：
+/// `Path2D = Vec<PathCommand>`（精确边界，可无限细分）；`Path3D = Vec<Vec3> + closed`
+/// （本质是采样结果 —— 其唯一来源就是
+/// [`ParameterCurveT2XYZ`](crate::curve::ParameterCurveT2XYZ) 采样后的折线）。
+/// 若将来 3D 需要真正的曲线（贝塞尔曲面边界 / 3D 描边 / 任意细分），`Path3D`
+/// 须改为命令式 —— **那是破坏性变更**，需单独立项。
+///
 /// **形态选择（M1 交付说明）**：采用 `Vec<Vec3>` + `closed` 的**简化版**，而非与
 /// [`Path2D`] 对称的枚举命令式。理由：3D 侧目前唯一来源是
 /// [`ParameterCurveT2XYZ`](crate::curve::ParameterCurveT2XYZ) 采样后吐出的离散折线，

@@ -25,12 +25,17 @@ pub mod draw_queue_2d;
 pub mod draw_queue_3d;
 pub mod painter_2d;
 pub mod painter_3d;
-pub mod shape;
 pub mod tessellate;
 pub mod viewport;
 
 // 顶点格式契约已下沉 kernel/xc-vertex：保留 `xcal_render::vertex::*` 路径。
 pub use xc_vertex as vertex;
+
+// 2D 图元体系（Shape2D / Style2D / CustomShapeData）已下沉 kernel/xc-render-ir：
+// 保留 `xcal_render::shape::*` 路径（与本 crate 的 `vertex` 同一口径的过渡 shim）。
+pub mod shape {
+    pub use xc_render_ir::shape::*;
+}
 
 // render_backend 模块始终编译（GpuHandle 无 wgpu 依赖）；
 // RenderBackend / RenderBackend3D trait 在模块内 cfg(feature = "wgpu")。
@@ -44,10 +49,15 @@ pub mod resource_cache;
 
 // ─── 2D 管线 re-export ────────────────────────────────────────────────────
 // M0 起载荷统一为 Shape2D / Style2D（旧 Shape / Style 枚举已删除）。
+// M2 起 Shape2D / Style2D / 样式组件 / 降级 trait 的定义在 kernel/xc-render-ir，
+// 此处转发以保持 `xcal_render::*` 路径不变（下游 / 后端无需改动）。
 pub use draw::{
     ContentTextureQueue, DrawCommand, DrawQueue, Drawable, MorphItem, MorphQueue, Painter2D,
-    ResolveStyle, SceneRender, ToShape2D, ZIndex, record_drawables, record_path_stroke,
-    record_scene,
+    SceneRender, ZIndex, record_drawables, record_path_stroke, record_scene,
+};
+pub use xc_render_ir::{
+    CustomShapeData, CustomTypeId, FillSolid, FillStyle, ResolveStyle, Shape2D, StrokeSolid,
+    StrokeStyle, Style2D, ToShape2D,
 };
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
@@ -66,7 +76,6 @@ pub use viewport::Viewport;
 pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};
 pub use draw_queue_2d::{DrawCommand2D, DrawQueue2D};
 pub use painter_2d::Painter2DTarget;
-pub use shape::{CustomShapeData, CustomTypeId, Shape2D, Style2D};
 
 // ─── S3-0：lyon 三角化适配层（纯 CPU，无 wgpu/egui 依赖） ────────────────
 pub use tessellate::{

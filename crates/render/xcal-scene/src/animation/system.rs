@@ -7,7 +7,8 @@
 use xc_time::{AnimValue, ClockForest};
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::{Camera3D, Circle, MorphShape, PhaseAnim};
+use xcal_scene::scene::components::{Camera3D, MorphShape, PhaseAnim};
+use xc_object::Circle;
 use xcal_scene::TimeState;
 
 use crate::animation::binding::{BindingTarget, BindingTable};
@@ -81,15 +82,21 @@ mod tests {
     use super::BindingApplySystem;
     use crate::animation::binding::{Binding, BindingTarget, BindingTable, SeekKind};
     use xcal_schedule::resource::Resources;
-    use crate::scene::components::Circle;
+    use xc_object::Circle;
     use xcal_schedule::scheduler::{Phase, Scheduler};
     use crate::TimeState;
     use glam::Vec3;
     use hecs::World;
     use xc_time::{ClockForest as XcClockForest, ClockNode, Curve};
 
+    /// 场景层包装向量（`xcal_scene::types::Vec2` 是 glam 的 newtype）。
     fn vec2(x: f32, y: f32) -> crate::types::Vec2 {
         crate::types::Vec2::new(glam::Vec2::new(x, y))
+    }
+
+    /// 图元对象（`xc-object`）用的是理念层向量（= glam::Vec2），故去掉包装。
+    fn obj_vec2(x: f32, y: f32) -> glam::Vec2 {
+        glam::Vec2::new(x, y)
     }
 
     /// 等价性测试：旧公式 vs 新链路，1000 个采样点最大误差 < 1e-5。
@@ -179,7 +186,7 @@ mod tests {
     #[test]
     fn binding_apply_writes_circle_radius_via_scheduler() {
         let mut world = World::new();
-        let entity = world.spawn((Circle::new(vec2(0.0, 0.0), 1.0),));
+        let entity = world.spawn((Circle::new(obj_vec2(0.0, 0.0), 1.0),));
 
         let mut forest = XcClockForest::new();
         let root = forest.insert(ClockNode::new(None)).unwrap();

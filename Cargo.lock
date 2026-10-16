@@ -5739,6 +5739,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-object"
+version = "0.1.0"
+dependencies = [
+ "xc-notion",
+ "xc-render-ir",
+]
+
+[[package]]
 name = "xc-prerender"
 version = "0.1.0"
 dependencies = [
@@ -5754,8 +5762,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-render-ir"
+version = "0.1.0"
+dependencies = [
+ "xc-notion",
+]
+
+[[package]]
 name = "xc-resource"
 version = "0.1.0"
+
+[[package]]
+name = "xc-scene-contract"
+version = "0.1.0"
+dependencies = [
+ "xc-notion",
+ "xc-render-ir",
+]
 
 [[package]]
 name = "xc-time"
@@ -5813,6 +5836,7 @@ dependencies = [
  "hecs",
  "xc-macro",
  "xc-notion",
+ "xc-object",
  "xcal-render",
  "xcal-render-backends",
  "xcal-scene",
@@ -5874,6 +5898,8 @@ dependencies = [
  "wgpu",
  "xc-content",
  "xc-notion",
+ "xc-object",
+ "xc-render-ir",
  "xc-resource",
  "xc-vertex",
  "xcal-scene",
@@ -5887,7 +5913,6 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "glam",
- "hecs",
  "pollster 0.3.0",
  "thiserror 2.0.20",
  "wgpu",
@@ -5909,6 +5934,7 @@ dependencies = [
  "thiserror 2.0.20",
  "xc-macro",
  "xc-notion",
+ "xc-object",
  "xc-time",
  "xcal-schedule",
 ]

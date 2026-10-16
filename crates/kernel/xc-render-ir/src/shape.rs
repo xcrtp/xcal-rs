@@ -1,6 +1,6 @@
 // shape.rs
 //
-// 2D 形状定义（新渲染管线）：基于 xc-notion 的纯数据描述。
+// 2D 形状定义（渲染 IR）：基于 xc-notion 的纯数据描述。
 //
 // 设计要点：
 // - Shape2D 是"逻辑图元"枚举，后端可选择光栅化路径（triangulate / flatten）；
@@ -8,6 +8,10 @@
 //   类型标识与几何降级函数（to_path / to_triangles），使 render 层无需
 //   为每个宿主图元增加变体即可统一处理裁剪/命中测试/离屏后端；
 // - 本模块不依赖 wgpu/egui，纯几何 + 函数指针。
+//
+// M2：本文件自 `xcal-render/src/shape.rs` 迁入（渲染 IR 层）。
+// ⚠️ 变体语义**冻结**：`Circle { center, radius }` 等扁平字段形态是后端
+// （wgpu_2d / tessellate）源级依赖的契约，改名 / 改形会连带改后端源码 —— 禁止。
 
 use xc_notion::{Color32, MeasureSpace, Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
 
@@ -82,7 +86,7 @@ pub struct Style2D {
     pub stroke_width: f32,
     /// 描边宽度所属空间（声明式）。IR 转换层（`content_ir`）在此声明意图，
     /// 由消费端把它转成 `StrokeSolid.space`，最终在 `record_scene`
-    /// （**唯一换算点**）结合 `camera.scale` 解析为屏幕像素。
+    /// （**唯一换算点**）结合相机 scale 解析为屏幕像素。
     pub space: MeasureSpace,
 }
 

@@ -218,6 +218,9 @@ fn contours_of(shape: &Shape2D, transform: &Transform2D, tolerance: f32) -> Vec<
             .collect(),
         // Group / Custom 在 [`tessellate`] 顶层分派，不会走到这里。
         Shape2D::Group { .. } | Shape2D::Custom(_) => Vec::new(),
+        // `Shape2D` 是 `#[non_exhaustive]`（定义已下沉 kernel/xc-render-ir）：
+        // 新增变体时必须在此显式接线，否则该变体静默不产生几何。
+        _ => Vec::new(),
     }
 }
 

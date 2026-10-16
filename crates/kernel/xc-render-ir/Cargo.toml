@@ -1,0 +1,19 @@
+[package]
+name = "xc-render-ir"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 渲染 IR 层（M2）：2D 图元的中间表示 —— Shape2D / Style2D + 样式组件 +
+# 「对象 → IR」的降级 trait。
+#
+# 硬约束（与理念层同级）：
+#   - 只依赖理念层 xc-notion（+ 本 crate 自身 std）
+#   - 不得出现 ECS / hecs / GPU / wgpu / egui / UI
+#   - 不得依赖任何 xcal-* / xc-object（分层验收：
+#     `cargo tree -p xc-render-ir | grep -E "xcal-|xc-object"` = 0）
+#
+# 三角化（lyon）不在此层：它是「IR → 顶点」的后端侧动作，留在 xcal-render。
+[dependencies]
+xc-notion = { path = "../xc-notion" }

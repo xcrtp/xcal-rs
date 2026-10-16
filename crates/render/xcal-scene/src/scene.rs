@@ -84,8 +84,8 @@ impl Default for Scene {
 
 #[cfg(test)]
 mod tests {
-    use super::components::*;
     use super::*;
+    use xc_object::Circle;
 
     #[test]
     fn test_scene_new_is_empty() {

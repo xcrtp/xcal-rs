@@ -17,6 +17,8 @@ xcal-render-backends = { path = "../../render/xcal-render-backends", default-fea
 xc-macro = { path = "../../kernel/xc-macro" }
 # S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。
 xc-notion = { path = "../../kernel/xc-notion" }
+# 场景对象层：图元 newtype（Circle / Path / Line / Rect）的定义在此。
+xc-object = { path = "../../object/xc-object" }
 
 egui.workspace = true
 # EguiSceneHost::present 把 3D 内容封装为 egui_wgpu 回调提交（原 RenderSubmit3DSystem 职责）。

@@ -12,6 +12,10 @@ license.workspace = true
 [dependencies]
 xcal-scene = { path = "../xcal-scene", default-features = false }
 xc-notion = { path = "../../kernel/xc-notion" }
+# 渲染 IR 层（Shape2D / Style2D / 样式组件 / 降级 trait）已下沉 kernel/xc-render-ir。
+xc-render-ir = { path = "../../kernel/xc-render-ir" }
+# 场景对象层（图元 newtype）：Circle / Path / Line / Rect 的定义在此。
+xc-object = { path = "../../object/xc-object" }
 xc-content = { path = "../../kernel/xc-content" }
 # 渲染契约层已下沉 kernel：
 #   xc-vertex   ← vertex/（顶点格式契约，纯数据）

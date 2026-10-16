@@ -23,11 +23,16 @@
 //   [`MorphQueue`] 以"两端几何 + `t`"的原样形态直达 2D 后端；
 // - 两端几何与 `t` 无关 ⇒ 三角化与 GPU 缓冲都帧间命中，每帧只写一个 `t` uniform。
 
-use crate::components::{Circle, FillSolid, Line, Path, StrokeSolid};
+use crate::components::{Circle, FillSolid, Line, Path, Rect, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
-use xcal_scene::transform::Transform2D;
-use xcal_scene::types::{Camera2D, Rect};
-use xc_notion::{MeasureSpace, Rect2D, Vec2 as GeoVec2, resolve_width};
+use xcal_scene::types::Camera2D;
+use xc_notion::Transform2D as Affine2D;
+// 降级 trait 与样式组件定义在渲染 IR 层（M2）：
+// - `ToShape2D` 吃**仿射矩阵**（相机在调用点降级），`ResolveStyle` 吃标量 scale
+//   ⇒ IR 层不认识相机类型，不成环（见 xc_render_ir::degrade）。
+// - `Camera2D::to_transform2d()` 由场景对象层的 `Camera2D` 提供（M3 迁往 xc-object）。
+// - `ToShape2D` 的图元 impl 在场景对象层 `xc-object`（孤儿规则：实现里必须有本地类型）。
+use xc_render_ir::{ResolveStyle, ToShape2D, fill_style, stroke_style_raw};
 
 /// 2D 绘制器 Trait。
 ///
@@ -79,117 +84,13 @@ pub struct DrawQueue {
 }
 
 // ─── 组件 → Shape2D 转换（屏幕空间） ────────────────────────────────────────
+//
+// M3-5：图元 → `Shape2D` 的映射（`ToShape2D` impl 与相机仿射映射）已随图元
+// 迁往场景对象层 `xc-object` —— 那里才是"实现里含本地类型"的合法落点
+// （孤儿规则）。本模块只保留"队列便捷方法"用的**已是屏幕空间**的构造。
 
 fn rect_shape(r: &Rect) -> Shape2D {
-    let (min, max) = (r.min(), r.max());
-    Shape2D::Rect(Rect2D::new(
-        GeoVec2::new(min.x, min.y),
-        GeoVec2::new(max.x, max.y),
-    ))
-}
-
-/// 场景图元 → 屏幕空间 [`Shape2D`]。
-///
-/// 公开以允许**下游 crate**为新图元组件提供实现（本 crate 自身只覆盖
-/// `Circle` / `Path` / `Line` / `Rect`）。
-///
-/// ⚠️ `xcal-scene` **不能**实现它（依赖方向为 xcal-scene ← xcal-render，
-/// 反向会成环）——图元组件若定义在 scene，其 `ToShape2D` 只能放在
-/// 依赖 xcal-render 的 crate 里。彻底解决需把 `record_scene` 下沉，已延后。
-pub trait ToShape2D {
-    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D;
-}
-
-impl ToShape2D for Circle {
-    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
-        let s = self.to_screen(camera);
-        Shape2D::Circle {
-            center: GeoVec2::new(s.center.x, s.center.y),
-            radius: s.radius,
-        }
-    }
-}
-
-impl ToShape2D for Path {
-    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
-        // `Path` 直接持有 `Path2D`（自带闭合语义）；变换后在屏幕空间仍是
-        // 同一条命令序列，仅逐命令映射坐标（含 `Close` 保留）。
-        Shape2D::Path(self.to_screen(camera).path)
-    }
-}
-
-impl ToShape2D for Line {
-    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
-        let s = self.to_screen(camera);
-        Shape2D::Line {
-            start: GeoVec2::new(s.a.x, s.a.y),
-            end: GeoVec2::new(s.b.x, s.b.y),
-        }
-    }
-}
-
-impl ToShape2D for Rect {
-    fn to_shape2d(&self, camera: &Camera2D) -> Shape2D {
-        let s = self.to_screen(camera);
-        rect_shape(&s)
-    }
-}
-
-// ─── 样式解析（唯一换算点） ────────────────────────────────────────────────
-
-/// 把样式组件解析为**屏幕空间**的 [`Style2D`]。
-///
-/// ⚠️ **本任务是唯一换算点**：描边宽度在此经 [`resolve_width`] 结合
-/// `camera.scale` 解析为屏幕像素。项目中其它任何地方都**不得**再乘除 `scale`——
-/// 否则会出现"某些描边乘过、某些没乘"的不一致。
-///
-/// 公开以允许下游 crate 为新样式组件提供实现（本 crate 只覆盖
-/// `StrokeSolid` / `FillSolid`）。
-pub trait ResolveStyle {
-    fn resolve_style(&self, scale: f32) -> Style2D;
-}
-
-impl ResolveStyle for StrokeSolid {
-    fn resolve_style(&self, scale: f32) -> Style2D {
-        Style2D {
-            fill: None,
-            stroke: Some(self.color),
-            stroke_width: resolve_width(self.width, self.space, scale),
-            // 已解析为屏幕像素，不再是世界度量。
-            space: MeasureSpace::Screen,
-        }
-    }
-}
-
-impl ResolveStyle for FillSolid {
-    fn resolve_style(&self, _scale: f32) -> Style2D {
-        Style2D {
-            fill: Some(self.color),
-            stroke: None,
-            stroke_width: 0.0,
-            space: MeasureSpace::Screen,
-        }
-    }
-}
-
-/// 队列便捷方法的样式构造：**不做** scale 换算（调用方给的就是屏幕空间量，
-/// 与迁移前的队列行为一致；世界→屏幕换算只发生在 [`record_scene`]）。
-fn fill_style(fill: &FillSolid) -> Style2D {
-    Style2D {
-        fill: Some(fill.color),
-        stroke: None,
-        stroke_width: 0.0,
-        space: MeasureSpace::Screen,
-    }
-}
-
-fn stroke_style_raw(stroke: &StrokeSolid) -> Style2D {
-    Style2D {
-        fill: None,
-        stroke: Some(stroke.color),
-        stroke_width: stroke.width,
-        space: stroke.space,
-    }
+    Shape2D::Rect(r.0)
 }
 
 impl DrawQueue {
@@ -218,7 +119,7 @@ impl DrawQueue {
         self.push(DrawCommand::new(
             z,
             Shape2D::Circle {
-                center: GeoVec2::new(circle.center.x, circle.center.y),
+                center: circle.center,
                 radius: circle.radius,
             },
             fill_style(&fill),
@@ -230,7 +131,7 @@ impl DrawQueue {
         self.push(DrawCommand::new(
             z,
             Shape2D::Circle {
-                center: GeoVec2::new(circle.center.x, circle.center.y),
+                center: circle.center,
                 radius: circle.radius,
             },
             stroke_style_raw(&stroke),
@@ -239,18 +140,14 @@ impl DrawQueue {
 
     /// 路径填充：`path` 已在屏幕空间。
     pub fn path_fill(&mut self, z: ZIndex, path: Path, fill: FillSolid) {
-        self.push(DrawCommand::new(
-            z,
-            Shape2D::Path(path.path),
-            fill_style(&fill),
-        ));
+        self.push(DrawCommand::new(z, Shape2D::Path(path.0), fill_style(&fill)));
     }
 
     /// 路径描边：`path` 已在屏幕空间。
     pub fn path_stroke(&mut self, z: ZIndex, path: Path, stroke: StrokeSolid) {
         self.push(DrawCommand::new(
             z,
-            Shape2D::Path(path.path),
+            Shape2D::Path(path.0),
             stroke_style_raw(&stroke),
         ));
     }
@@ -260,20 +157,26 @@ impl DrawQueue {
         self.push(DrawCommand::new(
             z,
             Shape2D::Line {
-                start: GeoVec2::new(line.a.x, line.a.y),
-                end: GeoVec2::new(line.b.x, line.b.y),
+                start: line.a,
+                end: line.b,
             },
             stroke_style_raw(&stroke),
         ));
     }
 
     /// 矩形填充：`rect` 已在屏幕空间。
-    pub fn rect_fill(&mut self, z: ZIndex, rect: Rect, fill: FillSolid) {
+    ///
+    /// 接受 `impl Into<Rect>`：场景层的视口矩形（`xcal_scene::types::Rect`）与
+    /// 绘制用矩形对象（`xc_object::Rect`）同名不同物，转换由 `xc-object` 的
+    /// `From` 实现承担（在 `xcal-scene` 侧提供，避免对象层反向依赖）。
+    pub fn rect_fill(&mut self, z: ZIndex, rect: impl Into<Rect>, fill: FillSolid) {
+        let rect: Rect = rect.into();
         self.push(DrawCommand::new(z, rect_shape(&rect), fill_style(&fill)));
     }
 
-    /// 矩形描边：`rect` 已在屏幕空间。
-    pub fn rect_stroke(&mut self, z: ZIndex, rect: Rect, stroke: StrokeSolid) {
+    /// 矩形描边：`rect` 已在屏幕空间（`Into<Rect>` 语义同 [`DrawQueue::rect_fill`]）。
+    pub fn rect_stroke(&mut self, z: ZIndex, rect: impl Into<Rect>, stroke: StrokeSolid) {
+        let rect: Rect = rect.into();
         self.push(DrawCommand::new(
             z,
             rect_shape(&rect),
@@ -432,9 +335,11 @@ pub struct MorphQueue(pub Vec<MorphItem>);
 /// 即可进 [`DrawQueue`]。返回 `None` 表示本帧剔除（不产生绘制命令）。
 ///
 /// ⚠️ 世界→屏幕换算只允许发生在实现体内（经 [`ToShape2D`] / [`ResolveStyle`]），
-/// 不得在别处乘除 `camera.scale`（唯一换算点纪律，见 [`ResolveStyle`]）。
+/// 不得在别处乘除 `scale`（唯一换算点纪律，见 [`ResolveStyle`]）。
 pub trait Drawable {
-    fn to_primitive(&self, camera: &Camera2D) -> Option<(Shape2D, Style2D)>;
+    /// `t`：相机降级出的仿射矩阵（见 [`ToShape2D`]）；
+    /// `scale`：`Camera2D.scale`，供 [`ResolveStyle`] 解析世界/屏幕宽度。
+    fn to_primitive(&self, t: &Affine2D, scale: f32) -> Option<(Shape2D, Style2D)>;
 }
 
 /// `(形状组件, 样式组件)` 组合即一个可绘制图元。
@@ -446,8 +351,8 @@ pub trait Drawable {
 /// 之所以是"引用对"而非裸组件：`to_primitive` 必须同时产出形状与样式，
 /// 而二者在 ECS 里是两个独立组件类型。
 impl<S: ToShape2D, T: ResolveStyle> Drawable for (&S, &T) {
-    fn to_primitive(&self, camera: &Camera2D) -> Option<(Shape2D, Style2D)> {
-        Some((self.0.to_shape2d(camera), self.1.resolve_style(camera.scale)))
+    fn to_primitive(&self, t: &Affine2D, scale: f32) -> Option<(Shape2D, Style2D)> {
+        Some((self.0.to_shape2d(t), self.1.resolve_style(scale)))
     }
 }
 
@@ -456,12 +361,16 @@ impl<S: ToShape2D, T: ResolveStyle> Drawable for (&S, &T) {
 /// `items` 每项 = `(可绘制对象, z)`。`z` 是绘制层级（越小越先画），写入
 /// `DrawCommand` 时取整为 [`ZIndex`]；同一 `z` 内保持 `items` 的迭代顺序
 /// （[`DrawQueue`] 的排序是稳定的）。`to_primitive` 返回 `None` 的项被跳过（剔除）。
-pub fn record_drawables<D: Drawable, I>(queue: &mut DrawQueue, camera: &Camera2D, items: I)
-where
+pub fn record_drawables<D: Drawable, I>(
+    queue: &mut DrawQueue,
+    t: &Affine2D,
+    scale: f32,
+    items: I,
+) where
     I: IntoIterator<Item = (D, f32)>,
 {
     for (item, z) in items {
-        if let Some((shape, style)) = item.to_primitive(camera) {
+        if let Some((shape, style)) = item.to_primitive(t, scale) {
             queue.push(DrawCommand::new(ZIndex::new(z as i32), shape, style));
         }
     }
@@ -498,13 +407,20 @@ impl<T: Painter2D> SceneRender<T> {
 ///
 /// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
 /// 与重构前逐位一致。
+///
+/// M2-3：相机在此**降级为仿射矩阵**（`Camera2D::to_transform2d()`），
+/// 故本函数调用链（`record_drawables` / `Drawable` / `ToShape2D`）都不认识相机类型。
 pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueue) {
     // 场景图元的绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
+    // 相机 → 屏幕的仿射（唯一降级点）。
+    let t = camera.to_transform2d();
+    let scale = camera.scale;
 
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Circle, &StrokeSolid)>()
             .iter()
@@ -512,7 +428,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Circle, &FillSolid)>()
             .iter()
@@ -520,7 +437,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Path, &StrokeSolid)>()
             .iter()
@@ -528,7 +446,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Path, &FillSolid)>()
             .iter()
@@ -536,7 +455,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Line, &StrokeSolid)>()
             .iter()
@@ -544,7 +464,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Rect, &FillSolid)>()
             .iter()
@@ -552,7 +473,8 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
     );
     record_drawables(
         queue,
-        camera,
+        &t,
+        scale,
         world
             .query::<(&Rect, &StrokeSolid)>()
             .iter()
@@ -563,9 +485,9 @@ pub fn record_scene(world: &hecs::World, camera: &Camera2D, queue: &mut DrawQueu
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
 ///
 /// S3-3 内容纹理层按需录制（只录带 `ContentTextureItem` 标记的实体）时用它：
-/// 位置经 `to_screen(camera)` 落到相机屏幕空间，描边宽度经 [`ResolveStyle`]
-/// 按 `camera.scale` 解析为屏幕像素——与 [`record_scene`] 完全一致，换算
-/// 仍只发生在这里（唯一换算点不外泄）。
+/// 位置经相机降级仿射落到屏幕空间，描边宽度经 [`ResolveStyle`] 按 `camera.scale`
+/// 解析为屏幕像素——与 [`record_scene`] 完全一致，换算仍只发生在这里
+/// （唯一换算点不外泄）。
 pub fn record_path_stroke(
     queue: &mut DrawQueue,
     path: &Path,
@@ -574,7 +496,7 @@ pub fn record_path_stroke(
 ) {
     queue.push(DrawCommand::new(
         ZIndex::new(0),
-        path.to_shape2d(camera),
+        path.to_shape2d(&camera.to_transform2d()),
         stroke.resolve_style(camera.scale),
     ));
 }
@@ -584,7 +506,7 @@ pub fn record_path_stroke(
 mod tests {
     use super::*;
     use xcal_scene::scene::components::*;
-    use xc_notion::Path2D;
+    use xc_notion::{MeasureSpace, Path2D};
 
     struct MockPainter;
 
@@ -596,7 +518,9 @@ mod tests {
         Camera2D::new(
             (0.0, 0.0).into(),
             1.0,
-            Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+            // 视口矩形是**场景层**类型（`xcal_scene::types::Rect`），
+            // 与绘制用矩形对象（`xc_object::Rect`）同名不同物。
+            xcal_scene::types::Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
         )
     }
 
@@ -717,7 +641,7 @@ mod tests {
         Line::new((x, 0.0), (x, 10.0))
     }
     fn mk_rect() -> Rect {
-        Rect::new((0.0, 0.0).into(), (10.0, 10.0).into())
+        Rect::new((0.0_f32, 0.0_f32), (10.0_f32, 10.0_f32))
     }
 
     #[test]
@@ -757,7 +681,7 @@ mod tests {
         Camera2D::new(
             (0.0, 0.0).into(),
             scale,
-            Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
+            xcal_scene::types::Rect::new((0.0, 0.0).into(), (100.0, 100.0).into()),
         )
     }
 

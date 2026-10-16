@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 xc-macro = { path = "../../kernel/xc-macro" }
 xc-notion = { path = "../../kernel/xc-notion" }
+# 场景对象层（图元 newtype）：组件词汇由对象层定义，本层（ECS 实现）只消费。
+xc-object = { path = "../../object/xc-object" }
 xc-time = { path = "../../kernel/xc-time" }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 

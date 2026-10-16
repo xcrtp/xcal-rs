@@ -1,12 +1,15 @@
 [workspace]
 members = [
     "crates/kernel/xc-notion",
+    "crates/kernel/xc-render-ir",
+    "crates/kernel/xc-scene-contract",
     "crates/kernel/xc-content",
     "crates/kernel/xc-prerender",
     "crates/kernel/xc-time",
     "crates/kernel/xc-vertex",
     "crates/kernel/xc-resource",
     "crates/kernel/xc-macro",
+    "crates/object/xc-object",
     "crates/graph/xc-node",
     "crates/graph/xc-graph-algo",
     "crates/graph/xc-graph-eval",

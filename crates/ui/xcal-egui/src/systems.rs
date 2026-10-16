@@ -235,8 +235,8 @@ impl System for MorphRecordSystem {
         ctx.with_world_and_resource_mut::<MorphQueue, _>(|world, queue| {
             queue.0.clear();
             for (morph, stroke) in world.query::<(&MorphShape, &StrokeSolid)>().iter() {
-                let from = Path::new(morph.from.clone()).to_screen(&camera).path;
-                let to = Path::new(morph.to.clone()).to_screen(&camera).path;
+                let from = Path::new(morph.from.clone()).to_screen(&camera).0;
+                let to = Path::new(morph.to.clone()).to_screen(&camera).0;
                 queue.0.push(MorphItem {
                     from,
                     to,
@@ -415,7 +415,8 @@ mod tests {
     // ─── ContentTextureRecordSystem（S3-3） ────────────────────────────────
 
     use xcal_render::Shape2D;
-    use xcal_scene::scene::components::{Circle, TextureHandle};
+    use xcal_scene::scene::components::TextureHandle;
+    use xc_object::Circle;
     use xc_notion::PathCommand;
 
     const TEX_W: u32 = 512;

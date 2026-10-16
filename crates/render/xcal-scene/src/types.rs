@@ -82,6 +82,17 @@ impl Rect {
     }
 }
 
+/// 视口矩形（本层）→ 绘制用矩形对象（`xc-object`）。
+///
+/// 二者**同名不同物**：`xcal_scene::types::Rect` 是相机视口矩形（场景层）；
+/// `xc_object::Rect` 是可绘制的矩形图元（场景对象层）。转换实现放在本层 ——
+/// 场景层依赖对象层，反向不允许，故对象层不能知道视口矩形。
+impl From<Rect> for xc_object::Rect {
+    fn from(r: Rect) -> Self {
+        xc_object::Rect::new(*r.min, *r.max)
+    }
+}
+
 /// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
 ///
 /// - 屏幕坐标系：以视口左上角为原点，y 向下（Y-down），单位为像素。
@@ -114,6 +125,41 @@ impl Camera2D {
     pub fn world_to_screen(&self, p: Vec2) -> Vec2 {
         use crate::transform::Transform2D;
         p.to_screen(self)
+    }
+
+    /// 把相机**降级为「世界 → 屏幕」的仿射矩阵**（M2-3）。
+    ///
+    /// 这是渲染 IR 层唯一被允许看到的相机形态：`ToShape2D` 只吃
+    /// `xc_notion::Transform2D`，不吃 `Camera2D`（否则 IR 层要依赖场景对象层，成环）。
+    ///
+    /// 精确形式（与 [`Camera2D::world_to_screen`] 同式）：
+    ///
+    /// ```text
+    /// screen.x = rect.center.x + (world.x - center.x) * scale
+    /// screen.y = rect.center.y - (world.y - center.y) * scale      // Y 翻转
+    /// ```
+    ///
+    /// 作为 `Mat3`（列主序）：
+    ///
+    /// ```text
+    /// col0 = [ s,  0, 0 ]
+    /// col1 = [ 0, -s, 0 ]
+    /// col2 = [ rc.x - c.x·s,  rc.y + c.y·s,  1 ]
+    /// ```
+    ///
+    /// 回归基线：`camera_transform2d_matches_world_to_screen` 断言两式一致
+    /// （同时保留既有的 `screen_to_world` / `world_to_screen` 往返测试）。
+    pub fn to_transform2d(&self) -> xc_notion::Transform2D {
+        let rc = self.rect.center();
+        let s = self.scale;
+        let c = self.center;
+        xc_notion::Transform2D {
+            matrix: glam::Mat3::from_cols(
+                glam::Vec3::new(s, 0.0, 0.0),
+                glam::Vec3::new(0.0, -s, 0.0),
+                glam::Vec3::new(rc.x - c.x * s, rc.y + c.y * s, 1.0),
+            ),
+        }
     }
 }
 
@@ -219,6 +265,34 @@ mod tests {
             assert!(
                 (back.x - sp.x).abs() < 1e-5 && (back.y - sp.y).abs() < 1e-5,
                 "screen roundtrip failed: {sp:?} -> {wp:?} -> {back:?}"
+            );
+        }
+    }
+
+    /// M2-3 回归基线：相机降级矩阵 `to_transform2d()` 与 `world_to_screen` 逐点一致。
+    ///
+    /// 容差 1e-2 像素：两式只差浮点结合律（`rc.x + (wx - cx)*s` vs
+    /// `s*wx + (rc.x - cx*s)`），量级 ~1e4 时 fp32 的 ulp ≈ 1e-3。
+    #[test]
+    fn camera_transform2d_matches_world_to_screen() {
+        let camera = Camera2D::new(
+            (-3.5, 7.25).into(),
+            12.0,
+            Rect::new((0.0, 0.0).into(), (800.0, 600.0).into()),
+        );
+        let t = camera.to_transform2d();
+
+        for wp in [
+            (0.0, 0.0).into(),
+            (-100.0, 42.0).into(),
+            (3.7, -9.9).into(),
+            (800.0, -600.0).into(),
+        ] {
+            let a = camera.world_to_screen(wp);
+            let b = t.apply_point(*wp);
+            assert!(
+                (a.x - b.x).abs() < 1e-2 && (a.y - b.y).abs() < 1e-2,
+                "仿射与 world_to_screen 不一致: {wp:?} -> {a:?} vs {b:?}"
             );
         }
     }

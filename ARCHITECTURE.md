@@ -9,6 +9,7 @@
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
 | kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；可含通用能力领域，如几何、排版）|
+| object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换），只依赖 kernel |
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
 | schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
 | render | `crates/render/` | `xcal-` | 场景层 + 渲染抽象 + 具体后端 |
@@ -24,12 +25,18 @@
 graph TD
     subgraph kernel[crates/kernel]
         xc_notion["xc-notion"]
+        xc_render_ir["xc-render-ir"]
+        xc_scene_contract["xc-scene-contract"]
         xc_content["xc-content"]
         xc_prerender["xc-prerender"]
         xc_time["xc-time"]
         xc_vertex["xc-vertex"]
         xc_resource["xc-resource"]
         xc_macro["xc-macro"]
+    end
+
+    subgraph object[crates/object]
+        xc_object["xc-object"]
     end
 
     subgraph graph[crates/graph]
@@ -66,10 +73,17 @@ graph TD
     xc_vertex
     xc_resource
     xc_macro
+    xc_render_ir --> xc_notion
+    xc_scene_contract --> xc_notion
+    xc_scene_contract --> xc_render_ir
     xc_content --> xc_notion
     xc_prerender --> xc_content
     xc_prerender --> xc_notion
     xc_time --> xc_notion
+
+    %% object → kernel（场景对象层只依赖 kernel）
+    xc_object --> xc_notion
+    xc_object --> xc_render_ir
 
     %% graph → kernel
     xc_graph_algo --> xc_node
@@ -79,13 +93,16 @@ graph TD
 
     %% schedule（无内部依赖，仅依赖 hecs）
 
-    %% render → kernel + schedule
+    %% render → kernel + object + schedule
     xcal_scene --> xc_notion
     xcal_scene --> xc_time
     xcal_scene --> xc_macro
+    xcal_scene --> xc_object
     xcal_scene --> xcal_schedule
     xcal_render --> xc_content
     xcal_render --> xc_notion
+    xcal_render --> xc_render_ir
+    xcal_render --> xc_object
     xcal_render --> xc_vertex
     xcal_render --> xc_resource
     xcal_render --> xcal_scene
@@ -96,6 +113,7 @@ graph TD
     %% ui → kernel + graph + render + schedule
     xcal_egui --> xc_notion
     xcal_egui --> xc_macro
+    xcal_egui --> xc_object
     xcal_egui --> xcal_scene
     xcal_egui --> xcal_schedule
     xcal_egui --> xcal_render
@@ -135,24 +153,27 @@ graph TD
 |---------|-------|--------|-------------|
 | xcal-app | 0 | 9 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
+| xc-scene-contract | 0 | 2 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
-| xcal-egui | 1 | 6 | 0.86 |
+| xcal-egui | 1 | 7 | 0.88 |
+| xcal-render | 3 | 7 | 0.70 |
 | xcal-node-egui | 1 | 2 | 0.67 |
 | xc-node-schema | 1 | 2 | 0.67 |
 | xcal-node-editor | 1 | 2 | 0.67 |
 | xc-prerender | 1 | 2 | 0.67 |
-| xcal-render | 3 | 5 | 0.63 |
 | xcal-render-backends | 2 | 3 | 0.60 |
-| xcal-scene | 4 | 4 | 0.50 |
+| xcal-scene | 4 | 5 | 0.56 |
 | xc-graph-algo | 1 | 1 | 0.50 |
 | xc-time | 1 | 1 | 0.50 |
+| xc-object | 3 | 2 | 0.40 |
+| xc-render-ir | 3 | 1 | 0.25 |
 | xc-content | 3 | 1 | 0.25 |
 | xcal-schedule | 3 | 0 | 0.00 |
 | xc-vertex | 1 | 0 | 0.00 |
 | xc-resource | 1 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
-| xc-notion | 8 | 0 | 0.00 |
+| xc-notion | 11 | 0 | 0.00 |
 | xc-macro | 3 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
@@ -423,5 +444,18 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > FanIn/FanOut 表按 `cargo metadata` 全量重算（18 → 21 行）。工具恢复后重跑
 > `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
+>
+> 备注（2026-10-16，M2/M3）：新增层 `object`（`crates/object/xc-object`）与 kernel
+> 节点 `xc-render-ir` / `xc-scene-contract`，依赖图与 FanIn/FanOut 按同一
+> `cargo metadata` 口径同步：
+> - 新增边：`xc-render-ir → xc-notion`、`xc-scene-contract → xc-notion / xc-render-ir`、
+>   `xc-object → xc-notion / xc-render-ir`、`xcal-scene → xc-object`、
+>   `xcal-render → xc-render-ir / xc-object`、`xcal-egui → xc-object`（9 条）；
+> - 表由 21 → 24 行：`xc-notion` FanIn 8→11、`xcal-scene` FanOut 4→5、
+>   `xcal-render` FanOut 5→7、`xcal-egui` FanOut 6→7；新增 `xc-scene-contract`（0/2）、
+>   `xc-object`（3/2）、`xc-render-ir`（3/1）。
+> - **本轮为部分落地**：`xc-object` 暂不依赖 `xc-scene-contract`（`Describable`
+>   派生宏延后），`record_scene` 暂保留 `&hecs::World`（见 M2/M3 交付说明）。
+> 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

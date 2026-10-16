@@ -27,6 +27,18 @@ jobs:
         run: cargo check --workspace --all-targets
         shell: bash
 
+      # kernel 层的 wasm 可编译性是分层的核心承诺之一（跑不上 wasm，分层就没意义）。
+      # 此前一直手工验收，本步把它纳入 CI 自动化门禁。
+      # 新增 kernel crate 必须加入下面的列表（M2 起含 xc-scene-contract / xc-render-ir）。
+      - name: Kernel wasm gate
+        run: |
+          rustup target add wasm32-unknown-unknown
+          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender; do
+            echo "== $c (wasm32-unknown-unknown) =="
+            cargo check -p "$c" --target wasm32-unknown-unknown || exit 1
+          done
+        shell: bash
+
       - name: Workspace Analyzer (cycles + DAG)
         run: |
           # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边

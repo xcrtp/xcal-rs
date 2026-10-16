@@ -13,7 +13,8 @@
 use xc_notion::Path2D;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::{MorphShape, Path};
+use xcal_scene::scene::components::MorphShape;
+use xc_object::Path;
 
 /// 形变应用（CPU 回退）：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的
 /// `Path.path`（闭合折线，`from_polyline(..., true)` 携带闭合语义）。render 层由
@@ -28,7 +29,7 @@ impl System for MorphApplySystem {
         for (morph, path) in ctx.world.query::<(&MorphShape, &mut Path)>().iter() {
             let samples = morph.samples.max(1) as usize;
             let pts = Path2D::morph_points(&morph.from, &morph.to, morph.t, samples);
-            path.path = Path2D::from_polyline(&pts, true);
+            path.0 = Path2D::from_polyline(&pts, true);
         }
     }
 }
@@ -92,11 +93,11 @@ mod tests {
 
         let path = scheduler.world().get::<&Path>(entity).unwrap();
         // 128 个采样点 + Close 回到起点 = 129 个展平点。
-        let pts = path.path.flatten(0.01);
+        let pts = path.0.flatten(0.01);
         assert_eq!(pts.len(), 129, "顶点数应恒为 samples + 闭合回起点");
         assert!(
             matches!(
-                path.path.commands.last(),
+                path.0.commands.last(),
                 Some(xc_notion::PathCommand::Close)
             ),
             "形变输出应闭合（末命令为 Close）"

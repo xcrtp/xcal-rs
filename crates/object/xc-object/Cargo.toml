@@ -1,0 +1,21 @@
+[package]
+name = "xc-object"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 场景对象层（新层 `crates/object/`，M3 建立）：
+# 用户可见的场景对象 —— 图元 newtype（Circle / Path / Line / Rect）。
+#
+# 硬约束：
+#   - 只依赖 kernel 层（xc-notion / xc-render-ir）与 xc-macro
+#   - 不得依赖任何 xcal-*（反向依赖禁令）
+#
+# 为什么图元是 newtype 而不是直接用具象字段：
+#   字段只在理念层定义**一次**（`Circle2D { center, radius }`），对象层与 IR 层
+#   都不再各写一份 ⇒ 消掉"同一个圆两处定义"的两处真相；`Deref` 到内层后
+#   `circle.radius` 仍可直接用。
+[dependencies]
+xc-notion = { path = "../../kernel/xc-notion" }
+xc-render-ir = { path = "../../kernel/xc-render-ir" }

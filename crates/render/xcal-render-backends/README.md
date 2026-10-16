@@ -234,7 +234,6 @@ xcal-scene              = { default-features = false }
 xcal-render            = { default-features = false }
 xc-notion
 glam
-hecs
 thiserror
 pollster               (optional)  ← wgpu  / egui-wgpu
 wgpu                   (optional)  ← wgpu  / egui-wgpu
