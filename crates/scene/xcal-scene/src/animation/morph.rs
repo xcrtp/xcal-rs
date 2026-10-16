@@ -37,8 +37,9 @@ impl System for MorphApplySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::binding::{Binding, BindingTarget, BindingTable, SeekKind};
+    use crate::animation::binding::{Binding, BindingTable, SeekKind};
     use crate::animation::system::BindingApplySystem;
+    use crate::animation::target::MorphT;
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
     use crate::TimeState;
@@ -73,7 +74,9 @@ mod tests {
             clock: root,
             // Phase：sample(t) = omega * t = 0.5 → 形变参数 0.5
             curve: Curve::Phase { omega: 1.0 },
-            target: BindingTarget::MorphT(entity),
+            target: std::sync::Arc::new(MorphT {
+                id: crate::contract::object_id_of(entity),
+            }),
             seek_kind: SeekKind::O1,
         });
 

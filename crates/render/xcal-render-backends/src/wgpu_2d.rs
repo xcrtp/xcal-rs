@@ -775,12 +775,28 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..item.style
             };
-            let from_tess = tessellate(&Shape2D::Path(from_path), &local, &style, tolerance);
-            let to_tess = tessellate(&Shape2D::Path(to_path), &local, &style, tolerance);
+            let from_tess = tessellate(&Shape2D::Path(from_path.clone()), &local, &style, tolerance);
+            let to_tess = tessellate(&Shape2D::Path(to_path.clone()), &local, &style, tolerance);
             // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
-            let (Some(from_tess), Some(to_tess)) = (from_tess.first(), to_tess.first()) else {
-                continue;
+            //
+            // ⚠️ **退化一侧的合成**（P5 实测修）：`from` 是"退化点"（全部点重合）时
+            // lyon 不产出任何几何（实测 `t_len = 0`），若直接跳过，整条形变项就消失
+            // ——表现为"画面空白，而队列层（`MorphQueue`）看不出任何异常"。
+            // 故用**可三角化的一侧**的拓扑合成退化侧：顶点位置塌到该侧路径的点、
+            // 法线归零 ⇒ `t = 0` 时三角形退化（不可见），随 `t` 平滑长出，
+            // 且索引/顶点数**按构造相等**（拓扑一致是逐点插值的前提）。
+            let (from_tess, to_tess) = match (from_tess.into_iter().next(), to_tess.into_iter().next())
+            {
+                (Some(f), Some(t)) => (f, t),
+                (None, Some(t)) => (collapsed_like(&t, &from_path), t),
+                (Some(f), None) => {
+                    let c = collapsed_like(&f, &to_path);
+                    (f, c)
+                }
+                // 两侧都没有几何（空路径已在上方挡掉）⇒ 无从合成。
+                (None, None) => continue,
             };
+            let (from_tess, to_tess) = (&from_tess, &to_tess);
             if from_tess.indices.len() != to_tess.indices.len()
                 || from_tess.vertices.len() != to_tess.vertices.len()
             {
@@ -1016,6 +1032,27 @@ fn hash_batch(color: Color32, stroke_width: f32, keys: &[u64]) -> u64 {
 /// **形变缓存键**（S4.3）：只由两侧几何决定，**不含 `t`**。
 ///
 /// 这正是"逐帧只写 t"能成立的原因：`t` 变 ⇒ 键不变 ⇒ 命中 ⇒ 零装配零上传。
+/// 用**可三角化的一侧**（`template`）的拓扑，合成**退化侧**的几何：
+/// 全部顶点位置塌到 `zero_path` 的首点、法线归零。
+///
+/// 为什么需要（P5 实测）：`from` 是"退化点"（全部点重合）时 lyon 不产出任何几何，
+/// 形变项会被整条跳过 —— 画面空白，而队列层看不出异常。
+/// 合成后：`t = 0` 时三角形退化（不可见），随 `t` 平滑长出；
+/// 且索引 / 顶点数与 `template` **按构造相同**（逐点插值的前提）。
+fn collapsed_like(template: &Tessellation2D, zero_path: &xc_notion::Path2D) -> Tessellation2D {
+    let pivot = zero_path
+        .flatten(0.0)
+        .first()
+        .copied()
+        .unwrap_or(Vec2::ZERO);
+    let mut out = template.clone();
+    for v in &mut out.vertices {
+        v.position = [pivot.x, pivot.y];
+        v.normal = [0.0, 0.0];
+    }
+    out
+}
+
 fn hash_morph(from: &Tessellation2D, to: &Tessellation2D) -> u64 {
     hash_tessellation(from).rotate_left(13)
         ^ hash_tessellation(to).wrapping_mul(0x100_0000_01b3)
@@ -1905,6 +1942,95 @@ mod tests {
             "`t` 变化不得导致缓存未命中（几何与 t 无关）：{misses:?}"
         );
         assert_eq!(backend.morph_cache_len(), 1);
+    }
+
+    /// **分镜 3 的形态**（P5）：`from` 是**退化点**（全部点重合），`to` 是完整折线。
+    ///
+    /// 这是"曲线从左到右生长"的实现方式（`storyboard.rs`）。它比"同心方框"更极端
+    /// ——零长度路径进 lyon **不产出几何**，必须实测（否则形变项会被整条跳过、
+    /// 画面空白，而队列层看不出问题）。
+    ///
+    /// 可证伪断言（按面积随 `t` 单调增长判定，不依赖具体像素坐标）：
+    /// 1. `t = 0` 时**完全不可见**（三角形退化）——"从一点长出"的起点；
+    /// 2. `t = 0.5` 与 `t = 1.0` 都**已画出**，且覆盖像素数严格递增
+    ///    —— 若退化 `from` 被跳过（`batch_count == 0`）或像素不随 `t` 变化，断言失败。
+    #[test]
+    fn morph_from_degenerate_point_grows_into_target_line() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        // 屏幕坐标下的浅弧（非共线 ⇒ 环有面积，绕向明确）；离屏本地 = 屏幕 - (100,50)。
+        let start = Vec2::new(120.0, 130.0);
+        let from = xc_notion::Path2D::from_polyline(&[start, start], false);
+        let to = xc_notion::Path2D::from_polyline(
+            &[
+                start,
+                Vec2::new(170.0, 90.0),
+                Vec2::new(230.0, 90.0),
+                Vec2::new(280.0, 130.0),
+            ],
+            false,
+        );
+        let style = Style2D {
+            fill: None,
+            stroke: Some(Color32::new(0, 200, 200, 255)),
+            stroke_width: 4.0,
+            space: MeasureSpace::Screen,
+            ..Default::default()
+        };
+
+        let mut covered: Vec<usize> = Vec::new();
+        for t in [0.0f32, 0.5, 1.0] {
+            backend.begin_frame_at(g);
+            backend.push_morph(MorphItem {
+                from: from.clone(),
+                to: to.clone(),
+                t,
+                samples: 32,
+                style,
+            });
+            assert_eq!(backend.recorded_morph_len(), 1);
+
+            let mut enc = ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("xcal-2d-morph-degenerate-frame"),
+                });
+            let out = backend.finish_frame(&mut enc, LayerId(0), &g);
+            ctx.queue.submit([enc.finish()]);
+            ctx.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("形变帧提交后 poll");
+
+            assert_eq!(out.cache.morph_requests, 1);
+            assert_eq!(
+                out.batch_count, 1,
+                "退化 `from` 不得被跳过（t = {t}）：形变项应产出 1 次 draw call"
+            );
+
+            let px = read_texture(
+                &ctx,
+                backend.offscreen_texture(LayerId(0)).unwrap(),
+                (200, 100),
+            );
+            let opaque = px.chunks_exact(4).filter(|p| p[3] > 0).count();
+            covered.push(opaque);
+        }
+
+        assert_eq!(covered[0], 0, "t = 0 应是退化点（不可见），实际覆盖 {covered:?}");
+        assert!(
+            covered[1] > 0,
+            "t = 0.5 应已画出一半形状，实际覆盖 {covered:?}"
+        );
+        assert!(
+            covered[2] > covered[1],
+            "像素覆盖应随 t 增长（形状在长大）：{covered:?}"
+        );
     }
 
     /// 契约布局：stride 20 / 三槽（无硬编码字面量的可测证明）。

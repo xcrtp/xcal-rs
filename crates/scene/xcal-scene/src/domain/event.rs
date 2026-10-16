@@ -24,6 +24,13 @@ pub mod ids {
     pub const PLAY_PAUSE: WidgetId = WidgetId(3);
     pub const SPEED: WidgetId = WidgetId(4);
     pub const SEEK: WidgetId = WidgetId(5);
+    /// 重新播放：把全局时间拨回 0 并恢复播放（分镜从第 1 条重放）。
+    ///
+    /// 为什么"拨回 0"就够了：当前所有绑定都是 [`SeekKind::O1`]（纯函数、无记忆），
+    /// 场景状态由 `t` 唯一决定 ⇒ 回到 `t = 0` 即回到初始画面，不需要重建场景。
+    ///
+    /// [`SeekKind::O1`]: https://docs.rs/xcal-scene
+    pub const REPLAY: WidgetId = WidgetId(6);
 
     // ── 参数面板（BindingTable）──
     pub const CIRCLE_BASE: WidgetId = WidgetId(10);

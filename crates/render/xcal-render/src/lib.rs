@@ -26,7 +26,9 @@ pub mod draw;
 pub mod draw_queue_3d;
 pub mod painter_2d;
 pub mod painter_3d;
+pub mod record_systems;
 pub mod tessellate;
+pub mod view_rect;
 pub mod viewport;
 
 // 顶点格式契约已下沉 kernel/xc-vertex：保留 `xcal_render::vertex::*` 路径。
@@ -72,6 +74,12 @@ pub use painter_3d::Painter3D;
 
 // ─── 视口（纯数据） ───────────────────────────────────────────────────────
 pub use viewport::Viewport;
+
+// ─── 渲染目标矩形（Resource；P4 从 xcal-egui 归位） ───────────────────────
+pub use view_rect::ViewRect;
+
+// ─── 录制 System（P4 从 xcal-egui 归位到渲染层） ──────────────────────────
+pub use record_systems::{ContentTextureRecordSystem, MorphRecordSystem, SceneRecordSystem};
 
 // ─── 内容 IR 与预留后端目标 ───────────────────────────────────────────────
 pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};

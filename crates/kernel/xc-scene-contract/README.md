@@ -78,6 +78,9 @@ pub trait SceneRead {
     fn for_each<T: 'static + Send + Sync>(&self, f: impl FnMut(ObjectId, &T));
     fn for_each_pair<A, B>(&self, f: impl FnMut(ObjectId, &A, &B));
     fn for_each_pair_opt<A, B, C>(&self, f: impl FnMut(ObjectId, &A, &B, Option<&C>));
+    /// 只读**点查询**（P1-3）：按 `id` 取一个组件（访客形态，见下方设计点 3）。
+    fn with<T: 'static + Send + Sync, R>(&self, id: ObjectId, f: impl FnOnce(&T) -> R)
+        -> Option<R>;
 }
 
 pub trait Scene: SceneRead {                    // 写路径
@@ -104,6 +107,12 @@ pub trait Scene: SceneRead {                    // 写路径
 3. **`for_each_pair_opt`（可选第三组件）**：对象层的**可缺席摆放信息**（`ZOrder` 绘制层级）
    要求"有则用、无则默认"——若要求 `C` 必须存在，就没法用一次查询同时覆盖两类对象。
    hecs 原生支持 `query::<(Entity, &A, &B, Option<&C>)>()`，故不是额外负担。
+
+4. **`with` 是访客形态而非 `Option<&T>`（P1-3，实测修正）**：hecs 0.11 的
+   `World::get::<&T>(entity)` 返回的是**借用守卫** `Ref<'_, T>`（生命周期绑在 `&World`
+   的借用上，守卫本身必须存活），**`&T` 交不出去** —— 与 `for_each*` 是同一约束。
+   消费方：相机**句柄**（`xc_object::Camera2DHandle::resolve`）按 `ObjectId` 取场景对象上的
+   取景参数（`Framing2D`），而渲染录制只拿得到 `&S`（`SceneRead`）、没有 `&mut`。
 
 `spawn_dyn` 的**组件登记表**在实现方（hecs 无类型擦除 bundle 入口）：未登记的组件类型 ⇒
 返回 `None`（**不静默丢组件** —— 宁可失败也不造"少了一半组件"的对象）。

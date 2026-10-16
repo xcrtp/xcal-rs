@@ -23,7 +23,7 @@
 // 故动态创建必须**按类型登记**。下表即唯一登记点：
 //
 //   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform` / `ZOrder`
-//   相机：      `Camera2D` / `Camera3D` / `Projection`
+//   相机：      `Camera2D` / `Camera3D` / `Projection` / `Framing2D`（2D 取景参数，P1-2）
 //   样式：      `StrokeSolid` / `FillSolid`
 //   装配对象：  `Axes2D` / `AxesLine` / `FunctionGraph`（M4：网格与函数图像归对象层）
 //   动画与标记：`PhaseAnim` / `MorphShape` / `ContentTextureItem`
@@ -35,16 +35,18 @@
 use hecs::{Entity, EntityBuilder, World};
 
 use xc_object::{
-    Axes2D, AxesLine, Camera2D, Camera3D, Circle, FunctionGraph, Line, Path, Projection, Rect,
-    Transform, ZOrder,
+    Axes2D, AxesLine, Camera2D, Camera3D, Circle, Framing2D, FunctionGraph, Line, Path, Projection,
+    Rect, Transform, ZOrder,
 };
 use xc_render_ir::{FillSolid, StrokeSolid};
-use xc_scene_contract::{Components, ObjectId, Parent, Scene};
+use xc_scene_contract::{Components, Parent, Scene};
 
-/// 契约层的**只读**能力（`for_each*`）在此处对外转发：
+/// 契约层的**只读**能力（`for_each*` / `with`）在此处对外转发：
 /// 消费方（UI 层 / 装配层）只需 `xcal_scene::contract::SceneRead` 一个入口，
 /// 不必额外依赖 `xc-scene-contract`（本 crate 已依赖它）。
-pub use xc_scene_contract::SceneRead;
+///
+/// 同时转发身份类型 [`ObjectId`]（句柄 / 目标都要用到它）。
+pub use xc_scene_contract::{ObjectId, SceneRead};
 
 use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim};
 
@@ -115,6 +117,18 @@ impl SceneRead for WorldView<'_> {
             f(object_id_of(e), a, b, c);
         }
     }
+
+    fn with<T: 'static + Send + Sync, R>(
+        &self,
+        id: ObjectId,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        let e = entity_of(id)?;
+        // `World::get::<&T>` 返回借用守卫 `Ref<'_, T>`：守卫在本方法体内存活，
+        // `&T` 只在 `f` 调用期间有效 —— 这正是访客形态的原因（见契约层文档）。
+        let t = self.world.get::<&T>(e).ok()?;
+        Some(f(&t))
+    }
 }
 
 /// **读写适配器**：借用 `&mut hecs::World` 并实现 [`Scene`]
@@ -170,6 +184,14 @@ impl SceneRead for WorldScene<'_> {
     ) {
         WorldView::new(self.world).for_each_pair_opt::<A, B, C>(f);
     }
+
+    fn with<T: 'static + Send + Sync, R>(
+        &self,
+        id: ObjectId,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        WorldView::new(self.world).with::<T, R>(id, f)
+    }
 }
 
 /// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `Err(原组件)`。
@@ -198,6 +220,7 @@ fn add_known(
     arm!(Camera2D);
     arm!(Camera3D);
     arm!(Projection);
+    arm!(Framing2D);
     arm!(StrokeSolid);
     arm!(FillSolid);
     arm!(Axes2D);
@@ -277,6 +300,14 @@ impl SceneRead for crate::scene::Scene {
         f: impl FnMut(ObjectId, &A, &B, Option<&C>),
     ) {
         WorldView::new(self.world()).for_each_pair_opt::<A, B, C>(f);
+    }
+
+    fn with<T: 'static + Send + Sync, R>(
+        &self,
+        id: ObjectId,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        WorldView::new(self.world()).with::<T, R>(id, f)
     }
 }
 

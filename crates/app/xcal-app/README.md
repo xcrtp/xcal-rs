@@ -12,100 +12,104 @@ cargo run -p xcal-app
 
 ## 启动后会看到什么
 
-1. **中央视口（wgpu 合成）**：
-   - 线框立方体（white, `wireframe_cube(1.0)`）持续绕 Y 轴做轨道相机运动
-   - 振动的 2D 绿色圆（`radius ∈ [0.6, 1.4]`，sin 振荡驱动）
-   - 一条青色 `sin(x + φ)` 曲线（`φ` 随时间平移）
-   - 一条白描边 Typst 公式 `x² + 1`（**空心字轮廓**；由 `formula.rs` 把
-     `ContentIR` 烘焙成旧 `(Path, StrokeSolid)` 实体，见下方"公式接入"）
-   - 一个橙色**形变形状**：圆 ↔ 方 平滑来回（S1a；`MorphShape` + `MorphApplySystem`）
-   - 一段粉色**语义形变公式**：`x²` ↔ `x³`（S1b；按源码锚点配对 —— `x` 配到 `x`）
-   - 可多级缩放的网格背景（1 / 10 / 100 三档，视缩放自动淡入淡出）
-2. **egui 面板**：左侧时间/相机/网格 + **`翻转图层顺序` 复选框**
-   （S3-2 验收开关：验证叠放顺序确实由 `SceneView::layers` 的声明序决定，默认关），
+> **P5**：本轮把 2D 内容换成**首个数学动画原型**（分镜脚本在 `src/storyboard.rs`，
+> 六条分镜见计划 §1.1）。原先的 2D demo（振动圆 / `sin(x+φ)` 曲线 / 圆↔方形变 /
+> `x²`↔`x³` 语义形变）已被分镜取代；3D demo（线框立方体 + 参数曲面 + 内容纹理公式）
+> 保持不动。
+
+1. **中央视口（wgpu 合成）**——六条分镜：
+   1. **常驻**：网格与坐标轴（`Axes2D`，逐帧按相机 refresh）；
+   2. **镜头初始位**：2D 相机是场景对象（`Framing2D`），脚本取出 `Camera2DHandle`；
+   3. **0–2s**：曲线 `y = sin x` 从左到右**生长**（`MorphShape` 从退化点形变到完整折线，
+      走 GPU 形变管线）；
+   4. **2–2.5s**：`wait`；
+   5. **2.5–3.5s**：**镜头推进**到曲线峰值 `(π/2, 1)`（`scale` 40 → 110）；
+   6. **3.5–4.5s**：公式 `y = sin x` **浮现**（每个子轮廓从字形中心形变浮现）；
+   另有 3D demo：线框立方体持续绕 Y 轴做轨道相机运动 + 蓝色参数曲面（采样内容纹理，
+   纹理源是一条静态 Typst 公式 `x² + 1`）。
+2. **egui 面板**：左侧时间/相机/网格 + **`2D 相机` / `3D 相机` 复选框**
+   （关掉即不再声明该图层：2D 关掉则网格/曲线/公式全部不画，3D 关掉则立方体/曲面不画）、
+   **`翻转图层顺序` 复选框**（S3-2 验收开关：验证叠放顺序确实由 `SceneView::layers`
+   的声明序决定，默认关），
+   左二时间控制面板：播放/暂停、**`⟲ 重新播放`**（拨回 `t = 0` 并开始播放，
+   用于重看分镜；全部绑定是 O1 纯函数 ⇒ 回到 0 即回到初始画面）、速度、时间轴 seek，
    右侧动画参数
    （圆半径 / 曲线相位 / 3D 轨道相机 slider → `ParamPanelSystem` 写回 `BindingTable`）
 3. **右上角 Health Overlay（F1 切换）**：FPS、tick、实体数、绘制调用数
 4. **快捷键**：
    - `F1` — 切换性能面板
    - `F10` — 导出当前 `hecs::World + Resources` 快照到 `snapshots/tick_{n}.json`
-   - 滚轮缩放、拖拽平移（host 翻译为 `CameraCommand` → `CameraInputSystem`）
+   - 滚轮缩放、拖拽平移（host 翻译为 `CameraCommand` → `CameraInputSystem`，
+     **相机状态在场景对象里**，P1）
 
 ---
 
 ## App::new 初始化流程（关键代码）
 
+> ⚠️ 以下为**当前**装配流程的压缩版（P1~P5 后）。完整代码见 `src/lib.rs`；
+> 2D 分镜在 `src/storyboard.rs`。
+
 ```rust
 // ── 1. 字体 / 视觉（宿主平台资产归 host） ──
-// 候选路径覆盖 Windows / macOS / 常见 Linux 发行版，可用 XCAL_CJK_FONT 指定；找不到只提示。
 if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() { eprintln!("…中文可能显示为方框…"); }
 Self::setup_visuals(&ctx.egui_ctx);
 
 // ── 2. 渲染环境：一行装好后端与合成器（细节在 backends 侧） ──
-let rs = ctx.wgpu_render_state.clone().unwrap();
 let render_ctx = xcal_render_backends::install_standard_backends(&rs);
-//   ↳ 等价于旧的"手工 insert WgpuBackend3D / WgpuBackend2D / Compositor + 取 RenderContext"；
-//     为什么装进 callback_resources：回调为 &self，不能持有重建中的 GPU 资源。
 
-// ── 3. Scene 填充 hecs World（纯逻辑组件 / 场景对象） ──
+// ── 3. 3D demo + 内容纹理公式 ──
 let mut scene = Scene::new();
-scene.spawn((wireframe_cube(1.0), Material3D::color(Color32::WHITE))); // 3D 线框立方体
-scene.spawn((Camera3D::new(...),));                            // 3D 相机（eye 由 Binding 驱动）
-scene.spawn((Circle::new((0.,0.),1.0), StrokeSolid));          // 振动圆（半径由 Binding 驱动）
-// M4：坐标轴 / 网格与函数图像由**对象层装配对象**建立（几何在 xc-object）。
-let axes = Axes2D::unbounded();
-axes.build(&mut scene);                                        // 网格容器（逐帧 refresh）
-let graph = FunctionGraph::new(FunctionX2Y::new(|x| x.sin()), Sampler1D::new(-10., 10., 0.1));
-let func_handle = graph.build(&mut scene, StrokeSolid);        // 折线 + 采样规格（相位由 Binding 驱动）
-let func_entity = xcal_scene::contract::entity_of(func_handle).unwrap();
-// 形变 demo 的圆：等角采样在理念层（`Circle2D::sample`），起笔方向可指定。
-let circle_pts = Circle2D::new(morph_center, morph_radius).sample(64, start_angle);
-// 公式：IR → (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"；
-// 内容纹理相机的取景由对象层 `Camera2D::fit_bounds` 完成（包围盒用 Path2D::bounds ∪ Rect2D::union）。
-let engine = formula::build_engine();
-let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
-if let Some(ir) = formula::rebuild(&engine, &spec) {
-    for (mut path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
-        bounds = Some(match bounds { Some(acc) => acc.union(&path.bounds()), None => path.bounds() });
-        scene.spawn((
-            Path::new(path),
-            // 公式描边是世界空间：与字形一同随缩放成比例变化。
-            StrokeSolid::new_in(width, color, space),
-        ));
+scene.spawn((Arc::new(wireframe_cube(1.0)), Material3D::color(WHITE)));
+scene.spawn((Arc::new(parametric_surface(..)), surface_material, Transform { .. }));
+let camera3d_entity = scene.spawn((Camera3D::new(..),));               // eye 由 Binding 驱动
+let engine = formula::build_engine();                                  // Typst / placeholder
+if let Some(ir) = formula::rebuild(&engine, &spec /* "x^2 + 1" */) {
+    for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+        scene.spawn((Path::new(path), StrokeSolid::new_in(width, color, space), ContentTextureItem));
     }
+    content_camera = Some(base_camera.fit_bounds(bounds, 0.8));         // 内容纹理取景
 }
-let mut world = scene.into_world();
-world.insert_one(func_entity, PhaseAnim::new(0.0, 1.5)).unwrap();  // 相位组件（装配层不认识动画）
 
-// ── 4. 动画唯一驱动链路：ClockForest + BindingTable ──
-let mut forest = ClockForest::new();      // 3 个 root：振动圆 / 曲线相位 / 3D 轨道
-let mut bindings = BindingTable::new();   // Curve::Sin / Phase / Orbit → BindingTarget
+// ── 4. 首个数学动画原型（§1.1 六条分镜，声明式）──
+// 内部：Axes2D::build + spawn_camera2d（取 handle）+ 曲线 MorphShape + 公式浮现实体
+//       + Timeline 把"先…再…"编译成 ClockNode(offset+span+Hold) + Binding
+let sb = storyboard::build(&mut scene, &engine);                        // → forest / bindings / camera
+let world = scene.into_world();
+let mut forest = sb.forest;
+let mut bindings = sb.bindings;
+// 唯一一条手工绑定：3D 轨道相机（与分镜编排无关，时间源 = 全局 t）
+bindings.bind_arc(forest.insert(ClockNode::new(None))?, Curve::Orbit { .. }, Arc::new(CameraEye { .. }));
 
 // ── 5. Resources 注入 ──
 let mut r = Resources::new();
-r.insert(AppCamera::default());
+r.insert(sb.camera);            // P1-1/P2：相机状态在场景对象里，这里只放**句柄**
 r.insert(TimeState::default());
 r.insert(UiConfig::default());
-r.insert(ViewRect::default());
-r.insert(InputEvents::default());   // 每帧由 host 整帧替换
+r.insert(ViewRect::default());  // P4：来自 xcal-render
+r.insert(InputEvents::default());
 r.insert(DrawQueue::new());
 r.insert(DrawQueue3D::new());
+r.insert(ContentTextureSpec { .. });      // S3-3
+r.insert(ContentTextureQueue::default());
+r.insert(MorphQueue::default());          // S4.3
 r.insert(render_ctx.clone());
 r.insert(forest);
 r.insert(bindings);
 r.insert(DirectorState::new());
 
-// ── 6. Scheduler 注册 System（参见"阶段分配"） ──
+// ── 6. Scheduler 注册 System（参见下方"阶段分配"） ──
 let mut sched = Scheduler::new(world, r);
 sched.add_system(Phase::Input,        DirectorAdvanceSystem);
-sched.add_system(Phase::Input,        CameraInputSystem);
+sched.add_system(Phase::Input,        CameraInputSystem);          // xcal-scene（P1 归位）
 sched.add_system(Phase::LogicUpdate,  TimeControlSystem);
-sched.add_system(Phase::LogicUpdate,  ParamPanelSystem);        // App 层
+sched.add_system(Phase::LogicUpdate,  ParamPanelSystem);           // App 层
 sched.add_system(Phase::SceneSync,    BindingApplySystem);
-sched.add_system(Phase::Prepare,      AxesRefreshSystem);        // M4：几何在对象层
+sched.add_system(Phase::Prepare,      AxesRefreshSystem);          // M4：几何在对象层
 sched.add_system(Phase::Prepare,      FunctionGraphRefreshSystem);
-sched.add_system(Phase::RenderCommit, SceneRecordSystem);       // 2D
-sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（App 层）
+sched.add_system(Phase::RenderCommit, SceneRecordSystem);          // xcal-render（P4 归位）
+sched.add_system(Phase::RenderCommit, ContentTextureRecordSystem); // xcal-render
+sched.add_system(Phase::RenderCommit, MorphRecordSystem);          // xcal-render
+sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);        // 3D 专用（App 层）
 // FrameEnd 为空——内容提交由 host.present 承担（原 RenderSubmit 职责）
 ```
 
@@ -119,20 +123,23 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（A
 | Phase | System | 资源写集 | 资源读集 |
 |-------|--------|----------|----------|
 | **Input**       | DirectorAdvance | DirectorState, TimeState | — |
-|                 | CameraInput     | AppCamera                | InputEvents |
+|                 | CameraInput     | —（写**场景对象** `Framing2D`）| InputEvents, Camera2DHandle |
 | **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
 |                 | ParamPanel      | BindingTable             | InputEvents |
 | **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
-| **Prepare**     | AxesRefresh (M4) | —（写 hecs 组件）         | ViewRect, AppCamera, UiConfig |
+| **Prepare**     | AxesRefresh (M4) | —（写 hecs 组件）         | ViewRect, Camera2DHandle, UiConfig |
 |                 | FunctionGraphRefresh (M4) | —（写 hecs 组件）| — |
-| **RenderCommit**| SceneRecord (2D)| DrawQueue (2D)           | ViewRect, AppCamera |
+| **RenderCommit**| SceneRecord (2D) | DrawQueue (2D)          | ViewRect, Camera2DHandle |
 |                 | ContentTextureRecord (S3-3) | ContentTextureQueue | ContentTextureSpec |
-|                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, AppCamera |
+|                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, Camera2DHandle |
 |                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
 | **FrameEnd**    | —（空）         | —                        | — |
 
+前三个录制 System 与 `CameraInput` **不在 app**：它们分别住在
+`xcal-render::record_systems`（P4）与 `xcal-scene::camera_input`（P1）。
+
 同 phase 内 `TimeControl` / `ParamPanel` 同读 `InputEvents`（合法）；
-`SceneRecord` 写 `DrawQueue` 与 `SceneRecord3D` 写 `DrawQueue3D` 类型无交集
+三个录制 System 同读 `ViewRect` / `Camera2DHandle`、写集两两不相交
 ——debug 模式下 `BorrowTracker` 不会触发冲突。
 
 `FrameEnd` 为空：内容提交（2D + 3D）由 `EguiSceneHost::present` 在 `run_frame` 之后承担，
@@ -215,29 +222,37 @@ Typst 源码 → xc-prerender::engine（typst [feature] / placeholder）
 
 ## 形变（S1 插值内核）
 
-两段 demo 共用同一条形变时钟 + `MorphT` 绑定链路（均落在 `SceneSync`）：
+**P5 后**：形变由**分镜脚本**消费 —— 分镜 3（曲线生长）与分镜 6（公式浮现）都是
+`MorphShape(退化点, 目标折线)` + `MorphT` 绑定，走同一条 GPU 形变链路。
 
-- **S1a 几何形变**：橙色形状 `MorphShape(圆, 方)` + `StrokeSolid`（**不带 `Path`**）。
-  `BindingTarget::MorphT` 写 `t`；`MorphRecordSystem`（RenderCommit）把实体录成
+- **链路**：`MorphT`（`xcal_scene::animation::target::MorphT`）写 `t`；
+  `MorphRecordSystem`（`xcal-render::record_systems`，RenderCommit）把实体录成
   `MorphItem`（`from`/`to` + `t`），由 2D 后端的**形变管线**做 GPU 插值
   （双 vertex buffer + `t` uniform，见 S4.3）。两端几何经弧长等点重采样，
   三角化结果与 GPU 缓冲都**帧间命中缓存** —— 每帧只多写一个 `t` uniform。
-- **S1b 语义形变**：`formula::compile_morph_pairs("x^2", "x^3")` 用
-  `xc_content::pair_by_anchor` 按**源码锚点**配对（`x` 配到 `x`，而非按位置配到 `3`），
-  每对路径 spawn 一个 `MorphShape` 实体，共用同一形变时钟同步形变（渲染路径同上）。
+- **退化点起点**：`from` 的全部点重合于目标路径的首点（曲线）或包围盒中心（公式）
+  ⇒ 形变两端点数对齐、视觉上"从一点绽开"。
+  ⚠️ **零长度一侧由 2D 后端合成**（P5 实测修）：lyon 对零长度路径**不产出几何**，
+  若直接跳过整条形变项就消失（画面空白，而 `MorphQueue` 看不出异常）。
+  后端在 `prepare` 阶段用另一侧的拓扑合成它（顶点位置塌到该点、法线归零）
+  ⇒ `t = 0` 不可见、随 `t` 平滑长出。用例：
+  `morph_from_degenerate_point_grows_into_target_line`（GPU 像素级）。
+- **开口 / 闭合口径**（实测修）：形变端点的闭合性**由两端共同决定** ——
+  任一端自带 `Close` 即按闭合环重采样，**两端都开口则保持开口**。
+  早期版本恒按闭合环处理，开口曲线（分镜 3 的 `y = sin x`）会因此多出一条
+  **首尾相接的弦**（画面上是 x 轴上多出的一条直线）。用例：
+  `open_morph_endpoints_stay_open_without_chord` / `closed_morph_endpoints_stay_closed`。
 - **CPU 回退**：`xcal_scene::animation::MorphApplySystem` 仍可把形变落成 `Path`
   （实体同时带 `MorphShape` + `Path` 时生效，供 headless / 无 GPU 宿主使用）。
   App **不注册**它，形变走 GPU。
-
-时钟：`PlayMode::PingPong` span `(0, 1)` + `Curve::Phase { omega: 1.0 }`
-→ 形变参数 `t` 在 `[0, 1]` 平滑往返。**起点对齐**（原型约定）：圆的起笔方向与方的
-首顶点方向取一致（均指向 -45°），避免形变过程"绕圈"。
+- **S1a/S1b 旧 demo**（圆↔方、`x²`↔`x³` 语义形变）**已从 App 移除**（被分镜取代）；
+  `formula::compile_morph_pairs` 与其文档保留（`#[allow(dead_code)]`，见该函数 doc）。
 
 > 铁律（路线甲）：`xc-time` 可依赖 `xc-notion`，但**不得**依赖 `xc-content`——
 > 语义配对留在 `xc-content`，`xc-time` 只提供插值原语。
 >
-> 度量空间：形变形状 / 网格 / 坐标轴 / sin 曲线 / 圆均为 `MeasureSpace::Screen`
-> （粗细恒定）；只有公式描边是 `World`（随缩放成比例）。唯一换算点在
+> 度量空间：分镜的曲线 / 公式形变 / 网格 / 坐标轴均为 `MeasureSpace::Screen`
+> （粗细恒定）；只有内容纹理那条公式描边是 `World`（随缩放成比例）。唯一换算点在
 > `xcal-render::record_scene`。
 
 ---
@@ -289,15 +304,21 @@ snapshots/
 
 ## 依赖
 
+> **P5 文档修正（先核查）**：本节此前写作 `xcal-scene = { features = ["egui"] }`，
+> 但 `crates/scene/xcal-scene/Cargo.toml` **没有 `[features]` 段**（实测，全仓库无该
+> feature 定义）——以代码为准，已改为无 feature 的普通依赖。
+
 ```toml
-xcal-scene              = { features = ["egui"] }
-xcal-render                             # 默认 feature="wgpu"
+xcal-scene                              # 场景组件 / 装配对象 / 动画（ClockForest + Binding + Timeline）
+xcal-schedule                           # 调度内核 + Telemetry
+xcal-render                             # 2D 管线（含 P4 归位的三个录制 System + ViewRect）
 xcal-render-backends   = { features = ["egui-wgpu"] }
 xcal-egui
 xc-macro
 xc-content                              # 公式 IR 类型
 xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
-xc-notion                             # 形变 demo：直接构造 Path2D（MorphShape 的 from/to）
+xc-notion                             # 分镜：直接构造 Path2D（MorphShape 的 from/to）
+xc-object                             # 相机句柄 / 取景参数 / 图元
 
 eframe = { version = "0.36", default-features = false, features = ["wgpu","x11","wayland"] }
 egui / egui-wgpu / wgpu 30

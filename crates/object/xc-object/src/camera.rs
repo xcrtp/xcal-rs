@@ -11,6 +11,7 @@
 
 use xc_notion::proj::{directx, look_at_mat4};
 use xc_notion::{Mat4, Rect2D, Transform2D, Vec2, Vec3};
+use xc_scene_contract::{ObjectId, Scene, SceneRead};
 
 /// [`Camera2D::fit_bounds`] 的退化阈值：包围盒某方向尺寸 ≤ 该值即视为退化
 /// （保持基底 `scale`）。与 `xcal-app` 原手写式的 `size.x > 1e-3` 同值。
@@ -129,6 +130,68 @@ impl Camera2D {
         };
         Camera2D::new(bbox.center(), scale, self.rect)
     }
+}
+
+// ─── Framing2D / Camera2DHandle（P1-2 + P2）────────────────────────────────
+
+/// 2D 相机**取景参数**（不含视口矩形）——相机作为**场景对象**的形态。
+///
+/// 为什么与 [`Camera2D`] 拆开（P1-2 方案 a）：`Camera2D` 里绑着 `rect`（屏幕视口
+/// 矩形）⇒ "同一个相机渲染到 800×600 与 1920×1080"会变成"改相机"，句柄就不是纯引用。
+/// 取景（`center` / `scale`）属于**场景对象**，视口矩形属于**渲染目标**：
+/// 前者进 scene（可被 handle 引用、可被动画驱动），后者在录制时由渲染层绑定。
+#[derive(Debug, Clone, Copy, PartialEq, derive_new::new)]
+pub struct Framing2D {
+    /// 逻辑坐标系中的取景中心。
+    pub center: Vec2,
+    /// 缩放：1 世界单位 = `scale` 像素（方向约定同 [`Camera2D::scale`]）。
+    pub scale: f32,
+}
+
+impl Default for Framing2D {
+    /// 与 UI 侧原默认一致：世界原点居中、scale = 40（像素/世界单位）。
+    fn default() -> Self {
+        Self {
+            center: Vec2::ZERO,
+            scale: 40.0,
+        }
+    }
+}
+
+impl Framing2D {
+    /// 绑定**渲染目标矩形** → 本帧 [`Camera2D`]（唯一取景 → 相机的绑定点）。
+    pub fn to_camera_2d(&self, rect: Rect2D) -> Camera2D {
+        Camera2D::new(self.center, self.scale, rect)
+    }
+}
+
+/// 2D 相机句柄（P2，**引用型**）：指向 scene 里的相机对象（持有 [`Framing2D`]）。
+///
+/// 句柄是"隔离**时间**与**渲染目标**的一层膜"：它只携带身份，取景参数从 scene 读、
+/// 视口矩形由渲染目标传入 ⇒ 时间进不了渲染层，同一句柄换目标只是画面大小不同。
+///
+/// 与 `ObjectId` 的关系：句柄**存 `ObjectId` 而非 `hecs::Entity`**（对象层不依赖
+/// hecs），失效检测可接 [`ObjectId::is_stale`](xc_scene_contract::ObjectId::is_stale)。
+///
+/// `Default` = `ObjectId::DANGLING`（永不匹配任何对象的哨兵）：调用方在"尚未装配相机"
+/// 时可先用它占位，解析必然失败并跳过本帧渲染（不 panic）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Camera2DHandle(pub ObjectId);
+
+impl Camera2DHandle {
+    /// 解析为本帧渲染用 [`Camera2D`]：scene 里的取景参数（[`Framing2D`]）绑定目标 `rect`。
+    ///
+    /// 对象不存在 / 未挂 `Framing2D` ⇒ `None`（句柄失效，调用方跳过本帧渲染，不 panic）。
+    pub fn resolve<S: SceneRead>(&self, scene: &S, rect: Rect2D) -> Option<Camera2D> {
+        scene.with::<Framing2D, _>(self.0, |f| f.to_camera_2d(rect))
+    }
+}
+
+/// 在场景里创建 2D 相机对象，返回其句柄（脚本取景入口）。
+///
+/// 返回 `None` = `Framing2D` 未在实现的组件登记表中（见 `xcal-scene::contract`）。
+pub fn spawn_camera2d<S: Scene>(scene: &mut S, framing: Framing2D) -> Option<Camera2DHandle> {
+    scene.spawn_dyn(vec![Box::new(framing)]).map(Camera2DHandle)
 }
 
 // ─── Projection / Camera3D ────────────────────────────────────────────────

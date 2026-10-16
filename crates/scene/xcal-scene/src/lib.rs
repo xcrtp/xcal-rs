@@ -8,6 +8,7 @@
 // 独立的 `xcal-schedule` crate。
 
 pub mod animation;
+pub mod camera_input;
 pub mod contract;
 pub mod director_state;
 pub mod domain;
@@ -22,8 +23,9 @@ pub use errors::Error;
 pub use scene::{Scene, comp, components, primitives};
 pub use transform::{Transform2D, Transform2DInto};
 pub use time_state::TimeState;
-pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, PlayMode};
-pub use animation::{BindingTable, Binding, BindingTarget, SeekKind};
+pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
+pub use animation::{Binding, BindingTable, SeekKind, Target, TargetKind, Timeline};
+pub use camera_input::{CameraInputSystem, apply_pan_zoom};
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
 pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
 // 相机（M3-2）与摆放组件（M3-4）归场景对象层 `xc-object`：本层**不转发**，

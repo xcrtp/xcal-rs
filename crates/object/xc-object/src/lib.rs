@@ -34,7 +34,7 @@ pub mod zorder;
 
 pub use affine::{map_path_affine, uniform_scale};
 pub use axes::{AXIS_Z, Axes2D, AxesLine, GRID_Z, TickSpec};
-pub use camera::{Camera2D, Camera3D, Projection};
+pub use camera::{Camera2D, Camera2DHandle, Camera3D, Framing2D, Projection, spawn_camera2d};
 pub use content_texture::{CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH};
 pub use graph::{CONTENT_Z, FunctionGraph};
 pub use placement::Transform;

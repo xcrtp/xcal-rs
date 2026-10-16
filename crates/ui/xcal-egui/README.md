@@ -2,8 +2,11 @@
 
 > **UI 适配层**：`EguiSceneHost` 是 egui 与场景之间的**唯一**适配层——把每帧 egui
 > 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容；
-> 另有 5 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（相机输入、时间控制、
-> 坐标轴刷新、函数图像刷新、场景录制），只依赖纯数据 Resource，可 headless 测试。
+> 另有 2 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（坐标轴刷新、函数图像
+> 刷新），只依赖纯数据 Resource，可 headless 测试。
+>
+> **P1 / P4 归位**：相机状态搬进场景（本层不再持 `AppCamera`）、三个录制 System
+> 搬到 `xcal-render`、`ViewRect` 随之下沉 —— 详见下方"已迁出"。
 
 ```
 xcal-scene (场景组件 + 场景 System + domain 契约)
@@ -29,16 +32,16 @@ xcal-app (装配 + ParamPanelSystem)
 
 | Resource | 归属 | 说明 |
 |----------|------|------|
-| `AppCamera { center: Vec2, scale: f32 }` | 本 crate | 2D 相机**纯状态**；输入处理已删除，控制器是纯函数 `apply_command`（消费 domain 的 `CameraCommand`）|
-| `UiConfig { show_grid, show_field, flip_layer_order }` | 本 crate | 面板显示开关 + S3-2 图层顺序翻转（默认 `false`）|
-| `ViewRect { rect }` | 本 crate | 中央视口在 egui 点坐标中的矩形（由 `EguiSceneHost::update_view_rect` 写入）|
+| `UiConfig { show_grid, show_field, show_2d, show_3d, flip_layer_order }` | 本 crate | 面板显示开关（`show_2d` / `show_3d` = 图层开关，默认都开）+ S3-2 图层顺序翻转（默认 `false`）|
 | `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
 | `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
 | `InputEvents`（`Vec<SceneEvent>`）| xcal-scene::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
-| `DrawQueue`（来自 xcal-render）| — | 2D 绘制命令队列（RenderCommit 由 `SceneRecordSystem` 录场景；网格线已是场景对象，与内容同路录制）|
-| `DrawQueue3D`（来自 xcal-render）| — | 3D 绘制命令队列（`EguiSceneHost::present` 消费）|
-| `ContentTextureQueue`（来自 xcal-render，S3-3）| — | 内容纹理层的当帧录制结果（标记实体）|
-| `MorphQueue`（来自 xcal-render，S4.3）| — | 形变项当帧快照（`from`/`to` 常量 + 逐帧 `t`），由 `MorphRecordSystem` 写 |
+| `Camera2DHandle`（来自 xc-object）| — | 主 2D 相机的**引用型句柄**（P2）：指向场景里的相机对象（持 `Framing2D`）。相机状态本身**不是 Resource**（P1-1）|
+| `ViewRect`（来自 xcal-render）| — | 本帧渲染目标矩形（P4 下沉）。由 `EguiSceneHost::update_view_rect` 写入；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑）|
+| `DrawQueue` / `DrawQueue3D` / `ContentTextureQueue` / `MorphQueue`（来自 xcal-render）| — | 各渲染队列；由 `xcal-render::record_systems` 的三个录制 System 与 app 的 3D 录制写入 |
+
+> `AppCamera` **已删除**（P1-1）：相机状态是**场景对象**（`xc_object::Framing2D`），
+> UI 只发 `CameraCommand`（控制器纯函数 `xcal_scene::camera_input::apply_pan_zoom`）。
 
 > `EguiFrameContext` **已删除**（B 阶段 UI 解耦）：egui 访问收敛到 `EguiSceneHost`，
 > 场景侧 System 只依赖纯数据 `InputEvents`，因此可 headless 测试。
@@ -52,28 +55,30 @@ xcal-app (装配 + ParamPanelSystem)
 
 | Phase | System | 读写 | 功能 |
 |-------|--------|------|------|
-| Input | `CameraInputSystem` | R=`InputEvents`; W=`AppCamera` | 过滤 `SceneEvent::Camera`，委托 `AppCamera::apply_command`（PanZoom 模式）|
 | LogicUpdate | `TimeControlSystem` | R=`InputEvents`; W=`DirectorState` | 消费 `Button(PLAY_PAUSE)` / `Slider(SPEED)` / `Slider(SEEK)` |
-| Prepare | `AxesRefreshSystem`（M4）| R=`ViewRect`, `AppCamera`, `UiConfig`; W=— | 取本帧相机 → 调对象层 `Axes2D::refresh`（几何在 `xc-object`，本层只接线）|
+| Prepare | `AxesRefreshSystem`（M4）| R=`ViewRect`, `Camera2DHandle`, `UiConfig`; W=— | 取本帧相机 → 调对象层 `Axes2D::refresh`（几何在 `xc-object`，本层只接线）|
 | Prepare | `FunctionGraphRefreshSystem`（M4）| R=—; W=— | 取实体相位（`PhaseAnim`）→ 调对象层 `FunctionGraph::refresh`（写路径 = 契约层 `Scene::set`）|
-| RenderCommit | `SceneRecordSystem` | R=`ViewRect`, `AppCamera`; W=`DrawQueue` | `record_scene(&WorldView, camera, dq)`（契约层 `SceneRead`，**不认识 hecs**）|
-| RenderCommit | `ContentTextureRecordSystem`（S3-3）| R=`ContentTextureSpec`; W=`ContentTextureQueue` | 只录带 `ContentTextureItem` 标记的实体到内容纹理 |
-| RenderCommit | `MorphRecordSystem`（S4.3）| R=`ViewRect`, `AppCamera`; W=`MorphQueue` | 调 `push_morph_item`（**不做 CPU 插值**，`t` 走 uniform；换算收在 xcal-render）|
 
-其他阶段由别的 crate 提供：Input 的 `DirectorAdvance`、SceneSync 的 `BindingApply`
-（xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
+### 已迁出（P1 / P4）
+
+| System | 新家 | 理由 |
+|---|---|---|
+| `CameraInputSystem` | `xcal-scene::camera_input` | 相机状态归**场景对象**；控制器纯函数 `apply_pan_zoom` 一并搬走 |
+| `SceneRecordSystem` | `xcal-render::record_systems` | 渲染动作住渲染层；不再读 UI 的 `ViewRect`（已下沉） |
+| `MorphRecordSystem` | 同上 | 同上 |
+| `ContentTextureRecordSystem` | 同上 | 同上；其**内联 hecs 查询**一并改为契约层 `for_each*`（"换场景实现要整体重写"→"只需换适配器"） |
+
+其他阶段由别的 crate 提供：Input 的 `DirectorAdvance` / `CameraInput`、SceneSync 的
+`BindingApply`（xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。
+`Phase::FrameEnd` 目前为空。
 
 > **M4：UI 层不含几何计算。** 原网格构建 System（相机裁剪 / 步长自适应 / 刻度线 /
 > 坐标轴，279 行）已退役，四段逻辑整体归 `xc_object::Axes2D`；函数采样归
 > `xc_object::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
 > 世界↔屏幕换算（换算只在 `xcal-render` 的唯一换算点）。
 >
-> `SceneRecordSystem` 需要 `&hecs::World`（不可变）与 `&mut DrawQueue`，通过
-> `ctx.with_world_and_resource_mut::<DrawQueue, _>(...)` 做拆分借用，
-> 再经只读适配器 `WorldView` 接进契约层。
->
-> S4.3 的 `MorphRecordSystem` 之所以是独立 System 而不是并进 `SceneRecordSystem`：
-> 既有 System 的 `Reads` / `Writes` 是冻结契约（S3-4 §6），不能新增写资源。
+> P1：`AxesRefreshSystem` 的相机来自**场景对象**（经 `Camera2DHandle` 指认 + `ViewRect`
+> 绑定视口）；只读世界解析相机、再取世界可变借用写线段，一读一写不重叠。
 
 ---
 
@@ -82,11 +87,15 @@ xcal-app (装配 + ParamPanelSystem)
 `EguiSceneHost`（`host.rs`）绘制的三个面板：
 
 - **控制面板（左）**：`t` 读数、`显示网格` / `显示向量场` 复选框、
-  **`GPU 2D 管线` 复选框**（S3-1 运行期开关，默认开）、
-  **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数。
-- **时间面板（左）**：播放/暂停按钮、速度滑块、时间轴 seek 滑块。
-- **参数面板（右）**：按 (curve, target) 展示绑定滑块——圆半径 `base/amp/omega`、
-  函数相位 `omega`、3D 轨道相机 `radius/speed/angle`。
+  **`2D 相机` / `3D 相机` 复选框**（图层开关：关掉即 `build_scene_view` 不再声明该图层，
+  等于关掉对应相机）、
+  **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数
+  （值取自本帧 `SceneView` 的 2D 图层 —— UI 不再持有相机状态）。
+- **时间面板（左）**：播放/暂停按钮、**`⟲ 重新播放` 按钮**（拨回 `t = 0` 并恢复播放 →
+  `Button(REPLAY)` → `TimeControlSystem`）、速度滑块、时间轴 seek 滑块。
+- **参数面板（右）**：按 **(目标类别, 曲线类型)** 展示绑定滑块——圆半径 `base/amp/omega`、
+  函数相位 `omega`、3D 轨道相机 `radius/speed/angle`（目标 trait 化后用
+  `Target::kind()` 分类，见 `xcal_scene::animation::TargetKind`）。
 
 所有控件交互都以 `SceneEvent`（按 `WidgetId` 标识）上报，由场景侧 System 消费。
 
@@ -95,7 +104,8 @@ xcal-app (装配 + ParamPanelSystem)
 ## `EguiSceneHost`：唯一 egui 触点
 
 - `build_scene_view(world, res) -> SceneView`：场景 → UI，纯数据（2D 图层取
-  `AppCamera` + `ViewRect`，3D 图层取 World 中第一个 `Camera3D`）。
+  `Camera2DHandle` 指向的场景相机对象 + `ViewRect` 绑定，3D 图层取 World 中第一个
+  `Camera3D`）。
 - `begin_frame(ui, view, res)`：收集视口输入（滚轮 → `Zoom`、右键/中键拖拽 → `Pan`，
   位移在 host 内换算为**世界坐标**并做 Y 翻转）+ 三面板 chrome，整帧替换写入
   `InputEvents`；随后 `update_view_rect` 写 `ViewRect`（必须在 `run_frame` 之前，
@@ -142,9 +152,11 @@ xcal-app (装配 + ParamPanelSystem)
 
 ```toml
 xcal-scene                                                    # 场景组件 + System + domain 契约
-xcal-render            = { default-features = false }         # 2D 录制管线（无 wgpu）
+xcal-schedule                                                 # System / ExecutorContext / Resources
+xcal-render            = { default-features = false }         # 2D 录制管线 + `ViewRect`（P4 下沉）
 xcal-render-backends   = { default-features = false, features = ["egui-wgpu"] } # Compositor / SceneCompositorCallback
 xc-notion                                                   # S3-1：以 Rect2D 声明回调视口
+xc-object                                                   # 相机句柄 / 取景参数 / 图元
 xc-macro
 egui                   = "0.36"
 egui-wgpu                                                     # present 提交 3D/GPU2D 回调
@@ -160,12 +172,16 @@ cargo test -p xcal-egui
 cargo doc  -p xcal-egui --no-deps
 ```
 
-- `resources`：`AppCamera` / `UiConfig` Default（含 `!flip_layer_order` 断言）/ `Resources` 增删
-- `systems`：`CameraInputSystem` zoom / clamp / pan / 无事件 4 例；`AppCamera::apply_command`
-  忽略 Orbit/Dolly 1 例；`AxesRefreshSystem` 每帧清旧建新 + `show_grid` 开关 2 例；
+- `resources`：`UiConfig` Default（含 `!flip_layer_order` 断言）/ `Resources` 增删
+- `systems`：`AxesRefreshSystem` 每帧清旧建新 + `show_grid` 开关 + 无相机句柄跳过 3 例；
   `FunctionGraphRefreshSystem` 按实体相位重采样 1 例
-- `time_control`：`TimeControlSystem` 播放切换 / speed+seek / 无关事件忽略 3 例
+- `time_control`：`TimeControlSystem` 播放切换 / **重播（拨回 0 并恢复播放）** /
+  speed+seek / 无关事件忽略 4 例
 - `host`：`build_scene_view` 图层声明（含 `LayerBlend::Alpha` / `opacity` / 默认背景断言）/
-  缺层跳过 / 2D 相机与 AppCamera 一致 3 例
+  缺层跳过 / 2D 相机 = 取景参数绑定 `ViewRect` 3 例
+
+> 迁出的 System 由新家自带测试：`xcal-scene::camera_input`（zoom/clamp/pan/无事件/失效句柄/
+> 控制器忽略 Orbit）与 `xcal-render::record_systems`（相机→视口绑定、失效句柄跳过、
+> 形变项、内容纹理过滤）。
 
 以上均为 **headless**（无窗口、无 egui 上下文）构造 `Scheduler + Resources` 驱动。

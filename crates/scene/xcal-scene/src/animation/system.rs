@@ -3,17 +3,18 @@
 // 把时钟树 + 曲线 应用到 hecs 组件。SceneSync 阶段。
 // 纯 Resource 读、组件（ctx.world）写。
 // 等价性单测：新链路 vs 旧 AnimationApplySystem 公式，误差 < 1e-5。
+//
+// P0：目标由 `BindingTarget` 枚举改为 `Arc<dyn Target>` —— 本 System 只做
+// "遍历 + 求值 + 派发"，**不认识任何具体目标**（新增目标零 System 改动）。
 
 use xc_time::{AnimValue, ClockForest};
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::{MorphShape, PhaseAnim};
-use xc_object::{Camera3D, Circle};
 use xcal_scene::TimeState;
 
-use crate::animation::binding::{BindingTarget, BindingTable};
+use crate::animation::binding::BindingTable;
 
-/// 遍历 BindingTable，按 `BindingTarget` 把 `Curve::sample(forest.eval_local(clock, t))` 写入组件字段。
+/// 遍历 BindingTable，按 `Binding.target` 把 `Curve::sample(forest.eval_local(clock, t))` 写入组件字段。
 pub struct BindingApplySystem;
 
 impl System for BindingApplySystem {
@@ -35,44 +36,9 @@ impl System for BindingApplySystem {
 
         for b in &table.bindings {
             let lt = forest.eval_local(b.clock, t_global);
-            let value = b.curve.sample(lt);
-            self.apply_target(&b.target, value, &mut ctx.world);
-        }
-    }
-}
-
-impl BindingApplySystem {
-    fn apply_target(&self, target: &BindingTarget, value: xc_time::AnimValue, world: &mut hecs::World) {
-        // 模式匹配取值：曲线输出类型与目标不符时跳过本帧写入（不 panic）。
-        match target {
-            BindingTarget::CircleRadius(entity) => {
-                if let (Ok(mut circle), AnimValue::Scalar(v)) =
-                    (world.get::<&mut Circle>(*entity), value)
-                {
-                    circle.radius = v;
-                }
-            }
-            BindingTarget::Phase(entity) => {
-                if let (Ok(mut phase), AnimValue::Scalar(v)) =
-                    (world.get::<&mut PhaseAnim>(*entity), value)
-                {
-                    phase.phase = v;
-                }
-            }
-            BindingTarget::CameraEye(entity) => {
-                if let (Ok(mut camera), AnimValue::Vec3(v)) =
-                    (world.get::<&mut Camera3D>(*entity), value)
-                {
-                    camera.eye = v;
-                }
-            }
-            BindingTarget::MorphT(entity) => {
-                if let (Ok(mut morph), AnimValue::Scalar(v)) =
-                    (world.get::<&mut MorphShape>(*entity), value)
-                {
-                    morph.t = v;
-                }
-            }
+            let value: AnimValue = b.curve.sample(lt);
+            // 目标自己负责"类型匹配 + 写组件"（不符则跳过本帧，不 panic）。
+            b.target.apply(&mut ctx.world, &value);
         }
     }
 }
@@ -80,7 +46,8 @@ impl BindingApplySystem {
 #[cfg(test)]
 mod tests {
     use super::BindingApplySystem;
-    use crate::animation::binding::{Binding, BindingTarget, BindingTable, SeekKind};
+    use crate::animation::binding::{Binding, BindingTable, SeekKind};
+    use crate::animation::target::CircleRadius;
     use xcal_schedule::resource::Resources;
     use xc_object::Circle;
     use xcal_schedule::scheduler::{Phase, Scheduler};
@@ -195,7 +162,9 @@ mod tests {
                 amp: 0.5,
                 omega: 1.0,
             },
-            target: BindingTarget::CircleRadius(entity),
+            target: std::sync::Arc::new(CircleRadius {
+                id: crate::contract::object_id_of(entity),
+            }),
             seek_kind: SeekKind::O1,
         });
 

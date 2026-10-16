@@ -11,6 +11,9 @@ license.workspace = true
 # RenderLayer / RenderBackend 等 GPU 抽象需要），纯数据/队列/trait 定义不依赖 wgpu。
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene", default-features = false }
+# 调度内核：三个录制 System（record_systems.rs，P4 从 xcal-egui 归位到渲染层）
+# 需要 `System` / `ExecutorContext`。
+xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xc-notion = { path = "../../kernel/xc-notion" }
 # 渲染 IR 层（Shape2D / Style2D / 样式组件 / 降级 trait）已下沉 kernel/xc-render-ir。
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
@@ -41,6 +44,9 @@ lyon_path = "1.0"
 [dev-dependencies]
 glam.workspace = true
 serde_json.workspace = true
+# ⚠️ 仅测试用：录制 System 的用例要驱动 `Scheduler`（容器是 `hecs::World`）。
+# 库本体**不认识 hecs**（M3-7 纪律）—— `record_scene` 只吃契约层 `SceneRead`。
+hecs.workspace = true
 
 [features]
 default = ["wgpu"]

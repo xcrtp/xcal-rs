@@ -140,6 +140,12 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
 /// 的路径会被错误缩放（不报错，只画错）。
 ///
 /// 产出交给 `Path2D::morph` / `Curve::PathMorph` 逐对插值（配对知识不进 xc-time）。
+///
+/// ⚠️ **当前无生产调用点**（P5 记账）：它的唯一消费方是原 S1b「`x²` ↔ `x³` 语义形变」
+/// demo，本轮分镜脚本（`storyboard.rs`）取代了那批 2D demo。函数与文档一并保留 ——
+/// 它是"语义配对形变"这条既有能力的接线（配对知识在 `xc_content`，不在 `xc-time`），
+/// 删除属于独立的下游 churn，不属于本轮范围。
+#[allow(dead_code)]
 pub fn compile_morph_pairs(
     from_ir: &ContentIR,
     to_ir: &ContentIR,

@@ -121,7 +121,8 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 |------|----------|
 | [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
 | [`contract`] | 契约层 hecs 实现：`WorldView` / `WorldScene` / `object_id_of` / `entity_of` + `SceneRead` 转发 |
-| [`animation`] | `Binding` / `BindingTarget` / `BindingTable` / `SeekKind` + `BindingApplySystem` / `MorphApplySystem` |
+| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`+`TargetKind`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming`）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
+| [`camera_input`] | `CameraInputSystem`（P1：相机状态归场景对象）+ 控制器纯函数 `apply_pan_zoom` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |
 | [`transform`] | `Transform2D` / `Transform2DInto` trait 系统（结构体派生用 `xc_macro::Transform2DInto`）|

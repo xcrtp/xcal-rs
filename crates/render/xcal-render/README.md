@@ -107,6 +107,8 @@ xcal-render 同时承载两套渲染抽象：
 |------|------|
 | `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
 | `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
+| `record_systems` | P4 从 `xcal-egui` 归位的三个录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem`（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle`，不读 UI 类型） |
+| `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_3d` | 3D 双列表队列（`DrawQueue3D` / `MeshDraw` / `LineDraw`）|
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
@@ -215,6 +217,7 @@ cargo doc  -p xcal-render --no-deps --all-features
 
 ```toml
 xcal-scene        = { path = "../../scene/xcal-scene", default-features = false }
+xcal-schedule     = { path = "../../schedule/xcal-schedule" }    # P4：录制 System 需要 System / ExecutorContext
 xc-notion         = { path = "../../kernel/xc-notion" }
 xc-render-ir      = { path = "../../kernel/xc-render-ir" }       # Shape2D / Style2D / 样式组件 / 降级 trait
 xc-object         = { path = "../../object/xc-object" }          # 图元 newtype / Camera2D / ZOrder
@@ -231,6 +234,9 @@ lyon_path         = "1.0"
 wgpu              = "30"   (optional, feature = "wgpu")
 ```
 
-> **无 hecs**（M3-7）：`record_scene<S: SceneRead>` 只吃契约层抽象；
-> `Cargo.toml` 的 `[dependencies]` 与 `[dev-dependencies]` 里都已删除 hecs
-> （树中仍会出现传递的 hecs，因为本 crate 依赖 `xcal-scene` —— 那是 ECS 实现层）。
+> **无 hecs（库本体）**（M3-7）：`record_scene<S: SceneRead>` 与 P4 归位的三个录制 System
+> 都只吃契约层抽象（`WorldView` 是 hecs 侧适配器，在 `xcal-scene`）——
+> `Cargo.toml` 的 `[dependencies]` **没有 hecs**。
+> ⚠️ P4 新增 `[dev-dependencies] hecs`（**仅测试**）：驱动 `Scheduler` 的容器就是
+> `hecs::World`，录制 System 的用例无法绕开。库本体的 hecs 零引用不变。
+> （树中一直会出现传递的 hecs，因为本 crate 依赖 `xcal-scene` —— 那是 ECS 实现层。）

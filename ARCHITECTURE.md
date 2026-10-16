@@ -260,7 +260,7 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
 xc-notion：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
 xc-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
 xc-content ：pair_by_anchor（语义配对，按源码锚点）
-xcal-scene  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（SceneSync）
+xcal-scene  ：MorphShape 组件 + target::MorphT（`Arc<dyn Target>`，P0）+ MorphApplySystem（SceneSync）
 ```
 
 - **路线甲**：`xc-time` 依赖 `xc-notion`（插值原语），但**不得**依赖 `xc-content`
@@ -268,10 +268,10 @@ xcal-scene  ：MorphShape 组件 + BindingTarget::MorphT + MorphApplySystem（Sc
 - 对齐按**弧长**（非索引）：`flatten` 输出点分布不均，按索引配对会让直线段被拉伸、
   曲线段被压缩，形变过程"抽动"。
 - 输出顶点数**恒为 `samples`**（默认 128）→ 稳定开销，与输入复杂度无关。
-- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `BindingTarget::MorphT`），
-  `MorphApplySystem` 每帧把 `Path2D::morph_points` 的结果写进同实体的 `Path`
-  —— render 层复用现有 `record_scene`，零录制改动。from/to 不每帧重建
-  （为 S3 上 GPU 预留：上传一次 + 每帧一个 float）。
+- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `xcal_scene::animation::MorphT`），
+  生产路径由 `xcal-render::record_systems::MorphRecordSystem` 录成 `MorphItem`
+  （from/to 常量 + 逐帧 `t`）交 GPU 形变管线；`MorphApplySystem` 是 CPU 回退
+  （实体同时带 `Path` 时生效）。from/to 不每帧重建。
 - **语义配对（S1b）**：`xc_content::pair_by_anchor` 按源码 `Span` 锚点配对
   （`x^2 → x^3` 的 `x` 配到 `x`，而非按位置配到 `3`）；单侧存在 → 淡入/淡出
   （退化为包围盒中心的一个点）；无锚点 → 退化为索引配对。
@@ -423,7 +423,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
 | `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：实测 10 个 crate / 41 文件 / **172 处** `glam::` 直接引用未收敛（M4 计划记为 216 处，系 M2.5 消灭 newtype 之前的实测值） | 分阶段收敛；不阻塞任何功能 |
-| 2D / 3D 录制 System **分居** | `xcal-egui::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层），但合并方式取决于真实录制结构 | 做真实数学动画、确定录制结构时 |
+| 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
 
@@ -529,5 +529,43 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `EguiSceneHost::draw_call_count` / `end_frame`。
 > - **依赖图无变化**：本轮只移动目录与搬内部实现，**没有新增/删除任何依赖边**，
 >   package 名亦未变 ⇒ FanIn/FanOut 表与 `workspace-analyzer.mmd` 无需重算（工具不可用也不影响）。
+>
+> 备注（2026-10-16，首个数学动画原型 P0–P5）：本轮第一次**为"内容"改造引擎**
+> （判据：脚本里写不出来的东西才补；脚本用不到的一个都不补）。依赖图新增两条边：
+> `xcal-render → xcal-schedule`（三个录制 System 需要 `System`，P4）与
+> `xcal-render → hecs`（**仅 dev-dependencies**，测录制 System 用）。
+> - **P0 目标 trait 化**：`BindingTarget` 枚举 → `Arc<dyn Target>`
+>   （`xcal-scene::animation::target`）。五个目标：`CircleRadius` / `Phase` / `CameraEye` /
+>   `MorphT` / `Camera2DFraming`（新增）。新增驱动目标**不改枚举、不改 System 源码**。
+>   代价（记账）：失去 enum exhaustiveness；`dyn Trait` 不能 serde。为 UI 分类另加
+>   `Target::kind() -> TargetKind`（无载荷判别式）。
+> - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`xc_object::Framing2D`，
+>   无 `rect`）；`Camera2D` 与渲染目标 `rect` 解绑（录制时经 `ViewRect` 绑定，方案 a）；
+>   控制器纯函数移到 `xcal-scene::camera_input::apply_pan_zoom`；
+>   `SceneRead` 新增只读**点查询** —— 实现为访客形态 `with<T, R>(id, f)`：
+>   hecs 0.11 的 `World::get::<&T>` 返回**借用守卫** `Ref<'_, T>`，`&T` 交不出去
+>   （与 `for_each` 同一约束；计划原文的 `Option<&T>` 断言与代码事实不符，以代码为准）。
+> - **P2 相机句柄**：`xc_object::Camera2DHandle(pub ObjectId)` + `resolve(scene, rect)`
+>   + `spawn_camera2d`；本轮**只做引用型**，自由相机内联参数按 §5.1 延后（分镜用不到）。
+> - **P3 Timeline**：`xcal-scene::animation::timeline`，顺序游标 → 每段一个
+>   `ClockNode{local_offset, span:(0,dur), mode:Hold}` + `Binding`；`parallel()` 表达
+>   **同区间多动作**（镜头推进同时改 scale/center）。`ClockForest` / `eval_local` **零改动**。
+> - **P4 录制 System 归位**：三个 System → `xcal-render::record_systems`；`ViewRect`
+>   下沉到 `xcal-render`；`MorphRecordSystem` / `ContentTextureRecordSystem` 的
+>   **内联 hecs 查询**改为契约层 `for_each*`（渲染层仍不认识 hecs）。
+> - **P5 分镜脚本**：`xcal-app::storyboard` 声明 §1.1 六条分镜（网格常驻 / 相机对象 /
+>   0–2s 曲线生长 / wait / 2.5–3.5s 镜头推进 / 3.5–4.5s 公式浮现）；
+>   原 2D demo（振动圆 / sin 曲线相位 / 圆↔方 / `x²`↔`x³`）被分镜取代，3D demo 不动。
+> - **P5 实测修（引擎缺陷，非分镜问题）**：**零长度路径 lyon 不产出几何** ——
+>   "退化点 → 完整折线"的形变（分镜 3/6）会被 2D 后端**整条跳过**，表现为
+>   2D 视口只剩网格、**看不到任何动画**，而 `MorphQueue` 层完全看不出异常。
+>   修法：`wgpu_2d::prepare` 在仅一侧可三角化时，用其拓扑合成另一侧
+>   （顶点位置塌到该侧的点、法线归零 ⇒ `t=0` 不可见、随 `t` 平滑长出，
+>   索引/顶点数按构造相等）。证据：`morph_from_degenerate_point_grows_into_target_line`
+>   （GPU 像素级：`batch_count == 1`、覆盖像素随 `t` 严格递增、`t=0` 为 0）。
+> - **P5 实测修（二）**：形变端点原先**恒按闭合环**重采样 ⇒ 开口曲线（`y = sin x`）
+>   首尾之间多出一条**可见的弦**（画在 x 轴上）。改为**闭合性由两端共同决定**
+>   （任一端带 `Close` 即闭合，两端都开口则保持开口）。
+>   用例：`open_morph_endpoints_stay_open_without_chord` / `closed_morph_endpoints_stay_closed`。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

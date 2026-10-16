@@ -17,11 +17,13 @@ use xcal_schedule::resource::Resources;
 use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
 use xcal_scene::scene::components::{Material3D, MeshGeometry};
-use xc_object::Camera3D;
-use xcal_egui::resources::{AppCamera, TimeState, UiConfig, ViewRect};
+use xcal_scene::TimeState;
+use xcal_egui::resources::UiConfig;
+use xcal_render::ViewRect;
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::RenderContext;
+use xc_object::{Camera2DHandle, Camera3D, Framing2D};
 
 /// 环形缓冲保留的帧耗时样本数（约 4 秒 @60fps）。
 const HISTORY_LEN: usize = 240;
@@ -60,13 +62,18 @@ impl HealthOverlay {
         registry.register_component::<PhaseAnim>("PhaseAnim");
 
         // ── Resource 注册（仅记录存在性）──
-        registry.register_resource::<AppCamera>("AppCamera");
+        // P1-1：`AppCamera` 已删除（相机状态归场景对象）；这里登记的是
+        // 相机**句柄**与场景里的取景参数组件。
+        registry.register_resource::<Camera2DHandle>("Camera2DHandle");
         registry.register_resource::<TimeState>("TimeState");
         registry.register_resource::<UiConfig>("UiConfig");
         registry.register_resource::<ViewRect>("ViewRect");
         registry.register_resource::<DrawQueue>("DrawQueue");
         registry.register_resource::<DrawQueue3D>("DrawQueue3D");
         registry.register_resource::<RenderContext>("RenderContext");
+
+        // 2D 相机取景参数（P1-2：与渲染目标 rect 解绑后的相机对象形态）。
+        registry.register_component::<Framing2D>("Framing2D");
 
         Self {
             open: false,

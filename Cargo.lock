@@ -5894,6 +5894,7 @@ dependencies = [
  "derive_builder",
  "derive_more",
  "glam",
+ "hecs",
  "lyon_path",
  "lyon_tessellation",
  "serde",
@@ -5908,6 +5909,7 @@ dependencies = [
  "xc-scene-contract",
  "xc-vertex",
  "xcal-scene",
+ "xcal-schedule",
 ]
 
 [[package]]

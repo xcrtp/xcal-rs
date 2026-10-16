@@ -29,6 +29,12 @@ impl System for TimeControlSystem {
         for event in events {
             match event {
                 SceneEvent::Button { id } if id == ids::PLAY_PAUSE => dir.director.toggle(),
+                // 重新播放：拨回 0 并恢复播放。全部绑定是 O1（纯函数、无记忆）
+                // ⇒ 场景状态由 t 唯一决定，回到 0 即回到初始画面（无需重建场景）。
+                SceneEvent::Button { id } if id == ids::REPLAY => {
+                    dir.director.seek(0.0);
+                    dir.director.resume();
+                }
                 SceneEvent::Slider { id, value } if id == ids::SPEED => {
                     dir.director.set_speed(value as f64);
                 }
@@ -68,6 +74,29 @@ mod tests {
         let before = DirectorState::new();
         let after = run_with_events(vec![SceneEvent::Button { id: ids::PLAY_PAUSE }]);
         assert_ne!(after.director.playing, before.director.playing);
+    }
+
+    /// headless：Button(REPLAY) 把时间拨回 0 并恢复播放（无论当前是否暂停）。
+    #[test]
+    fn replay_button_seeks_to_zero_and_resumes() {
+        // 当前状态：已跑到 3.7s 且处于暂停 —— 重播应同时"归零"与"开始播放"。
+        let mut resources = Resources::new();
+        let mut director = DirectorState::new();
+        director.director.seek(3.7);
+        director.director.pause();
+        resources.insert(director);
+        resources.insert(InputEvents::from_events(vec![SceneEvent::Button {
+            id: ids::REPLAY,
+        }]));
+
+        let mut sched = Scheduler::new(hecs::World::new(), resources);
+        sched.add_system(Phase::LogicUpdate, TimeControlSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let d = sched.resources().get::<DirectorState>().unwrap();
+        assert!(d.director.global_t.abs() < 1e-9, "应拨回 0，实际 {}", d.director.global_t);
+        assert!(d.director.playing, "重播后应处于播放态");
     }
 
     /// headless：Slider(SPEED) / Slider(SEEK) 分别作用于 speed / global_t。

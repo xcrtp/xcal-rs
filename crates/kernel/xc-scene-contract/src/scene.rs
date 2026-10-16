@@ -66,6 +66,24 @@ pub trait SceneRead {
         &self,
         f: impl FnMut(ObjectId, &A, &B, Option<&C>),
     );
+
+    /// **只读点查询（访客形态）**：`id` 存在且带组件 `T` 时，以 `&T` 调用 `f`
+    /// 并返回其结果；对象不存在 / 未挂 `T` ⇒ `None`。
+    ///
+    /// 用途（P1-3）：相机**句柄**（`Camera2DHandle`）要按 `ObjectId` 取一个场景对象上的
+    /// 取景参数，而渲染录制只拿得到 `&S`（[`SceneRead`]），没有 `&mut`。
+    ///
+    /// # 为什么是访客形态，而不是 `Option<&T>`（实测修正）
+    ///
+    /// hecs 0.11 的 `World::get::<&T>(entity)` 返回的是**借用守卫**
+    /// `Ref<'_, T>`（生命周期绑在 `&World` 的借用上，守卫本身必须存活），
+    /// 因此无法把 `&T` 直接交出去 —— 与 [`SceneRead::for_each`] 是**同一约束**，
+    /// 不是为迁就实现而降低表达力（`with` 同样表达"按 id 读一个组件"）。
+    fn with<T: 'static + Send + Sync, R>(
+        &self,
+        id: ObjectId,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R>;
 }
 
 /// **读写**场景：在 [`SceneRead`] 之上补创建 / 销毁 / 写入。

@@ -298,34 +298,53 @@ pub struct MorphItem {
 }
 
 impl MorphItem {
-    /// 两端经**弧长等点重采样**后的闭合折线（点数恒为 `samples`）。
+    /// 两端经**弧长等点重采样**后的折线（点数恒为 `samples`；闭合与否见下）。
     ///
-    /// 与 [`xc_notion::Path2D::morph_points`] 的采样口径完全一致
-    /// （同样的 `n` / `MORPH_TOLERANCE` / `closed = true`），但**与 `t` 无关**
+    /// 与 [`xc_notion::Path2D::morph_points`] 的采样口径一致（同样的 `n` /
+    /// `MORPH_TOLERANCE`），但**闭合性由两端共同决定**、且**与 `t` 无关**
     /// ⇒ 结果可逐帧缓存，是"几何帧间不变"的关键。
     ///
-    /// 退化处理与 `morph_points` 相同：任一侧为空时用另一侧补齐两端。
+    /// # 闭合性（实测修）
+    ///
+    /// 早期版本**恒按闭合环**重采样：开口曲线（如 `y = sin x`）会因此多出一条
+    /// **首尾相接的弦** —— 在分镜里表现为 x 轴上一条可见的青色直线。
+    /// 现在改为：**任一端自带闭合语义（末命令 `Close`）即闭合，否则开口**
+    /// （两端必须同口径，逐点插值才成立；闭合是超集：闭合端按环采、开口端按折线采
+    /// 都会得到 `n` 个点，但当两端都开口时不再补弦）。
+    ///
+    /// 退化处理：任一侧为空时用另一侧补齐两端。
+    ///
+    /// ⚠️ **零长度但不为空的一侧**（"退化点"起点，全点重合）**不在这里处理** ——
+    /// lyon 对零长度路径不产出几何（实测 `tess_len = 0`），2D 后端会在
+    /// `prepare` 阶段用另一侧的拓扑合成它（见 `wgpu_2d.rs` 的 `collapsed_like`）；
+    /// 本函数只负责"点数对齐 + 闭合口径一致"这两件事。
     pub fn sampled_endpoints(&self) -> (xc_notion::Path2D, xc_notion::Path2D) {
         use xc_notion::{MORPH_TOLERANCE, Path2D};
         let n = self.samples.max(1) as usize;
-        let a = self.from.resample_arc_length(n, MORPH_TOLERANCE, true);
-        let b = self.to.resample_arc_length(n, MORPH_TOLERANCE, true);
+        let closed = is_closed_path(&self.from) || is_closed_path(&self.to);
+        let a = self.from.resample_arc_length(n, MORPH_TOLERANCE, closed);
+        let b = self.to.resample_arc_length(n, MORPH_TOLERANCE, closed);
         match (a.is_empty(), b.is_empty()) {
             (true, true) => (Path2D::new(), Path2D::new()),
             (true, false) => {
-                let p = Path2D::from_polyline(&b, true);
+                let p = Path2D::from_polyline(&b, closed);
                 (p.clone(), p)
             }
             (false, true) => {
-                let p = Path2D::from_polyline(&a, true);
+                let p = Path2D::from_polyline(&a, closed);
                 (p.clone(), p)
             }
             (false, false) => (
-                Path2D::from_polyline(&a, true),
-                Path2D::from_polyline(&b, true),
+                Path2D::from_polyline(&a, closed),
+                Path2D::from_polyline(&b, closed),
             ),
         }
     }
+}
+
+/// 路径是否自带闭合语义（末命令为 [`xc_notion::PathCommand::Close`]）。
+fn is_closed_path(p: &xc_notion::Path2D) -> bool {
+    matches!(p.commands.last(), Some(xc_notion::PathCommand::Close))
 }
 
 /// 形变绘制队列（S4.3）：当帧的形变项，与 [`DrawQueue`] 并行持有。
@@ -599,6 +618,16 @@ mod tests {
                     f(*id, a, b, c);
                 }
             }
+        }
+
+        fn with<T: 'static + Send + Sync, R>(
+            &self,
+            id: ObjectId,
+            f: impl FnOnce(&T) -> R,
+        ) -> Option<R> {
+            let comps = &self.items.iter().find(|(i, _)| *i == id)?.1;
+            let t = comps.iter().find_map(|c| c.downcast_ref::<T>())?;
+            Some(f(t))
         }
     }
 
@@ -1051,5 +1080,66 @@ mod tests {
             panic!("expected Shape2D::Circle");
         };
         assert!((radius - 20.0).abs() < 1e-4, "radius = {radius}");
+    }
+
+    /// 形变端点的**闭合口径**（实测修）：两端都开口 ⇒ 不得补弦。
+    ///
+    /// 早期版本恒按闭合环重采样，开口曲线（分镜的 `y = sin x`）会因此多出一条
+    /// **首尾相接的弦** —— 在画面上就是 x 轴上一条额外的直线。
+    #[test]
+    fn open_morph_endpoints_stay_open_without_chord() {
+        let pts: Vec<glam::Vec2> = (0..=16)
+            .map(|i| {
+                let x = -1.0 + (i as f32) * 0.125;
+                glam::Vec2::new(x, x.sin())
+            })
+            .collect();
+        let item = MorphItem {
+            from: Path2D::from_polyline(&[pts[0], pts[0]], false),
+            to: Path2D::from_polyline(&pts, false),
+            t: 1.0,
+            samples: 32,
+            style: Style2D::default(),
+        };
+        let (from, to) = item.sampled_endpoints();
+        for (name, p) in [("from", &from), ("to", &to)] {
+            assert_eq!(
+                p.flatten(0.0).len(),
+                32,
+                "{name} 重采样点数应恒为 samples"
+            );
+            assert!(
+                !matches!(p.commands.last(), Some(xc_notion::PathCommand::Close)),
+                "{name} 应保持开口（否则首尾会多出一条弦）"
+            );
+        }
+    }
+
+    /// 反向：两端都闭合（如 S1a 的圆→方）⇒ 仍闭合，行为不变。
+    #[test]
+    fn closed_morph_endpoints_stay_closed() {
+        let ring = |r: f32| {
+            let pts: Vec<glam::Vec2> = (0..16)
+                .map(|i| {
+                    let a = std::f32::consts::TAU * (i as f32) / 16.0;
+                    glam::Vec2::new(r * a.cos(), r * a.sin())
+                })
+                .collect();
+            Path2D::from_polyline(&pts, true)
+        };
+        let item = MorphItem {
+            from: ring(1.0),
+            to: ring(2.0),
+            t: 0.5,
+            samples: 32,
+            style: Style2D::default(),
+        };
+        let (from, to) = item.sampled_endpoints();
+        for (name, p) in [("from", &from), ("to", &to)] {
+            assert!(
+                matches!(p.commands.last(), Some(xc_notion::PathCommand::Close)),
+                "{name} 应保持闭合"
+            );
+        }
     }
 }

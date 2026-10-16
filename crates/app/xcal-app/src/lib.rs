@@ -1,45 +1,44 @@
 // xcal-app: 组装 + 启动层
 //
 // App::new 负责：
-//   - 构建 Scene、初始化 World 图元
-//   - 构建 Resources、挂载各个 egui Resource 类型
-//   - 构建 Scheduler、按 Phase 注册 System（迁移到新阶段分配以避开冲突）
+//   - 构建 Scene（3D demo + 首个数学动画原型的分镜脚本）
+//   - 构建 Resources、挂载各个 Resource 类型
+//   - 构建 Scheduler、按 Phase 注册 System
 //   - 实现 eframe::App trait（ui 每帧调度）
+//
+// P5（本轮内容目标）：**首个数学动画原型**的六条分镜在
+// [`storyboard::build`] 里被**声明**出来（而不是手工 spawn 一堆实体 + 手写 offset）。
 
 use std::sync::Arc;
 use std::time::Instant;
 
 pub use xcal_scene::Result;
-use xcal_scene::animation::{
-    Binding, BindingApplySystem, BindingTable, BindingTarget, SeekKind,
-};
-use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
-use xcal_scene::errors::Error;
-use xcal_schedule::resource::Resources;
-use xcal_scene::domain::{ContentTextureSpec, InputEvents};
-use xcal_scene::scene::components::{
-    ContentTextureItem, Material3D, MorphShape, TextureHandle,
-};
-use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
-use xcal_schedule::scheduler::{Phase, Scheduler};
-use xcal_scene::TimeState;
-use xcal_scene::types::Color32;
-use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
-use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
-use xcal_egui::systems::{
-    AxesRefreshSystem, CameraInputSystem, ContentTextureRecordSystem, FunctionGraphRefreshSystem,
-    MorphRecordSystem, SceneRecordSystem,
-};
+use xcal_egui::resources::UiConfig;
+use xcal_egui::systems::{AxesRefreshSystem, FunctionGraphRefreshSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
-use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
+use xcal_render::components::{Path, StrokeSolid};
 use xcal_render::{
-    ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, MorphQueue, scene::Scene,
+    ContentTextureQueue, ContentTextureRecordSystem, DrawQueue, DrawQueue3D, MorphQueue,
+    MorphRecordSystem, SceneRecordSystem, ViewRect, scene::Scene,
 };
 use xcal_render_backends::RenderContext;
-use xc_notion::{Path2D, Rect2D, SurfaceFn};
+use xcal_scene::animation::CameraEye;
+use xcal_scene::animation::BindingApplySystem;
+use xcal_scene::camera_input::CameraInputSystem;
+use xcal_scene::contract::object_id_of;
+use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
+use xcal_scene::domain::{ContentTextureSpec, InputEvents};
+use xcal_scene::errors::Error;
+use xcal_scene::scene::components::{ContentTextureItem, Material3D, TextureHandle};
+use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
+use xcal_scene::{ClockNode, Curve, TimeState};
+use xcal_schedule::resource::Resources;
+use xcal_schedule::scheduler::{Phase, Scheduler};
+use xcal_scene::types::Color32;
+use xc_notion::{Rect2D, SurfaceFn};
 use xc_object::{
-    Axes2D, CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
-    FunctionGraph, Projection, Transform,
+    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
+    Projection, Transform,
 };
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
@@ -48,6 +47,7 @@ use xc_object::{
 mod formula;
 mod health;
 mod param_panel;
+mod storyboard;
 mod systems_3d;
 use health::HealthOverlay;
 use param_panel::ParamPanelSystem;
@@ -129,56 +129,21 @@ impl App {
         // 注：eye 由 Orbit 绑定直接写入（半径 5、绕原点、eye.y ≡ 0），改变 target 只影响
         // 朝向，不影响该旋转轨道。
         const SCENE_LOOK_AT: glam::Vec3 = glam::Vec3::new(0.0, -0.9, 0.0);
-        let camera_entity = scene.spawn((
-            Camera3D::new(
-                glam::Vec3::new(0.0, 0.0, 5.0),
-                SCENE_LOOK_AT,
-                glam::Vec3::Y,
-                Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
-            ),
-        ));
+        let camera3d_entity = scene.spawn((Camera3D::new(
+            glam::Vec3::new(0.0, 0.0, 5.0),
+            SCENE_LOOK_AT,
+            glam::Vec3::Y,
+            Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
+        ),));
 
-        let circle_entity = scene.spawn((
-            Circle::new((0.0, 0.0), 1.0),
-            // 屏幕空间：圆粗细是"观测工具"，不随缩放变化。
-            StrokeSolid::new_in(2.0, (100, 255, 0, 255), MeasureSpace::Screen),
-            // 半径振荡由 BindingApplySystem 驱动（Binding 表：base=1.0, amp=0.4, omega=2.0）
-        ));
-
-        // ── 坐标轴 / 网格（M4-2）：规格与装配都在场景对象层 `Axes2D` ──────
-        // 原先由 UI 层网格构建 System（M4 已退役）每帧直写 DrawQueue 的几何
-        // （相机裁剪 / 步长自适应 / 刻度线 / 坐标轴）已整体归位；
-        // 这里只装配一次，逐帧刷新由 `AxesRefreshSystem` 接线。
-        let axes = Axes2D::unbounded();
-        let _axes_handle = axes.build(&mut scene).expect("Axes2D 已登记");
-
-        // ── 函数图像（M4-1）：采样归对象层 `FunctionGraph` ────────────────
-        // 相位仍由 BindingApplySystem 写 `PhaseAnim`；`FunctionGraphRefreshSystem`
-        // 读该相位并按对象自己的采样规格重采样（写路径 = 契约层 `Scene::set`）。
-        let graph = FunctionGraph::new(
-            FunctionX2Y::new(|x: f32| x.sin()),
-            Sampler1D::new(-10.0f32, 10.0, 0.1),
-        );
-        let func_handle = graph
-            .build(
-                &mut scene,
-                StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen),
-            )
-            .expect("FunctionGraph 已登记");
-        let func_entity = xcal_scene::contract::entity_of(func_handle).expect("刚创建的句柄有效");
-
-        // ── 公式接入：Typst 内容管线 → 旧 2D 描边路径（空心字）──────────
-        // 静态一条公式，启动时烘焙一次并 spawn 实体；rebuild() 已留口，
-        // 将来接交互只需加 UI 工作量。零 System 改动：公式作为普通
-        // (Path, StrokeSolid) 实体参与现有 record_scene 录制。
-        // 位置选在上方空白区域，避开 sin 曲线 / 圆 / 网格轴线；
-        // 字号按"窄窗口也能完整看到"取值（默认视口 x∈[-10,10]，但面板会压缩视口）。
+        // ── 公式接入（内容纹理源）：Typst 内容管线 → 2D 描边路径 ──────────
+        // 静态一条公式，启动时烘焙一次并 spawn 实体；它同时是 3D 曲面材质的纹理源
+        // （带 `ContentTextureItem` 标记）。零 System 改动：公式作为普通
+        // `(Path, StrokeSolid)` 对象参与既有录制。
         let engine = formula::build_engine();
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
         // 内容纹理相机（S3-3）：由公式的世界包围盒导出——`rect` 即纹理矩形
-        // （0,0–512,512），让包围盒适配它（margin 0.8 ⇒ 公式宽度 ≈ 纹理宽 × 0.8），
-        // `center` 取包围盒中心。这样录进纹理的点恰好落在 [0,512]×[0,512] 内
-        // （见 xcal-egui 单测 `content_record_maps_into_texture_rect`）。
+        // （0,0–512,512），让包围盒适配它（margin 0.8 ⇒ 公式宽度 ≈ 纹理宽 × 0.8）。
         let texture_rect = Rect2D::new(
             xc_notion::Vec2::ZERO,
             xc_notion::Vec2::new(CONTENT_TEXTURE_WIDTH as f32, CONTENT_TEXTURE_HEIGHT as f32),
@@ -212,121 +177,37 @@ impl App {
             None => eprintln!("[xcal-app] 公式编译失败，跳过公式实体"),
         }
 
-        // ── S1 形变 demo：圆 → 方（弧长对齐的 Path 形变）────────────────
-        // S4.3：形变**上 GPU** —— 实体只带 `MorphShape`（`from`/`to` 常量）+ `StrokeSolid`，
-        // `t` 由 Binding 逐帧写入；`MorphRecordSystem` 把它录成 `MorphItem`，
-        // 由 2D 后端的形变管线做 `mix(from, to, t)`（每帧只写一个 `t` uniform）。
-        // 因此实体**不再带 `Path` 组件**（即不再走 CPU 插值 + 逐帧重三角化）。
-        let morph_center = glam::Vec2::new(-6.0, -2.5);
-        let morph_radius = 1.2;
-        // 起点对齐（原型约定，见 S1 计划已知限制"旋转对齐"）：圆的起笔方向与
-        // 方的首个顶点方向一致（均指向 -45° 的右下角），避免形变过程中"绕圈"旋转。
-        let start_angle = -std::f32::consts::FRAC_PI_4;
-        // 圆采样下沉到理念层 `Circle2D::sample`（原为 app 内的手写三角函数循环）。
-        let circle_pts: Vec<glam::Vec2> =
-            xc_notion::Circle2D::new(morph_center, morph_radius).sample(64, start_angle);
-        let square_pts: Vec<glam::Vec2> = [
-            glam::Vec2::new(morph_radius, -morph_radius),
-            glam::Vec2::new(morph_radius, morph_radius),
-            glam::Vec2::new(-morph_radius, morph_radius),
-            glam::Vec2::new(-morph_radius, -morph_radius),
-        ]
-        .iter()
-        .map(|p| morph_center + *p)
-        .collect();
-        let morph_entity = scene.spawn((
-            MorphShape::new(
-                Path2D::from_polyline(&circle_pts, true),
-                Path2D::from_polyline(&square_pts, true),
-            ),
-            StrokeSolid::new_in(2.0, (255, 180, 0, 255), MeasureSpace::Screen),
-        ));
+        // ── 首个数学动画原型（§1.1 六条分镜）─────────────────────────────
+        // 分镜脚本在 `storyboard.rs`：声明式地表达"先…再…"，编译成 `ClockNode + Binding`
+        // （求值层零改动）。返回：时钟树 + 绑定表 + 主 2D 相机句柄。
+        let sb = storyboard::build(&mut scene, &engine);
 
-        // ── S1b 语义形变 demo：x^2 ↔ x^3（按源码锚点配对）──────────────
-        // `pair_by_anchor` 保证 `x` 配对到 `x`（而非按位置配到 `2`/`3`）。
-        // 每对路径 spawn 一个 MorphShape 实体，由同一个形变时钟同步驱动。
-        let anchor_spec = formula::FormulaSpec::new("x^2", 1.0, glam::Vec2::new(1.5, 3.0));
-        let mut semantic_morph_entities: Vec<hecs::Entity> = Vec::new();
-        let from_ir = formula::rebuild(&engine, &anchor_spec);
-        let to_ir = formula::rebuild(
-            &engine,
-            &formula::FormulaSpec::new("x^3", 1.0, glam::Vec2::new(1.5, 3.0)),
-        );
-        if let (Some(f), Some(t)) = (from_ir, to_ir) {
-            for (from_path, to_path) in formula::compile_morph_pairs(&f, &t, &anchor_spec) {
-                semantic_morph_entities.push(scene.spawn((
-                    MorphShape::new(from_path, to_path),
-                    StrokeSolid::new_in(1.0, (255, 120, 220, 255), MeasureSpace::Screen),
-                )));
-            }
-        }
-
-        let mut world = scene.into_world();
-
-        // 函数图像的相位组件：`FunctionGraphRefreshSystem` 读它、`BindingApplySystem`
-        // 写它（`BindingTarget::Phase(func_entity)`）。装配层不认识动画组件，
-        // 故它在 `FunctionGraph::build` 之后由 App 侧补上。
-        world
-            .insert_one(func_entity, PhaseAnim::new(0.0, 1.5))
-            .expect("实体刚创建");
+        let world = scene.into_world();
 
         // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
-        let mut forest = ClockForest::new();
-        let root_circle = forest.insert(ClockNode::new(None)).unwrap();
-        let root_phase = forest.insert(ClockNode::new(None)).unwrap();
-        let root_orbit = forest.insert(ClockNode::new(None)).unwrap();
-        // 形变时钟：PingPong 在 [0,1] 来回 → t 平滑往返。
-        let mut morph_clock = ClockNode::new(None);
-        morph_clock.span = Some((0.0, 1.0));
-        morph_clock.mode = PlayMode::PingPong;
-        let root_morph = forest.insert(morph_clock).unwrap();
-
-        let mut bindings = BindingTable::new();
-        // 振动圆半径：radius = base + amp * sin(t * omega)，base=1, amp=0.4, omega=2
-        bindings.add(Binding {
-            clock: root_circle,
-            curve: Curve::Sin { base: 1.0, amp: 0.4, omega: 2.0 },
-            target: BindingTarget::CircleRadius(circle_entity),
-            seek_kind: SeekKind::O1,
-        });
-        // sin 曲线相位滑动：phase = t * omega，omega=1.5
-        bindings.add(Binding {
-            clock: root_phase,
-            curve: Curve::Phase { omega: 1.5 },
-            target: BindingTarget::Phase(func_entity),
-            seek_kind: SeekKind::O1,
-        });
-        // 3D 轨道相机：eye = radius * rotate_y(speed * t)，radius=5, speed=0.5
-        bindings.add(Binding {
-            clock: root_orbit,
-            curve: Curve::Orbit {
+        // 分镜已把时间编排编译进 `sb.forest` / `sb.bindings`；下面只补一条与
+        // 分镜编排无关的手工绑定：3D 轨道相机（时间源 = 全局 t）。
+        let mut forest = sb.forest;
+        let mut bindings = sb.bindings;
+        let orbit_clock = forest.insert(ClockNode::new(None)).unwrap();
+        bindings.bind_arc(
+            orbit_clock,
+            // 3D 轨道相机：eye = radius * rotate_y(speed * t)，radius=5, speed=0.5
+            Curve::Orbit {
                 radius: 5.0,
                 axis: glam::Vec3::Y,
                 speed: 0.5,
                 initial_angle: 0.0,
             },
-            target: BindingTarget::CameraEye(camera_entity),
-            seek_kind: SeekKind::O1,
-        });
-        // 形变参数：t = 局部时间 ∈ [0,1]（PingPong 来回）→ MorphShape.t
-        bindings.add(Binding {
-            clock: root_morph,
-            curve: Curve::Phase { omega: 1.0 },
-            target: BindingTarget::MorphT(morph_entity),
-            seek_kind: SeekKind::O1,
-        });
-        // S1b 语义形变：每个配对实体一条 MorphT 绑定（共用同一形变时钟）。
-        for &entity in &semantic_morph_entities {
-            bindings.add(Binding {
-                clock: root_morph,
-                curve: Curve::Phase { omega: 1.0 },
-                target: BindingTarget::MorphT(entity),
-                seek_kind: SeekKind::O1,
-            });
-        }
+            Arc::new(CameraEye {
+                id: object_id_of(camera3d_entity),
+            }),
+        );
 
         let mut resources = Resources::new();
-        resources.insert(AppCamera::default());
+        // P1-1：相机状态**不再是 Resource** —— 场景里有一个 2D 相机对象，
+        // 这里只放它的**句柄**（引用型，P2）。
+        resources.insert(sb.camera);
         resources.insert(TimeState::default());
         resources.insert(UiConfig::default());
         resources.insert(ViewRect::default());
@@ -364,17 +245,18 @@ impl App {
 
         let mut scheduler = Scheduler::new(world, resources);
 
-        // P3：Director 是唯一时间源。B 阶段（UI 解耦）后的 Phase 分配：
+        // Director 是唯一时间源。Phase 分配：
         // - Input:        DirectorAdvance（W=DirectorState, TimeState）
-        //                 CameraInput（R=InputEvents, W=AppCamera，消费视口事件）
+        //                 CameraInput（R=InputEvents+Camera2DHandle，写**场景对象**）
         // - LogicUpdate:  TimeControl（R=InputEvents, W=DirectorState）
         //                 ParamPanel（R=InputEvents, W=BindingTable）
-        // - SceneSync:    BindingApply（统一驱动 2D+3D 动画）
-        // - Prepare:      AxesRefresh + FunctionGraphRefresh（M4：几何在场景对象层）
-        // - RenderCommit: SceneRecord（2D）+ SceneRecord3D
-        // - FrameEnd:     无——内容提交由 host.present 承担（原 RenderSubmit 职责）。
-        //                 面板 chrome 与 ViewRect 由 host.begin_frame 承担（run_frame 前）。
+        // - SceneSync:    BindingApply（统一驱动全部绑定，含分镜时序）
+        // - Prepare:      AxesRefresh + FunctionGraphRefresh（几何在场景对象层）
+        // - RenderCommit: SceneRecord / ContentTextureRecord / MorphRecord（xcal-render）
+        //                 + SceneRecord3D（app）
+        // - FrameEnd:     无——内容提交由 host.present 承担。
         scheduler.add_system(Phase::Input, DirectorAdvanceSystem);
+        // P1：相机输入由场景层消费（相机状态归场景对象，UI 只发命令）。
         scheduler.add_system(Phase::Input, CameraInputSystem);
 
         scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
@@ -390,13 +272,10 @@ impl App {
         scheduler.add_system(Phase::Prepare, AxesRefreshSystem);
         scheduler.add_system(Phase::Prepare, FunctionGraphRefreshSystem);
 
-        // RenderCommit：2D SceneRecord 写 DrawQueue(2D)，
-        // 3D SceneRecord3D 写 DrawQueue3D，类型不相交。
+        // P4：三个录制 System 已归位到 `xcal-render`（渲染动作住渲染层，
+        // 不再读 UI 定义的 `ViewRect` / 已删除的 `AppCamera`）。
         scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
-        // S3-3：内容纹理录制（R=ContentTextureSpec, W=ContentTextureQueue）——
-        // 与 SceneRecord 同相，但读/写资源不相交，可同相注册。
         scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
-        // S4.3：形变录制（R=ViewRect/AppCamera, W=MorphQueue）——同样与上面不相交。
         scheduler.add_system(Phase::RenderCommit, MorphRecordSystem);
         scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
 

@@ -24,20 +24,21 @@ use std::sync::Arc;
 
 use egui::Panel;
 
-use xcal_scene::animation::{BindingTable, BindingTarget};
+use xcal_scene::animation::{BindingTable, TargetKind};
+use xcal_scene::contract::WorldView;
 use xcal_scene::director_state::DirectorState;
 use xcal_scene::domain::{
     ids, CameraCommand, ContentHandle, ContentTextureSpec, InputEvents, LayerBlend,
     LayerDescriptor, LayerId, LayerKind, SceneEvent, SceneView,
 };
 use xcal_schedule::resource::Resources;
-use xc_object::Camera3D;
+use xc_object::{Camera2DHandle, Camera3D};
 use xcal_scene::{Curve, TimeState};
-use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue};
+use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, ViewRect};
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
 use xc_notion::Rect2D;
 
-use crate::resources::{AppCamera, UiConfig, ViewRect};
+use crate::resources::UiConfig;
 
 pub struct EguiSceneHost;
 
@@ -55,7 +56,7 @@ impl EguiSceneHost {
     /// 否则窗口 resize 时内容会慢一帧。
     pub fn begin_frame(ui: &mut egui::Ui, view: &SceneView, res: &mut Resources) {
         let mut events = InputEvents::from_events(Self::collect_events(ui, view));
-        events.extend(Self::draw_control_panel(ui, res));
+        events.extend(Self::draw_control_panel(ui, view, res));
         events.extend(Self::draw_time_panel(ui, res));
         events.extend(Self::draw_param_panel(ui, res));
         res.insert(events);
@@ -125,8 +126,10 @@ impl EguiSceneHost {
 
     /// 从场景状态构建本帧视图声明（纯数据，无 egui 类型）。
     ///
-    /// - 2D 图层：相机来自 `AppCamera` + `ViewRect`（UI 侧管理的观察参数）；
-    /// - 3D 图层：相机取 World 中第一个 `Camera3D` 组件；
+    /// - 2D 图层：相机来自**场景对象**（`Camera2DHandle` 指认 `Framing2D`），
+    ///   视口矩形由 `ViewRect` 绑定（P1-1 / P1-2：UI 不再持有相机状态）；
+    ///   受 `UiConfig::show_2d` 控制（关掉即"关掉 2D 相机"）；
+    /// - 3D 图层：相机取 World 中第一个 `Camera3D` 组件，受 `UiConfig::show_3d` 控制；
     /// - `ContentHandle` 为 B 阶段占位（S3 统一管线接管后指向 RenderQueue 分片）；
     /// - **混合方式（S3-2）**：两个图层的内容都渲染到**透明底**离屏纹理，
     ///   所以声明为 [`LayerBlend::Alpha`] —— 用 `Opaque`(REPLACE) 会把透明像素
@@ -136,30 +139,35 @@ impl EguiSceneHost {
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
+        let cfg = res.get::<UiConfig>().cloned().unwrap_or_default();
 
         let mut view = SceneView::default();
 
-        if let Some(cam) = res.get::<AppCamera>() {
-            view.layers.push(LayerDescriptor {
-                id: LayerId(view.layers.len() as u32),
-                kind: LayerKind::Viewport2D {
-                    camera: cam.to_camera_2d(rect),
-                },
-                content: ContentHandle::OPAQUE,
-                opacity: 1.0,
-                blend: LayerBlend::Alpha,
-            });
+        if cfg.show_2d {
+            if let Some(handle) = res.get::<Camera2DHandle>() {
+                if let Some(camera) = handle.resolve(&WorldView::new(world), rect) {
+                    view.layers.push(LayerDescriptor {
+                        id: LayerId(view.layers.len() as u32),
+                        kind: LayerKind::Viewport2D { camera },
+                        content: ContentHandle::OPAQUE,
+                        opacity: 1.0,
+                        blend: LayerBlend::Alpha,
+                    });
+                }
+            }
         }
 
         // hecs 0.11：单组件查询的 iter 产出 `&Camera3D`（无 Entity）。
-        if let Some(camera3d) = world.query::<&Camera3D>().iter().next() {
-            view.layers.push(LayerDescriptor {
-                id: LayerId(view.layers.len() as u32),
-                kind: LayerKind::Viewport3D { camera: *camera3d },
-                content: ContentHandle::OPAQUE,
-                opacity: 1.0,
-                blend: LayerBlend::Alpha,
-            });
+        if cfg.show_3d {
+            if let Some(camera3d) = world.query::<&Camera3D>().iter().next() {
+                view.layers.push(LayerDescriptor {
+                    id: LayerId(view.layers.len() as u32),
+                    kind: LayerKind::Viewport3D { camera: *camera3d },
+                    content: ContentHandle::OPAQUE,
+                    opacity: 1.0,
+                    blend: LayerBlend::Alpha,
+                });
+            }
         }
 
         // 内容纹理层（S3-3）：仅当注册了 `ContentTextureSpec` 时声明。
@@ -267,10 +275,18 @@ impl EguiSceneHost {
     /// 控制面板（原 ControlPanelSystem 的 UI chrome，移出 ECS）。
     ///
     /// `UiConfig` 是纯 UI 状态（显示开关），由 chrome 直接修改；
-    /// Camera 读数只展示。返回空事件集（预留未来 Toggle 事件）。
-    fn draw_control_panel(ui: &mut egui::Ui, res: &mut Resources) -> Vec<SceneEvent> {
+    /// Camera 读数只展示 —— 值取自**本帧视图声明**（相机已在场景对象里，
+    /// P1-1 后 UI 不再持有相机状态）。返回空事件集（预留未来 Toggle 事件）。
+    fn draw_control_panel(
+        ui: &mut egui::Ui,
+        view: &SceneView,
+        res: &mut Resources,
+    ) -> Vec<SceneEvent> {
         let time = res.get::<TimeState>().map(|t| t.elapsed).unwrap_or(0.0);
-        let camera = res.get::<AppCamera>().cloned().unwrap_or_default();
+        let camera = view.layers.iter().find_map(|l| match &l.kind {
+            LayerKind::Viewport2D { camera } => Some(*camera),
+            _ => None,
+        });
         let mut ui_config = res.get::<UiConfig>().cloned().unwrap_or_default();
 
         Panel::left("controls")
@@ -285,16 +301,25 @@ impl EguiSceneHost {
                 ui.checkbox(&mut ui_config.show_field, "显示向量场");
 
                 ui.separator();
+                // 图层开关（= 关掉对应的相机）：`build_scene_view` 不再声明该图层。
+                ui.checkbox(&mut ui_config.show_2d, "2D 相机（网格/曲线/公式）");
+                ui.checkbox(&mut ui_config.show_3d, "3D 相机（立方体/曲面）");
+
+                ui.separator();
                 // S3-2 验收开关：翻转图层叠放顺序（见 `UiConfig::flip_layer_order`）。
                 ui.checkbox(&mut ui_config.flip_layer_order, "翻转图层顺序");
 
                 ui.separator();
                 ui.label("Camera");
-                ui.label(format!(
-                    "center: ({:.2}, {:.2})",
-                    camera.center.x, camera.center.y
-                ));
-                ui.label(format!("scale: {:.1}", camera.scale));
+                match camera {
+                    Some(c) => {
+                        ui.label(format!("center: ({:.2}, {:.2})", c.center.x, c.center.y));
+                        ui.label(format!("scale: {:.1}", c.scale));
+                    }
+                    None => {
+                        ui.label("(无 2D 相机对象)");
+                    }
+                }
             });
 
         if let Some(cfg) = res.get_mut::<UiConfig>() {
@@ -324,6 +349,16 @@ impl EguiSceneHost {
                 let label = if director.director.playing { "⏸ 暂停" } else { "▶ 播放" };
                 if ui.button(label).clicked() {
                     events.push(SceneEvent::Button { id: ids::PLAY_PAUSE });
+                }
+
+                // 重新播放：把时间拨回 0 并恢复播放（分镜从头重放）。
+                // 同一行并排放，便于"暂停后回看"与"重播"的对比操作。
+                if ui
+                    .button("⟲ 重新播放")
+                    .on_hover_text("把时间拨回 0 并开始播放")
+                    .clicked()
+                {
+                    events.push(SceneEvent::Button { id: ids::REPLAY });
                 }
 
                 // 速度滑块
@@ -358,7 +393,8 @@ impl EguiSceneHost {
 
     /// 参数面板（原 ParamPanelSystem 的 UI chrome）。
     ///
-    /// 按 (curve, target) 类型匹配展示绑定（与 A5 一致，不依赖插入顺序），
+    /// 按 **(目标类别, 曲线类型)** 匹配展示绑定（与 A5 一致，不依赖插入顺序）——
+    /// `BindingTarget` trait 化后目标无法模式匹配，故用 `TargetKind` 分类。
     /// 滑块交互以 `Slider { id }` 事件上报，由场景侧 `ParamPanelSystem` 消费。
     fn draw_param_panel(ui: &mut egui::Ui, res: &mut Resources) -> Vec<SceneEvent> {
         let table = res.get::<BindingTable>().cloned().unwrap_or_default();
@@ -372,8 +408,8 @@ impl EguiSceneHost {
                 ui.separator();
 
                 for binding in table.bindings.iter() {
-                    match (&binding.curve, &binding.target) {
-                        (Curve::Sin { base, amp, omega }, BindingTarget::CircleRadius(_)) => {
+                    match (binding.target.kind(), &binding.curve) {
+                        (TargetKind::CircleRadius, Curve::Sin { base, amp, omega }) => {
                             ui.label("圆半径");
                             for (id, label, value, range, step) in [
                                 (ids::CIRCLE_BASE, "base", *base, 0.0..=3.0, 0.1),
@@ -390,7 +426,7 @@ impl EguiSceneHost {
                             }
                             ui.separator();
                         }
-                        (Curve::Phase { omega }, BindingTarget::Phase(_)) => {
+                        (TargetKind::Phase, Curve::Phase { omega }) => {
                             ui.label("函数曲线相位");
                             let mut v = *omega;
                             if ui
@@ -409,13 +445,13 @@ impl EguiSceneHost {
                             ui.separator();
                         }
                         (
+                            TargetKind::CameraEye,
                             Curve::Orbit {
                                 radius,
                                 speed,
                                 initial_angle,
                                 ..
                             },
-                            BindingTarget::CameraEye(_),
                         ) => {
                             ui.label("3D 轨道相机");
                             for (id, label, value, range, step) in [
@@ -594,12 +630,11 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 mod tests {
     use super::*;
     use xcal_schedule::resource::Resources;
-    use xc_object::{Camera3D, Projection};
+    use xcal_scene::contract::WorldScene;
+    use xc_object::{Camera3D, Framing2D, Projection};
 
-    /// headless：无任何 egui 上下文即可构建 SceneView。
-    #[test]
-    fn build_scene_view_declares_2d_and_3d_layers() {
-        let mut world = hecs::World::new();
+    /// 建含 3D 相机的世界（3D 图层来源）。
+    fn spawn_3d_camera(world: &mut hecs::World) {
         world.spawn((
             Camera3D::new(
                 glam::Vec3::new(0.0, 0.0, 5.0),
@@ -608,9 +643,23 @@ mod tests {
                 Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
             ),
         ));
+    }
+
+    /// 建含 2D 相机对象的场景 + 其句柄 Resource（P1：相机是场景对象）。
+    fn spawn_2d_camera(world: &mut hecs::World) -> Camera2DHandle {
+        let mut scene = WorldScene::new(world);
+        xc_object::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
+    }
+
+    /// headless：无任何 egui 上下文即可构建 SceneView。
+    #[test]
+    fn build_scene_view_declares_2d_and_3d_layers() {
+        let mut world = hecs::World::new();
+        spawn_3d_camera(&mut world);
+        let handle = spawn_2d_camera(&mut world);
 
         let mut res = Resources::new();
-        res.insert(AppCamera::default());
+        res.insert(handle);
         res.insert(ViewRect::default());
 
         let view = EguiSceneHost::build_scene_view(&world, &res);
@@ -633,17 +682,11 @@ mod tests {
     #[test]
     fn build_scene_view_assigns_unique_layer_ids() {
         let mut world = hecs::World::new();
-        world.spawn((
-            Camera3D::new(
-                glam::Vec3::new(0.0, 0.0, 5.0),
-                glam::Vec3::ZERO,
-                glam::Vec3::Y,
-                Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
-            ),
-        ));
+        spawn_3d_camera(&mut world);
+        let handle = spawn_2d_camera(&mut world);
 
         let mut res = Resources::new();
-        res.insert(AppCamera::default());
+        res.insert(handle);
         res.insert(ViewRect::default());
 
         let view = EguiSceneHost::build_scene_view(&world, &res);
@@ -655,39 +698,99 @@ mod tests {
         }
     }
 
-    /// 无 3D 相机实体时只声明 2D 图层；无 AppCamera 资源时无 2D 图层。
+    /// 无 3D 相机实体时只声明 2D 图层；无 2D 相机句柄（或句柄失效）时无 2D 图层。
     #[test]
     fn build_scene_view_skips_missing_layers() {
-        let world = hecs::World::new();
-        let mut res = Resources::new();
-        res.insert(AppCamera::default());
+        let mut world = hecs::World::new();
+        let handle = spawn_2d_camera(&mut world);
 
+        let mut res = Resources::new();
+        res.insert(handle);
         let view = EguiSceneHost::build_scene_view(&world, &res);
         assert_eq!(view.layers.len(), 1);
         assert!(matches!(view.layers[0].kind, LayerKind::Viewport2D { .. }));
 
+        // 空资源 ⇒ 无句柄 ⇒ 无图层。
         let res_empty = Resources::new();
         let view = EguiSceneHost::build_scene_view(&world, &res_empty);
         assert!(view.layers.is_empty());
+
+        // 句柄存在但指向的场景对象已消失（空世界）⇒ 同样无 2D 图层。
+        let empty_world = hecs::World::new();
+        let mut res_stale = Resources::new();
+        res_stale.insert(Camera2DHandle::default());
+        assert!(EguiSceneHost::build_scene_view(&empty_world, &res_stale)
+            .layers
+            .is_empty());
     }
 
-    /// 2D 图层相机与 GridBuild 的构造方式一致：AppCamera → Camera2D。
+    /// 2D 图层相机 = 场景里的取景参数（`Framing2D`）绑定 `ViewRect` —— P1-2 的
+    /// "相机与渲染目标 rect 解绑"在场景 → UI 方向的落点。
     #[test]
-    fn scene_view_2d_camera_matches_app_camera() {
-        let world = hecs::World::new();
+    fn scene_view_2d_camera_binds_framing_to_view_rect() {
+        let mut world = hecs::World::new();
+        let mut scene = WorldScene::new(&mut world);
+        let handle = xc_object::spawn_camera2d(&mut scene, Framing2D::new((2.0, -3.0).into(), 55.0))
+            .expect("Framing2D 已登记");
+
         let mut res = Resources::new();
-        res.insert(AppCamera::default());
+        res.insert(handle);
         res.insert(ViewRect::default());
 
         let rect = res.get::<ViewRect>().unwrap().rect;
-        let expected = res.get::<AppCamera>().unwrap().to_camera_2d(rect);
-
         let view = EguiSceneHost::build_scene_view(&world, &res);
-        let Some(LayerKind::Viewport2D { camera }) = Some(view.layers[0].kind) else {
+        let LayerKind::Viewport2D { camera } = view.layers[0].kind else {
             panic!("expected 2D layer");
         };
-        assert!((camera.center.x - expected.center.x).abs() < 1e-5);
-        assert!((camera.center.y - expected.center.y).abs() < 1e-5);
-        assert!((camera.scale - expected.scale).abs() < 1e-5);
+        assert!((camera.center.x - 2.0).abs() < 1e-5);
+        assert!((camera.center.y + 3.0).abs() < 1e-5);
+        assert!((camera.scale - 55.0).abs() < 1e-5);
+        // rect 来自渲染目标（ViewRect），不是相机自带。
+        assert_eq!(camera.rect, rect);
+    }
+
+    /// 图层开关（= 关掉对应相机）：关掉的图层**不再出现在声明里**。
+    #[test]
+    fn build_scene_view_respects_layer_toggles() {
+        let mut world = hecs::World::new();
+        spawn_3d_camera(&mut world);
+        let handle = spawn_2d_camera(&mut world);
+
+        let res_with = |show_2d: bool, show_3d: bool| {
+            let mut res = Resources::new();
+            res.insert(handle);
+            res.insert(ViewRect::default());
+            res.insert(UiConfig {
+                show_2d,
+                show_3d,
+                ..UiConfig::default()
+            });
+            res
+        };
+
+        // 默认两图都在（`UiConfig::default()` 两个开关为 true）。
+        assert_eq!(
+            EguiSceneHost::build_scene_view(&world, &res_with(true, true))
+                .layers
+                .len(),
+            2
+        );
+
+        // 关 2D ⇒ 只剩 3D。
+        let v = EguiSceneHost::build_scene_view(&world, &res_with(false, true));
+        assert_eq!(v.layers.len(), 1);
+        assert!(matches!(v.layers[0].kind, LayerKind::Viewport3D { .. }));
+
+        // 关 3D ⇒ 只剩 2D。
+        let v = EguiSceneHost::build_scene_view(&world, &res_with(true, false));
+        assert_eq!(v.layers.len(), 1);
+        assert!(matches!(v.layers[0].kind, LayerKind::Viewport2D { .. }));
+
+        // 两个都关 ⇒ 无图层（`present` 只铺背景）。
+        assert!(
+            EguiSceneHost::build_scene_view(&world, &res_with(false, false))
+                .layers
+                .is_empty()
+        );
     }
 }

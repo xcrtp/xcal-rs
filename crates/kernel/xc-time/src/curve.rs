@@ -60,6 +60,19 @@ impl AnimValue {
             _ => None,
         }
     }
+    /// 类型安全取 Vec2：不匹配返回 `None`，不 panic。
+    ///
+    /// 与 `try_scalar` / `try_vec3` / `try_path` 同一族：类型匹配下沉到各
+    /// [`Target`] 实现（`BindingTarget` trait 化后，写 `Vec2` 字段的目标
+    /// ——如 2D 相机取景中心——靠它做类型安全取值）。
+    ///
+    /// [`Target`]: https://docs.rs/xcal-scene
+    pub fn try_vec2(&self) -> Option<Vec2> {
+        match self {
+            AnimValue::Vec2(v) => Some(*v),
+            _ => None,
+        }
+    }
     /// 类型安全取 Vec3：不匹配返回 `None`，不 panic。
     pub fn try_vec3(&self) -> Option<Vec3> {
         match self {
@@ -364,6 +377,16 @@ mod tests {
         assert_eq!(AnimValue::Vec3(Vec3::ONE).try_vec3(), Some(Vec3::ONE));
         assert_eq!(AnimValue::Scalar(1.5).try_vec3(), None);
         assert_eq!(AnimValue::Color([0.0; 4]).try_vec3(), None);
+    }
+
+    #[test]
+    fn try_vec2_returns_none_on_mismatch() {
+        assert_eq!(
+            AnimValue::Vec2(Vec2::new(1.0, 2.0)).try_vec2(),
+            Some(Vec2::new(1.0, 2.0))
+        );
+        assert_eq!(AnimValue::Scalar(1.5).try_vec2(), None);
+        assert_eq!(AnimValue::Vec3(Vec3::ONE).try_vec2(), None);
     }
 
     #[test]

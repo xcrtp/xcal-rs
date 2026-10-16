@@ -107,15 +107,16 @@ let v = eye.try_vec3().unwrap();           // 类型安全取值：不匹配返�
 > 共享同一套采样逻辑；若后续确认无差别，优先合并（S1 计划 §3.2 / §6）。
 
 > **`PathMorph` 状态：已就绪、未接线。** 已实现并有单测覆盖，但当前**无生产接线**
-> （`render/`、`app/` 无引用）。场景侧 demo 走的是
-> `BindingTarget::MorphT` + `MorphShape` 路线 —— 持有 from/to、只写 `t`，为 S3 上
-> GPU 预留（from/to 上传一次、每帧一个 float）；`PathMorph` 是"路径对**直接**插值、
-> 一次性 CPU 产出路径"的另一条用法，供将来按需接线。
+> （`render/`、`app/` 无引用）。场景侧（首个数学动画原型的分镜 3 / 分镜 6）走的是
+> `xcal_scene::animation::MorphT` + `MorphShape` 路线 —— 持有 from/to、只写 `t`，
+> 由 GPU 形变管线插值（from/to 上传一次、每帧一个 float）；`PathMorph` 是"路径对
+> **直接**插值、一次性 CPU 产出路径"的另一条用法，供将来按需接线。
 
 `AnimValue` 支持 `Scalar` / `Vec2` / `Vec3` / `Color([f32;4])` / `Path(Path2D)`：
 
 - 热路径取值 `scalar()` / `vec3()`：类型不匹配在 **debug panic**（尽早暴露 bug）、
-  release 返回零值；类型不确定时用 `try_scalar()` / `try_vec3()` / `try_path()`（返回引用）；
+  release 返回零值；类型不确定时用 `try_scalar()` / `try_vec2()` / `try_vec3()` /
+  `try_path()`（`try_path` 返回引用）；
 - 自引入 `Path` 后 `AnimValue` **不再是 `Copy`**；
 - `Sampled` 相邻点类型不一致时退化为取区间起点值（**不静默编造插值**）。
 

@@ -23,7 +23,6 @@ use xc_notion::{Color32, Path2D, Stroke2D, Vec2};
 use xc_content::{ContentIR, ContentSource, Span as XSpan, StyledPath};
 
 use crate::request::{ContentConfig, ContentError};
-use typst::World;
 use super::world::TypstWorld;
 
 const PT_UNIT: typst::layout::AbsUnit = typst::layout::AbsUnit::Pt;
