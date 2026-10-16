@@ -116,6 +116,12 @@ xcal-app (装配 + ParamPanelSystem)
   两个图层都声明 `LayerBlend::Alpha`：离屏是透明底，用 `Opaque`(REPLACE) 会把透明像素
   写进主 pass、抹掉背景与下层。
   （S4.1 前的 CPU 回放路径不支持真合成，已随其编译期 feature 一并删除。）
+- `install_cjk_font(ctx) -> Option<PathBuf>`：安装 CJK 字体 —— 候选路径覆盖
+  Windows / macOS / 常见 Linux 发行版，可用 `XCAL_CJK_FONT` 指定；找不到**不 panic**
+  （返回 `None`，提示文案由调用方决定）。
+- `draw_call_count(res) -> usize`：本帧绘制调用数（2D 命令 + 3D mesh/line），供 health overlay。
+  ⚠️ `FrameReport` / `FrameCacheStats` 均无该字段（实测），故保留"查队列"口径、只把取数收进 host。
+- `end_frame(res)`：帧末清理（清空已被 `present` 消费的 2D 队列）—— 帧管理归 host，app 只表达"这一帧结束了"。
 
 > **单一回调（S3-2 修复）**：`egui_wgpu::CallbackResources` 是全局共享的 TypeMap，
 > 每层一个回调会互相覆盖 `CompositeFrame`（实机现象：顺序 A 只见 3D、顺序 B 只见 2D）。

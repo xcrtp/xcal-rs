@@ -10,10 +10,12 @@
 //   - 3D 队列与绘制器 trait（draw_queue_3d.rs / painter_3d.rs）
 //   - 视口/渲染目标/渲染层（viewport.rs / render_target.rs / render_layer.rs）
 //   - 后端 trait 与资源缓存的过渡 shim（render_backend.rs / resource_cache.rs，wgpu gate）
-//   - 图元体系（shape.rs / painter_2d.rs / draw_queue_2d.rs）
+//   - 路径稳定的转发模块（`shape` / `vertex`）与预留后端目标
+//     （`painter_2d.rs::Painter2DTarget`，已有生产实现 `WgpuBackend2D`）
 //
-// 渲染契约层（顶点格式 / 资源缓存纯数据）已下沉 kernel（xc-vertex / xc-resource），
-// 这里通过 `pub use xc_vertex as vertex;` 与 shim 模块保留原有公开路径。
+// 渲染契约层（顶点格式 / 资源缓存纯数据）与图元载荷（Shape2D / Style2D）已下沉 kernel
+// （xc-vertex / xc-resource / xc-render-ir）；这里通过 `pub use xc_vertex as vertex;`、
+// `pub mod shape { .. }` 等**转发模块**保留原有公开路径，真实定义在各自 kernel crate。
 //
 // 具体后端（wgpu_2d / wgpu_3d / eframe）位于 xcal-render-backends。
 // S4.1：旧 CPU 2D 回放后端（`egui_2d` 模块）已删除。
@@ -21,7 +23,6 @@
 pub mod components;
 pub mod content_ir;
 pub mod draw;
-pub mod draw_queue_2d;
 pub mod draw_queue_3d;
 pub mod painter_2d;
 pub mod painter_3d;
@@ -72,9 +73,8 @@ pub use painter_3d::Painter3D;
 // ─── 视口（纯数据） ───────────────────────────────────────────────────────
 pub use viewport::Viewport;
 
-// ─── 新图元体系 ───────────────────────────────────────────────────────────
+// ─── 内容 IR 与预留后端目标 ───────────────────────────────────────────────
 pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};
-pub use draw_queue_2d::{DrawCommand2D, DrawQueue2D};
 pub use painter_2d::Painter2DTarget;
 
 // ─── S3-0：lyon 三角化适配层（纯 CPU，无 wgpu/egui 依赖） ────────────────

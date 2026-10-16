@@ -11,12 +11,16 @@
 //    由 host 承担原 ViewRectUpdateSystem 的职责）；
 // 5. `present` — 把 `DrawQueue`(2D) 与 `DrawQueue3D` 的录制内容提交到
 //    egui painter（承担原 RenderSubmitSystem / RenderSubmit3DSystem 的职责）。
+// 6. 宿主环境 — `install_cjk_font`：按平台候选路径（+ `XCAL_CJK_FONT`）安装 CJK 字体；
+// 7. 帧末    — `draw_call_count`（可观测性取数）/ `end_frame`（清理已消费的队列）。
 //
 // 这是唯一同时接触 egui 与场景两者的模块；将来迁移 UI 只需另写一个 host，
 // 场景逻辑一行不动。本文件之外的 xcal-egui 模块不得出现 egui 类型（B 阶段红线）。
 //
 // 帧内调用顺序（xcal-app::App::ui）：
 // `build_scene_view` → `begin_frame` → `Scheduler::run_frame` → `present`。
+
+use std::sync::Arc;
 
 use egui::Panel;
 
@@ -56,6 +60,65 @@ impl EguiSceneHost {
         events.extend(Self::draw_param_panel(ui, res));
         res.insert(events);
         Self::update_view_rect(ui, res);
+    }
+
+    // ─── 宿主环境（平台相关）──────────────────────────────────────────────
+
+    /// 安装 CJK 字体：按 `XCAL_CJK_FONT` 环境变量 + 各平台常见路径查找，
+    /// 找到即注入 `Proportional` / `Monospace` 字体族，返回实际加载的路径。
+    ///
+    /// 为什么在 UI 层：字体是**宿主平台**的资产（字体文件路径与任何渲染后端无关），
+    /// 且注入对象是 `egui::Context` —— 本 crate 的 host 是唯一允许出现 egui 类型的地方。
+    ///
+    /// 跨平台：候选列表覆盖 Windows / macOS / 常见 Linux 发行版；还可由环境变量指定。
+    /// 找不到时返回 `None` 且**不 panic、不打日志**（提示文案由调用方决定）：中文会退化为方框。
+    pub fn install_cjk_font(ctx: &egui::Context) -> Option<std::path::PathBuf> {
+        let path = cjk_font_candidates().into_iter().find(|p| p.is_file())?;
+        let data = std::fs::read(&path).ok()?;
+
+        let mut fonts = egui::FontDefinitions::default();
+        fonts
+            .font_data
+            .insert("cjk".to_owned(), Arc::new(egui::FontData::from_owned(data)));
+        // 比例字体：插到**最前**（默认正文字体）；等宽字体：追加（保留原有 ASCII 等宽字形）。
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "cjk".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("cjk".to_owned());
+        ctx.set_fonts(fonts);
+        Some(path)
+    }
+
+    // ─── 帧末管理 / 可观测性 ───────────────────────────────────────────────
+
+    /// 本帧的**绘制调用数**（2D 命令 + 3D mesh/line 条数）。
+    ///
+    /// ⚠️ 口径说明（本轮实测）：`xcal-schedule::FrameReport` 只有 System 耗时 / 实体数，
+    /// `xcal_render_backends::FrameCacheStats` 只有三角化缓存的请求 / 未命中 —— **两者都没有**
+    /// "绘制调用数"字段。故这里保留"查队列求长度"的原口径，只是把取数从 app 收到 host
+    /// （app 不该知道队列的内部结构；将来 `FrameReport` 若增字段，可再收敛到这里）。
+    pub fn draw_call_count(res: &Resources) -> usize {
+        let two_d = res.get::<DrawQueue>().map_or(0, |q| q.len());
+        let three_d = res
+            .get::<DrawQueue3D>()
+            .map_or(0, |q| q.mesh_count() + q.line_count());
+        two_d + three_d
+    }
+
+    /// 帧末清理：2D 队列内容已被 `present` 消费，清空以便下帧重新录制。
+    ///
+    /// 为什么在 host 而不是 app：这是**帧管理**（谁消费、谁负责重置），
+    /// app 只应表达"这一帧结束了"，不该知道要清哪个队列。
+    pub fn end_frame(res: &mut Resources) {
+        if let Some(queue) = res.get_mut::<DrawQueue>() {
+            queue.clear();
+        }
     }
 
     // ─── 场景 → UI：视图声明 ───────────────────────────────────────────────
@@ -498,6 +561,33 @@ impl EguiSceneHost {
             egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
         ));
     }
+}
+
+/// CJK 字体候选路径：环境变量 `XCAL_CJK_FONT` **优先**，其次各平台常见内置路径。
+///
+/// 只做"列候选"，是否存在由调用方过滤 —— 这样非 Windows 平台也能跑（无 panic / 无方框提示之外的行为）。
+fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(custom) = std::env::var("XCAL_CJK_FONT") {
+        if !custom.trim().is_empty() {
+            paths.push(std::path::PathBuf::from(custom));
+        }
+    }
+    paths.extend(
+        [
+            // Windows：微软雅黑
+            r"C:\Windows\Fonts\msyh.ttc",
+            // macOS：苹方
+            "/System/Library/Fonts/PingFang.ttc",
+            // Linux：Noto CJK（Debian/Ubuntu 与 Fedora/Arch 的常见落点）
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            // Linux：文泉驿正黑（轻量发行版常见）
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+        .map(std::path::PathBuf::from),
+    );
+    paths
 }
 
 #[cfg(test)]

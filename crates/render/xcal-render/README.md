@@ -46,8 +46,12 @@ xcal-render 同时承载两套渲染抽象：
   解析为屏幕像素，其它地方不得乘除 `scale`。`MeasureSpace` 由本 crate 再导出；
   `StrokeSolid::new(w, c)` 两参保持（默认 `Screen`），显式声明用 `new_in(w, c, space)`。
   `World` = 随缩放变化（如公式描边），`Screen` = 恒定（网格 / 轴 / 曲线 / 圆 / 形变）。
-- **预留可替换后端**（`painter_2d.rs::Painter2DTarget` / `draw_queue_2d.rs`）：
-  面向 SVG / PDF / TikZ 的指令级队列。
+- **预留可替换后端**（`painter_2d.rs::Painter2DTarget`，已有生产实现 `WgpuBackend2D`）：
+  面向 SVG / PDF / TikZ 等非 GPU 后端的**指令级接口**（`begin_frame` / `draw_shape` / `end_frame`）。
+  > 注：原 `draw_queue_2d.rs`（`DrawQueue2D` / `DrawCommand2D`，123 行）**已删除** ——
+  > 全仓引用仅其自身测试与 `lib.rs` re-export，无生产消费方；保留下来只会成为
+  > "纸面能力"（建了没人用的设施比不建更糟）。将来真要接非 GPU 后端时，
+  > 应直接实现 `Painter2DTarget`（接口已在），而不是复活一个空队列类型。
 
 ### ② S3-0 三角化适配层（`tessellate.rs`，纯 CPU / headless）
 `Shape2D + Transform2D + Style2D` → 索引化顶点缓冲，顶点结构**严格**符合自有顶点
@@ -104,7 +108,7 @@ xcal-render 同时承载两套渲染抽象：
 | `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
 | `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
-| `draw_queue_2d` / `draw_queue_3d` | 预留 2D 指令队列 + 3D 双列表队列 |
+| `draw_queue_3d` | 3D 双列表队列（`DrawQueue3D` / `MeshDraw` / `LineDraw`）|
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
 | `shape` | `Shape2D` + `Style2D` + `CustomShapeData/CustomTypeId` 自定义图元钩子 |
 | `viewport` | `Viewport`（纯数据） |
@@ -210,7 +214,7 @@ cargo doc  -p xcal-render --no-deps --all-features
 ## 依赖
 
 ```toml
-xcal-scene        = { path = "../xcal-scene", default-features = false }
+xcal-scene        = { path = "../../scene/xcal-scene", default-features = false }
 xc-notion         = { path = "../../kernel/xc-notion" }
 xc-render-ir      = { path = "../../kernel/xc-render-ir" }       # Shape2D / Style2D / 样式组件 / 降级 trait
 xc-object         = { path = "../../object/xc-object" }          # 图元 newtype / Camera2D / ZOrder

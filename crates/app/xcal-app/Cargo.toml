@@ -10,7 +10,7 @@ name = "xcal-app"
 path = "src/main.rs"
 
 [dependencies]
-xcal-scene = { path = "../../render/xcal-scene" }
+xcal-scene = { path = "../../scene/xcal-scene" }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }

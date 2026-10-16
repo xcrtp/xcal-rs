@@ -15,7 +15,7 @@ members = [
     "crates/graph/xc-graph-eval",
     "crates/graph/xc-node-schema",
     "crates/graph/xc-node-schema-macros",
-    "crates/render/xcal-scene",
+    "crates/scene/xcal-scene",
     "crates/schedule/xcal-schedule",
     "crates/render/xcal-render",
     "crates/render/xcal-render-backends",

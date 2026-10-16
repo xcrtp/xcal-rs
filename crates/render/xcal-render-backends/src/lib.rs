@@ -54,6 +54,6 @@ pub use wgpu_2d::{
 pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 
 #[cfg(feature = "egui-wgpu")]
-pub use eframe_backend::EframeWgpuBackend;
+pub use eframe_backend::{EframeWgpuBackend, install_standard_backends};
 #[cfg(feature = "egui-wgpu")]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};

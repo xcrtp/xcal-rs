@@ -201,6 +201,14 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
 `EframeWgpuBackend`：实现 `xcal_render::RenderBackend` trait 的 eframe 版本。
 对写纯 eframe/wgpu 示例时可直接复用。
 
+`install_standard_backends(rs) -> RenderContext`：**为宿主准备渲染环境的一行入口** ——
+依次把 `WgpuBackend3D`（默认着色器）/ `WgpuBackend2D` / `Compositor` 装进
+`Renderer::callback_resources`，并返回 `RenderContext`。
+
+- 为什么在这里：这是"为宿主准备渲染环境"的职责，而被装的三个类型都是本 crate 的实现细节
+  —— 将来增删后端、改装配顺序只动本函数，`xcal-app` 一行不变。
+- 为什么装 TypeMap：回调执行时只有 `&self`，不能持有"重建中"的 GPU 资源（见 `scene_callback`）。
+
 ### 7. `vertex_layout` (`wgpu` / `egui-wgpu`)
 
 顶点格式契约（`xcal-render::vertex`）→ wgpu 的翻译层：`to_wgpu(layout, &mut attrs)`

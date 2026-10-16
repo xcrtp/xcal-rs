@@ -7,7 +7,36 @@
 
 use xcal_render::render_backend::{GpuHandle, RenderBackend};
 
+use crate::compositor::Compositor;
 use crate::render_context::RenderContext;
+use crate::wgpu_2d::WgpuBackend2D;
+use crate::wgpu_3d::WgpuBackend3D;
+
+/// 为 egui-wgpu 宿主**安装标准渲染环境**，返回本次会话的 [`RenderContext`]。
+///
+/// 依次安装（顺序即依赖顺序）：
+/// 1. [`WgpuBackend3D`]（默认着色器）；
+/// 2. [`WgpuBackend2D`]（离屏 + MSAA；S4.1 后唯一的 2D 路径）；
+/// 3. [`Compositor`]（按图层声明序合成；S3-2）。
+///
+/// 为什么放在本 crate 而不是 app：这是"**为宿主准备渲染环境**"的职责，而被安装的
+/// 三个类型都是本 crate 的实现细节 —— 将来增删后端、改装配顺序只动这里，app 一行不变。
+///
+/// 为什么装进 `egui_wgpu` 的 `Renderer::callback_resources`（全局 TypeMap）：
+/// 回调执行时只有 `&self`，不能持有"重建中"的 GPU 资源，故后端与合成器必须常驻 TypeMap
+/// （见 `scene_callback` 的说明）。同一 TypeMap 里每种类型只放一份。
+pub fn install_standard_backends(rs: &egui_wgpu::RenderState) -> RenderContext {
+    let backend_3d = WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
+    rs.renderer.write().callback_resources.insert(backend_3d);
+
+    let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue);
+    rs.renderer.write().callback_resources.insert(backend_2d);
+
+    let compositor = Compositor::new(&rs.device, rs.target_format);
+    rs.renderer.write().callback_resources.insert(compositor);
+
+    RenderContext::from_render_state(rs)
+}
 
 /// 基于 eframe/egui_wgpu 的 RenderBackend 实现。
 ///

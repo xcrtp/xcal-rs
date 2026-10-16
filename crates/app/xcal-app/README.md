@@ -36,25 +36,16 @@ cargo run -p xcal-app
 ## App::new 初始化流程（关键代码）
 
 ```rust
-// ── 1. 字体 / 视觉：微软雅黑优先，否则 egui 默认（中文变方框） ──
-Self::setup_fonts(&ctx.egui_ctx)?;
+// ── 1. 字体 / 视觉（宿主平台资产归 host） ──
+// 候选路径覆盖 Windows / macOS / 常见 Linux 发行版，可用 XCAL_CJK_FONT 指定；找不到只提示。
+if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() { eprintln!("…中文可能显示为方框…"); }
 Self::setup_visuals(&ctx.egui_ctx);
 
-// ── 2. RenderContext + WgpuBackend3D / WgpuBackend2D / Compositor（回调资源） ──
+// ── 2. 渲染环境：一行装好后端与合成器（细节在 backends 侧） ──
 let rs = ctx.wgpu_render_state.clone().unwrap();
-let backend_3d = WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
-rs.renderer.write().callback_resources.insert(backend_3d);  // 回调为 &self，资源存 TypeMap
-
-// S3-1：同一 TypeMap 再放一份 WgpuBackend2D（pipeline / 缓存 / 离屏目标惰性重建；
-// S4.1 后它是唯一的 2D 路径）。
-let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue);
-rs.renderer.write().callback_resources.insert(backend_2d);
-
-// S3-2：图层合成器（2D / 3D 各画到自己的离屏纹理后按声明顺序混合进主 pass）。
-let compositor = Compositor::new(&rs.device, rs.target_format);
-rs.renderer.write().callback_resources.insert(compositor);
-
-let render_ctx = RenderContext::from_render_state(&rs);
+let render_ctx = xcal_render_backends::install_standard_backends(&rs);
+//   ↳ 等价于旧的"手工 insert WgpuBackend3D / WgpuBackend2D / Compositor + 取 RenderContext"；
+//     为什么装进 callback_resources：回调为 &self，不能持有重建中的 GPU 资源。
 
 // ── 3. Scene 填充 hecs World（纯逻辑组件 / 场景对象） ──
 let mut scene = Scene::new();
@@ -67,11 +58,15 @@ axes.build(&mut scene);                                        // 网格容器�
 let graph = FunctionGraph::new(FunctionX2Y::new(|x| x.sin()), Sampler1D::new(-10., 10., 0.1));
 let func_handle = graph.build(&mut scene, StrokeSolid);        // 折线 + 采样规格（相位由 Binding 驱动）
 let func_entity = xcal_scene::contract::entity_of(func_handle).unwrap();
-// 公式：IR → (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"
+// 形变 demo 的圆：等角采样在理念层（`Circle2D::sample`），起笔方向可指定。
+let circle_pts = Circle2D::new(morph_center, morph_radius).sample(64, start_angle);
+// 公式：IR → (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"；
+// 内容纹理相机的取景由对象层 `Camera2D::fit_bounds` 完成（包围盒用 Path2D::bounds ∪ Rect2D::union）。
 let engine = formula::build_engine();
 let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
 if let Some(ir) = formula::rebuild(&engine, &spec) {
-    for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+    for (mut path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+        bounds = Some(match bounds { Some(acc) => acc.union(&path.bounds()), None => path.bounds() });
         scene.spawn((
             Path::new(path),
             // 公式描边是世界空间：与字形一同随缩放成比例变化。
@@ -158,7 +153,7 @@ fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
     let view = EguiSceneHost::build_scene_view(self.scheduler.world(), self.scheduler.resources());
 
     // 2. UI → 场景：收集事件、画面板 chrome、写 ViewRect。
-    //    必须在 run_frame 之前：System 消费 InputEvents，GridBuild 当帧读 ViewRect。
+    //    必须在 run_frame 之前：System 消费 InputEvents，Axes/FunctionGraph 刷新当帧读 ViewRect。
     EguiSceneHost::begin_frame(ui, &view, self.scheduler.resources_mut());
 
     self.scheduler.run_frame(dt);
@@ -166,12 +161,12 @@ fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
     // 3. 内容提交：2D 队列 + 3D 队列 → painter（原 RenderSubmit 职责）。
     EguiSceneHost::present(ui, &view, self.scheduler.resources_mut());
 
-    // ── 快捷键 F1（性能面板）/ F10（导出快照）+ health.update/show ──
+    // ── 快捷键 F1（性能面板）/ F10（导出快照）──
+    // health.update(..., EguiSceneHost::draw_call_count(res))：绘制调用数由 host 取数
+    //（口径 = 2D 命令数 + 3D mesh/line 数；FrameReport / FrameCacheStats 均无该字段）。
 
-    // ── 清空 DrawQueue(2D)（3D 队列由回调内部 take_snapshot 清空） ──
-    if let Some(q) = self.scheduler.resources_mut().get_mut::<DrawQueue>() {
-        q.clear();
-    }
+    // ── 帧末：清空已被 present 消费的 DrawQueue(2D)（3D 队列由回调内部 take_snapshot 清空）──
+    EguiSceneHost::end_frame(self.scheduler.resources_mut());
 
     // ⚠️ egui 默认是"事件驱动"，无输入时不重画 → 动画停住。
     //    每帧主动请求，保证时间推进与 repaint 持续。

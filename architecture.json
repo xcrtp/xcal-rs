@@ -37,12 +37,18 @@
       "crates": ["xcal-schedule"]
     },
     {
+      "name": "scene",
+      "path": "crates/scene",
+      "prefix": "xcal-",
+      "description": "场景层：ECS 场景数据（Scene / 组件）+ 场景 System + UI↔场景 domain 契约；不依赖任何渲染后端",
+      "crates": ["xcal-scene"]
+    },
+    {
       "name": "render",
       "path": "crates/render",
       "prefix": "xcal-",
-      "description": "场景层 + 渲染抽象 + 具体后端实现",
+      "description": "渲染抽象（trait / 队列 / 三角化）+ 具体后端实现（场景层已归位到 crates/scene/）",
       "crates": [
-        "xcal-scene",
         "xcal-render",
         "xcal-render-backends"
       ]

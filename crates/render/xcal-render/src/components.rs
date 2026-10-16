@@ -1,6 +1,16 @@
-// components.rs
+// components.rs — 场景组件与渲染样式的统一出口（**有意的兼容 facade，不是死代码**）
 //
-// 场景组件 + 渲染样式的统一出口（facade）。
+// 本文件只做**转发**，四路来源：
+//   - `xcal_scene::scene::components`：纯逻辑场景组件（`PhaseAnim` / `marker` / `mesh` …）
+//   - `xc_notion`：连续数学元语（`FunctionX2Y` / `Sampler1D/2D` / `Interpolator` …）
+//   - `xc_object`：图元 newtype 与摆放（`Circle` / `Line` / `Path` / `Rect` / `Transform`）
+//   - `xc_render_ir`：样式组件（`StrokeSolid` / `FillSolid` / `StrokeStyle` / `FillStyle`）
+//
+// 目的：保持 `xcal_render::components::*` 这一路径稳定 —— M1 / M2 / M3 三轮下沉
+// （notion ← scene ← object ← render_ir）都靠它做到**下游零改动**。
+//
+// ⚠️ **不是** 死代码，**请勿删除**：下游改用各层原生路径（如 `xc_object::Circle`）后
+// 本模块即可整体移除，但那是一次独立的下游 churn（不属于任何单点重构的范围）。
 //
 // M1 T4：连续数学对象（FunctionX2Y / ParameterCurve* / Sampler* / Interpolator /
 // SyncSendFn）已归位理念层 `xc-notion`，本 facade 直接从理念层转发。

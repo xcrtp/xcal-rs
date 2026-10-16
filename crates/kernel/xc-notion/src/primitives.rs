@@ -145,6 +145,30 @@ impl Circle2D {
     pub fn translated(&self, delta: Vec2) -> Self {
         Self::new(self.center + delta, self.radius)
     }
+
+    /// 等角采样为折线点列（**首尾点不重复**；闭合语义由调用方的 `closed` 表达，
+    /// 与 [`Path2D::from_polyline`](crate::Path2D::from_polyline) 同口径）。
+    ///
+    /// - `n`：段数 ⇒ 点数恒为 `n`；`n = 0` 返回空（不做特判 panic）；
+    /// - `start_angle`：首点方向（弧度，`0.0` = +X）；后续点按 `TAU / n` **逆时针**推进。
+    ///
+    /// 为什么带 `start_angle`：形变 / 描边场景需要"起笔方向对齐"——例如圆→方形按弧长配对时，
+    /// 起笔方向不一致会让形变过程整体旋转（见 S1 形变的原型约定）。
+    ///
+    /// 返回 `Vec<Vec2>` 而非 `Polyline2D`：与 `Path2D::from_polyline(&points, closed)`
+    /// 的入参口径一致，调用方自行决定闭合与包装（本方法只管"圆的离散化"这一件事）。
+    pub fn sample(&self, n: u32, start_angle: f32) -> Vec<Vec2> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let step = std::f32::consts::TAU / n as f32;
+        (0..n)
+            .map(|i| {
+                let a = start_angle + step * i as f32;
+                self.center + Vec2::new(a.cos(), a.sin()) * self.radius
+            })
+            .collect()
+    }
 }
 
 /// 2D 轴对齐椭圆：中心 + 两个半轴。
@@ -463,6 +487,50 @@ mod tests {
             c.translated(Vec2::new(2.0, 3.0)),
             Circle2D::new(Vec2::new(2.0, 3.0), 1.0)
         );
+    }
+
+    /// `Circle2D::sample`：点数 = 段数、半径守恒、首尾**不重复**（闭合由 `closed` 表达）、
+    /// 起点由 `start_angle` 决定、步长恒为 `TAU / n`（逆时针）。
+    ///
+    /// 该口径与 `xcal-app` 里原手写循环（起笔 `-π/4`、64 段、半径 `1.2`）逐点一致。
+    #[test]
+    fn test_circle2d_sample_equiangular_without_duplicate_endpoint() {
+        let center = Vec2::new(-6.0, -2.5);
+        let radius = 1.2;
+        let start_angle = -std::f32::consts::FRAC_PI_4;
+        let c = Circle2D::new(center, radius);
+        let n = 64u32;
+        let pts = c.sample(n, start_angle);
+
+        assert_eq!(pts.len(), n as usize, "点数恒等于段数");
+        // 半径守恒（含首点与末点）。
+        for p in &pts {
+            assert!(((*p - center).length() - radius).abs() < 1e-4);
+        }
+        // 首点 = center + r·(cos start, sin start)。
+        let first = center + Vec2::new(start_angle.cos(), start_angle.sin()) * radius;
+        assert!((pts[0] - first).length() < 1e-5);
+        // 步长 = TAU / n。
+        let step = std::f32::consts::TAU / n as f32;
+        let second = center + Vec2::new((start_angle + step).cos(), (start_angle + step).sin()) * radius;
+        assert!((pts[1] - second).length() < 1e-5);
+        // 首尾不重复：末点与首点的弦长 = 2r·sin(π/n)（≠ 0 ⇒ 点数恰为 n，
+        // 闭合语义由调用方的 `closed` 表达，不由重复端点表达）。
+        let chord = 2.0 * radius * (std::f32::consts::PI / n as f32).sin();
+        assert!(
+            ((pts[0] - pts[(n - 1) as usize]).length() - chord).abs() < 1e-4,
+            "末点与首点的弦长应为 2r·sin(π/n)"
+        );
+    }
+
+    /// 退化段数不 panic：`n = 0` 返回空，`n = 1 / 2` 返回 1 / 2 个点。
+    #[test]
+    fn test_circle2d_sample_degenerate_segment_counts() {
+        let c = Circle2D::new(Vec2::ZERO, 3.0);
+        assert!(c.sample(0, 0.0).is_empty());
+        assert_eq!(c.sample(1, 0.0).len(), 1);
+        assert_eq!(c.sample(2, 0.0).len(), 2);
+        assert_eq!(c.sample(1, 0.0)[0], Vec2::new(3.0, 0.0));
     }
 
     #[test]

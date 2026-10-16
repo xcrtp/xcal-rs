@@ -35,20 +35,15 @@ use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, S
 use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MeasureSpace, MorphQueue, scene::Scene,
 };
-use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
+use xcal_render_backends::RenderContext;
 use xc_notion::{Path2D, Rect2D, SurfaceFn};
-use xc_object::{Axes2D, Camera2D, Camera3D, FunctionGraph, Projection, Transform};
+use xc_object::{
+    Axes2D, CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
+    FunctionGraph, Projection, Transform,
+};
 
-/// 内容纹理（S3-3）：纹理句柄 id 与尺寸。
-///
-/// 3D 材质按同一 id 引用本帧渲染出的纹理（见 `WgpuBackend3D::register_texture`）。
-/// 尺寸固定 512×512（D1）：2 的幂、稳定不触发离屏目标反复重建；
-/// **正方形**与曲面域 `[-1.5,1.5]²` 同比，避免贴图被非等比拉伸。
-const CONTENT_TEXTURE_ID: u64 = 1;
-/// 内容纹理宽（物理像素）。
-const CONTENT_TEX_W: u32 = 512;
-/// 内容纹理高（物理像素）。
-const CONTENT_TEX_H: u32 = 512;
+// 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
+// `xc_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT}`。
 
 mod formula;
 mod health;
@@ -69,9 +64,16 @@ pub struct App {
 
 impl App {
     pub fn new(ctx: &eframe::CreationContext) -> Result<Self> {
-        Self::setup_fonts(&ctx.egui_ctx)?;
+        // 宿主字体（平台相关）：候选路径 + `XCAL_CJK_FONT`；找不到只提示、不中止。
+        if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() {
+            eprintln!(
+                "警告：未找到可用的中文字体（可用环境变量 XCAL_CJK_FONT 指定字体路径），中文可能显示为方框。"
+            );
+        }
         Self::setup_visuals(&ctx.egui_ctx);
 
+        // 渲染环境（后端 + 合成器 + RenderContext）由 backends 侧的"标准安装"负责：
+        // app 不需要知道要装哪几个后端、以什么顺序装。
         let render_ctx = {
             let rs = ctx
                 .wgpu_render_state
@@ -79,26 +81,7 @@ impl App {
                 .ok_or(Error::InitializationError(
                     "Wgpu render state not available".to_string(),
                 ))?;
-
-            // 3D 后端：pipeline 等 GPU 资源存入 egui-wgpu Renderer 的
-            // callback_resources（TypeMap），SceneCompositorCallback 在 prepare/paint
-            // 阶段按需取用（回调本身为 &self，不能持有重建中的 GPU 资源）。
-            let backend_3d =
-                WgpuBackend3D::with_default_shader(&rs.device, &rs.queue, rs.target_format);
-            rs.renderer.write().callback_resources.insert(backend_3d);
-
-            // 2D 后端（S3-1）：同一 TypeMap 里再放一份 WgpuBackend2D。
-            // S4.1 后它是唯一的 2D 路径（旧 CPU 回放已删除）。
-            // 后端常驻（pipeline/缓存/离屏目标随视口尺寸惰性重建）。
-            let backend_2d = WgpuBackend2D::new(&rs.device, &rs.queue);
-            rs.renderer.write().callback_resources.insert(backend_2d);
-
-            // 合成器（S3-2）：2D / 3D 图层各画到自己的离屏纹理后，
-            // 由它按 `SceneView::layers` 的声明顺序混合进主 pass。
-            let compositor = Compositor::new(&rs.device, rs.target_format);
-            rs.renderer.write().callback_resources.insert(compositor);
-
-            RenderContext::from_render_state(&rs)
+            xcal_render_backends::install_standard_backends(&rs)
         };
 
         let mut scene = Scene::new();
@@ -193,23 +176,24 @@ impl App {
         let engine = formula::build_engine();
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
         // 内容纹理相机（S3-3）：由公式的世界包围盒导出——`rect` 即纹理矩形
-        // （0,0–512,512），`scale` 取「公式宽度 ≈ 纹理宽 × 0.8」，`center` 取包围盒中心。
-        // 这样录进纹理的点恰好落在 [0,512]×[0,512] 内（见 xcal-egui 单测
-        // `content_record_maps_into_texture_rect`）。
+        // （0,0–512,512），让包围盒适配它（margin 0.8 ⇒ 公式宽度 ≈ 纹理宽 × 0.8），
+        // `center` 取包围盒中心。这样录进纹理的点恰好落在 [0,512]×[0,512] 内
+        // （见 xcal-egui 单测 `content_record_maps_into_texture_rect`）。
+        let texture_rect = Rect2D::new(
+            xc_notion::Vec2::ZERO,
+            xc_notion::Vec2::new(CONTENT_TEXTURE_WIDTH as f32, CONTENT_TEXTURE_HEIGHT as f32),
+        );
         let mut content_camera: Option<Camera2D> = None;
         match formula::rebuild(&engine, &spec) {
             Some(ir) => {
-                let mut lo = glam::Vec2::splat(f32::INFINITY);
-                let mut hi = glam::Vec2::splat(f32::NEG_INFINITY);
-                for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
-                    for cmd in &path.commands {
-                        if let xc_notion::PathCommand::MoveTo(p)
-                        | xc_notion::PathCommand::LineTo(p) = cmd
-                        {
-                            lo = lo.min(*p);
-                            hi = hi.max(*p);
-                        }
-                    }
+                // 包围盒由理念层 `Path2D::bounds`（懒计算）给出 —— app 不再遍历命令。
+                let mut bounds: Option<Rect2D> = None;
+                for (mut path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec)
+                {
+                    bounds = Some(match bounds {
+                        Some(acc) => acc.union(&path.bounds()),
+                        None => path.bounds(),
+                    });
                     scene.spawn((
                         Path::new(path),
                         // 公式描边是世界空间：与字形一同随缩放成比例变化。
@@ -218,23 +202,11 @@ impl App {
                         ContentTextureItem,
                     ));
                 }
-                if lo.x.is_finite() && hi.x.is_finite() {
-                    let size = hi - lo;
-                    let center = (lo + hi) * 0.5;
-                    let scale = if size.x > 1e-3 {
-                        CONTENT_TEX_W as f32 * 0.8 / size.x
-                    } else {
-                        // 退化保护（无点 / 零宽）：给一个可见的默认缩放。
-                        40.0
-                    };
-                    content_camera = Some(Camera2D::new(
-                        (center.x, center.y).into(),
-                        scale,
-                        Rect2D::new(
-                            xc_notion::Vec2::ZERO,
-                            xc_notion::Vec2::new(CONTENT_TEX_W as f32, CONTENT_TEX_H as f32),
-                        ),
-                    ));
+                if let Some(bbox) = bounds {
+                    // `fit_bounds` 自带退化保护（空盒 / 零宽 ⇒ 保持基底 scale）；
+                    // 基底取 40，与原实现里退化分支的兜底值同值。
+                    let base = Camera2D::new(xc_notion::Vec2::ZERO, 40.0, texture_rect);
+                    content_camera = Some(base.fit_bounds(bbox, 0.8));
                 }
             }
             None => eprintln!("[xcal-app] 公式编译失败，跳过公式实体"),
@@ -250,12 +222,9 @@ impl App {
         // 起点对齐（原型约定，见 S1 计划已知限制"旋转对齐"）：圆的起笔方向与
         // 方的首个顶点方向一致（均指向 -45° 的右下角），避免形变过程中"绕圈"旋转。
         let start_angle = -std::f32::consts::FRAC_PI_4;
-        let circle_pts: Vec<glam::Vec2> = (0..64)
-            .map(|i| {
-                let a = start_angle + std::f32::consts::TAU * (i as f32) / 64.0;
-                morph_center + glam::Vec2::new(a.cos(), a.sin()) * morph_radius
-            })
-            .collect();
+        // 圆采样下沉到理念层 `Circle2D::sample`（原为 app 内的手写三角函数循环）。
+        let circle_pts: Vec<glam::Vec2> =
+            xc_notion::Circle2D::new(morph_center, morph_radius).sample(64, start_angle);
         let square_pts: Vec<glam::Vec2> = [
             glam::Vec2::new(morph_radius, -morph_radius),
             glam::Vec2::new(morph_radius, morph_radius),
@@ -372,13 +341,16 @@ impl App {
                 25.0,
                 Rect2D::new(
                     xc_notion::Vec2::ZERO,
-                    xc_notion::Vec2::new(CONTENT_TEX_W as f32, CONTENT_TEX_H as f32),
+                    xc_notion::Vec2::new(
+                        CONTENT_TEXTURE_WIDTH as f32,
+                        CONTENT_TEXTURE_HEIGHT as f32,
+                    ),
                 ),
             )
         });
         resources.insert(ContentTextureSpec {
             camera: content_camera,
-            size_px: [CONTENT_TEX_W, CONTENT_TEX_H],
+            size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
             texture: TextureHandle::new(CONTENT_TEXTURE_ID),
             composite: false,
         });
@@ -440,31 +412,6 @@ impl App {
         self.render_ctx.clone()
     }
 
-    fn setup_fonts(ctx: &egui::Context) -> Result<()> {
-        let mut fonts = egui::FontDefinitions::default();
-        let font_path = "C:\\Windows\\Fonts\\msyh.ttc";
-        if let Ok(font_data) = std::fs::read(font_path) {
-            fonts.font_data.insert(
-                "msyh".to_owned(),
-                Arc::new(egui::FontData::from_owned(font_data)),
-            );
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, "msyh".to_owned());
-            fonts
-                .families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .push("msyh".to_owned());
-            ctx.set_fonts(fonts);
-        } else {
-            eprintln!("警告：未找到微软雅黑字体，中文可能显示为方框。");
-        }
-        Ok(())
-    }
-
     /// 调亮 UI 文字颜色：默认 dark theme 的 weak_text_color 偏灰，
     /// 把 hint / inactive 都提亮。
     fn setup_visuals(ctx: &egui::Context) {
@@ -515,16 +462,7 @@ impl eframe::App for App {
                 Err(e) => tracing::error!(%e, tick, "snapshot export failed"),
             }
         }
-        let draw_calls = self
-            .scheduler
-            .resources()
-            .get::<DrawQueue>()
-            .map_or(0, |q| q.len())
-            + self
-                .scheduler
-                .resources()
-                .get::<DrawQueue3D>()
-                .map_or(0, |q| q.mesh_count() + q.line_count());
+        let draw_calls = EguiSceneHost::draw_call_count(self.scheduler.resources());
         self.health.update(
             dt,
             self.scheduler.frame_report(),
@@ -533,10 +471,8 @@ impl eframe::App for App {
         );
         self.health.show(ui);
 
-        // 每帧清空 2D 队列（present 已消费其内容；SceneRecord 下帧重新录制）。
-        if let Some(queue) = self.scheduler.resources_mut().get_mut::<DrawQueue>() {
-            queue.clear();
-        }
+        // 帧末：清空已被 present 消费的 2D 队列（帧管理归 host）。
+        EguiSceneHost::end_frame(self.scheduler.resources_mut());
 
         // egui 默认事件驱动，无鼠标/键盘事件时不调度 ui()，导致
         // TimeState.elapsed 停止增长、动画卡住。动画引擎需持续重绘，每帧请求下一帧。

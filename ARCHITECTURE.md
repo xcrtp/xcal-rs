@@ -12,13 +12,14 @@
 | object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
 | schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
-| render | `crates/render/` | `xcal-` | 场景层 + 渲染抽象 + 具体后端 |
+| scene  | `crates/scene/` | `xcal-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 |
+| render | `crates/render/` | `xcal-` | 渲染抽象（trait / 队列 / 三角化）+ 具体后端 |
 | ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 |
 | app    | `crates/app/`    | `xcal-` | 组装 / 可执行 |
 
 ## 依赖图
 
-依赖方向自上而下：`kernel → object / graph → schedule → render → ui → app`，反向禁止。
+依赖方向自上而下：`kernel → object / graph → schedule → scene → render → ui → app`，反向禁止。
 （`schedule` 无内部依赖，是通用底座；`render` / `ui` / `app` 亦可直接依赖 `kernel` / `object` / `graph`。）
 
 ```mermaid
@@ -51,8 +52,11 @@ graph TD
         xcal_schedule["xcal-schedule"]
     end
 
-    subgraph render[crates/render]
+    subgraph scene[crates/scene]
         xcal_scene["xcal-scene"]
+    end
+
+    subgraph render[crates/render]
         xcal_render["xcal-render"]
         xcal_render_backends["xcal-render-backends"]
     end
@@ -419,6 +423,9 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
 | `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：实测 10 个 crate / 41 文件 / **172 处** `glam::` 直接引用未收敛（M4 计划记为 216 处，系 M2.5 消灭 newtype 之前的实测值） | 分阶段收敛；不阻塞任何功能 |
+| 2D / 3D 录制 System **分居** | `xcal-egui::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层），但合并方式取决于真实录制结构 | 做真实数学动画、确定录制结构时 |
+| `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
+| `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
 > （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
@@ -503,5 +510,24 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   "与 hecs 的接触面"标注（替换 `Scene` 实现时各自要改哪里）；
 > - `Axes2D::refresh` 补写性能记账（每帧约 39 个实体 + 图元下沉判据 / 触发条件）；
 > - 新增上文「已知未接线项」章节。
+>
+> 备注（2026-10-16，App 简化与渲染层清理）：本轮做**减法**（补下层能力 → 上层代码自然消失）。
+> - **P1 能力补完**：`Circle2D::sample(n, start_angle)`（理念层补上与其他代数同类的"离散化"）、
+>   `Camera2D::fit_bounds(bbox, margin)`（对象层补上"取景适配"）。补完之后 app 里的
+>   手写 64 点三角函数循环与 `path.commands` 包围盒遍历**消失**（改为 `Circle2D::sample`
+>   与 `Path2D::bounds` + `Rect2D::union`）；`grep -n "commands" crates/app/.../lib.rs` = 0。
+> - **P2 渲染层清理**：删除 `draw_queue_2d.rs`（`DrawQueue2D` / `DrawCommand2D`，123 行，
+>   零生产消费方 —— 保留只会成为"纸面能力"）；修正 `xcal-render/src/lib.rs` 里
+>   自相矛盾的模块注释（`shape.rs` 并非真实文件，是路径稳定的转发模块）；
+>   `components.rs` 加"兼容 facade，非死代码"标注；**新增 `scene` 层**：
+>   `crates/render/xcal-scene` → `crates/scene/xcal-scene`（层序改为
+>   `kernel → object / graph → schedule → scene → render → ui → app`）。
+> - **P3 app 归位**：后端安装 → `xcal_render_backends::install_standard_backends`（app 一行）；
+>   CJK 字体 → `EguiSceneHost::install_cjk_font`（跨平台候选 + `XCAL_CJK_FONT`，不再硬编码
+>   Windows 路径）；内容纹理常量 → `xc_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
+>   CONTENT_TEXTURE_HEIGHT}`（值不变 1 / 512 / 512）；可观测与帧管理 →
+>   `EguiSceneHost::draw_call_count` / `end_frame`。
+> - **依赖图无变化**：本轮只移动目录与搬内部实现，**没有新增/删除任何依赖边**，
+>   package 名亦未变 ⇒ FanIn/FanOut 表与 `workspace-analyzer.mmd` 无需重算（工具不可用也不影响）。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

@@ -12,6 +12,10 @@
 use xc_notion::proj::{directx, look_at_mat4};
 use xc_notion::{Mat4, Rect2D, Transform2D, Vec2, Vec3};
 
+/// [`Camera2D::fit_bounds`] 的退化阈值：包围盒某方向尺寸 ≤ 该值即视为退化
+/// （保持基底 `scale`）。与 `xcal-app` 原手写式的 `size.x > 1e-3` 同值。
+const FIT_MIN_EXTENT: f32 = 1e-3;
+
 // ─── Camera2D ─────────────────────────────────────────────────────────────
 
 /// 2D 相机参数：用于在屏幕坐标系和逻辑坐标系之间转换。
@@ -92,6 +96,38 @@ impl Camera2D {
         Transform2D {
             matrix: self.to_transform2d().matrix.inverse(),
         }
+    }
+
+    /// 让给定**世界空间包围盒**适配本相机的视口矩形（`self.rect`），返回**新相机**。
+    ///
+    /// 语义：
+    /// - `center` = 包围盒中心；
+    /// - `scale` = `margin × min(视口宽 / 盒宽, 视口高 / 盒高)`
+    ///   —— 按"刚好装下"的方向定比例（另一方向留白），再乘 `margin`；
+    /// - `rect` 沿用 `self.rect`（本方法只负责取景，不改视口）；
+    /// - **退化保护**：盒宽 / 盒高非有限或 ≤ [`FIT_MIN_EXTENT`] 时**保持 `self.scale`**
+    ///   —— 调用方可用一个带"兜底 scale"的相机作基底。
+    ///
+    /// 为什么 `margin` 是显式参数：它是**视觉选择**（0.8 = 内容占视口 80%），
+    /// 不是几何常量，必须由调用方声明。
+    ///
+    /// 与 `xcal-app` 原手写式的关系：原式 `scale = 视口宽 × 0.8 / 盒宽` 只按宽适配；
+    /// 在**盒宽 ≥ 盒高**时 `min` 恰取宽度方向 ⇒ 两者逐位一致（内容纹理相机的实际情形）。
+    pub fn fit_bounds(&self, bbox: Rect2D, margin: f32) -> Camera2D {
+        let box_size = bbox.size();
+        let view_size = self.rect.size();
+        let fits = box_size.x.is_finite()
+            && box_size.y.is_finite()
+            && box_size.x > FIT_MIN_EXTENT
+            && box_size.y > FIT_MIN_EXTENT
+            && view_size.x.is_finite()
+            && view_size.y.is_finite();
+        let scale = if fits {
+            margin * (view_size.x / box_size.x).min(view_size.y / box_size.y)
+        } else {
+            self.scale
+        };
+        Camera2D::new(bbox.center(), scale, self.rect)
     }
 }
 
@@ -274,6 +310,46 @@ mod tests {
             (by_points - by_delta).length() < 1e-5,
             "增量换算与两点之差必须一致：{by_points:?} vs {by_delta:?}"
         );
+    }
+
+    /// `fit_bounds`：`center` = 盒中心；`scale` = `margin × min(视口/盒)`。
+    ///
+    /// **等价性判据（本轮唯一视觉风险点）**：盒宽 ≥ 盒高 时 `min` 取宽度方向，
+    /// 与 `xcal-app` 原手写式 `视口宽 × 0.8 / 盒宽` 逐位一致。
+    #[test]
+    fn fit_bounds_matches_app_previous_width_fit() {
+        let viewport = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
+        let base = Camera2D::new(Vec2::ZERO, 40.0, viewport);
+        // 盒 100 × 40（宽 ≥ 高，公式包围盒的实际情形）。
+        let bbox = Rect2D::new(Vec2::new(10.0, 20.0), Vec2::new(110.0, 60.0));
+        let cam = base.fit_bounds(bbox, 0.8);
+
+        assert!((cam.scale - 512.0 * 0.8 / 100.0).abs() < 1e-5, "scale = {}", cam.scale);
+        assert!((cam.center.x - 60.0).abs() < 1e-5 && (cam.center.y - 40.0).abs() < 1e-5);
+        // 视口沿用基底相机的 rect。
+        assert_eq!(cam.rect, viewport);
+
+        // 盒高 > 盒宽 ⇒ 取高度方向（保证完整可见，另一方向留白）。
+        let tall = Rect2D::new(Vec2::ZERO, Vec2::new(40.0, 100.0));
+        assert!((base.fit_bounds(tall, 0.8).scale - 512.0 * 0.8 / 100.0).abs() < 1e-5);
+    }
+
+    /// `fit_bounds` 的退化保护：空盒 / 零宽 / 非有限 ⇒ 保持基底 `scale`。
+    ///
+    /// 与 `xcal-app` 原手写式的退化兜底（基底 scale = 40）同口径。
+    #[test]
+    fn fit_bounds_keeps_base_scale_for_degenerate_bbox() {
+        let viewport = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
+        let base = Camera2D::new(Vec2::ZERO, 40.0, viewport);
+        for bbox in [
+            Rect2D::default(),                                                   // 空盒
+            Rect2D::new(Vec2::new(1.0, 1.0), Vec2::new(1.0, 5.0)),               // 零宽
+            Rect2D::new(Vec2::new(0.0, 0.0), Vec2::new(f32::INFINITY, 1.0)),     // 非有限
+        ] {
+            let cam = base.fit_bounds(bbox, 0.8);
+            assert_eq!(cam.scale, 40.0, "退化盒应保持基底 scale：{bbox:?}");
+            assert_eq!(cam.center, bbox.center(), "退化盒仍以盒中心取景");
+        }
     }
 
     /// 降级矩阵与 `world_to_screen` 一致（容差 1e-2 像素：两式只差浮点结合律）。

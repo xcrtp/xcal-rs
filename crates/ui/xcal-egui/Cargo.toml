@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xcal-scene = { path = "../../render/xcal-scene" }
+xcal-scene = { path = "../../scene/xcal-scene" }
 # ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。

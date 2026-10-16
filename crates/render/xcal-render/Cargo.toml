@@ -10,7 +10,7 @@ license.workspace = true
 # 本 crate 禁止依赖 egui；wgpu 仅通过 feature "wgpu" 引入（RenderTarget /
 # RenderLayer / RenderBackend 等 GPU 抽象需要），纯数据/队列/trait 定义不依赖 wgpu。
 [dependencies]
-xcal-scene = { path = "../xcal-scene", default-features = false }
+xcal-scene = { path = "../../scene/xcal-scene", default-features = false }
 xc-notion = { path = "../../kernel/xc-notion" }
 # 渲染 IR 层（Shape2D / Style2D / 样式组件 / 降级 trait）已下沉 kernel/xc-render-ir。
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
