@@ -9,7 +9,7 @@ macro_rules! auto_into {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::Vec3;
+    use xc_notion::Vec3;
 
     #[test]
     fn test_auto_into_basic() {

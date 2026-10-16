@@ -460,7 +460,7 @@ impl EguiSceneHost {
             .collect();
 
         // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
-        let viewport = Rect2D::new(*view_rect.min(), *view_rect.max());
+        let viewport = Rect2D::new(view_rect.min(), view_rect.max());
 
         let (Some(queue_2d), Some(queue_3d)) = (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
         else {

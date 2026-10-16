@@ -6,6 +6,8 @@
 //
 // [`InputEvents`] 是普通 Vec，可 headless 构造 → 场景 System 可以脱离窗口单测。
 
+use xc_notion::Vec2;
+
 /// 控件唯一标识（场景契约的一部分，UI 侧按 ID 发事件）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WidgetId(pub u32);
@@ -40,8 +42,8 @@ pub mod ids {
 #[derive(Debug, Clone, Copy)]
 pub enum SceneEvent {
     // ─── 视口拾取（坐标已换算为场景坐标；非相机操作）───
-    ViewportHover { layer: LayerId, scene_pos: crate::types::Vec2 },
-    ViewportClick { layer: LayerId, scene_pos: crate::types::Vec2 },
+    ViewportHover { layer: LayerId, scene_pos: Vec2 },
+    ViewportClick { layer: LayerId, scene_pos: Vec2 },
 
     // ─── 相机命令（语义化，不含 center/scale/eye 等字段名）───
     // 命令如何改变相机状态由相机控制器按 CameraMode 决定（PanZoom/Orbit/Path）。
@@ -103,7 +105,6 @@ impl InputEvents {
 mod tests {
     use super::*;
     use crate::domain::view::LayerId;
-    use crate::types::Vec2;
 
     /// headless 构造：不需要任何窗口/UI 上下文。
     #[test]

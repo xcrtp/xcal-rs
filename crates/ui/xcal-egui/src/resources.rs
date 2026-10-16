@@ -7,7 +7,8 @@
 //   egui 原生输入（滚轮/拖拽）的读取与翻译全部在 host。
 
 use xcal_scene::domain::CameraCommand;
-use xcal_scene::types::{Camera2D, Rect, Vec2};
+use xcal_scene::types::{Camera2D, Rect};
+use xc_notion::Vec2;
 
 // ─── AppCamera ─────────────────────────────────────────────────────────────
 

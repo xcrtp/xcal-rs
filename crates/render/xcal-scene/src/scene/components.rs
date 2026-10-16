@@ -25,7 +25,7 @@ pub mod marker {
 }
 
 pub mod mesh {
-    use crate::types::Vec3;
+    use xc_notion::Vec3;
 
     pub struct TriangleMesh {
         pub vertices: Vec<Vec3>,

@@ -13,8 +13,8 @@
 // 逐命令映射的实现已统一到 `xc_object::map_path_affine`（单份），
 // 本文件的正反向都复用它 —— 不再各写一份。
 
-use crate::types::{Camera2D, Vec2};
-use xc_notion::{Path2D, Transform2D as Affine2D};
+use crate::types::Camera2D;
+use xc_notion::{Path2D, Transform2D as Affine2D, Vec2};
 use xc_object::{Circle, Line, Path};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。

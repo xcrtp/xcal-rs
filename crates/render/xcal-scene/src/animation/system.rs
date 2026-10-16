@@ -89,13 +89,9 @@ mod tests {
     use hecs::World;
     use xc_time::{ClockForest as XcClockForest, ClockNode, Curve};
 
-    /// 场景层包装向量（`xcal_scene::types::Vec2` 是 glam 的 newtype）。
-    fn vec2(x: f32, y: f32) -> crate::types::Vec2 {
-        crate::types::Vec2::new(glam::Vec2::new(x, y))
-    }
-
-    /// 图元对象（`xc-object`）用的是理念层向量（= glam::Vec2），故去掉包装。
-    fn obj_vec2(x: f32, y: f32) -> glam::Vec2 {
+    /// 场景向量（M2.5 后 `xcal_scene::types::Vec2` 就是 `glam::Vec2` 的转发，
+    /// 图元对象用的也是同一类型 —— 原来的 `vec2` / `obj_vec2` 两个包装已被消灭）。
+    fn vec2(x: f32, y: f32) -> glam::Vec2 {
         glam::Vec2::new(x, y)
     }
 
@@ -186,7 +182,7 @@ mod tests {
     #[test]
     fn binding_apply_writes_circle_radius_via_scheduler() {
         let mut world = World::new();
-        let entity = world.spawn((Circle::new(obj_vec2(0.0, 0.0), 1.0),));
+        let entity = world.spawn((Circle::new(vec2(0.0, 0.0), 1.0),));
 
         let mut forest = XcClockForest::new();
         let root = forest.insert(ClockNode::new(None)).unwrap();

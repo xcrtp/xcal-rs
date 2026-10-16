@@ -1,56 +1,18 @@
 // types.rs
 //
-// 数学包装类型：Vec2, Vec3, Vec4, Color32, Rect, Camera2D。
+// 数学类型出口：Vec2 / Vec3 / Vec4（转发理念层）+ Color32 / Rect / Camera2D。
 //
 // M1 T6①：`I8Vec4` / `U8Vec4` 已收回理念层 `xc-notion::vec`（全仓零外部消费方）。
-// 二者此前是本文件的 `export_vec!` newtype，是"每层各自依赖 glam"的重复定义；
-// 收回后（含 tuple 转换）零下游影响。
+//
+// M2.5：`Vec2` / `Vec3` / `Vec4` 由**本地 newtype** 改为**理念层转发**。
+// 此前 `xcal_scene::types::Vec2` 是 `glam::Vec2` 的 newtype ⇒ 与 `xc_notion::Vec2`
+// 是**两个不同类型**，导致 `Camera2D` / `Transform2DInto` 派生 / `xc-macro`
+// 硬编码路径被绑死在场景层（M3 余项无法低成本推进的根因）。
+// 现在三者与 `xc_notion::Vec2` **同一类型**（`= glam::Vec2`），带 `Deref`/`From`
+// 的包装随之消失：同一个类型不再有两份定义（也无从复制），`(x, y).into()`
+// 由 glam 自带实现承接（`glam/src/f32/vec2.rs:1959`）。
 
-macro_rules! export_type {
-    ($(#[$m:meta])? $v:vis $name:ident($ty:ty)) => {
-        #[derive(derive_more::From, derive_more::Deref, derive_more::DerefMut)]
-        $(#[$m])?
-        $v struct $name($ty);
-    };
-}
-macro_rules! export_vec {
-    ($id:ident) => {
-        export_type! {
-            #[derive(Clone,Copy,derive_new::new,Debug)]
-           pub $id (glam::$id)
-        }
-    };
-    ($id:ident, $($extra:meta),*) => {
-        export_type! {
-            #[derive(Clone,Copy,derive_new::new,Debug, $($extra),*)]
-           pub $id (glam::$id)
-        }
-    };
-}
-
-export_vec!(Vec2, xc_macro::Transform2DInto);
-
-impl From<(f32, f32)> for Vec2 {
-    fn from((x, y): (f32, f32)) -> Self {
-        glam::Vec2::new(x, y).into()
-    }
-}
-
-export_vec!(Vec3, xc_macro::Transform2DInto);
-
-impl From<(f32, f32, f32)> for Vec3 {
-    fn from((x, y, z): (f32, f32, f32)) -> Self {
-        glam::Vec3::new(x, y, z).into()
-    }
-}
-
-export_vec!(Vec4);
-
-impl From<(f32, f32, f32, f32)> for Vec4 {
-    fn from((x, y, z, w): (f32, f32, f32, f32)) -> Self {
-        glam::Vec4::new(x, y, z, w).into()
-    }
-}
+pub use xc_notion::{Vec2, Vec3, Vec4};
 
 // Color32 的规范定义位于 xc-notion（理念层），此处再导出，使 ECS 组件、
 // 2D 变换体系与渲染层共用同一类型。egui/wgpu 等后端转换由各后端 crate 负责
@@ -75,10 +37,10 @@ impl Rect {
 
 impl Rect {
     pub fn size(&self) -> Vec2 {
-        (*self.max - *self.min).abs().into()
+        (self.max - self.min).abs()
     }
     pub fn center(&self) -> Vec2 {
-        ((*self.max + *self.min) / 2.0).into()
+        (self.max + self.min) / 2.0
     }
 }
 
@@ -89,7 +51,7 @@ impl Rect {
 /// 场景层依赖对象层，反向不允许，故对象层不能知道视口矩形。
 impl From<Rect> for xc_object::Rect {
     fn from(r: Rect) -> Self {
-        xc_object::Rect::new(*r.min, *r.max)
+        xc_object::Rect::new(r.min, r.max)
     }
 }
 
@@ -289,7 +251,7 @@ mod tests {
             (800.0, -600.0).into(),
         ] {
             let a = camera.world_to_screen(wp);
-            let b = t.apply_point(*wp);
+            let b = t.apply_point(wp);
             assert!(
                 (a.x - b.x).abs() < 1e-2 && (a.y - b.y).abs() < 1e-2,
                 "仿射与 world_to_screen 不一致: {wp:?} -> {a:?} vs {b:?}"
