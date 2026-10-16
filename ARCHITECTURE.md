@@ -9,7 +9,7 @@
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
 | kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；可含通用能力领域，如几何、排版）|
-| object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换），只依赖 kernel |
+| object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
 | schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
 | render | `crates/render/` | `xcal-` | 场景层 + 渲染抽象 + 具体后端 |
@@ -189,12 +189,17 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 ```
 Input:         DirectorAdvance · CameraInput
 LogicUpdate:   TimeControl · ParamPanel
-SceneSync:     BindingApply · MorphApply
-Prepare:       GridBuild
-RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D)
+SceneSync:     BindingApply
+Prepare:       AxesRefresh · FunctionGraphRefresh
+RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D) · ContentTextureRecord · MorphRecord
 FrameEnd:      —（内容提交由 host.present 承担；
                  面板 chrome 与 ViewRect 由 host.begin_frame 在 run_frame 前写入）
 ```
+
+**M4 起，几何不再出现在 UI 层**：坐标轴 / 网格（相机裁剪、步长自适应、刻度线）
+归 `xc_object::Axes2D`，函数采样归 `xc_object::FunctionGraph`；`Prepare` 阶段的两个
+System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原先的 `GridBuildSystem`
+已退役（其几何四段全部归位）。
 
 3D 合成方式：`EguiSceneHost::present` 先铺 `SceneView::background`，再**遍历**
 `SceneView::layers`（索引序 = 合成序，先 = 下），把**全部**图层（S4.1 后 2D / 3D /
@@ -456,6 +461,21 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `xc-object`（3/2）、`xc-render-ir`（3/1）。
 > - **本轮为部分落地**：`xc-object` 暂不依赖 `xc-scene-contract`（`Describable`
 >   派生宏延后），`record_scene` 暂保留 `&hecs::World`（见 M2/M3 交付说明）。
+> 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
+>
+> 备注（2026-10-16，M4）：M 阶段收尾。**M4 本身未新增依赖边**（它只搬逻辑，不加 crate 依赖），
+> 但 M3 余项引入的边（`xc-object → xc-scene-contract`、`xcal-scene → xc-object`、
+> `xcal-render → xc-object / xc-scene-contract`、`xcal-render-backends → xc-object`、
+> `xcal-app → xc-object`）在上一轮的表中尚未计入，故本轮把 FanIn/FanOut 与
+> `workspace-analyzer.mmd` 一并按同一口径全量重算：
+> - 关键变化：`xc-scene-contract` FanIn **0 → 3**（消费者 `xc-object` / `xcal-scene` /
+>   `xcal-render`，Instability 1.00 → 0.40 —— **契约层不再是零消费方空层**）；
+>   `xc-object` 3/2 → **5/4**、`xc-render-ir` 3/1 → **4/1**、`xc-macro` 3/0 → **4/0**、
+>   `xcal-render` 3/7 → 3/8、`xcal-scene` 4/5 → 4/7、`xcal-render-backends` 2/3 → 2/4、
+>   `xcal-app` 0/9 → 0/10；
+> - 结构判据（本轮）：`Parent` 定义 1 处、`record_scene` 不认识 hecs、
+>   UI 层无几何计算（`GridBuildSystem` 退役）、装配对象 `Axes2D` / `FunctionGraph`
+>   在对象层。已知未接线项（`Parent` 累乘 System、`Scene` 的第二实现等）见 M4 交付说明。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

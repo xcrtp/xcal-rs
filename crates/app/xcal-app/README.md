@@ -56,13 +56,17 @@ rs.renderer.write().callback_resources.insert(compositor);
 
 let render_ctx = RenderContext::from_render_state(&rs);
 
-// ── 3. Scene 填充 hecs World（纯逻辑组件） ──
+// ── 3. Scene 填充 hecs World（纯逻辑组件 / 场景对象） ──
 let mut scene = Scene::new();
 scene.spawn((wireframe_cube(1.0), Material3D::color(Color32::WHITE))); // 3D 线框立方体
 scene.spawn((Camera3D::new(...),));                            // 3D 相机（eye 由 Binding 驱动）
 scene.spawn((Circle::new((0.,0.),1.0), StrokeSolid));          // 振动圆（半径由 Binding 驱动）
-scene.spawn((FunctionX2Y::new(|x| x.sin()), Sampler1D,
-             StrokeSolid, PhaseAnim));                         // sin 曲线（相位由 Binding 驱动）
+// M4：坐标轴 / 网格与函数图像由**对象层装配对象**建立（几何在 xc-object）。
+let axes = Axes2D::unbounded();
+axes.build(&mut scene);                                        // 网格容器（逐帧 refresh）
+let graph = FunctionGraph::new(FunctionX2Y::new(|x| x.sin()), Sampler1D::new(-10., 10., 0.1));
+let func_handle = graph.build(&mut scene, StrokeSolid);        // 折线 + 采样规格（相位由 Binding 驱动）
+let func_entity = xcal_scene::contract::entity_of(func_handle).unwrap();
 // 公式：IR → (Path, StrokeSolid) 实体（每个子轮廓一条），见"公式接入"
 let engine = formula::build_engine();
 let spec   = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
@@ -97,13 +101,14 @@ r.insert(bindings);
 r.insert(DirectorState::new());
 
 // ── 6. Scheduler 注册 System（参见"阶段分配"） ──
-let mut sched = Scheduler::new(scene.into_world(), r);
+let mut sched = Scheduler::new(world, r);
 sched.add_system(Phase::Input,        DirectorAdvanceSystem);
 sched.add_system(Phase::Input,        CameraInputSystem);
 sched.add_system(Phase::LogicUpdate,  TimeControlSystem);
 sched.add_system(Phase::LogicUpdate,  ParamPanelSystem);        // App 层
 sched.add_system(Phase::SceneSync,    BindingApplySystem);
-sched.add_system(Phase::Prepare,      GridBuildSystem);
+sched.add_system(Phase::Prepare,      AxesRefreshSystem);        // M4：几何在对象层
+sched.add_system(Phase::Prepare,      FunctionGraphRefreshSystem);
 sched.add_system(Phase::RenderCommit, SceneRecordSystem);       // 2D
 sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（App 层）
 // FrameEnd 为空——内容提交由 host.present 承担（原 RenderSubmit 职责）
@@ -123,7 +128,8 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);     // 3D 专用（A
 | **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
 |                 | ParamPanel      | BindingTable             | InputEvents |
 | **SceneSync**   | BindingApply    | hecs 组件（无 Resource） | TimeState, ClockForest, BindingTable |
-| **Prepare**     | GridBuild       | DrawQueue (2D)           | ViewRect, AppCamera, UiConfig |
+| **Prepare**     | AxesRefresh (M4) | —（写 hecs 组件）         | ViewRect, AppCamera, UiConfig |
+|                 | FunctionGraphRefresh (M4) | —（写 hecs 组件）| — |
 | **RenderCommit**| SceneRecord (2D)| DrawQueue (2D)           | ViewRect, AppCamera |
 |                 | ContentTextureRecord (S3-3) | ContentTextureQueue | ContentTextureSpec |
 |                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, AppCamera |

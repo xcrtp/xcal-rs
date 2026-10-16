@@ -1,7 +1,7 @@
 // xc-object — 场景对象层（新层 `crates/object/`，M3 建立）
 //
 // 用户可见的**场景对象**：图元 newtype（`Circle` / `Path` / `Line` / `Rect`）、
-// 摆放组件（`Transform`）。
+// 摆放组件（`Transform` / `ZOrder`）与**装配对象**（`Axes2D` / `FunctionGraph`）。
 // 它们把"理念层的数学值"封装成"可放进场景、可被描述符驱动样式"的对象，
 // 并实现渲染 IR 的降级 trait（`ToShape2D`）与契约层的样式描述符接口（`Describable`）。
 //
@@ -24,11 +24,17 @@
 // 不是为凑 FanIn 而声明的假依赖（假依赖正是 P0-5 删掉的那类疤痕）。
 
 pub mod affine;
+pub mod axes;
 pub mod camera;
+pub mod graph;
 pub mod placement;
 pub mod primitives;
+pub mod zorder;
 
 pub use affine::{map_path_affine, uniform_scale};
+pub use axes::{AXIS_Z, Axes2D, AxesLine, GRID_Z, TickSpec};
 pub use camera::{Camera2D, Camera3D, Projection};
+pub use graph::{CONTENT_Z, FunctionGraph};
 pub use placement::Transform;
 pub use primitives::{Circle, Line, Path, Rect};
+pub use zorder::ZOrder;

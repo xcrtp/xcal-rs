@@ -22,9 +22,10 @@
 // hecs 没有类型擦除的 bundle 入口（`EntityBuilder` 只有 `add::<T>()`），
 // 故动态创建必须**按类型登记**。下表即唯一登记点：
 //
-//   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform`
+//   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform` / `ZOrder`
 //   相机：      `Camera2D` / `Camera3D` / `Projection`
 //   样式：      `StrokeSolid` / `FillSolid`
+//   装配对象：  `Axes2D` / `AxesLine` / `FunctionGraph`（M4：网格与函数图像归对象层）
 //   动画与标记：`PhaseAnim` / `MorphShape` / `ContentTextureItem`
 //   关系：      `Parent`
 //
@@ -33,9 +34,17 @@
 
 use hecs::{Entity, EntityBuilder, World};
 
-use xc_object::{Camera2D, Camera3D, Circle, Line, Path, Projection, Rect, Transform};
+use xc_object::{
+    Axes2D, AxesLine, Camera2D, Camera3D, Circle, FunctionGraph, Line, Path, Projection, Rect,
+    Transform, ZOrder,
+};
 use xc_render_ir::{FillSolid, StrokeSolid};
-use xc_scene_contract::{Components, ObjectId, Parent, Scene, SceneRead};
+use xc_scene_contract::{Components, ObjectId, Parent, Scene};
+
+/// 契约层的**只读**能力（`for_each*`）在此处对外转发：
+/// 消费方（UI 层 / 装配层）只需 `xcal_scene::contract::SceneRead` 一个入口，
+/// 不必额外依赖 `xc-scene-contract`（本 crate 已依赖它）。
+pub use xc_scene_contract::SceneRead;
 
 use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim};
 
@@ -92,6 +101,20 @@ impl SceneRead for WorldView<'_> {
             f(object_id_of(e), a, b);
         }
     }
+
+    fn for_each_pair_opt<
+        A: 'static + Send + Sync,
+        B: 'static + Send + Sync,
+        C: 'static + Send + Sync,
+    >(
+        &self,
+        mut f: impl FnMut(ObjectId, &A, &B, Option<&C>),
+    ) {
+        // hecs 原生支持 `Option<&T>` 查询项：`C` 缺席的对象也进结果（传 `None`）。
+        for (e, a, b, c) in self.world.query::<(Entity, &A, &B, Option<&C>)>().iter() {
+            f(object_id_of(e), a, b, c);
+        }
+    }
 }
 
 /// **读写适配器**：借用 `&mut hecs::World` 并实现 [`Scene`]
@@ -136,6 +159,17 @@ impl SceneRead for WorldScene<'_> {
     ) {
         WorldView::new(self.world).for_each_pair::<A, B>(f);
     }
+
+    fn for_each_pair_opt<
+        A: 'static + Send + Sync,
+        B: 'static + Send + Sync,
+        C: 'static + Send + Sync,
+    >(
+        &self,
+        f: impl FnMut(ObjectId, &A, &B, Option<&C>),
+    ) {
+        WorldView::new(self.world).for_each_pair_opt::<A, B, C>(f);
+    }
 }
 
 /// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `Err(原组件)`。
@@ -160,11 +194,15 @@ fn add_known(
     arm!(Path);
     arm!(Rect);
     arm!(Transform);
+    arm!(ZOrder);
     arm!(Camera2D);
     arm!(Camera3D);
     arm!(Projection);
     arm!(StrokeSolid);
     arm!(FillSolid);
+    arm!(Axes2D);
+    arm!(AxesLine);
+    arm!(FunctionGraph);
     arm!(PhaseAnim);
     arm!(MorphShape);
     arm!(ContentTextureItem);
@@ -228,6 +266,17 @@ impl SceneRead for crate::scene::Scene {
         f: impl FnMut(ObjectId, &A, &B),
     ) {
         WorldView::new(self.world()).for_each_pair::<A, B>(f);
+    }
+
+    fn for_each_pair_opt<
+        A: 'static + Send + Sync,
+        B: 'static + Send + Sync,
+        C: 'static + Send + Sync,
+    >(
+        &self,
+        f: impl FnMut(ObjectId, &A, &B, Option<&C>),
+    ) {
+        WorldView::new(self.world()).for_each_pair_opt::<A, B, C>(f);
     }
 }
 
@@ -335,5 +384,90 @@ mod tests {
         assert_eq!(seen, 1);
         assert!(scene.despawn(id));
         assert_eq!(scene.len(), 0);
+    }
+
+    fn test_camera() -> Camera2D {
+        Camera2D::new(
+            xc_notion::Vec2::ZERO,
+            40.0,
+            xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(800.0, 600.0)),
+        )
+    }
+
+    /// `for_each_pair_opt`：`C` 缺席传 `None`（普通对象），存在时给出（分层对象）。
+    #[test]
+    fn for_each_pair_opt_reports_missing_component() {
+        let mut world = World::new();
+        world.spawn((
+            Circle::new((0.0, 0.0), 1.0),
+            StrokeSolid::new(1.0, (0, 0, 0, 255)),
+        ));
+        world.spawn((
+            Circle::new((1.0, 0.0), 1.0),
+            StrokeSolid::new(1.0, (0, 0, 0, 255)),
+            ZOrder::new(-100),
+        ));
+        let view = WorldView::new(&world);
+        let mut zs = Vec::new();
+        view.for_each_pair_opt::<Circle, StrokeSolid, ZOrder>(|_, _, _, z| zs.push(z.map(|z| z.0)));
+        zs.sort();
+        assert_eq!(zs, vec![None, Some(-100)]);
+    }
+
+    /// M4：`Axes2D::build` / `refresh` 走契约层写路径 —— 每帧清旧建新，
+    /// 线段数量不累积，且网格线带 `ZOrder`（压在内容之下）。
+    #[test]
+    fn axes_refresh_rebuilds_without_accumulating() {
+        let mut scene = crate::scene::Scene::new();
+        let axes = Axes2D::new((-10.0, 10.0), (-10.0, 10.0));
+        let handle = axes.build(&mut scene).expect("Axes2D 已登记");
+        let camera = test_camera();
+
+        let count_lines = |scene: &crate::scene::Scene| {
+            let mut n = 0;
+            scene.for_each::<AxesLine>(|_, _| n += 1);
+            n
+        };
+
+        axes.refresh(&mut scene, handle, &camera);
+        // 视口 800x600、scale 40 ⇒ 可见 x ∈ [-10,10]（21 条）、y ∈ [-7.5,7.5]（16 条）
+        // ⇒ 37 条网格线 + 2 条坐标轴 = 39。
+        assert_eq!(count_lines(&scene), 39);
+
+        // 第二次刷新：旧的全部清掉（不累积）。
+        axes.refresh(&mut scene, handle, &camera);
+        assert_eq!(count_lines(&scene), 39);
+
+        // 关闭网格 ⇒ 线段清空，容器对象仍在。
+        axes.clear(&mut scene, handle);
+        assert_eq!(count_lines(&scene), 0);
+        assert!(scene.contains(handle));
+    }
+
+    /// M4-3b 消费方：`FunctionGraph::refresh` 用 `Scene::set` 覆盖既有 `Path`。
+    #[test]
+    fn function_graph_refresh_rewrites_path() {
+        let mut scene = crate::scene::Scene::new();
+        let graph = FunctionGraph::new(
+            xc_notion::FunctionX2Y::new(|x: f32| x),
+            xc_notion::Sampler1D::new(0.0f32, 1.0, 1.0),
+        );
+        let handle = graph
+            .build(&mut scene, StrokeSolid::new(1.0, (0, 0, 0, 255)))
+            .expect("FunctionGraph 已登记");
+
+        assert!(graph.refresh(&mut scene, handle, 1.0));
+        let path = scene.get_mut::<Path>(handle).expect("Path 组件在");
+        let mut pts = Vec::new();
+        for cmd in &path.0.commands {
+            if let xc_notion::PathCommand::MoveTo(p) | xc_notion::PathCommand::LineTo(p) = cmd {
+                pts.push(*p);
+            }
+        }
+        // 相位 1.0 加在自变量上：x = {0,1} ⇒ y = {1,2}。
+        assert_eq!(pts, vec![xc_notion::Vec2::new(0.0, 1.0), xc_notion::Vec2::new(1.0, 2.0)]);
+
+        // 句柄失效 ⇒ 写入失败（不 panic）。
+        assert!(!graph.refresh(&mut scene, ObjectId::DANGLING, 0.0));
     }
 }

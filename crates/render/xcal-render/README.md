@@ -35,8 +35,11 @@ xcal-render 同时承载两套渲染抽象：
   `record_drawables` 是 **ECS 无关**的录制入口，只接受实现了 `Drawable`
   （`to_primitive(&camera) -> Option<(Shape2D, Style2D)>`）的对象——
   `(形状, 样式)` 引用对经泛型 blanket impl 自动获得 `Drawable`；
-  `record_scene` 负责把 hecs World 的 `Circle/Path/Line/Rect` 组合成 `Drawable`
-  后调用它（z = 0）。旧「逐组件穷举宏」已删除 ⇒
+  `record_scene` 负责把**契约层 `SceneRead`**（`for_each_pair_opt`）里的
+  `Circle/Path/Line/Rect` 组合成 `Drawable` 后调用它。**M3-7：不认识 hecs** ——
+  hecs 侧经 `xcal-scene` 的 `WorldView` 只读适配器接入。层级（M4）：对象上
+  **可选**的 `ZOrder` 组件优先（网格 z = -100 / 坐标轴 z = -90），缺席用默认层（0）。
+  旧「逐组件穷举宏」已删除 ⇒
   **新增图元只需实现 `ToShape2D`，不必改动录制逻辑**。
 - **描边宽度的度量空间**（`StrokeSolid.space: MeasureSpace`，默认 `Screen`）：
   `record_scene` 是**唯一换算点**——按 `camera.scale` 用 `xc_notion::resolve_width`
@@ -98,8 +101,8 @@ xcal-render 同时承载两套渲染抽象：
 
 | 模块 | 说明 |
 |------|------|
-| `components` | 统一 2D 管线需要的 hecs 组件（`Circle, StrokeSolid, FillSolid, Line, Path, FunctionX2Y, Sampler1D, LocalClock, ClockState, CircleAnim, PhaseAnim`）|
-| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + SceneRender + record_scene`（统一 2D 管线） |
+| `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
+| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_2d` / `draw_queue_3d` | 预留 2D 指令队列 + 3D 双列表队列 |
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
@@ -184,7 +187,8 @@ cargo doc  -p xcal-render --no-deps --all-features
 - `DrawQueue`：稳定排序（同 `ZIndex` 保插入序）、`merge` 多批次归并、
   `execute` 顺序验证
 - `DrawQueue3D`：Mesh/Line 双列表追加、清空、`mesh_count` / `line_count`
-- `Shape2D`（rect / circle / path / line）端点一致性 + `record_scene` 遍历 hecs World；
+- `Shape2D`（rect / circle / path / line）端点一致性 + `record_scene` 经契约层 `SceneRead`
+  （测试用**非 ECS 的 `TestScene`** 驱动，证明"可替换"不是纸面承诺）+ `ZOrder` 层级优先；
   闭合路径以 `PathCommand::Close` 结尾（M0 方案 b）
 - `tessellate`：`Vertex2D` size == 20 布局契约、`side ∈ {±1}`、
   填充面积 / 描边环面积、Group 展开、
@@ -206,17 +210,23 @@ cargo doc  -p xcal-render --no-deps --all-features
 ## 依赖
 
 ```toml
-xcal-scene     = { path = "../xcal-scene", default-features = false }
-xc-notion = { path = "../xc-notion" }
-xc-content  = { path = "../../kernel/xc-content" }   # content_ir 消费侧：ir_to_draw_cmds
-xc-vertex   = { path = "../../kernel/xc-vertex" }    # 顶点格式契约（已下沉 kernel）
-xc-resource = { path = "../../kernel/xc-resource" }  # 资源缓存 / GpuHandle（已下沉 kernel）
-serde       = { workspace = true }                   # VertexLayout 可序列化（pipeline 变体缓存 key）
-glam          = "0.33"
+xcal-scene        = { path = "../xcal-scene", default-features = false }
+xc-notion         = { path = "../../kernel/xc-notion" }
+xc-render-ir      = { path = "../../kernel/xc-render-ir" }       # Shape2D / Style2D / 样式组件 / 降级 trait
+xc-object         = { path = "../../object/xc-object" }          # 图元 newtype / Camera2D / ZOrder
+xc-scene-contract = { path = "../../kernel/xc-scene-contract" }  # record_scene 的唯一入参抽象（SceneRead）
+xc-content        = { path = "../../kernel/xc-content" }         # content_ir 消费侧：ir_to_draw_cmds
+xc-vertex         = { path = "../../kernel/xc-vertex" }          # 顶点格式契约（已下沉 kernel）
+xc-resource       = { path = "../../kernel/xc-resource" }        # 资源缓存 / GpuHandle（已下沉 kernel）
+serde             = { workspace = true }                        # VertexLayout 可序列化（pipeline 变体缓存 key）
+glam              = "0.33"
 derive_more / derive-new / derive_builder
-hecs          = "0.11"
-thiserror     = "2.0"
+thiserror         = "2.0"
 lyon_tessellation = "1.0"   # S3-0 三角化（不自研）
-lyon_path    = "1.0"
-wgpu          = "30"   (optional, feature = "wgpu")
+lyon_path         = "1.0"
+wgpu              = "30"   (optional, feature = "wgpu")
 ```
+
+> **无 hecs**（M3-7）：`record_scene<S: SceneRead>` 只吃契约层抽象；
+> `Cargo.toml` 的 `[dependencies]` 与 `[dev-dependencies]` 里都已删除 hecs
+> （树中仍会出现传递的 hecs，因为本 crate 依赖 `xcal-scene` —— 那是 ECS 实现层）。

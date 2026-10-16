@@ -27,8 +27,8 @@ use xcal_scene::types::Color32;
 use xcal_scene::{ClockForest, ClockNode, Curve, PlayMode};
 use xcal_egui::resources::{AppCamera, UiConfig, ViewRect};
 use xcal_egui::systems::{
-    CameraInputSystem, ContentTextureRecordSystem, GridBuildSystem, MorphRecordSystem,
-    SceneRecordSystem,
+    AxesRefreshSystem, CameraInputSystem, ContentTextureRecordSystem, FunctionGraphRefreshSystem,
+    MorphRecordSystem, SceneRecordSystem,
 };
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
 use xcal_render::components::{Circle, FunctionX2Y, Path, PhaseAnim, Sampler1D, StrokeSolid};
@@ -37,7 +37,7 @@ use xcal_render::{
 };
 use xcal_render_backends::{Compositor, RenderContext, WgpuBackend2D, WgpuBackend3D};
 use xc_notion::{Path2D, Rect2D, SurfaceFn};
-use xc_object::{Camera2D, Camera3D, Projection, Transform};
+use xc_object::{Axes2D, Camera2D, Camera3D, FunctionGraph, Projection, Transform};
 
 /// 内容纹理（S3-3）：纹理句柄 id 与尺寸。
 ///
@@ -162,13 +162,27 @@ impl App {
             // 半径振荡由 BindingApplySystem 驱动（Binding 表：base=1.0, amp=0.4, omega=2.0）
         ));
 
-        let func_entity = scene.spawn((
+        // ── 坐标轴 / 网格（M4-2）：规格与装配都在场景对象层 `Axes2D` ──────
+        // 原先由 UI 层 `GridBuildSystem` 每帧直写 DrawQueue 的几何
+        // （相机裁剪 / 步长自适应 / 刻度线 / 坐标轴）已整体归位；
+        // 这里只装配一次，逐帧刷新由 `AxesRefreshSystem` 接线。
+        let axes = Axes2D::unbounded();
+        let _axes_handle = axes.build(&mut scene).expect("Axes2D 已登记");
+
+        // ── 函数图像（M4-1）：采样归对象层 `FunctionGraph` ────────────────
+        // 相位仍由 BindingApplySystem 写 `PhaseAnim`；`FunctionGraphRefreshSystem`
+        // 读该相位并按对象自己的采样规格重采样（写路径 = 契约层 `Scene::set`）。
+        let graph = FunctionGraph::new(
             FunctionX2Y::new(|x: f32| x.sin()),
             Sampler1D::new(-10.0f32, 10.0, 0.1),
-            StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen),
-            // 相位滑动由 BindingApplySystem 驱动（Binding 表：omega=1.5）
-            PhaseAnim::new(0.0, 1.5),
-        ));
+        );
+        let func_handle = graph
+            .build(
+                &mut scene,
+                StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen),
+            )
+            .expect("FunctionGraph 已登记");
+        let func_entity = xcal_scene::contract::entity_of(func_handle).expect("刚创建的句柄有效");
 
         // ── 公式接入：Typst 内容管线 → 旧 2D 描边路径（空心字）──────────
         // 静态一条公式，启动时烘焙一次并 spawn 实体；rebuild() 已留口，
@@ -278,7 +292,14 @@ impl App {
             }
         }
 
-        let world = scene.into_world();
+        let mut world = scene.into_world();
+
+        // 函数图像的相位组件：`FunctionGraphRefreshSystem` 读它、`BindingApplySystem`
+        // 写它（`BindingTarget::Phase(func_entity)`）。装配层不认识动画组件，
+        // 故它在 `FunctionGraph::build` 之后由 App 侧补上。
+        world
+            .insert_one(func_entity, PhaseAnim::new(0.0, 1.5))
+            .expect("实体刚创建");
 
         // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
         let mut forest = ClockForest::new();
@@ -377,7 +398,7 @@ impl App {
         // - LogicUpdate:  TimeControl（R=InputEvents, W=DirectorState）
         //                 ParamPanel（R=InputEvents, W=BindingTable）
         // - SceneSync:    BindingApply（统一驱动 2D+3D 动画）
-        // - Prepare:      GridBuild
+        // - Prepare:      AxesRefresh + FunctionGraphRefresh（M4：几何在场景对象层）
         // - RenderCommit: SceneRecord（2D）+ SceneRecord3D
         // - FrameEnd:     无——内容提交由 host.present 承担（原 RenderSubmit 职责）。
         //                 面板 chrome 与 ViewRect 由 host.begin_frame 承担（run_frame 前）。
@@ -392,7 +413,10 @@ impl App {
         // `MorphApplySystem`（CPU 插值写 `Path`）不再注册——形变实体已不带 `Path`
         // 组件，故它即使注册也不会命中。CPU 路径保留在 xcal-scene 备查。
 
-        scheduler.add_system(Phase::Prepare, GridBuildSystem);
+        // M4：坐标轴 / 网格与函数图像的几何在场景对象层（`Axes2D` / `FunctionGraph`），
+        // 这两个 System 只做「取相机 / 取相位 → 刷新对象」的接线。
+        scheduler.add_system(Phase::Prepare, AxesRefreshSystem);
+        scheduler.add_system(Phase::Prepare, FunctionGraphRefreshSystem);
 
         // RenderCommit：2D SceneRecord 写 DrawQueue(2D)，
         // 3D SceneRecord3D 写 DrawQueue3D，类型不相交。
@@ -467,7 +491,8 @@ impl eframe::App for App {
             EguiSceneHost::build_scene_view(self.scheduler.world(), self.scheduler.resources());
 
         // 2. UI → 场景：收集输入事件、绘制面板 chrome、写 ViewRect。
-        //    必须在 run_frame 之前：System 消费 InputEvents，GridBuild 当帧读 ViewRect。
+        //    必须在 run_frame 之前：System 消费 InputEvents，Axes/FunctionGraph
+        //    刷新当帧读 ViewRect。
         EguiSceneHost::begin_frame(ui, &view, self.scheduler.resources_mut());
 
         self.scheduler.run_frame(dt);

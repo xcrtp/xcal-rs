@@ -12,7 +12,7 @@ use xc_time::{ClockId, Curve};
 pub enum BindingTarget {
     /// 写 `Circle.radius`（2D 圆半径振荡）。
     CircleRadius(Entity),
-    /// 写 `PhaseAnim.phase`（供 FunctionX2Y 水平采样滑动）。
+    /// 写 `PhaseAnim.phase`（供函数图像 `FunctionGraph::refresh` 水平采样滑动，M4）。
     Phase(Entity),
     /// 写 `Camera3D.eye`（3D 轨道相机）。
     CameraEye(Entity),

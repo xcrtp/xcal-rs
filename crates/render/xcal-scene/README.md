@@ -43,8 +43,29 @@
 ### 场景数据：`Scene`
 
 `Scene` 是 `hecs::World` + 类型化 `ResourceMap` 的薄包装，提供 `spawn` /
-`add_resource` / `borrow_resource(_mut)` / `render(|world, resources| ...)`，
-以及 `world()` / `world_mut()` / `into_world()` 的所有权转移入口。
+`add_resource` / `borrow_resource(_mut)` / `len` / `is_empty`，
+以及 `world()` / `world_mut()` / `into_world()` 的 ECS 特定入口
+（**替换实现时随之重写**；契约层能力见下）。
+
+> **M3-8**：原先的 `render(|world, resources| ...)` 闭包入口**已删除** —— 它把
+> `&hecs::World` 交给任意调用方，是 ECS 泄漏最重的一处。需要读场景时走契约层
+> `xc_scene_contract::SceneRead`（`for_each` / `for_each_pair` / `for_each_pair_opt`），
+> 需要「同时拿 world 与 resource」时用 `xcal-schedule` 的
+> `ExecutorContext::with_world_and_resource_mut`。
+
+### 契约层适配：`contract`
+
+`xcal-scene` 是**契约层 `Scene` trait 的 hecs 实现**（唯一接触面）：
+
+| 类型 | 能力 | 用途 |
+|------|------|------|
+| `WorldView<'a>` | `SceneRead`（只读） | 渲染录制：`record_scene(&WorldView::new(world), camera, queue)`（不可变借用足够）|
+| `WorldScene<'a>` | `SceneRead + Scene`（读写） | 装配对象（`Axes2D::refresh` / `FunctionGraph::refresh`）|
+| `Scene`（本地类型） | `SceneRead + Scene` | 持有 `hecs::World` 的场景；App 启动期装配 |
+| `object_id_of` / `entity_of` | 句柄互转 | `ObjectId ↔ hecs::Entity`（位模式直通）|
+
+`spawn_dyn` 走**组件登记表**（`xc-object` 的图元 / 相机 / 摆放 / 装配对象 + 样式 +
+动画组件 + `Parent`）；未登记的组件类型 ⇒ 返回 `None`（不造半成品对象）。
 
 组件分两处：
 

@@ -49,6 +49,23 @@ pub trait SceneRead {
         &self,
         f: impl FnMut(ObjectId, &A, &B),
     );
+
+    /// 逐对象访问 `(A, B)`，并**可选**地取 `C`：`C` 缺席时传 `None`。
+    ///
+    /// 为什么需要"可选"：对象层新增了**可缺席的摆放信息**（如 `ZOrder` 绘制层级）——
+    /// 绝大多数对象没有它（用默认值），只有需要显式分层的对象才有；
+    /// 若要求 `C` 必须存在，就没法用一次查询同时覆盖两类对象。
+    ///
+    /// hecs 侧即 `query::<(Entity, &A, &B, Option<&C>)>()`：ECS 的 `Option<&T>`
+    /// 查询项是原生支持的，故这不是额外负担。
+    fn for_each_pair_opt<
+        A: 'static + Send + Sync,
+        B: 'static + Send + Sync,
+        C: 'static + Send + Sync,
+    >(
+        &self,
+        f: impl FnMut(ObjectId, &A, &B, Option<&C>),
+    );
 }
 
 /// **读写**场景：在 [`SceneRead`] 之上补创建 / 销毁 / 写入。

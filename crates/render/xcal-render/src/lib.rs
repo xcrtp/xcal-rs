@@ -53,7 +53,7 @@ pub mod resource_cache;
 // 此处转发以保持 `xcal_render::*` 路径不变（下游 / 后端无需改动）。
 pub use draw::{
     ContentTextureQueue, DrawCommand, DrawQueue, Drawable, MorphItem, MorphQueue, Painter2D,
-    SceneRender, ZIndex, record_drawables, record_path_stroke, record_scene,
+    SceneRender, ZIndex, push_morph_item, record_drawables, record_path_stroke, record_scene,
 };
 pub use xc_render_ir::{
     CustomShapeData, CustomTypeId, FillSolid, FillStyle, ResolveStyle, Shape2D, StrokeSolid,

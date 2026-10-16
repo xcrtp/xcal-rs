@@ -54,16 +54,23 @@ xcal-app (装配 + ParamPanelSystem)
 |-------|--------|------|------|
 | Input | `CameraInputSystem` | R=`InputEvents`; W=`AppCamera` | 过滤 `SceneEvent::Camera`，委托 `AppCamera::apply_command`（PanZoom 模式）|
 | LogicUpdate | `TimeControlSystem` | R=`InputEvents`; W=`DirectorState` | 消费 `Button(PLAY_PAUSE)` / `Slider(SPEED)` / `Slider(SEEK)` |
-| Prepare | `GridBuildSystem` | R=`ViewRect`, `AppCamera`, `UiConfig`; W=`DrawQueue` | 视口底色 + 多级网格 / 坐标轴（`MeasureSpace::Screen`）|
-| RenderCommit | `SceneRecordSystem` | R=`ViewRect`, `AppCamera`; W=`DrawQueue` | `record_scene(world, camera, dq)` 遍历 hecs World + `FunctionX2Y` 曲线 |
+| Prepare | `AxesRefreshSystem`（M4）| R=`ViewRect`, `AppCamera`, `UiConfig`; W=— | 取本帧相机 → 调对象层 `Axes2D::refresh`（几何在 `xc-object`，本层只接线）|
+| Prepare | `FunctionGraphRefreshSystem`（M4）| R=—; W=— | 取实体相位（`PhaseAnim`）→ 调对象层 `FunctionGraph::refresh`（写路径 = 契约层 `Scene::set`）|
+| RenderCommit | `SceneRecordSystem` | R=`ViewRect`, `AppCamera`; W=`DrawQueue` | `record_scene(&WorldView, camera, dq)`（契约层 `SceneRead`，**不认识 hecs**）|
 | RenderCommit | `ContentTextureRecordSystem`（S3-3）| R=`ContentTextureSpec`; W=`ContentTextureQueue` | 只录带 `ContentTextureItem` 标记的实体到内容纹理 |
-| RenderCommit | `MorphRecordSystem`（S4.3）| R=`ViewRect`, `AppCamera`; W=`MorphQueue` | 录 `(MorphShape, StrokeSolid)` 为 `MorphItem`（**不做 CPU 插值**，`t` 走 uniform）|
+| RenderCommit | `MorphRecordSystem`（S4.3）| R=`ViewRect`, `AppCamera`; W=`MorphQueue` | 调 `push_morph_item`（**不做 CPU 插值**，`t` 走 uniform；换算收在 xcal-render）|
 
 其他阶段由别的 crate 提供：Input 的 `DirectorAdvance`、SceneSync 的 `BindingApply`
 （xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。`Phase::FrameEnd` 目前为空。
 
-> `SceneRecordSystem` 同时需要 `&hecs::World` 与 `&mut DrawQueue`，通过
-> `ctx.with_world_and_resource_mut::<DrawQueue, _>(...)` 做拆分借用。
+> **M4：UI 层不含几何计算。** 原 `GridBuildSystem`（相机裁剪 / 步长自适应 / 刻度线 /
+> 坐标轴，279 行）已退役，四段逻辑整体归 `xc_object::Axes2D`；函数采样归
+> `xc_object::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
+> 世界↔屏幕换算（换算只在 `xcal-render` 的唯一换算点）。
+>
+> `SceneRecordSystem` 需要 `&hecs::World`（不可变）与 `&mut DrawQueue`，通过
+> `ctx.with_world_and_resource_mut::<DrawQueue, _>(...)` 做拆分借用，
+> 再经只读适配器 `WorldView` 接进契约层。
 >
 > S4.3 的 `MorphRecordSystem` 之所以是独立 System 而不是并进 `SceneRecordSystem`：
 > 既有 System 的 `Reads` / `Writes` 是冻结契约（S3-4 §6），不能新增写资源。
@@ -149,7 +156,8 @@ cargo doc  -p xcal-egui --no-deps
 
 - `resources`：`AppCamera` / `UiConfig` Default（含 `!flip_layer_order` 断言）/ `Resources` 增删
 - `systems`：`CameraInputSystem` zoom / clamp / pan / 无事件 4 例；`AppCamera::apply_command`
-  忽略 Orbit/Dolly 1 例；`GridBuildSystem` 不再产出全屏背景矩形 1 例
+  忽略 Orbit/Dolly 1 例；`AxesRefreshSystem` 每帧清旧建新 + `show_grid` 开关 2 例；
+  `FunctionGraphRefreshSystem` 按实体相位重采样 1 例
 - `time_control`：`TimeControlSystem` 播放切换 / speed+seek / 无关事件忽略 3 例
 - `host`：`build_scene_view` 图层声明（含 `LayerBlend::Alpha` / `opacity` / 默认背景断言）/
   缺层跳过 / 2D 相机与 AppCamera 一致 3 例

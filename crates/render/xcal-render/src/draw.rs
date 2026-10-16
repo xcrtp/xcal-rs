@@ -28,6 +28,10 @@ use crate::components::{Circle, FillSolid, Line, Path, Rect, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
 use xc_notion::Transform2D as Affine2D;
 use xc_object::Camera2D;
+// 对象层的绘制层级（M4）：可缺席 —— 缺席即用录制默认层。
+use xc_object::ZOrder;
+// `Path::to_screen(camera)`（世界 → 屏幕）由 xcal-scene 的场景层 trait 提供。
+use xcal_scene::transform::Transform2D as _;
 // 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
 // 且**只需要读能力**）。
 use xc_scene_contract::SceneRead;
@@ -406,15 +410,19 @@ impl<T: Painter2D> SceneRender<T> {
 ///
 /// 拆出来是为了让 [`record_scene`] 的 7 组调用保持"一组一行"的可读性，
 /// 同时把"降级 + 剔除 + 入队"的逻辑只写一遍。
-fn record_group<S, A, B>(scene: &S, t: &Affine2D, scale: f32, queue: &mut DrawQueue, z: f32)
+///
+/// 层级（M4）：对象上**可选**的 [`ZOrder`] 优先（网格 / 坐标轴靠它压在内容之下），
+/// 缺席则用 `z_default`（内容默认层）。可缺席是必须的：绝大多数对象不分层。
+fn record_group<S, A, B>(scene: &S, t: &Affine2D, scale: f32, queue: &mut DrawQueue, z_default: f32)
 where
     S: SceneRead,
     A: ToShape2D + Send + Sync + 'static,
     B: ResolveStyle + Send + Sync + 'static,
 {
-    scene.for_each_pair::<A, B>(|_, a, b| {
+    scene.for_each_pair_opt::<A, B, ZOrder>(|_, a, b, z| {
         if let Some((shape, style)) = (a, b).to_primitive(t, scale) {
-            queue.push(DrawCommand::new(ZIndex::new(z as i32), shape, style));
+            let z = z.map_or(z_default as i32, |z| z.0);
+            queue.push(DrawCommand::new(ZIndex::new(z), shape, style));
         }
     });
 }
@@ -429,11 +437,14 @@ where
 /// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
 /// 与重构前逐位一致。
 ///
-/// **M3-7：不认识 hecs。** 参数是契约层 [`Scene`]（`for_each_pair` 完成 7 组
+/// **M3-7：不认识 hecs。** 参数是契约层 [`Scene`]（`for_each_pair_opt` 完成 7 组
 /// `(图元, 样式)` 组合查询）；hecs 的实现（适配器 `WorldScene`）在 `xcal-scene`，
 /// 本 crate 的依赖里没有 hecs。
+///
+/// **M4：层级来自对象。** 带 [`ZOrder`] 的对象用它自己的层级（网格 z = -100、
+/// 坐标轴 z = -90，见 `xc_object::axes`），其余对象落在 `Z`（内容层）。
 pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut DrawQueue) {
-    // 场景图元的绘制层级：同层（保持查询顺序）。
+    // 内容对象的默认绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
     // 相机 → 屏幕的仿射（唯一降级点）。
     let t = camera.to_transform2d();
@@ -465,6 +476,30 @@ pub fn record_path_stroke(
         path.to_shape2d(&camera.to_transform2d()),
         stroke.resolve_style(camera.scale),
     ));
+}
+
+/// 录制**一条形变项**到 [`MorphQueue`]（z 与形变管线一致，见 [`MorphQueue`]）。
+///
+/// 为什么把它放在本 crate 而不是调用点（M4-4）：形变项的两端几何要经相机
+/// 落到屏幕空间、描边宽度要经 [`ResolveStyle`] 按 `camera.scale` 解析 ——
+/// 这两件事都属于**唯一换算点**纪律的范围，必须留在渲染层内，
+/// 不得散到 UI 层（否则"某些描边乘过 scale、某些没乘"）。
+pub fn push_morph_item(
+    queue: &mut MorphQueue,
+    from: &xc_notion::Path2D,
+    to: &xc_notion::Path2D,
+    t: f32,
+    samples: u32,
+    stroke: &StrokeSolid,
+    camera: &Camera2D,
+) {
+    queue.0.push(MorphItem {
+        from: Path::new(from.clone()).to_screen(camera).0,
+        to: Path::new(to.clone()).to_screen(camera).0,
+        t,
+        samples,
+        style: stroke.resolve_style(camera.scale),
+    });
 }
 
 #[cfg(test)]
@@ -544,6 +579,24 @@ mod tests {
                 let b = comps.iter().find_map(|c| c.downcast_ref::<B>());
                 if let (Some(a), Some(b)) = (a, b) {
                     f(*id, a, b);
+                }
+            }
+        }
+
+        fn for_each_pair_opt<
+            A: 'static + Send + Sync,
+            B: 'static + Send + Sync,
+            C: 'static + Send + Sync,
+        >(
+            &self,
+            mut f: impl FnMut(ObjectId, &A, &B, Option<&C>),
+        ) {
+            for (id, comps) in &self.items {
+                let a = comps.iter().find_map(|c| c.downcast_ref::<A>());
+                let b = comps.iter().find_map(|c| c.downcast_ref::<B>());
+                if let (Some(a), Some(b)) = (a, b) {
+                    let c = comps.iter().find_map(|c| c.downcast_ref::<C>());
+                    f(*id, a, b, c);
                 }
             }
         }
@@ -817,6 +870,19 @@ mod tests {
         record_scene(&world, &cam_with_scale(1.0), &mut q);
         // 0.01 * 1 = 0.01 < 1.5 → 钳到 1.5
         assert!((queue_stroke_width(&q.commands()[0]) - 1.5).abs() < 1e-6);
+    }
+
+    /// M4：`ZOrder` 决定绘制层级 —— 网格线段（-100）排在内容（0）之前。
+    #[test]
+    fn zorder_component_overrides_default_layer() {
+        let mut world = TestScene::new();
+        world.spawn((mk_line(1.0), mk_stroke()));
+        world.spawn((mk_line(2.0), mk_stroke(), ZOrder::new(-100)));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &test_camera(), &mut q);
+        q.ensure_sorted();
+        let zs: Vec<i32> = q.commands().iter().map(|c| c.z.0).collect();
+        assert_eq!(zs, vec![-100, 0], "网格线段应压在内容之下");
     }
 
     #[test]

@@ -12,28 +12,23 @@
 //
 // Phase 分配（避开同 phase 内 read/write 冲突）：
 // - Input:        CameraInput  (R=InputEvents, W=AppCamera)
-// - Prepare:      GridBuild    (R=ViewRect, AppCamera, UiConfig, W=DrawQueue)
+// - Prepare:      AxesRefresh / FunctionGraphRefresh（M4：几何在场景对象层，
+//                 本层只做接线，故不再写 DrawQueue）
 // - RenderCommit: SceneRecord  (R=ViewRect, AppCamera, W=DrawQueue)
 //
 // 注：时间推进由 DirectorAdvanceSystem（xcal-scene）负责，动画由 BindingApplySystem
 // （xcal-scene::animation）驱动。
 
 use xcal_schedule::context::ExecutorContext;
-use xcal_scene::domain::{CameraCommand, ContentTextureSpec, InputEvents, SceneEvent};
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::{ContentTextureItem, MorphShape};
-use xcal_scene::transform::Transform2D;
-use xc_notion::Rect2D;
-use xc_object::Camera2D;
-use xcal_scene::contract::WorldView;
-use xcal_render::components::{
-    FunctionX2Y, Line, Path, PhaseAnim, Sampler1D, StrokeSolid,
-};
+use xcal_scene::contract::{SceneRead, WorldScene, WorldView};
+use xcal_scene::domain::{CameraCommand, ContentTextureSpec, InputEvents, SceneEvent};
+use xcal_scene::scene::components::{ContentTextureItem, MorphShape, PhaseAnim};
+use xcal_render::components::{Path, StrokeSolid};
 use xcal_render::{
-    ContentTextureQueue, DrawQueue, MeasureSpace, MorphItem, MorphQueue, ResolveStyle, ZIndex,
-    record_path_stroke, record_scene,
+    ContentTextureQueue, DrawQueue, MorphQueue, push_morph_item, record_path_stroke, record_scene,
 };
-use xc_notion::Path2D;
+use xc_object::{Axes2D, FunctionGraph};
 
 use crate::resources::{AppCamera, UiConfig, ViewRect};
 
@@ -76,84 +71,70 @@ impl System for CameraInputSystem {
     }
 }
 
-// ─── GridBuildSystem ───────────────────────────────────────────────────────
+// ─── AxesRefreshSystem（M4-4：GridBuildSystem 退役）─────────────────────────
 
-pub struct GridBuildSystem;
-impl GridBuildSystem {
-    fn push_grid(queue: &mut DrawQueue, camera: &Camera2D, rect: Rect2D) {
-        let center = camera.center;
-        let scale = camera.scale;
-        let half_w = rect.size().x / 2.0 / scale;
-        let half_h = rect.size().y / 2.0 / scale;
-        let x0 = center.x - half_w;
-        let x1 = center.x + half_w;
-        let y0 = center.y - half_h;
-        let y1 = center.y + half_h;
-
-        // 网格与坐标轴都是"观测工具"→ 屏幕空间：缩放时粗细恒定。
-        let grid = StrokeSolid::new_in(1.0, (50, 50, 50, 255), MeasureSpace::Screen);
-        let axis = StrokeSolid::new_in(2.0, (255, 255, 255, 255), MeasureSpace::Screen);
-        let z_grid = ZIndex::new(-100);
-        let z_axis = ZIndex::new(-90);
-        let unit = scale.max(10.0) / scale;
-
-        let mut x = (x0 / unit).floor() * unit;
-        while x <= x1 {
-            queue.line_stroke(
-                z_grid,
-                Line::new((x, y0), (x, y1)).to_screen(camera),
-                grid.clone(),
-            );
-            x += unit;
-        }
-
-        let mut y = (y0 / unit).floor() * unit;
-        while y <= y1 {
-            queue.line_stroke(
-                z_grid,
-                Line::new((x0, y), (x1, y)).to_screen(camera),
-                grid.clone(),
-            );
-            y += unit;
-        }
-
-        queue.line_stroke(
-            z_axis,
-            Line::new((x0, 0.0), (x1, 0.0)).to_screen(camera),
-            axis.clone(),
-        );
-        queue.line_stroke(
-            z_axis,
-            Line::new((0.0, y0), (0.0, y1)).to_screen(camera),
-            axis,
-        );
-    }
-}
-
-impl System for GridBuildSystem {
+/// 坐标轴 / 网格刷新（Prepare 阶段）。
+///
+/// **M4-4：`GridBuildSystem` 已退役。** 原先 279 行的四段几何逻辑
+/// （相机裁剪、步长自适应、刻度线、坐标轴）全部归场景对象层的
+/// [`xc_object::Axes2D`]；本 System 只剩**接线**：取本帧相机 → 逐个刷新场景里的
+/// 坐标轴对象。本文件因此**不再有任何几何计算**，也不再把相机缩放带进任何
+/// 宽度换算（换算只发生在 `xcal-render` 的唯一换算点）。
+///
+/// 语义与迁移前一致：`UiConfig::show_grid` 关闭时清空线段（容器对象保留），
+/// 打开时按相机重建（线段数量随缩放变化，故必须"清旧建新"）。
+pub struct AxesRefreshSystem;
+impl System for AxesRefreshSystem {
     type Reads = (ViewRect, AppCamera, UiConfig);
-    type Writes = (DrawQueue,);
+    type Writes = ();
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        // 三阶段闭包：先克隆只读值，再写回。
+        // 先取只读值（释放对 resources 的共享借用），再取 world 的可变借用。
         let rect = ctx
             .get::<ViewRect>()
             .map(|v| v.rect)
             .unwrap_or_else(|| ViewRect::default().rect);
         let cam = ctx.get::<AppCamera>().cloned().unwrap_or_default();
         let show_grid = ctx.get::<UiConfig>().map(|c| c.show_grid).unwrap_or(true);
-
         let camera = cam.to_camera_2d(rect);
 
-        let Some(queue) = ctx.get_mut::<DrawQueue>() else {
-            return;
-        };
+        let mut scene = WorldScene::new(ctx.borrow_world_mut());
+        // 不能边遍历边写：先收集规格（克隆），再逐个刷新。
+        let mut jobs = Vec::new();
+        scene.for_each::<Axes2D>(|id, spec| jobs.push((id, spec.clone())));
+        for (id, spec) in jobs {
+            if show_grid {
+                spec.refresh(&mut scene, id, &camera);
+            } else {
+                spec.clear(&mut scene, id);
+            }
+        }
+    }
+}
 
-        // S3-2 §1.1/C2：全屏背景矩形**已删除**。2D 图层只含内容，
-        // 背景改由合成器清屏（GPU 路径）或 host 回放前补画（CPU 路径）提供；
-        // 否则 2D 层搬到 3D 层之上时会用不透明背景盖死 3D。
-        if show_grid {
-            Self::push_grid(queue, &camera, rect);
+// ─── FunctionGraphRefreshSystem（M4-1：函数采样归对象层）────────────────────
+
+/// 函数图像刷新（Prepare 阶段）：按对象自己的采样规格重采样折线。
+///
+/// **M4-1**：采样循环原先在本文件 `SceneRecordSystem` 内（逐点 `f(x + phase)`）；
+/// 现归场景对象层 [`xc_object::FunctionGraph`]，本 System 只负责把当前相位
+/// （由 `BindingApplySystem` 写入实体的 `PhaseAnim`）交给它。
+///
+/// 写路径是契约层 [`xc_scene_contract::Scene::set`]（M4-3b 的消费方）：
+/// 采样点数固定 ⇒ 覆盖既有 `Path` 组件即可，无需清旧建新。
+pub struct FunctionGraphRefreshSystem;
+impl System for FunctionGraphRefreshSystem {
+    type Reads = ();
+    type Writes = ();
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        let mut scene = WorldScene::new(ctx.borrow_world_mut());
+        let mut jobs = Vec::new();
+        scene.for_each_pair::<FunctionGraph, PhaseAnim>(|id, graph, anim| {
+            jobs.push((id, graph.clone(), anim.phase));
+        });
+        for (id, graph, phase) in jobs {
+            graph.refresh(&mut scene, id, phase);
         }
     }
 }
@@ -179,31 +160,10 @@ impl System for SceneRecordSystem {
             // M3-7：`record_scene` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
             // `WorldView`（`xcal_scene::contract`）接入 —— 渲染管线不认识 hecs，
             // 且这里用的是不可变借用（渲染只需要读）。
+            //
+            // M4-1：函数图像的采样循环已归对象层 `FunctionGraph`（见
+            // `FunctionGraphRefreshSystem`），本 System 只录制场景对象。
             record_scene(&WorldView::new(world), &camera, queue);
-
-            for (func, sampler, stroke, phase) in world
-                .query::<(
-                    &FunctionX2Y<f32, f32>,
-                    &Sampler1D<f32>,
-                    &StrokeSolid,
-                    Option<&PhaseAnim>,
-                )>()
-                .iter()
-            {
-                // BindingApplySystem 写入的相位偏移：让 sin 曲线随时间水平滑动。
-                let phase = phase.map(|p| p.phase).unwrap_or(0.0);
-                let mut pts: Vec<glam::Vec2> = Vec::new();
-                let mut x = sampler.start;
-                while x <= sampler.end {
-                    pts.push(glam::Vec2::new(x, (func.f)(x + phase)));
-                    x += sampler.step;
-                }
-                queue.path_stroke(
-                    ZIndex::new(0),
-                    Path::new(Path2D::from_polyline(&pts, false)).to_screen(&camera),
-                    stroke.clone(),
-                );
-            }
         });
     }
 }
@@ -218,9 +178,9 @@ impl System for SceneRecordSystem {
 /// 每帧只多写一个 `t` uniform。CPU 侧的 `MorphApplySystem` 因此不再参与
 /// 形变实体的渲染（本 System 与它二选一；App 用本 System）。
 ///
-/// 换算口径与 [`SceneRecordSystem`] 完全一致：位置经 `to_screen(camera)`
-/// 落到屏幕空间，描边宽度经 [`ResolveStyle`] 按 `camera.scale` 解析
-/// —— 唯一换算点纪律不变。
+/// 换算口径与 [`SceneRecordSystem`] 完全一致（世界 → 屏幕的位置映射 +
+/// 描边宽度按相机的唯一换算点解析）：两者都收在 `xcal-render` 内
+/// （本 System 只调 [`push_morph_item`]）—— 唯一换算点纪律不变。
 ///
 /// 为什么是独立 System 而不是并进 `SceneRecordSystem`：既有 System 的
 /// `Reads` / `Writes` 是冻结契约（§6），不能给它新增写资源。
@@ -240,15 +200,17 @@ impl System for MorphRecordSystem {
         ctx.with_world_and_resource_mut::<MorphQueue, _>(|world, queue| {
             queue.0.clear();
             for (morph, stroke) in world.query::<(&MorphShape, &StrokeSolid)>().iter() {
-                let from = Path::new(morph.from.clone()).to_screen(&camera).0;
-                let to = Path::new(morph.to.clone()).to_screen(&camera).0;
-                queue.0.push(MorphItem {
-                    from,
-                    to,
-                    t: morph.t,
-                    samples: morph.samples,
-                    style: stroke.resolve_style(camera.scale),
-                });
+                // 世界 → 屏幕的二端几何映射 + 描边宽度换算都在 `push_morph_item`
+                // （xcal-render 内，唯一换算点不外泄到 UI 层）。
+                push_morph_item(
+                    queue,
+                    &morph.from,
+                    &morph.to,
+                    morph.t,
+                    morph.samples,
+                    stroke,
+                    &camera,
+                );
             }
         });
     }
@@ -389,39 +351,125 @@ mod tests {
         assert_eq!(cam.scale, 40.0);
     }
 
-    /// C2 验收：`GridBuildSystem` 产出的队列**不含**全屏背景矩形。
-    ///
-    /// 背景已外移到合成器清屏（GPU）/ host 回放前（CPU）：2D 图层若还带着
-    /// 不透明背景矩形，2D 叠到 3D 之上时会把它整片盖死。
-    #[test]
-    fn grid_build_emits_no_fullscreen_background_rect() {
-        let mut resources = Resources::new();
-        resources.insert(ViewRect::default());
-        resources.insert(AppCamera::default());
-        resources.insert(UiConfig::default());
-        resources.insert(DrawQueue::new());
+    // ─── AxesRefreshSystem（M4-4：GridBuildSystem 退役）────────────────────
 
-        let mut sched = Scheduler::new(hecs::World::new(), resources);
-        sched.add_system(Phase::Prepare, GridBuildSystem);
+    use xcal_scene::contract::entity_of;
+    use xc_object::{AxesLine, Circle, ZOrder};
+
+    fn count_axes_lines(world: &hecs::World) -> usize {
+        world.query::<&AxesLine>().iter().count()
+    }
+
+    /// M4-4：网格几何由对象层 `Axes2D` 生成，System 只接线 ——
+    /// 一帧之后场景里出现线段对象，且每帧"清旧建新"（不累积）。
+    #[test]
+    fn axes_refresh_rebuilds_grid_each_frame() {
+        let mut world = hecs::World::new();
+        let axes = Axes2D::new((-10.0, 10.0), (-10.0, 10.0));
+        axes.build(&mut WorldScene::new(&mut world))
+            .expect("Axes2D 已登记");
+
+        let mut resources = Resources::new();
+        resources.insert(ViewRect::default()); // 800 x 600
+        resources.insert(AppCamera::default()); // scale = 40
+        resources.insert(UiConfig::default()); // show_grid = true
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::Prepare, AxesRefreshSystem);
         sched.init_resources();
         sched.run_frame(0.016);
 
-        let queue = sched.resources().get::<DrawQueue>().unwrap();
-        assert!(!queue.is_empty(), "网格开关默认打开，应有网格线命令");
-        for cmd in queue.commands() {
-            assert_ne!(cmd.z.0, -1000, "背景矩形的 z 层已删除");
-            assert!(
-                !matches!(cmd.shape, xcal_render::Shape2D::Rect(_)),
-                "2D 图层不应再输出任何矩形填充（背景矩形残留）"
-            );
+        // 视口 800x600、scale 40 ⇒ 可见 x ∈ [-10,10]（21 条刻度）、
+        // y ∈ [-7.5,7.5]（16 条刻度，自 -8 起）⇒ 37 条网格线 + 2 条坐标轴 = 39。
+        assert_eq!(count_axes_lines(sched.world()), 39);
+
+        // 再来一帧：旧线段被清掉，数量不累积。
+        sched.run_frame(0.016);
+        assert_eq!(count_axes_lines(sched.world()), 39);
+
+        // 网格线上的 ZOrder 必须压在内容之下（-100 网格 / -90 坐标轴）。
+        let zs: Vec<i32> = sched.world().query::<&ZOrder>().iter().map(|z| z.0).collect();
+        assert!(zs.iter().all(|z| *z < 0), "网格不得落在内容层：{zs:?}");
+    }
+
+    /// M4-4：`show_grid` 关闭 ⇒ 线段清空（容器对象保留，开回来能重建）。
+    #[test]
+    fn axes_refresh_respects_show_grid_toggle() {
+        let mut world = hecs::World::new();
+        let axes = Axes2D::unbounded();
+        axes.build(&mut WorldScene::new(&mut world)).unwrap();
+
+        let mut resources = Resources::new();
+        resources.insert(ViewRect::default());
+        resources.insert(AppCamera::default());
+        resources.insert(UiConfig {
+            show_grid: false,
+            ..UiConfig::default()
+        });
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::Prepare, AxesRefreshSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+        assert_eq!(count_axes_lines(sched.world()), 0, "关闭网格后不应有线段");
+
+        sched.resources_mut().get_mut::<UiConfig>().unwrap().show_grid = true;
+        sched.run_frame(0.016);
+        assert!(count_axes_lines(sched.world()) > 0, "重新打开应重建网格");
+    }
+
+    // ─── FunctionGraphRefreshSystem（M4-1）───────────────────────────────
+
+    /// M4-1：函数采样归对象层；System 只把实体上的相位（`PhaseAnim`，由
+    /// `BindingApplySystem` 写入）交给 `FunctionGraph::refresh` —— 走契约层
+    /// `Scene::set` 的写路径（M4-3b）。
+    #[test]
+    fn function_graph_refresh_samples_with_entity_phase() {
+        let mut world = hecs::World::new();
+        let graph = FunctionGraph::new(
+            xc_notion::FunctionX2Y::new(|x: f32| x),
+            xc_notion::Sampler1D::new(0.0f32, 1.0, 1.0),
+        );
+        let handle = graph
+            .build(
+                &mut WorldScene::new(&mut world),
+                StrokeSolid::new(1.0, (0, 200, 200, 255)),
+            )
+            .expect("FunctionGraph 已登记");
+
+        // 相位组件（运行时由 BindingApplySystem 写入）。
+        let mut anim = PhaseAnim::new(0.0, 1.5);
+        anim.phase = 1.0;
+        world.insert_one(entity_of(handle).unwrap(), anim).unwrap();
+
+        let mut sched = Scheduler::new(world, Resources::new());
+        sched.add_system(Phase::Prepare, FunctionGraphRefreshSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let path = sched.world().get::<&Path>(entity_of(handle).unwrap()).unwrap();
+        let mut pts = Vec::new();
+        for cmd in &path.0.commands {
+            if let xc_notion::PathCommand::MoveTo(p) | xc_notion::PathCommand::LineTo(p) = cmd {
+                pts.push(*p);
+            }
         }
+        // 相位加在自变量上：x = {0,1} ⇒ y = {1,2}。
+        assert_eq!(
+            pts,
+            vec![
+                xc_notion::Vec2::new(0.0, 1.0),
+                xc_notion::Vec2::new(1.0, 2.0)
+            ]
+        );
     }
 
     // ─── ContentTextureRecordSystem（S3-3） ────────────────────────────────
 
     use xcal_render::Shape2D;
     use xcal_scene::scene::components::TextureHandle;
-    use xc_object::Circle;
+    use xc_notion::{Path2D, Rect2D};
+    use xc_object::Camera2D;
     use xc_notion::PathCommand;
 
     const TEX_W: u32 = 512;

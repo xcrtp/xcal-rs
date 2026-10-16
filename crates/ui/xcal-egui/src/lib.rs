@@ -5,7 +5,8 @@
 //   - host.rs::EguiSceneHost —— egui 与场景之间的唯一适配层
 //     （输入翻译为 SceneEvent、面板 chrome、ViewRect、内容提交）
 //   - 全局 Resource 类型：AppCamera, TimeState, UiConfig, ViewRect
-//   - 场景侧 System 实现：CameraInput（消费事件）、GridBuild、SceneRecord
+//   - 场景侧 System 实现：CameraInput（消费事件）、AxesRefresh / FunctionGraphRefresh
+//     （M4：几何在场景对象层，本层只接线）、SceneRecord
 //   - 时间控制事件消费：TimeControl（消费 Button/Slider 事件写 DirectorState）
 //
 // B 阶段红线：除 host.rs 外，本 crate 模块不得出现 egui 类型
@@ -21,5 +22,7 @@ pub mod time_control;
 
 pub use host::EguiSceneHost;
 pub use resources::{AppCamera, TimeState, UiConfig, ViewRect};
-pub use systems::{CameraInputSystem, GridBuildSystem, SceneRecordSystem};
+pub use systems::{
+    AxesRefreshSystem, CameraInputSystem, FunctionGraphRefreshSystem, SceneRecordSystem,
+};
 pub use time_control::TimeControlSystem;
