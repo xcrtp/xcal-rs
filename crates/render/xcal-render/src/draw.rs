@@ -354,6 +354,36 @@ fn is_closed_path(p: &xc_notion::Path2D) -> bool {
 #[derive(Default)]
 pub struct MorphQueue(pub Vec<MorphItem>);
 
+// ─── 书写动画项（R0 reveal） ──────────────────────────────────────────────
+
+/// 书写动画（reveal）绘制项：**一条描边路径 + 一个可见区间 `[start, end]`**。
+///
+/// 与 [`MorphItem`] 同一设计口径（几何静态、变量走 uniform）：
+/// - 几何 = 路径按弧长预细分 + 每顶点归一化弧长 `s`（`advance`）⇒ **帧间不变**；
+/// - 逐帧变的只有 `[start, end]`（走 2D uniform 的 `params.z / params.w`）。
+/// ⇒ 三角化与 GPU 缓冲都命中缓存，稳态零上传；也**不进合批**（区间是 uniform，
+/// 同批只能共享一个区间），每项一次 `draw_indexed`。
+///
+/// 与 [`MorphItem`] 的差别：morph 是"两端几何插值"，reveal 是"沿一条几何推进"，
+/// 二者可作用于同一条路径的不同实体，但**同一路径不宜同时挂两者**（计划 §12.3）。
+#[derive(Debug, Clone)]
+pub struct RevealItem {
+    /// 待书写的路径（世界/屏幕空间由 `style.space` 与相机决定，与 [`Path`] 同口径）。
+    pub path: xc_notion::Path2D,
+    /// 可见区间起点（归一化弧长 ∈ [0,1]）。
+    pub start: f32,
+    /// 可见区间终点（归一化弧长 ∈ [0,1]）。
+    pub end: f32,
+    /// 已解析为屏幕空间的**描边**样式（唯一换算点仍是 [`ResolveStyle`]）。
+    pub style: Style2D,
+}
+
+/// 书写动画队列（R0）：当帧的 reveal 项，与 [`DrawQueue`] / [`MorphQueue`] 并行持有。
+///
+/// 渲染顺序与 `MorphQueue` 相同（排在 `DrawQueue` 全部几何之后）。
+#[derive(Default)]
+pub struct RevealQueue(pub Vec<RevealItem>);
+
 // ─── 可绘制对象（ECS 无关的录制入口）────────────────────────────────────────
 
 /// 已降级的绘制描述：能把自己转换成**屏幕空间**的 [`Shape2D`] / [`Style2D`]。
@@ -517,6 +547,27 @@ pub fn push_morph_item(
         to: Path::new(to.clone()).to_screen(camera).0,
         t,
         samples,
+        style: stroke.resolve_style(camera.scale),
+    });
+}
+
+/// 录制**一条书写动画项**到 [`RevealQueue`]（与形变项同层，见 [`RevealQueue`]）。
+///
+/// 与 [`push_morph_item`] 同一纪律：路径经相机落到**屏幕空间**、描边宽度经
+/// [`ResolveStyle`] 按 `camera.scale` 解析 —— 唯一换算点不外泄（否则"某些描边
+/// 乘过 scale、某些没乘"）。归一化区间 `[start, end]` 原样带过。
+pub fn push_reveal_item(
+    queue: &mut RevealQueue,
+    path: &xc_notion::Path2D,
+    start: f32,
+    end: f32,
+    stroke: &StrokeSolid,
+    camera: &Camera2D,
+) {
+    queue.0.push(RevealItem {
+        path: Path::new(path.clone()).to_screen(camera).0,
+        start,
+        end,
         style: stroke.resolve_style(camera.scale),
     });
 }

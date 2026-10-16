@@ -26,11 +26,11 @@
 // （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, Viewport};
+use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, PostFilterChain, RevealItem, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_notion::{Rect2D, Vec2 as GeoVec2};
 
-use crate::compositor::{CompositeFrame, CompositeOp, Compositor};
+use crate::compositor::{CompositeFrame, CompositeOp, Compositor, PostBlit};
 use crate::wgpu_2d::{
     Frame2DData, Frame2DGeometry, OFFSCREEN_FORMAT, Recorded2D, WgpuBackend2D, snapshot_queue,
 };
@@ -61,6 +61,8 @@ pub struct SceneLayer {
 pub struct SceneCompositorFrame {
     /// 单个合成帧（层序 = 声明序）。
     pub frame: CompositeFrame,
+    /// **C0/C1**：post 路径的滤镜链 blit 资源（空链时为 `None` ⇒ 走直通，画面逐位不变）。
+    pub post_blit: Option<PostBlit>,
     /// 保活：本帧全部图层 uniform arena buffer（2D / 3D 各一）。
     pub _keep_alive: Vec<wgpu::Buffer>,
 }
@@ -86,6 +88,8 @@ pub struct SceneCompositorCallback {
     viewport_points: Rect2D,
     /// 本帧图层（**有效序**，即翻转开关已生效后的顺序）。
     layers: Vec<SceneLayer>,
+    /// **C0–C2**：本帧的合成后滤镜链（空链 ⇒ 直通路径，不建中间纹理）。
+    filters: PostFilterChain,
     /// 2D 队列快照（仅当有效序中存在 2D 图层时才采集）。
     draws_2d: Vec<Recorded2D>,
     /// 内容纹理层（S3-3）的录制快照，按 `LayerId` 索引。
@@ -98,6 +102,8 @@ pub struct SceneCompositorCallback {
     lines_3d: Vec<LineDraw>,
     /// 形变项快照（S4.3）：`from`/`to` 常量 + 逐帧 `t`，由 2D 图层用形变管线渲染。
     morphs: Vec<MorphItem>,
+    /// 书写动画项快照（R0）：路径常量 + 逐帧区间 `[start, end]`，由 2D 图层渲染。
+    reveals: Vec<RevealItem>,
 }
 
 #[cfg(feature = "egui-wgpu")]
@@ -113,17 +119,22 @@ impl SceneCompositorCallback {
         queue_3d: &DrawQueue3D,
         content: Vec<(LayerId, Vec<Recorded2D>)>,
         morphs: Vec<MorphItem>,
+        reveals: Vec<RevealItem>,
+        filters: PostFilterChain,
     ) -> Self {
         let needs_2d = layers.iter().any(|l| matches!(l.kind, LayerKind::Viewport2D { .. }));
         let needs_3d = layers.iter().any(|l| matches!(l.kind, LayerKind::Viewport3D { .. }));
         Self {
             viewport_points,
+            filters,
             draws_2d: if needs_2d { snapshot_queue(queue_2d) } else { Vec::new() },
             content,
             meshes_3d: if needs_3d { queue_3d.meshes().to_vec() } else { Vec::new() },
             lines_3d: if needs_3d { queue_3d.lines().to_vec() } else { Vec::new() },
             // 形变项属于 2D 图层；没有 2D 图层时无处渲染，直接丢弃。
             morphs: if needs_2d { morphs } else { Vec::new() },
+            // 书写动画项同理（R0）。
+            reveals: if needs_2d { reveals } else { Vec::new() },
             layers,
         }
     }
@@ -256,6 +267,11 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
                             for m in &self.morphs {
                                 backend.push_morph(m.clone());
                             }
+                            // R0：书写动画项随 2D 图层走（同一个 `pipeline_2d`，
+                            // 区间 `[a,b]` 走 uniform）。
+                            for r in &self.reveals {
+                                backend.push_reveal(r.clone());
+                            }
                             backend.finish_frame(egui_encoder, layer.id, &geometry)
                         })
                     else {
@@ -311,12 +327,32 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
         }
 
         // **一次**合成：全部图层进同一个 CompositeFrame（层序 = 声明序，不重排）。
-        let Some(compositor) = callback_resources.get::<Compositor>() else {
+        //
+        // C0/C1：滤镜链**非空**时走 post 路径 —— 先把全部图层合成到**中间全屏纹理**
+        // （清屏透明），再由 `paint` 经滤镜链 blit 进主 pass；**空链走直通**（不建中间
+        // 纹理、不多一次全屏 pass ⇒ 画面逐位不变）。
+        let Some(compositor) = callback_resources.get_mut::<Compositor>() else {
             return Vec::new();
         };
+        // C3：管线惰性建 —— 先确保本帧需要的 (blend, 域转换) 组合就绪。
+        let _ = compositor.ensure_for(device, &ops);
         let frame = compositor.prepare(device, &ops);
+
+        let post_blit = if self.filters.needs_post() {
+            // 视口物理像素尺寸（与 3D 离屏同口径：逻辑点 × ppp）。
+            let size_px = (
+                ((w_pt * ppp).round() as u32).max(1),
+                ((h_pt * ppp).round() as u32).max(1),
+            );
+            let src = compositor.render_post(device, egui_encoder, size_px, &frame);
+            Some(compositor.build_post_blit(device, &self.filters, &src, size_px))
+        } else {
+            None
+        };
+
         callback_resources.insert(SceneCompositorFrame {
             frame,
+            post_blit,
             _keep_alive: keep_alive,
         });
         Vec::new()
@@ -342,7 +378,11 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
             clip.width_px.max(0) as u32,
             clip.height_px.max(0) as u32,
         );
-        compositor.composite_layers(render_pass, &scene.frame);
+        // C0/C1：有滤镜链 ⇒ blit 中间纹理（经滤镜）；无 ⇒ 直通合成（画面逐位不变）。
+        match &scene.post_blit {
+            Some(blit) => compositor.blit_post(render_pass, blit),
+            None => compositor.composite_layers(render_pass, &scene.frame),
+        }
     }
 }
 
@@ -539,6 +579,8 @@ mod tests {
             &queue_3d,
             content,
             Vec::new(),
+            Vec::new(),
+            PostFilterChain::default(),
         );
 
         let screen = egui_wgpu::ScreenDescriptor {

@@ -12,8 +12,9 @@
 // - `SceneRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(DrawQueue,)`
 // - `ContentTextureRecordSystem` RenderCommit，`R=(ContentTextureSpec,)`，`W=(ContentTextureQueue,)`
 // - `MorphRecordSystem`        RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(MorphQueue,)`
+// - `RevealRecordSystem`       RenderCommit，`R=(ViewRect, Camera2DHandle)`，`W=(RevealQueue,)`
 //
-// 三个写集类型不相交，可同相注册（debug 的 BorrowTracker 不会报冲突）。
+// 四个写集类型不相交，可同相注册（debug 的 BorrowTracker 不会报冲突）。
 //
 // # 相机从哪来（P1 之后）
 //
@@ -33,12 +34,13 @@ use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 use xcal_scene::contract::{SceneRead, WorldView};
 use xcal_scene::domain::ContentTextureSpec;
-use xcal_scene::scene::components::{ContentTextureItem, MorphShape};
+use xcal_scene::scene::components::{ContentTextureItem, MorphShape, Reveal};
 
 use xc_object::{Camera2DHandle, Path};
 
 use crate::draw::{
-    ContentTextureQueue, DrawQueue, MorphQueue, push_morph_item, record_path_stroke, record_scene,
+    ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, push_morph_item, push_reveal_item,
+    record_path_stroke, record_scene,
 };
 use crate::view_rect::ViewRect;
 use xc_render_ir::StrokeSolid;
@@ -118,6 +120,50 @@ impl System for MorphRecordSystem {
                     &morph.to,
                     morph.t,
                     morph.samples,
+                    stroke,
+                    &camera,
+                );
+            });
+        });
+    }
+}
+
+// ─── RevealRecordSystem（R0 书写动画）──────────────────────────────────────
+
+/// 书写动画录制（RenderCommit，R0）：把 `(Reveal, StrokeSolid)` 对象录成
+/// [`RevealItem`](crate::draw::RevealItem)（路径原样 + 逐帧区间 `[start, end]`）。
+///
+/// 与 [`MorphRecordSystem`] 完全同一模式（独立队列 + 每项一次 draw + 动态 uniform
+/// 偏移）：几何帧间不变 ⇒ 三角化与 GPU 缓冲都命中缓存，每帧只多写一个区间 uniform。
+///
+/// **不做**任何路径预处理：预细分（`REVEAL_STEP_PX`）与弧长归一化都在后端三角化时
+/// 完成（`tessellate_reveal`），因为那属于几何口径、必须与三角化同处一地。
+///
+/// 为什么是独立 System 而不是并进 [`SceneRecordSystem`]：既有 System 的
+/// `Reads` / `Writes` 是冻结契约（§9.3），不能给它新增写资源。
+pub struct RevealRecordSystem;
+impl System for RevealRecordSystem {
+    type Reads = (ViewRect, Camera2DHandle);
+    type Writes = (RevealQueue,);
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        let rect = ctx
+            .get::<ViewRect>()
+            .map(|v| v.rect)
+            .unwrap_or_else(|| ViewRect::default().rect);
+        let Some(camera) = resolve_camera(ctx, rect) else {
+            return;
+        };
+
+        ctx.with_world_and_resource_mut::<RevealQueue, _>(|world, queue| {
+            queue.0.clear();
+            let scene = WorldView::new(world);
+            scene.for_each_pair::<Reveal, StrokeSolid>(|_, reveal, stroke| {
+                push_reveal_item(
+                    queue,
+                    &reveal.path,
+                    reveal.start,
+                    reveal.end,
                     stroke,
                     &camera,
                 );

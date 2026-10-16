@@ -70,6 +70,10 @@ impl eframe::App for Cube3dApp {
             &queue,
             Vec::new(),
             Vec::new(),
+            // R0：本 demo 不含书写动画项。
+            Vec::new(),
+            // C 线：本 demo 不带合成后滤镜（空链 ⇒ 直通路径）。
+            xcal_render::PostFilterChain::default(),
         );
         ui.painter().add(egui::epaint::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(rect, callback),

@@ -69,7 +69,7 @@
 
 组件分两处：
 
-- 2D 纯逻辑组件（`Circle` / `Path` / `Line` / `MorphShape` / `PhaseAnim` / marker …）
+- 2D 纯逻辑组件（`Circle` / `Path` / `Line` / `MorphShape` / `Reveal` / `PhaseAnim` / marker …）
   与 3D 类型（`Camera3D` / `Projection` / `MeshGeometry` / `Material3D`）都在 `scene::components`
   （以 `comp` 别名再导出）。
 - **渲染专属**的组件（`StrokeSolid` / `FillSolid` 等）**不在这里**，它们在 `xcal-render`。
@@ -104,6 +104,25 @@
 
 egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 
+### 相机模式与控制器（K 线：K0–K3）
+
+`CameraMode` 是**相机对象的组件**（`spawn` 时挂上；未挂 ⇒ `Default` = `PanZoom`）：
+
+| 模式 | 消费的命令 | 控制器（纯函数，可 headless 测试） |
+|---|---|---|
+| `PanZoom` | `Pan` / `Zoom` | `apply_pan_zoom(&mut Framing2D, cmd)` |
+| `Orbit` | `Orbit` / `Dolly` | `apply_orbit(&mut Camera3D, cmd)`（保持半径 + 俯仰钳制） |
+| `Fps` | `Look` / `Move` | `apply_fps(&mut FpsView, &mut Camera3D, cmd)`（pitch 钳 ±(π/2−ε)） |
+| `Path` | —（动画驱动） | —（交互命令全部忽略） |
+
+- **分派**：`CameraInputSystem::run` 读相机对象的模式 → `apply_command_2d` / `apply_command_3d`；
+  各模式对不属于自己的命令是 **no-op** ⇒ "命令路由"不需要 layer→相机 映射
+  （app 里 2D / 3D 图层占据同一视口矩形，坐标无法区分；见 `camera_input.rs` 头注释）。
+- `CameraMode` 是 `#[non_exhaustive]` ⇒ 下游用 `CameraMode::{PAN_ZOOM,ORBIT,FPS,PATH}`
+  关联常量取值/构造。
+- 新增模式只需：加变体 + 加控制器 + 在 `apply_command_*` 的 match 里加一支 ⇒
+  **事件契约（`SceneEvent` / `CameraCommand`）零改动**。
+
 ### 坐标转换：`Transform2D` / `Transform2DInto`
 
 - `Transform2D`：`&self` 版本；`Transform2DInto`：消耗 `self` 版本（省 clone）。
@@ -121,8 +140,8 @@ egui 原生输入的读取与翻译只发生在 `xcal-egui` 的 host。
 |------|----------|
 | [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
 | [`contract`] | 契约层 hecs 实现：`WorldView` / `WorldScene` / `object_id_of` / `entity_of` + `SceneRead` 转发 |
-| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`+`TargetKind`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming`）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
-| [`camera_input`] | `CameraInputSystem`（P1：相机状态归场景对象）+ 控制器纯函数 `apply_pan_zoom` |
+| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`+`TargetKind`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming` / **`RevealRange`**）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
+| [`camera_input`] | `CameraInputSystem`（P1：相机状态归场景对象；K0：**按 `CameraMode` 分派**）+ 控制器纯函数 `apply_pan_zoom` / `apply_orbit` / `apply_fps` |
 | [`director_state`] | `DirectorState`(包装 `xc_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |
 | [`transform`] | `Transform2D` / `Transform2DInto` trait 系统（结构体派生用 `xc_macro::Transform2DInto`）|

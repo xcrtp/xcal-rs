@@ -28,7 +28,7 @@ use xc_scene_contract::ObjectId;
 use xc_time::AnimValue;
 
 use crate::contract::entity_of;
-use crate::scene::components::{MorphShape, PhaseAnim};
+use crate::scene::components::{MorphShape, PhaseAnim, Reveal};
 
 /// 驱动目标：把 `Curve::sample` 产出的 [`AnimValue`] 写进**某对象**的**某个组件字段**。
 ///
@@ -64,6 +64,11 @@ pub enum TargetKind {
     /// 一个组件 = 一个 target：`Framing2D` 是单 target，**按 [`AnimValue`] 变体分派**，
     /// 将来给相机加字段不必加 target 类型。
     Camera2DFraming,
+    /// 写 `Reveal`（书写动画区间：`Scalar` → `end`，`Vec2` → `(start, end)`）。
+    ///
+    /// 与 `Camera2DFraming` 同一分派口径：单 target、按变体决定写哪个字段
+    /// （"从 0 写到 1"只需 `Scalar` 一条绑定）。
+    RevealRange,
 }
 
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。
@@ -181,6 +186,34 @@ impl Target for Camera2DFraming {
     }
 }
 
+/// 写 [`Reveal`] 的可见区间（书写动画，R0）。
+///
+/// - `Scalar(v)` → `end = v`（**"笔尖往前走"**：`start` 保持不动）；
+/// - `Vec2(v)` → `(start, end) = (v.x, v.y)`（区间版本："只写中段"）。
+///
+/// 与 `Camera2DFraming` 同口径：类型不符**静默跳过**，不 panic。
+#[derive(Debug, Clone, Copy)]
+pub struct RevealRange {
+    pub id: ObjectId,
+}
+
+impl Target for RevealRange {
+    fn apply(&self, world: &mut World, v: &AnimValue) {
+        if let Some(end) = v.try_scalar() {
+            with_component::<Reveal, _>(world, self.id, |r| r.end = end);
+        } else if let Some(range) = v.try_vec2() {
+            with_component::<Reveal, _>(world, self.id, |r| {
+                r.start = range.x;
+                r.end = range.y;
+            });
+        }
+    }
+
+    fn kind(&self) -> TargetKind {
+        TargetKind::RevealRange
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +296,39 @@ mod tests {
         t.apply(&mut world, &AnimValue::Scalar(1.0));
     }
 
+    /// `RevealRange`：`Scalar` 只推 `end`（"笔尖往前走"），`Vec2` 写整个区间。
+    #[test]
+    fn reveal_range_dispatches_by_variant() {
+        let mut world = World::new();
+        let e = world.spawn((crate::scene::components::Reveal::new(
+            xc_notion::Path2D::from_polyline(
+                &[xc_notion::Vec2::ZERO, xc_notion::Vec2::new(1.0, 0.0)],
+                false,
+            ),
+        ),));
+        let t = RevealRange { id: id_of(e) };
+
+        t.apply(&mut world, &AnimValue::Scalar(0.4));
+        {
+            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
+            assert_eq!(r.end, 0.4);
+            assert_eq!(r.start, 0.0, "Scalar 不得改动 start");
+        }
+
+        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(0.3, 0.7)));
+        {
+            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
+            assert_eq!((r.start, r.end), (0.3, 0.7));
+        }
+
+        // 类型不符 ⇒ 跳过（保持上一帧的值）。
+        t.apply(&mut world, &AnimValue::Vec3(Vec3::ONE));
+        {
+            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
+            assert_eq!((r.start, r.end), (0.3, 0.7));
+        }
+    }
+
     /// `kind()` 与实现的对应关系（UI 参数面板按它分类）。
     #[test]
     fn kinds_are_distinct() {
@@ -275,5 +341,6 @@ mod tests {
             Camera2DFraming { id }.kind(),
             TargetKind::Camera2DFraming
         );
+        assert_eq!(RevealRange { id }.kind(), TargetKind::RevealRange);
     }
 }

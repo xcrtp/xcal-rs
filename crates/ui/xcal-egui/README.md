@@ -32,13 +32,13 @@ xcal-app (装配 + ParamPanelSystem)
 
 | Resource | 归属 | 说明 |
 |----------|------|------|
-| `UiConfig { show_grid, show_field, show_2d, show_3d, flip_layer_order }` | 本 crate | 面板显示开关（`show_2d` / `show_3d` = 图层开关，默认都开）+ S3-2 图层顺序翻转（默认 `false`）|
+| `UiConfig { show_grid, show_field, show_2d, show_3d, viewport_camera, free_2d_camera, flip_layer_order, …(滤镜四参) }` | 本 crate | 面板显示开关（`show_2d` / `show_3d` = 图层开关，默认都开）+ K3 视口操作目标（默认 `TwoD`）+ **`free_2d_camera`：2D 相机由交互还是分镜驱动（默认 `false` = 分镜）** + S3-2 图层顺序翻转（默认 `false`）|
 | `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
 | `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
 | `InputEvents`（`Vec<SceneEvent>`）| xcal-scene::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
 | `Camera2DHandle`（来自 xc-object）| — | 主 2D 相机的**引用型句柄**（P2）：指向场景里的相机对象（持 `Framing2D`）。相机状态本身**不是 Resource**（P1-1）|
 | `ViewRect`（来自 xcal-render）| — | 本帧渲染目标矩形（P4 下沉）。由 `EguiSceneHost::update_view_rect` 写入；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑）|
-| `DrawQueue` / `DrawQueue3D` / `ContentTextureQueue` / `MorphQueue`（来自 xcal-render）| — | 各渲染队列；由 `xcal-render::record_systems` 的三个录制 System 与 app 的 3D 录制写入 |
+| `DrawQueue` / `DrawQueue3D` / `ContentTextureQueue` / `MorphQueue` / `RevealQueue`（来自 xcal-render）| — | 各渲染队列；由 `xcal-render::record_systems` 的四个录制 System 与 app 的 3D 录制写入（`RevealQueue` = R0 书写动画）|
 
 > `AppCamera` **已删除**（P1-1）：相机状态是**场景对象**（`xc_object::Framing2D`），
 > UI 只发 `CameraCommand`（控制器纯函数 `xcal_scene::camera_input::apply_pan_zoom`）。
@@ -89,6 +89,12 @@ xcal-app (装配 + ParamPanelSystem)
 - **控制面板（左）**：`t` 读数、`显示网格` / `显示向量场` 复选框、
   **`2D 相机` / `3D 相机` 复选框**（图层开关：关掉即 `build_scene_view` 不再声明该图层，
   等于关掉对应相机）、
+  **`视口操作` 单选**（K3：`2D 相机（平移/缩放）` / `3D 轨道（拖拽/滚轮）` /
+  `3D 第一人称（拖拽 + WASD/QE）` —— 2D/3D 同屏时由它决定拖拽/滚轮操作谁）、
+  **`2D 相机自由（关闭=分镜驱动）` 复选框**（K3 补：决定 2D 相机由分镜的
+  `Camera2DFraming` 绑定驱动，还是交给用户平移/缩放 —— 打开即让分镜绑定让位）、
+  **`合成后滤镜` 开关 + 强度滑块**（C 线：亮度 / 桶形畸变 / 模糊；由
+  `UiConfig::post_filters()` 编成 `PostFilterChain` 写回 Resource，全关 ⇒ 空链 ⇒ 直通）、
   **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数
   （值取自本帧 `SceneView` 的 2D 图层 —— UI 不再持有相机状态）。
 - **时间面板（左）**：播放/暂停按钮、**`⟲ 重新播放` 按钮**（拨回 `t = 0` 并恢复播放 →

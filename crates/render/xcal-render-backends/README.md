@@ -115,17 +115,19 @@ let ctx = RenderContext::from_render_state(rs);
   目标，同一类可有多个图层（S3-2 的"每类最多一个图层"`debug_assert` 已解除）；
   目标尺寸随 `viewport` 变化时按图层重建。
 
-### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1 / S3-2 / S4.2 / S4.3
+### 4. `wgpu_2d` (`wgpu` / `egui-wgpu`) — S3-1 / S3-2 / S4.2 / S4.3 / R0
 
 xcal-rs 的 GPU 2D 后端（S4.1 起是**唯一** 2D 路径）：**离屏纹理 + MSAA 4x**；
 合成自 S3-2 起外移到 `compositor`（本文件不再自带合成管线）。
 
 - **`WgpuBackend2D`**：`new(device, queue)` 建**两条**管线——
-  `shaders/shape_2d.wgsl`（图元；硬边 + MSAA）与
+  `shaders/shape_2d.wgsl`（图元 + **R0 书写动画**；硬边 + MSAA）与
   `shaders/shape_2d_morph.wgsl`（S4.3 形变；双 vertex buffer + `t` uniform）。
+  **R0 的书写动画复用图元管线**（区间是 uniform 里的分支，不是管线维度）⇒ 管线数不变。
   合成管线、绑定布局、采样器与 `composite()` 已移除（统一由 §6 `Compositor` 承担）。
 - 实现 `Painter2DTarget`（`begin_frame` / `draw_shape` / `end_frame`），
-  另有直达录制 API `push(shape, transform, style, z)` 与 `push_morph(MorphItem)`。
+  另有直达录制 API `push(shape, transform, style, z)` / `push_morph(MorphItem)` /
+  `push_reveal(RevealItem)`。
 - **每帧流程**（`finish_frame(encoder, layer_id, geometry) -> Frame2DData`）：
   1. 录制项按 `z` 稳定排序（同 z 保录制序，画家算法）；
   2. **趟 1**：每项 `tessellate`（S3-0）→ 顶点哈希 → 三角化结果（**CPU 侧**）进
@@ -141,18 +143,26 @@ xcal-rs 的 GPU 2D 后端（S4.1 起是**唯一** 2D 路径）：**离屏纹理 
      —— 缓存键**不含 `t`**，故 `t` 逐帧变化仍全程命中；每帧只多写一个
      `t` uniform（`params.y`），shader 侧 `mix(from, to, t)`（位置与法线都插值）。
      形变项排在全部 `DrawQueue` 几何**之后**（同为 z = 0 的内容；网格/轴线 z < 0 不受影响）；
-  5. uniform 经 `UniformArena`（复用 `wgpu_3d`，256B 对齐 dynamic offset）；
+  5. **趟 4（R0 书写动画）**：`RevealItem` 的路径用 `tessellate_reveal`（按
+     `REVEAL_STEP_PX` 预细分 + 每顶点归一化弧长 `s`）三角化，按内容哈希缓存
+     —— 缓存键**不含区间 `[a,b]`**，故区间逐帧变化仍全程命中；每帧只多写
+     `params.z/w`（区间）。区间逐项不同 ⇒ **不进合批**，每项一次 `draw_indexed`。
+     区间外的**片元**由 `shape_2d.wgsl` 的 `discard` 丢弃（§详见该 shader 头注：
+     顶点塌缩方案被像素级验收证伪）；
+  6. uniform 经 `UniformArena`（复用 `wgpu_3d`，256B 对齐 dynamic offset）；
      宽度由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析，**shader 不做空间换算**；
      几何本身与宽度无关（`position` 槽存 lyon `position_on_path()`），
      故同一路径换宽度只需换 uniform；
-  6. 在离屏 MSAA 纹理上绘制并 resolve；**离屏清屏透明**（S3-2/C2，背景由 host 提供）。
-- **`draw_count` 语义保持"几何条数"不变**（S4.2 起 = 合批前三角化条数 + 形变项数）；
-  新增 **`batch_count` = 实际 `draw_indexed` 次数**（合批后 ≤ `draw_count`）——
-  同色多条几何时 `batch_count < draw_count`（可证伪断言见 §测试）。
+  7. 在离屏 MSAA 纹理上绘制并 resolve；**离屏清屏透明**（S3-2/C2，背景由 host 提供）。
+- **`draw_count` 语义保持"几何条数"不变**（S4.2 起 = 合批前三角化条数 + 形变项数
+  + 书写动画项数）；新增 **`batch_count` = 实际 `draw_indexed` 次数**
+  （合批后 ≤ `draw_count`）—— 同色多条几何时 `batch_count < draw_count`
+  （可证伪断言见 §测试）。
 - **离屏格式** `OFFSCREEN_FORMAT = Rgba8Unorm`（**非 sRGB**，存 gamma 值），
   `MSAA_SAMPLES = 4`；纹理开 `COPY_SRC` 支持像素回读。
 - **`Frame2DData`** = `{ offscreen, draw_count, batch_count, cache, _arena_buffer }`，
-  `cache: FrameCacheStats { geom_requests, geom_misses, morph_requests, morph_misses }`。
+  `cache: FrameCacheStats { geom_requests, geom_misses, morph_requests, morph_misses,
+  reveal_requests, reveal_misses }`。
 - **`Frame2DGeometry`**：`viewport_points` + `pixels_per_point` + `screen_size_px`；
   `viewport_px()` 复刻 `epaint::ViewportInPixels::from_points` 的取整 + 钳制口径，
   使**离屏纹理尺寸恒等于 egui-wgpu 为该回调设置的 render pass viewport 尺寸**。
@@ -217,6 +227,24 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
 全局连续（wgpu 语义）。入口先 `validate()` fail-fast。**不碰 `wgpu_3d.rs`。**
 
 ---
+
+## 合成后滤镜链（C 线：C0–C3）
+
+`Compositor` 支持把全部图层合成到**中间全屏纹理**、再由 `shaders/post_filter.wgsl`
+（**uber shader + 4 固定槽位**）经滤镜链 blit 进主 pass。
+
+- **空链 = 直通**：`PostFilterChain::is_empty()` ⇒ 不建中间纹理、不多一次全屏 pass
+  ⇒ 画面**逐位不变**（`scene_callback.rs` 的 `post_blit: Option<PostBlit>`）。
+- **滤镜不是管线维度**：管线仍是 `3 blend × 3 域转换`；滤镜只在 uniform 里
+  （`FilterKind::code()` 与 WGSL 常量表一一对应）⇒ **新增滤镜不改管线代码**。
+- **预乘 alpha 硬约束**：中间纹理里是预乘颜色 —— 增益对 `rgb`/`a` 同乘、模糊在
+  **预乘空间**做（否则半透明边缘出黑边/halo）。
+- **管线惰性建**（C3）：`ensure_for(&mut self, ..)` 按本帧组合现场建并缓存；
+  `new` 不再预建 9 条。它只在 `prepare`（有 `&mut`）里调用 ⇒ `composite_layers`
+  的借用形式与签名**零改动**（`paint` 拿到的是 `&CallbackResources`，改不动它）。
+- **GPU 验收**：`gpu_post_route_with_identity_filter_matches_direct_bit_exactly` /
+  `gpu_post_filters_point_geometry_neighborhood` /
+  `gpu_filters_add_no_pipelines_and_pipelines_are_lazy`。
 
 ## 示例：独立 3D demo
 

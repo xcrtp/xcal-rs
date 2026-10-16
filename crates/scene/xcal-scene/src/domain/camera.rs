@@ -12,33 +12,45 @@
 //
 // 本模块是纯数据：不得出现任何 `egui::` 类型（B 阶段验收红线）。
 
-use xc_notion::Vec2;
+use xc_notion::{Vec2, Vec3};
 
 /// 相机交互模式（可插拔控制器选择）。
 ///
 /// 同一个 [`CameraCommand`] 在不同模式下作用于相机状态的方式不同：
-/// - [`PanZoom`](CameraMode::PanZoom)（2D，当前实现）：
-///   `Pan` 改取景中心 xy，`Zoom` 改缩放（对应未来正交投影 extent）；
-///   `Orbit`/`Dolly` 忽略。
-/// - [`Orbit`](CameraMode::Orbit)（3D 轨道，契约预留）：
-///   `Orbit` 改 eye（绕 target 的球面角），`Pan` 改 target，
-///   `Zoom`/`Dolly` 改 eye↔target 距离。
-/// - [`Path`](CameraMode::Path)（路径动画，契约预留）：
-///   eye/target 各自由动画曲线驱动（见 BindingTarget::CameraEye），
-///   不接受交互命令。
+/// - [`PanZoom`](CameraMode::PanZoom)（2D）：`Pan` 改取景中心 xy、`Zoom` 改缩放；
+///   `Orbit`/`Dolly`/`Look`/`Move` 忽略。
+/// - [`Orbit`](CameraMode::Orbit)（3D 轨道，K3 实现）：`Orbit` 绕 `target` 转（改 eye、
+///   保持半径）、`Dolly` 沿视线推拉（改 eye↔target 距离）；其余忽略。
+/// - [`Fps`](CameraMode::Fps)（3D 第一人称，K1）：`Look` 改朝向、`Move` 沿自身朝向位移；
+///   其余忽略。
+/// - [`Path`](CameraMode::Path)（路径动画，K2）：eye/target 各自由动画曲线驱动
+///   （见 `xcal_scene::animation::CameraEye` / `Camera2DFraming`），**不接受交互命令**。
 ///
-/// 新增模式（如 FPS）只需在此加变体 + 实现对应控制器，事件契约不变。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// **模式是相机对象的组件**（K0）：支持多相机各自不同模式；未挂该组件时取
+/// [`Default`] = `PanZoom`（不 panic）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum CameraMode {
-    /// 2D 平移/缩放。
+    /// 2D 平移/缩放（默认）。
+    #[default]
     PanZoom,
-    /// 3D 轨道环绕（控制器待 3D 交互接入时实现）。
-    #[allow(dead_code)]
+    /// 3D 轨道环绕（Orbit/Dolly）。
     Orbit,
-    /// 路径驱动，交互命令被忽略（控制器待路径动画接入时启用）。
-    #[allow(dead_code)]
+    /// 3D 第一人称（Look/Move）。
+    Fps,
+    /// 路径驱动，交互命令被忽略。
     Path,
+}
+
+impl CameraMode {
+    /// 供**外部 crate** 取值的关联常量。
+    ///
+    /// 为什么需要：本枚举是 `#[non_exhaustive]`，下游不能直接写 `CameraMode::Orbit`
+    /// （非定义 crate 无法构造其变体）；这些常量给出一条稳定的构造路径。
+    pub const PAN_ZOOM: Self = Self::PanZoom;
+    pub const ORBIT: Self = Self::Orbit;
+    pub const FPS: Self = Self::Fps;
+    pub const PATH: Self = Self::Path;
 }
 
 /// 语义化相机命令。
@@ -52,16 +64,26 @@ pub enum CameraMode {
 #[derive(Debug, Clone, Copy)]
 pub enum CameraCommand {
     /// 环绕观察：绕取景目标旋转（delta_yaw 水平角、delta_pitch 垂直角，弧度）。
-    /// PanZoom 模式下忽略。
+    /// 仅 `Orbit` 模式消费。
     Orbit { delta_yaw: f32, delta_pitch: f32 },
-    /// 平移取景：世界坐标（Y-up）下的目标位移量。
+    /// 平移取景：世界坐标（Y-up）下的目标位移量。仅 `PanZoom` 消费。
     Pan { delta: Vec2 },
-    /// 缩放：`factor > 1` 放大、`factor < 1` 缩小。
-    /// 作用对象由模式决定（PanZoom → 2D scale；Orbit → 轨道半径）。
+    /// 缩放：`factor > 1` 放大、`factor < 1` 缩小。仅 `PanZoom` 消费
+    /// （3D 的"远近"用 [`CameraCommand::Dolly`]）。
     Zoom { factor: f32 },
-    /// 推拉：沿视线方向前后移动（`delta` 为无量纲步长，正负方向由控制器约定）。
-    /// PanZoom 模式下忽略。
+    /// 推拉：沿视线方向前后移动（`delta` 为世界单位步长，正值朝 `target`）。
+    /// 仅 `Orbit` 模式消费。
     Dolly { delta: f32 },
+    /// **原地转头**（K1，仅 `Fps` 模式消费）：`delta_yaw` 绕世界 Y 轴、
+    /// `delta_pitch` 绕自身右轴（弧度）。
+    ///
+    /// 与 [`CameraCommand::Orbit`] 的区别：`Orbit` 是**绕目标公转**（eye 动、target 不动），
+    /// `Look` 是**自身朝向变化**（eye 不动、target 随朝向动）。
+    Look { delta_yaw: f32, delta_pitch: f32 },
+    /// **沿自身朝向位移**（K1，仅 `Fps` 模式消费）。
+    ///
+    /// `delta` 的分量含义：`x` = 右、`y` = 上、`z` = 前（世界单位）。
+    Move { delta: Vec3 },
 }
 
 #[cfg(test)]
@@ -80,5 +102,18 @@ mod tests {
         };
         let _ = CameraCommand::Zoom { factor: 1.1 };
         let _ = CameraCommand::Dolly { delta: 0.5 };
+        // K1：FPS 的两个命令同样可在无 egui / 无窗口下构造。
+        let _ = CameraCommand::Look {
+            delta_yaw: 0.05,
+            delta_pitch: -0.02,
+        };
+        let _ = CameraCommand::Move {
+            delta: Vec3::new(1.0, 0.0, -0.5),
+        };
+        // 模式默认 PanZoom（未挂 `CameraMode` 组件时的行为）。
+        assert_eq!(CameraMode::default(), CameraMode::PanZoom);
+        assert_eq!(CameraMode::ORBIT, CameraMode::Orbit);
+        assert_eq!(CameraMode::FPS, CameraMode::Fps);
+        assert_eq!(CameraMode::PATH, CameraMode::Path);
     }
 }

@@ -92,6 +92,49 @@ impl MorphShape {
 #[derive(Debug, Clone, Copy)]
 pub struct ContentTextureItem;
 
+/// **书写动画（reveal）对象**：持有一条描边路径 + 可见区间 `[start, end]`（归一化弧长）。
+///
+/// 与 [`MorphShape`] 同级、同一设计口径（几何静态、变量走 uniform）：
+/// - `path` 帧间不变 ⇒ 后端按内容哈希缓存三角化与 GPU 缓冲（稳态零上传）；
+/// - `start` / `end` 由 [`crate::animation::target::RevealRange`] 每帧写入
+///   （`AnimValue::Scalar` → `end`；`AnimValue::Vec2` → `(start, end)`），
+///   走 2D uniform 的 `params.z / params.w`。
+///
+/// 为什么是**独立组件**（而不是给 [`Path`](crate::scene::components) 加个区间字段）：
+/// `(Path, StrokeSolid)` 会被 `SceneRecordSystem` 录进 `DrawQueue` **整条绘制**，
+/// 而 reveal 对象必须**只**由 reveal 通路绘制（否则会叠加一条完整路径）。
+/// 本组件不在 `record_scene` 的组件组合枚举里 ⇒ 天然互斥。
+///
+/// 默认 `start = 0` / `end = 1` = **完整可见**（与不带 reveal 的绘制等价）。
+#[derive(Debug, Clone)]
+pub struct Reveal {
+    pub path: xc_notion::Path2D,
+    /// 可见区间起点（归一化弧长 ∈ [0,1]），由 `RevealRange` 写入。
+    pub start: f32,
+    /// 可见区间终点（归一化弧长 ∈ [0,1]），由 `RevealRange` 写入。
+    pub end: f32,
+}
+
+impl Reveal {
+    /// 构造：`[0, 0]`（**尚未写出任何部分** —— 书写动画的自然起点）。
+    pub fn new(path: xc_notion::Path2D) -> Self {
+        Self {
+            path,
+            start: 0.0,
+            end: 0.0,
+        }
+    }
+
+    /// 构造：完整可见（`[0, 1]`）。
+    pub fn visible(path: xc_notion::Path2D) -> Self {
+        Self {
+            path,
+            start: 0.0,
+            end: 1.0,
+        }
+    }
+}
+
 // M3-4：`Transform`（摆放组件）与 `Parent`（关系）已迁出本层 ——
 // 前者归场景对象层 `xc-object`，后者统一用契约层
 // `xc_scene_contract::Parent(pub ObjectId)`。原场景层的 `Parent` 组件把父对象

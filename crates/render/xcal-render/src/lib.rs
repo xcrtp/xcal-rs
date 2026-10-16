@@ -24,6 +24,7 @@ pub mod components;
 pub mod content_ir;
 pub mod draw;
 pub mod draw_queue_3d;
+pub mod filters;
 pub mod painter_2d;
 pub mod painter_3d;
 pub mod record_systems;
@@ -56,7 +57,8 @@ pub mod resource_cache;
 // 此处转发以保持 `xcal_render::*` 路径不变（下游 / 后端无需改动）。
 pub use draw::{
     ContentTextureQueue, DrawCommand, DrawQueue, Drawable, MorphItem, MorphQueue, Painter2D,
-    SceneRender, ZIndex, push_morph_item, record_drawables, record_path_stroke, record_scene,
+    RevealItem, RevealQueue, SceneRender, ZIndex, push_morph_item, push_reveal_item,
+    record_drawables, record_path_stroke, record_scene,
 };
 pub use xc_render_ir::{
     CustomShapeData, CustomTypeId, FillSolid, FillStyle, ResolveStyle, Shape2D, StrokeSolid,
@@ -78,8 +80,13 @@ pub use viewport::Viewport;
 // ─── 渲染目标矩形（Resource；P4 从 xcal-egui 归位） ───────────────────────
 pub use view_rect::ViewRect;
 
+// ─── 合成后滤镜链（C 线：纯数据；管线/着色器在 xcal-render-backends） ─────
+pub use filters::{FilterKind, FilterSlot, MAX_FILTER_SLOTS, POST_UNIFORM_SIZE, PostFilterChain};
+
 // ─── 录制 System（P4 从 xcal-egui 归位到渲染层） ──────────────────────────
-pub use record_systems::{ContentTextureRecordSystem, MorphRecordSystem, SceneRecordSystem};
+pub use record_systems::{
+    ContentTextureRecordSystem, MorphRecordSystem, RevealRecordSystem, SceneRecordSystem,
+};
 
 // ─── 内容 IR 与预留后端目标 ───────────────────────────────────────────────
 pub use content_ir::{ContentDrawCmd, ir_to_draw_cmds};
@@ -87,7 +94,8 @@ pub use painter_2d::Painter2DTarget;
 
 // ─── S3-0：lyon 三角化适配层（纯 CPU，无 wgpu/egui 依赖） ────────────────
 pub use tessellate::{
-    TessKind, Tessellation2D, Vertex2D, tessellate, tessellation_layout, tolerance_for_scale,
+    REVEAL_STEP_PX, TessKind, Tessellation2D, Vertex2D, tessellate, tessellate_reveal,
+    tessellation_layout, tolerance_for_scale,
 };
 
 // ─── 顶点格式契约（纯数据，无 wgpu 依赖；翻译层在 xcal-render-backends） ──

@@ -18,6 +18,6 @@ pub use binding::{Binding, BindingTable, SeekKind};
 pub use morph::MorphApplySystem;
 pub use system::BindingApplySystem;
 pub use target::{
-    Camera2DFraming, CameraEye, CircleRadius, MorphT, Phase, Target, TargetKind,
+    Camera2DFraming, CameraEye, CircleRadius, MorphT, Phase, RevealRange, Target, TargetKind,
 };
 pub use timeline::Timeline;

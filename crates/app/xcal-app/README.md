@@ -20,15 +20,20 @@ cargo run -p xcal-app
 1. **中央视口（wgpu 合成）**——六条分镜：
    1. **常驻**：网格与坐标轴（`Axes2D`，逐帧按相机 refresh）；
    2. **镜头初始位**：2D 相机是场景对象（`Framing2D`），脚本取出 `Camera2DHandle`；
-   3. **0–2s**：曲线 `y = sin x` 从左到右**生长**（`MorphShape` 从退化点形变到完整折线，
-      走 GPU 形变管线）；
+   3. **0–2s**：曲线 `y = sin x` 从左到右**被"写"出来**（R0 书写动画：`Reveal` 组件 +
+      `RevealRange` 目标把区间 `[0, end]` 从 0 推到 1 —— 几何静态、逐帧只变 uniform）；
    4. **2–2.5s**：`wait`；
    5. **2.5–3.5s**：**镜头推进**到曲线峰值 `(π/2, 1)`（`scale` 40 → 110）；
-   6. **3.5–4.5s**：公式 `y = sin x` **浮现**（每个子轮廓从字形中心形变浮现）；
+   6. **3.5–4.5s**：公式 `y = sin x` **被"写"出来**（每个描边子轮廓一个 `Reveal`，
+      **逐轮廓依次**占 `1/N` 段 —— 连续 `play` 顺序排期，见 `Timeline` 的顺序游标）；
    另有 3D demo：线框立方体持续绕 Y 轴做轨道相机运动 + 蓝色参数曲面（采样内容纹理，
    纹理源是一条静态 Typst 公式 `x² + 1`）。
 2. **egui 面板**：左侧时间/相机/网格 + **`2D 相机` / `3D 相机` 复选框**
    （关掉即不再声明该图层：2D 关掉则网格/曲线/公式全部不画，3D 关掉则立方体/曲面不画）、
+   **`视口操作` 单选**（K3：2D 平移缩放 / 3D 轨道（拖拽+滚轮）/ 3D 第一人称（拖拽+WASD/QE））
+   与 **`2D 相机自由（关闭=分镜驱动）` 复选框**（决定 2D 相机由分镜的镜头推进驱动，
+   还是交给用户平移/缩放）、
+   **`合成后滤镜` 开关 + 强度**（C 线：亮度 / 桶形畸变 / 3×3 模糊）、
    **`翻转图层顺序` 复选框**（S3-2 验收开关：验证叠放顺序确实由 `SceneView::layers`
    的声明序决定，默认关），
    左二时间控制面板：播放/暂停、**`⟲ 重新播放`**（拨回 `t = 0` 并开始播放，
@@ -77,8 +82,19 @@ let sb = storyboard::build(&mut scene, &engine);                        // → f
 let world = scene.into_world();
 let mut forest = sb.forest;
 let mut bindings = sb.bindings;
+// 「2D 相机自由」开关托管的分镜绑定：指 2D 相机（`Camera2DFraming`）的 center/scale 各一条。
+// 开关打开时它们被**移出**绑定表（否则每帧无条件写 center/scale，用户的 Pan/Zoom 同帧被抹掉）、
+// 关闭时放回。
+let cam2d_bindings: Vec<Binding> =
+    bindings.bindings.iter().filter(|b| b.target.kind() == TargetKind::Camera2DFraming).cloned().collect();
 // 唯一一条手工绑定：3D 轨道相机（与分镜编排无关，时间源 = 全局 t）
-bindings.bind_arc(forest.insert(ClockNode::new(None))?, Curve::Orbit { .. }, Arc::new(CameraEye { .. }));
+// K3：这条绑定由 `CameraDriveSystem` **托管** —— 「视口操作」切到 3D 时它会从表里
+// **移出**（让位给交互：否则 `CameraEye` 每帧无条件写 eye，拖拽效果立刻被覆盖），
+// 切回 2D 时放回；同时把 3D 相机的 `CameraMode` 组件在 `Path` ↔ `Orbit`/`Fps` 间切换。
+// 两台相机的让位判定由**同一个** System 原子完成（它们让位的是同一张 `BindingTable`，
+// 同相位两个写者会被 `Scheduler::add_system` 的静态借用冲突检查拦下）。
+let orbit = Binding { clock: forest.insert(ClockNode::new(None))?, curve: Curve::Orbit { .. }, target: Arc::new(CameraEye { .. }), seek_kind: SeekKind::O1 };
+bindings.add(orbit.clone());
 
 // ── 5. Resources 注入 ──
 let mut r = Resources::new();
@@ -92,6 +108,7 @@ r.insert(DrawQueue3D::new());
 r.insert(ContentTextureSpec { .. });      // S3-3
 r.insert(ContentTextureQueue::default());
 r.insert(MorphQueue::default());          // S4.3
+r.insert(RevealQueue::default());         // R0 书写动画
 r.insert(render_ctx.clone());
 r.insert(forest);
 r.insert(bindings);
@@ -100,6 +117,7 @@ r.insert(DirectorState::new());
 // ── 6. Scheduler 注册 System（参见下方"阶段分配"） ──
 let mut sched = Scheduler::new(world, r);
 sched.add_system(Phase::Input,        DirectorAdvanceSystem);
+sched.add_system(Phase::Input,        CameraDriveSystem::new(cam2d_bindings, orbit)); // App 层（K3 + 2D 自由开关）
 sched.add_system(Phase::Input,        CameraInputSystem);          // xcal-scene（P1 归位）
 sched.add_system(Phase::LogicUpdate,  TimeControlSystem);
 sched.add_system(Phase::LogicUpdate,  ParamPanelSystem);           // App 层
@@ -109,6 +127,7 @@ sched.add_system(Phase::Prepare,      FunctionGraphRefreshSystem);
 sched.add_system(Phase::RenderCommit, SceneRecordSystem);          // xcal-render（P4 归位）
 sched.add_system(Phase::RenderCommit, ContentTextureRecordSystem); // xcal-render
 sched.add_system(Phase::RenderCommit, MorphRecordSystem);          // xcal-render
+sched.add_system(Phase::RenderCommit, RevealRecordSystem);         // xcal-render（R0 书写动画）
 sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);        // 3D 专用（App 层）
 // FrameEnd 为空——内容提交由 host.present 承担（原 RenderSubmit 职责）
 ```
@@ -123,6 +142,7 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);        // 3D 专用�
 | Phase | System | 资源写集 | 资源读集 |
 |-------|--------|----------|----------|
 | **Input**       | DirectorAdvance | DirectorState, TimeState | — |
+|                 | CameraDrive     | BindingTable             | UiConfig, Camera2DHandle, Camera3DHandle |
 |                 | CameraInput     | —（写**场景对象** `Framing2D`）| InputEvents, Camera2DHandle |
 | **LogicUpdate** | TimeControl     | DirectorState            | InputEvents |
 |                 | ParamPanel      | BindingTable             | InputEvents |
@@ -132,15 +152,22 @@ sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);        // 3D 专用�
 | **RenderCommit**| SceneRecord (2D) | DrawQueue (2D)          | ViewRect, Camera2DHandle |
 |                 | ContentTextureRecord (S3-3) | ContentTextureQueue | ContentTextureSpec |
 |                 | MorphRecord (S4.3) | MorphQueue            | ViewRect, Camera2DHandle |
+|                 | RevealRecord (R0) | RevealQueue             | ViewRect, Camera2DHandle |
 |                 | SceneRecord3D   | DrawQueue3D              | —（读 hecs::World 组件） |
 | **FrameEnd**    | —（空）         | —                        | — |
 
-前三个录制 System 与 `CameraInput` **不在 app**：它们分别住在
-`xcal-render::record_systems`（P4）与 `xcal-scene::camera_input`（P1）。
+前四个录制 System 与 `CameraInput` **不在 app**：它们分别住在
+`xcal-render::record_systems`（P4 / R0）与 `xcal-scene::camera_input`（P1）。
 
 同 phase 内 `TimeControl` / `ParamPanel` 同读 `InputEvents`（合法）；
-三个录制 System 同读 `ViewRect` / `Camera2DHandle`、写集两两不相交
+四个录制 System 同读 `ViewRect` / `Camera2DHandle`、写集两两不相交
 ——debug 模式下 `BorrowTracker` 不会触发冲突。
+
+> **`BindingTable` 单写者约束（实测坑）**：`CameraDrive` 与 `ParamPanel` 是**仅有的**两个
+> `BindingTable` 写者，且必须分处不同 phase（`Input` / `LogicUpdate`）。两者同 phase 会被
+> `Scheduler::add_system` 的 debug 静态冲突检查在启动时 panic（`Scheduler conflict in phase
+> LogicUpdate ...`）。两台相机的让位判定（2D 自由开关 + 3D 视口目标）也因此必须由**同一个**
+> `CameraDriveSystem` 原子完成 —— 它们让位的是同一张表。
 
 `FrameEnd` 为空：内容提交（2D + 3D）由 `EguiSceneHost::present` 在 `run_frame` 之后承担，
 面板 chrome 与 `ViewRect` 写入由 `begin_frame` 在 `run_frame` 之前完成。

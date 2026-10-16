@@ -63,21 +63,27 @@ pub use layout::{AttribType, StepMode, VertexAttrib, VertexInputDesc, VertexLayo
 
 ### VertexLayout — 布局描述符
 
-契约词汇表**固定为 3 个语义**：`position` + 两个通用槽 `attrib0` / `attrib1`，
+契约词汇表**固定为 4 个语义**：`position` + 三个通用槽 `attrib0` / `attrib1` / `attrib2`，
 不再增加固定属性。通用槽的含义由 [`AaModel`](#aamodel--抗锯齿模型) 决定 ——
 从 MSAA 切到解析 AA 时，**顶点格式不动，只换 shader 变体和三角化器实现**。
 
 ```rust
 use xc_vertex::{AaModel, AttribType, CacheStrategy, StepMode, VertexLayout};
 
-// 标准布局：position(F32x2) + attrib0(F32x2) + attrib1(F32) → stride = 20
+// 标准布局（R0）：
+// position(F32x2) + attrib0(F32x2) + attrib1(F32) + attrib2(F32) → stride = 24
 let layout = VertexLayout::standard(AaModel::Analytic, CacheStrategy::Static);
-assert_eq!(layout.stride, 20);
+assert_eq!(layout.stride, 24);
 assert_eq!(layout.attribs[0].offset, 0);
 assert_eq!(layout.attribs[1].offset, 8);
 assert_eq!(layout.attribs[2].offset, 16);
+assert_eq!(layout.attribs[3].offset, 20);
 layout.validate().unwrap();
 ```
+
+> **R0（书写动画 reveal）**：第三个通用槽 `attrib2(F32)` 承载**归一化弧长** `s ∈ [0,1]`
+> （`aa::AttribSemantic::Advance`）。这是把一条**早已预留**的语义填上，不改前三个槽的承诺。
+> 代价：布局哈希再次全变（进程内 pipeline 变体缓存重建一次；顶点缓冲按结构体原样上传，自动跟随）。
 
 - **属性顺序即 shader location 顺序**，必须稳定（顺序变 → 哈希变 → 缓存失效）；
 - `compute_layout(&mut [VertexAttrib]) -> u32` 是**纯计算**：offset 从 0 起按顺序累加，
@@ -95,7 +101,7 @@ layout.validate().unwrap();
 **校验分层**（`validate()`）：
 
 - `StepMode::Vertex`（顶点数据 buffer）→ **严格词汇表**：语义必须是
-  `position` / `attrib0` / `attrib1`，否则 `IllegalSemantic`；
+  `position` / `attrib0` / `attrib1` / `attrib2`，否则 `IllegalSemantic`；
 - `StepMode::Instance`（实例数据 buffer）→ **宽松**：语义名宿主自定义，只要求非空；
 - 两者共同：offset 对齐、无重叠（须按 offset 升序）、stride 覆盖全部属性。
 
@@ -145,16 +151,16 @@ pub enum VertexLayoutError {
 
 ### AaModel — 抗锯齿模型
 
-`attrib0(F32x2)` / `attrib1(F32)` 两个通用槽的**含义由 `AaModel` 决定**。
-`aa.rs` 给出 `AaModel -> (attrib0 语义, attrib1 语义)` 的**纯数据映射表**，
+`attrib0(F32x2)` / `attrib1(F32)` / `attrib2(F32)` 三个通用槽的**含义由 `AaModel` 决定**。
+`aa.rs` 给出 `AaModel -> (attrib0 语义, attrib1 语义, attrib2 语义)` 的**纯数据映射表**，
 供 shader 作者与三角化器共享同一份声明（可 headless 测试）。
 
-| `AaModel` | attrib0 | attrib1 | 说明 |
-|-----------|---------|---------|------|
-| `None` | `Undefined` | `Undefined` | 硬边，纯靠 MSAA；shader 不得读两槽 |
-| `Coverage` | `Undefined` | `Coverage` | 顶点直接带 `[0,1]` coverage，插值即得 |
-| `Analytic` | `Normal` | `Side` | 顶点带单位边法线 + side(±1)，shader 解析到边距离后 smoothstep（lyon 方案） |
-| `Sdf` | `Uv` | `Undefined` | 距离场：顶点带图集 UV，场值从纹理采样 |
+| `AaModel` | attrib0 | attrib1 | attrib2 | 说明 |
+|-----------|---------|---------|---------|------|
+| `None` | `Undefined` | `Undefined` | `Undefined` | 硬边，纯靠 MSAA；shader 不得读三槽 |
+| `Coverage` | `Undefined` | `Coverage` | `Undefined` | 顶点直接带 `[0,1]` coverage，插值即得 |
+| `Analytic` | `Normal` | `Side` | `Advance` | 顶点带单位边法线 + side(±1) + **归一化弧长**；shader 解析到边距离后 smoothstep（lyon 方案），并用 `Advance` 决定书写动画写到哪 |
+| `Sdf` | `Uv` | `Undefined` | `Undefined` | 距离场：顶点带图集 UV，场值从纹理采样 |
 
 ```rust
 use xc_vertex::{AaModel, AaSlotSemantics, AttribSemantic};
@@ -162,11 +168,12 @@ use xc_vertex::{AaModel, AaSlotSemantics, AttribSemantic};
 let s: AaSlotSemantics = AaModel::Analytic.slots();
 assert_eq!(s.attrib0, AttribSemantic::Normal);
 assert_eq!(s.attrib1, AttribSemantic::Side);
+assert_eq!(s.attrib2, AttribSemantic::Advance); // R0：书写动画（reveal）
 assert!(!s.shader_note.is_empty()); // 每个模型都带 shader 解释说明
 ```
 
 `AttribSemantic` 是 §4.1 槽语义词汇表的枚举化，标注「预留」的变体
-（`SdfGradient` / `Advance` / `SdfDistance`）当前无模型使用，保留以把词汇表完整编码进类型系统。
+（`SdfGradient` / `Advance`(R0 已启用) / `SdfDistance`）当前无模型使用，保留以把词汇表完整编码进类型系统。
 `AaModel::ALL` 供穷举测试：映射表必须全覆盖、无未定义分支。
 
 ---

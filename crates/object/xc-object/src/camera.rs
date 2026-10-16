@@ -194,6 +194,68 @@ pub fn spawn_camera2d<S: Scene>(scene: &mut S, framing: Framing2D) -> Option<Cam
     scene.spawn_dyn(vec![Box::new(framing)]).map(Camera2DHandle)
 }
 
+// ─── FpsView / Camera3DHandle（K1 / K3）────────────────────────────────────
+
+/// FPS 相机的**朝向状态**（K1，组件）：显式存 `yaw` / `pitch`（弧度）。
+///
+/// 为什么不直接增量旋转 `eye - target`：增量应用到方向向量会**累积漂移**，
+/// 且 `pitch` 无法 clamp（会翻转）——只有显式存 yaw / pitch 才能正确限制俯仰范围。
+///
+/// 与 [`Camera3D`] 的分工：本组件是"朝向的权威来源"，`Camera3D.eye/target` 是它的
+/// 派生产物（控制器每次改完朝向就重写 `target = eye + forward`）。
+#[derive(Debug, Clone, Copy, PartialEq, derive_new::new)]
+pub struct FpsView {
+    /// 绕世界 Y 轴的偏航角（弧度）。
+    pub yaw: f32,
+    /// 俯仰角（弧度），限制在 ±[`FPS_PITCH_LIMIT`]。
+    pub pitch: f32,
+}
+
+/// FPS 俯仰角上限（弧度）：`π/2 − ε`，避免视线与世界上方向共线（翻转/奇异）。
+pub const FPS_PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
+
+impl FpsView {
+    /// 从相机的当前朝向导出 `yaw` / `pitch`（保证接管时画面不跳变）。
+    ///
+    /// 朝向约定（与 [`FpsView::forward`] 同式）：`yaw = atan2(dir.z, dir.x)`、
+    /// `pitch = asin(dir.y)`。
+    pub fn from_camera(camera: &Camera3D) -> Self {
+        let dir = (camera.target - camera.eye).normalize_or_zero();
+        Self {
+            yaw: dir.z.atan2(dir.x),
+            pitch: dir.y.asin().clamp(-FPS_PITCH_LIMIT, FPS_PITCH_LIMIT),
+        }
+    }
+
+    /// 朝向单位向量：`(cos p · cos y, sin p, cos p · sin y)`。
+    pub fn forward(&self) -> Vec3 {
+        let (sy, cy) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        Vec3::new(cp * cy, sp, cp * sy)
+    }
+
+    /// 把 `pitch` 钳到 `±`[`FPS_PITCH_LIMIT`]（转头时调用）。
+    pub fn clamp_pitch(&mut self) {
+        self.pitch = self.pitch.clamp(-FPS_PITCH_LIMIT, FPS_PITCH_LIMIT);
+    }
+}
+
+/// 3D 相机句柄（K3，**引用型**）：指向 scene 里的 3D 相机对象（持 [`Camera3D`]）。
+///
+/// 与 [`Camera2DHandle`] 对称：只携带身份，不使用 `hecs::Entity`
+/// （`entity_of` 转换在 `xcal-scene::contract`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Camera3DHandle(pub ObjectId);
+
+/// 在场景里创建 3D 相机对象，返回其句柄。
+///
+/// 可选挂 [`FpsView`]（FPS 模式的朝向状态）与 `CameraMode`（由调用方另行写入组件）。
+pub fn spawn_camera3d<S: Scene>(scene: &mut S, camera: Camera3D) -> Option<Camera3DHandle> {
+    scene
+        .spawn_dyn(vec![Box::new(camera)])
+        .map(Camera3DHandle)
+}
+
 // ─── Projection / Camera3D ────────────────────────────────────────────────
 
 /// 投影方式。

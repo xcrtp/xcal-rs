@@ -34,11 +34,13 @@ use xcal_scene::domain::{
 use xcal_schedule::resource::Resources;
 use xc_object::{Camera2DHandle, Camera3D};
 use xcal_scene::{Curve, TimeState};
-use xcal_render::{ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, ViewRect};
+use xcal_render::{
+    ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, PostFilterChain, RevealQueue, ViewRect,
+};
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
 use xc_notion::Rect2D;
 
-use crate::resources::UiConfig;
+use crate::resources::{UiConfig, ViewportCamera};
 
 pub struct EguiSceneHost;
 
@@ -55,7 +57,12 @@ impl EguiSceneHost {
     /// Prepare/RenderCommit 阶段的 GridBuild/SceneRecord 当帧就要用它，
     /// 否则窗口 resize 时内容会慢一帧。
     pub fn begin_frame(ui: &mut egui::Ui, view: &SceneView, res: &mut Resources) {
-        let mut events = InputEvents::from_events(Self::collect_events(ui, view));
+        // 视口操作目标（K3）：拖拽/滚轮产生哪一类相机命令。
+        let target = res
+            .get::<UiConfig>()
+            .map(|c| c.viewport_camera)
+            .unwrap_or_default();
+        let mut events = InputEvents::from_events(Self::collect_events(ui, view, target));
         events.extend(Self::draw_control_panel(ui, view, res));
         events.extend(Self::draw_time_panel(ui, res));
         events.extend(Self::draw_param_panel(ui, res));
@@ -196,12 +203,22 @@ impl EguiSceneHost {
     ///
     /// 视口交互路由到 SceneView 中第一个 2D 图层（B 阶段单视口；
     /// 多视口命中路由在 S3 统一管线中实现）。
-    /// 相机操作翻译为语义化 [`CameraCommand`]（不引用相机字段名）：
-    /// - 滚轮 → `Zoom { factor }`，factor = 1 + scroll × 0.001（不锚定光标，
-    ///   与旧行为一致；clamp 由 PanZoom 控制器负责）；
-    /// - 右键/中键拖拽 → `Pan { delta }`：屏幕位移在此换算为**世界坐标**
-    ///   （含 Y 翻转：dx → -dx/scale，dy → +dy/scale），控制器只做加法。
-    pub fn collect_events(ui: &egui::Ui, view: &SceneView) -> Vec<SceneEvent> {
+    ///
+    /// **操作目标由 `target` 决定**（K3，见 [`ViewportCamera`]）——2D / 3D 图层同屏
+    /// 占据同一矩形，坐标无法区分：
+    /// - [`ViewportCamera::TwoD`]：滚轮 → `Zoom { factor }`（factor = 1 + scroll × 0.001），
+    ///   右键/中键拖拽 → `Pan { delta }`（屏幕位移在此换算为**世界坐标**，含 Y 翻转）；
+    /// - [`ViewportCamera::ThreeDOrbit`]：拖拽 → `Orbit { delta_yaw, delta_pitch }`、
+    ///   滚轮 → `Dolly { delta }`（3D 语义，无需世界换算）；
+    /// - [`ViewportCamera::ThreeDFps`]：拖拽 → `Look { .. }`、
+    ///   `WASD`/`QE` → `Move { delta }`（x = 右、y = 上、z = 前）。
+    ///
+    /// 悬停 / 点击（拾取类事件）与操作目标无关，两种目标下都上报。
+    pub fn collect_events(
+        ui: &egui::Ui,
+        view: &SceneView,
+        target: ViewportCamera,
+    ) -> Vec<SceneEvent> {
         let Some(LayerDescriptor {
             id: layer,
             kind: LayerKind::Viewport2D { camera },
@@ -223,35 +240,105 @@ impl EguiSceneHost {
                 && p.y <= camera.rect.max.y
         };
 
+        // 每帧位移/旋转换算系数（交互手感，纯数值选择）。
+        /// 3D 拖拽 → 旋转角（弧度/像素）。
+        const ORBIT_RAD_PER_PX: f32 = 0.01;
+        /// 滚轮 → Dolly 步长（世界单位/滚轮量）。
+        const DOLLY_PER_SCROLL: f32 = 0.02;
+        /// FPS 按键 → 每帧位移（世界单位）。
+        const MOVE_PER_FRAME: f32 = 0.08;
+
         let mut events = Vec::new();
         ui.input(|i| {
-            // 滚轮缩放（语义命令；与旧行为一致：任意位置滚轮均生效）。
-            let scroll = i.smooth_scroll_delta.y;
-            if scroll != 0.0 {
-                events.push(SceneEvent::Camera {
-                    layer: *layer,
-                    command: CameraCommand::Zoom {
-                        factor: 1.0 + scroll * 0.001,
-                    },
-                });
-            }
+            match target {
+                ViewportCamera::TwoD => {
+                    // 滚轮缩放（语义命令；与旧行为一致：任意位置滚轮均生效）。
+                    let scroll = i.smooth_scroll_delta.y;
+                    if scroll != 0.0 {
+                        events.push(SceneEvent::Camera {
+                            layer: *layer,
+                            command: CameraCommand::Zoom {
+                                factor: 1.0 + scroll * 0.001,
+                            },
+                        });
+                    }
 
-            // 右键/中键拖拽 → 平移（屏幕位移经对象层的
-            // `Camera2D::screen_delta_to_world` 换算为世界位移：缩放 + Y 翻转都在那里；
-            // 「拖拽方向 → 取景中心反向移动」取负是**控制器语义**，留在本层）。
-            if i.pointer.secondary_down() || i.pointer.middle_down() {
-                let d = i.pointer.delta();
-                if d != egui::Vec2::ZERO {
-                    events.push(SceneEvent::Camera {
-                        layer: *layer,
-                        command: CameraCommand::Pan {
-                            delta: -camera.screen_delta_to_world((d.x, d.y).into()),
-                        },
-                    });
+                    // 右键/中键拖拽 → 平移（屏幕位移经对象层的
+                    // `Camera2D::screen_delta_to_world` 换算为世界位移：缩放 + Y 翻转都在那里；
+                    // 「拖拽方向 → 取景中心反向移动」取负是**控制器语义**，留在本层）。
+                    if i.pointer.secondary_down() || i.pointer.middle_down() {
+                        let d = i.pointer.delta();
+                        if d != egui::Vec2::ZERO {
+                            events.push(SceneEvent::Camera {
+                                layer: *layer,
+                                command: CameraCommand::Pan {
+                                    delta: -camera.screen_delta_to_world((d.x, d.y).into()),
+                                },
+                            });
+                        }
+                    }
+                }
+                ViewportCamera::ThreeDOrbit => {
+                    // 滚轮 → Dolly（向前滚 = 靠近 target）。
+                    let scroll = i.smooth_scroll_delta.y;
+                    if scroll != 0.0 {
+                        events.push(SceneEvent::Camera {
+                            layer: *layer,
+                            command: CameraCommand::Dolly {
+                                delta: scroll * DOLLY_PER_SCROLL,
+                            },
+                        });
+                    }
+                    // 拖拽（左/右/中键任一）→ 绕目标公转：向右拖 = 场景向右转。
+                    if i.pointer.primary_down() || i.pointer.secondary_down() || i.pointer.middle_down() {
+                        let d = i.pointer.delta();
+                        if d != egui::Vec2::ZERO {
+                            events.push(SceneEvent::Camera {
+                                layer: *layer,
+                                command: CameraCommand::Orbit {
+                                    delta_yaw: -d.x * ORBIT_RAD_PER_PX,
+                                    delta_pitch: -d.y * ORBIT_RAD_PER_PX,
+                                },
+                            });
+                        }
+                    }
+                }
+                ViewportCamera::ThreeDFps => {
+                    // 拖拽 → 原地转头（与鼠标移动同向）。
+                    if i.pointer.primary_down()
+                        || i.pointer.secondary_down()
+                        || i.pointer.middle_down()
+                    {
+                        let d = i.pointer.delta();
+                        if d != egui::Vec2::ZERO {
+                            events.push(SceneEvent::Camera {
+                                layer: *layer,
+                                command: CameraCommand::Look {
+                                    delta_yaw: d.x * ORBIT_RAD_PER_PX,
+                                    delta_pitch: -d.y * ORBIT_RAD_PER_PX,
+                                },
+                            });
+                        }
+                    }
+                    // WASD → 前后左右；QE → 上下（沿用 3D 建模软件惯例）。
+                    let axis = |neg: egui::Key, pos: egui::Key| {
+                        (i.key_down(pos) as i32 - i.key_down(neg) as i32) as f32
+                    };
+                    let delta = glam::Vec3::new(
+                        axis(egui::Key::A, egui::Key::D),
+                        axis(egui::Key::Q, egui::Key::E),
+                        axis(egui::Key::S, egui::Key::W),
+                    ) * MOVE_PER_FRAME;
+                    if delta != glam::Vec3::ZERO {
+                        events.push(SceneEvent::Camera {
+                            layer: *layer,
+                            command: CameraCommand::Move { delta },
+                        });
+                    }
                 }
             }
 
-            // 悬停 / 点击（视口内；拾取类事件，非相机命令）。
+            // 悬停 / 点击（视口内；拾取类事件，与操作目标无关）。
             if let Some(pos) = i.pointer.latest_pos() {
                 if in_view(pos) {
                     events.push(SceneEvent::ViewportHover {
@@ -306,8 +393,40 @@ impl EguiSceneHost {
                 ui.checkbox(&mut ui_config.show_3d, "3D 相机（立方体/曲面）");
 
                 ui.separator();
+                // 视口操作目标（K3）：2D / 3D 同屏 ⇒ 由本开关决定拖拽/滚轮操作谁。
+                ui.label("视口操作");
+                ui.radio_value(&mut ui_config.viewport_camera, ViewportCamera::TwoD, "2D 相机（平移/缩放）");
+                ui.radio_value(
+                    &mut ui_config.viewport_camera,
+                    ViewportCamera::ThreeDOrbit,
+                    "3D 轨道（拖拽/滚轮）",
+                );
+                ui.radio_value(
+                    &mut ui_config.viewport_camera,
+                    ViewportCamera::ThreeDFps,
+                    "3D 第一人称（拖拽 + WASD/QE）",
+                );
+                // 2D 相机的驱动方式：分镜（动画推动）还是自由（用户平移缩放）。
+                // 「自由」会把分镜的 2D 相机绑定移出绑定表 —— 否则它每帧无条件重写
+                // center/scale，用户操作同帧就被抹掉（见 `CameraDriveSystem`）。
+                ui.checkbox(&mut ui_config.free_2d_camera, "2D 相机自由（关闭=分镜驱动）");
+
+                ui.separator();
                 // S3-2 验收开关：翻转图层叠放顺序（见 `UiConfig::flip_layer_order`）。
                 ui.checkbox(&mut ui_config.flip_layer_order, "翻转图层顺序");
+
+                ui.separator();
+                // C 线：合成后滤镜（post-composite）。全关 ⇒ 空链 ⇒ 渲染层走直通路径
+                // （不建中间纹理、不多一次全屏 pass ⇒ 画面逐位不变）。
+                ui.label("合成后滤镜");
+                ui.checkbox(&mut ui_config.filter_gain, "亮度（点运算）");
+                ui.checkbox(&mut ui_config.filter_distortion, "桶形畸变（几何重映射）");
+                ui.checkbox(&mut ui_config.filter_blur, "模糊 3×3（邻域）");
+                ui.add(
+                    egui::Slider::new(&mut ui_config.filter_param, 0.0..=1.0)
+                        .text("滤镜强度")
+                        .fixed_decimals(2),
+                );
 
                 ui.separator();
                 ui.label("Camera");
@@ -323,8 +442,10 @@ impl EguiSceneHost {
             });
 
         if let Some(cfg) = res.get_mut::<UiConfig>() {
-            *cfg = ui_config;
+            *cfg = ui_config.clone();
         }
+        // C 线：面板开关 → **合成后滤镜链**（Resource）。全关 ⇒ 空链 ⇒ 渲染层直通。
+        res.insert(ui_config.post_filters());
         Vec::new()
     }
 
@@ -585,6 +706,16 @@ impl EguiSceneHost {
             .get::<MorphQueue>()
             .map(|q| q.0.clone())
             .unwrap_or_default();
+        // 书写动画项（R0）：同口径的 owned 快照。
+        let reveals = res
+            .get::<RevealQueue>()
+            .map(|q| q.0.clone())
+            .unwrap_or_default();
+        // 合成后滤镜链（C 线）：空链 ⇒ 渲染层走直通（不建中间纹理、画面逐位不变）。
+        let filters = res
+            .get::<PostFilterChain>()
+            .cloned()
+            .unwrap_or_default();
         let callback = SceneCompositorCallback::new(
             viewport,
             std::mem::take(&mut gpu_specs),
@@ -592,6 +723,8 @@ impl EguiSceneHost {
             queue_3d,
             content,
             morphs,
+            reveals,
+            filters,
         );
         painter.add(egui::epaint::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(egui_rect, callback),

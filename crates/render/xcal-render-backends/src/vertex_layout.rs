@@ -115,17 +115,17 @@ mod tests {
     use super::*;
     use xcal_render::vertex::{AaModel, CacheStrategy, VertexAttrib};
 
-    /// 标准布局翻译：属性顺序、offset、stride 与契约一致。
+    /// 标准布局翻译：属性顺序、offset、stride 与契约一致（R0：四槽 / stride 24）。
     #[test]
     fn standard_layout_translation_matches_contract() {
         let layout = VertexLayout::standard(AaModel::Analytic, CacheStrategy::Static);
         let mut attrs = Vec::new();
         let l = to_wgpu(&layout, &mut attrs);
 
-        assert_eq!(l.array_stride, 20);
+        assert_eq!(l.array_stride, 24);
         assert_eq!(l.step_mode, wgpu::VertexStepMode::Vertex);
         let a = l.attributes;
-        assert_eq!(a.len(), 3);
+        assert_eq!(a.len(), 4);
         // position @ location 0
         assert_eq!(a[0].format, wgpu::VertexFormat::Float32x2);
         assert_eq!(a[0].offset, 0);
@@ -138,6 +138,10 @@ mod tests {
         assert_eq!(a[2].format, wgpu::VertexFormat::Float32);
         assert_eq!(a[2].offset, 16);
         assert_eq!(a[2].shader_location, 2);
+        // attrib2 @ location 3（R0：归一化弧长）
+        assert_eq!(a[3].format, wgpu::VertexFormat::Float32);
+        assert_eq!(a[3].offset, 20);
+        assert_eq!(a[3].shader_location, 3);
     }
 
     /// 自定义布局（含对齐填充）：offset / stride 与契约计算一致。
@@ -260,33 +264,35 @@ mod tests {
 
         assert_eq!(layouts.len(), 2);
 
-        // slot 0：顶点数据
+        // slot 0：顶点数据（R0：四槽 / stride 24）
         let v = &layouts[0];
-        assert_eq!(v.array_stride, 20);
+        assert_eq!(v.array_stride, 24);
         assert_eq!(v.step_mode, wgpu::VertexStepMode::Vertex);
-        assert_eq!(v.attributes.len(), 3);
+        assert_eq!(v.attributes.len(), 4);
         assert_eq!(v.attributes[0].shader_location, 0);
         assert_eq!(v.attributes[1].shader_location, 1);
         assert_eq!(v.attributes[2].shader_location, 2);
+        assert_eq!(v.attributes[3].shader_location, 3);
         assert_eq!(v.attributes[0].offset, 0);
         assert_eq!(v.attributes[1].offset, 8);
         assert_eq!(v.attributes[2].offset, 16);
+        assert_eq!(v.attributes[3].offset, 20);
 
-        // slot 1：实例数据 —— location 从 3 续编（全局连续，不归零）
+        // slot 1：实例数据 —— location 从 4 续编（全局连续，不归零）
         let i = &layouts[1];
         assert_eq!(i.array_stride, 32);
         assert_eq!(i.step_mode, wgpu::VertexStepMode::Instance);
         assert_eq!(i.attributes.len(), 2);
         assert_eq!(i.attributes[0].format, wgpu::VertexFormat::Float32x4);
         assert_eq!(i.attributes[0].offset, 0);
-        assert_eq!(i.attributes[0].shader_location, 3);
+        assert_eq!(i.attributes[0].shader_location, 4);
         assert_eq!(i.attributes[1].format, wgpu::VertexFormat::Float32x4);
         assert_eq!(i.attributes[1].offset, 16);
-        assert_eq!(i.attributes[1].shader_location, 4);
+        assert_eq!(i.attributes[1].shader_location, 5);
 
         // 每 buffer 各自的存储被正确填充
         assert_eq!(attrs.len(), 2);
-        assert_eq!(attrs[0].len(), 3);
+        assert_eq!(attrs[0].len(), 4);
         assert_eq!(attrs[1].len(), 2);
     }
 

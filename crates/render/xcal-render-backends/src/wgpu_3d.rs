@@ -1942,4 +1942,147 @@ mod tests {
         let i = ((y * size + x) * 4) as usize;
         pixels[i..i + 4].try_into().expect("pixel bytes")
     }
+
+    /// 以**给定相机**渲染一组网格到离屏目标并回读像素（K 线验收用）。
+    fn render_with_camera(
+        backend: &WgpuBackend3D,
+        ctx: &RenderContext,
+        layer_id: LayerId,
+        size: u32,
+        camera: &Camera3D,
+        draws: &[MeshDraw],
+    ) -> Vec<u8> {
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-3d-camera-encoder"),
+            });
+        let _frame = backend.render_layer_offscreen(
+            &mut encoder,
+            layer_id,
+            camera.view_projection(1.0),
+            Viewport::full(size, size),
+            draws,
+            &[],
+        );
+        ctx.submit(encoder.finish());
+        ctx.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll 失败");
+        let texture = backend
+            .offscreen_texture(layer_id)
+            .expect("离屏纹理应已创建");
+        read_rgba8(ctx.device(), ctx.queue(), &texture, size, size)
+    }
+
+    /// 非透明像素数（画面覆盖面积的代理量）。
+    fn coverage(pixels: &[u8]) -> usize {
+        pixels.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    /// **K 线 GPU 像素级验收**（P 阶段教训：不得只断言组件字段变化）。
+    ///
+    /// 用**相机控制器产出的位姿**渲染同一场景，断言画面真的随之变化：
+    /// 1. K1 `Fps` + `Look`：转 90° ⇒ 平面变侧视，覆盖塌缩；
+    /// 2. K1 `Fps` + `Move`：靠近 ⇒ 平面变大，覆盖增加；
+    /// 3. K3 `Orbit`：绕目标公转 90° ⇒ 画面改变（侧视：覆盖塌缩且像素不同）；
+    /// 4. K2 轨迹：`Curve::Keyframes(Vec3)` 上的三个采样位姿 ⇒ 三帧互不相同。
+    #[test]
+    fn test_k_line_camera_controllers_change_pixels() {
+        use xcal_scene::camera_input::{apply_fps, apply_orbit};
+        use xcal_scene::domain::CameraCommand;
+        use xcal_scene::{AnimValue, Curve, Interp};
+        use xc_object::FpsView;
+
+        let Some((backend, ctx)) = headless_backend() else {
+            eprintln!("no GPU adapter, skipping");
+            return;
+        };
+        let size = 64u32;
+        // 场景：一张正对 +Z、半边长 0.5 的红色平面（位于 z = 0）。
+        let draws = [flat_plane(0.5, 0.5, 0.0, Color32::RED)];
+        let perspective = || Projection::perspective(60f32.to_radians(), 1.0, 0.1, 100.0);
+        let base = Camera3D::new(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y, perspective());
+
+        let p_base = render_with_camera(&backend, &ctx, LayerId(20), size, &base, &draws);
+        let c_base = coverage(&p_base);
+        assert!(c_base > 0, "基线：相机应看到平面");
+
+        // ── K1：Look 转 90° ⇒ 平面侧视 ──
+        let mut cam = base;
+        let mut fps = FpsView::from_camera(&cam);
+        apply_fps(
+            &mut fps,
+            &mut cam,
+            CameraCommand::Look {
+                delta_yaw: std::f32::consts::FRAC_PI_2,
+                delta_pitch: 0.0,
+            },
+        );
+        let p_look = render_with_camera(&backend, &ctx, LayerId(21), size, &cam, &draws);
+        assert!(
+            coverage(&p_look) < c_base,
+            "FPS 转头后平面应几乎不可见：base = {c_base}，look = {}",
+            coverage(&p_look)
+        );
+
+        // ── K1：Move 前进 3 ⇒ 平面更大 ──
+        let mut cam = base;
+        let mut fps = FpsView::from_camera(&cam);
+        apply_fps(
+            &mut fps,
+            &mut cam,
+            CameraCommand::Move {
+                delta: Vec3::new(0.0, 0.0, 3.0),
+            },
+        );
+        let p_move = render_with_camera(&backend, &ctx, LayerId(22), size, &cam, &draws);
+        assert!(
+            coverage(&p_move) > c_base,
+            "FPS 靠近后平面应更大：base = {c_base}，move = {}",
+            coverage(&p_move)
+        );
+
+        // ── K3：Orbit 公转 90° ⇒ 画面改变 ──
+        let mut cam = base;
+        apply_orbit(
+            &mut cam,
+            CameraCommand::Orbit {
+                delta_yaw: std::f32::consts::FRAC_PI_2,
+                delta_pitch: 0.0,
+            },
+        );
+        let p_orbit = render_with_camera(&backend, &ctx, LayerId(23), size, &cam, &draws);
+        assert_ne!(p_orbit, p_base, "3D 轨道后画面必须不同");
+        assert!(
+            coverage(&p_orbit) < c_base,
+            "公转 90° 后平面侧视，覆盖应塌缩：orbit = {}",
+            coverage(&p_orbit)
+        );
+
+        // ── K2：轨迹（Keyframes(Vec3) 驱动 eye）⇒ 三帧互不相同 ──
+        // 这正是 `CameraMode::Path` 的驱动方式（动画曲线给出 eye，交互被忽略）。
+        let path = Curve::Keyframes {
+            keys: vec![
+                (0.0, AnimValue::Vec3(Vec3::new(0.0, 0.0, 5.0))),
+                (1.0, AnimValue::Vec3(Vec3::new(4.0, 2.0, 3.0))),
+            ],
+            interpolation: Interp::Linear,
+        };
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        for (i, t) in [0.0f64, 0.5, 1.0].into_iter().enumerate() {
+            let cam = Camera3D::new(path.sample(t).vec3(), Vec3::ZERO, Vec3::Y, perspective());
+            frames.push(render_with_camera(
+                &backend,
+                &ctx,
+                LayerId(24 + i as u32),
+                size,
+                &cam,
+                &draws,
+            ));
+        }
+        assert_ne!(frames[0], frames[1], "轨迹 1/2 处画面应不同");
+        assert_ne!(frames[1], frames[2], "轨迹终点画面应不同");
+        assert_eq!(frames[0], p_base, "轨迹起点 = 初始位姿 ⇒ 画面应逐位一致");
+    }
 }

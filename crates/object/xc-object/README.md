@@ -41,6 +41,8 @@ xcal-render        渲染管线    record_scene / 三角化 / 队列
 | `camera` | `Framing2D` | **2D 取景参数**（P1-2，**无 `rect`**）：`{ center, scale }` + `to_camera_2d(rect)`。相机作为**场景对象**的形态 |
 | `camera` | `Camera2DHandle` / `spawn_camera2d` | **引用型相机句柄**（P2）：`Camera2DHandle(pub ObjectId)` + `resolve(scene, rect) -> Option<Camera2D>`；`spawn_camera2d(scene, framing)` 建相机对象并取句柄 |
 | `camera` | `Camera3D` / `Projection` | 3D 相机（`view_matrix` / `view_projection`）与投影（`Perspective` / `Orthographic`，自带 `aspect`）|
+| `camera` | `Camera3DHandle` / `spawn_camera3d` | **3D 相机句柄**（K3，与 `Camera2DHandle` 对称）：`Camera3DHandle(pub ObjectId)`；`spawn_camera3d(scene, camera)` 建 3D 相机对象并取句柄 |
+| `camera` | `FpsView` / `FPS_PITCH_LIMIT` | **FPS 朝向状态**（K1，组件）：显式 `{ yaw, pitch }`（增量旋转会漂移、pitch 无法 clamp）+ `from_camera` / `forward` / `clamp_pitch`；俯仰钳 `±(π/2 − 0.01)` |
 | `placement` | `Transform` | 3D 摆放（`position` / `rotation` / `scale` + `matrix()`）|
 | `zorder` | `ZOrder(pub i32)` | **绘制层级**（可缺席）：值越小越先绘制 |
 | `axes` | `Axes2D` / `TickSpec` / `AxesLine` | 坐标轴 / 网格**装配对象**：裁剪 + 步长自适应 + 刻度线 + 轴线 |

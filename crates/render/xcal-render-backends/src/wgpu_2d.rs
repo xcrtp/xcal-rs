@@ -35,9 +35,9 @@ use wgpu::util::DeviceExt as _;
 
 use xcal_render::resource_cache::{ResourceCache, ResourceKey};
 use xcal_render::{
-    AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, Shape2D, Style2D,
-    TessKind, Tessellation2D, Vertex2D, VertexInputDesc, VertexLayout, hash_bytes, tessellate,
-    tolerance_for_scale,
+    AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, REVEAL_STEP_PX,
+    RevealItem, Shape2D, Style2D, TessKind, Tessellation2D, Vertex2D, VertexInputDesc, VertexLayout,
+    hash_bytes, tessellate, tessellate_reveal, tolerance_for_scale,
 };
 use xcal_scene::domain::LayerId;
 use xc_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
@@ -229,6 +229,23 @@ unsafe impl Sync for MorphBuffers {}
 /// `ResourceKey` 类型标签：形变（from/to 双侧）GPU 缓冲。
 struct Morph2DTag;
 
+/// 书写动画（R0 reveal）：一条路径的 GPU 顶点缓冲 + 索引缓冲。
+///
+/// 与 [`MorphBuffers`] 同一设计：内容**不含** reveal 区间 `[a,b]` ⇒ 缓存键不含区间
+/// ⇒ 区间逐帧变化时零装配零上传（逐帧只多写一个 uniform）。
+struct RevealBuffers {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+}
+
+// Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（同 [`BatchBuffers`]）。
+unsafe impl Send for RevealBuffers {}
+unsafe impl Sync for RevealBuffers {}
+
+/// `ResourceKey` 类型标签：书写动画（reveal）GPU 缓冲。
+struct Reveal2DTag;
+
 /// 离屏渲染目标（随视口尺寸重建）。
 struct OffscreenTargets {
     size: (u32, u32),
@@ -259,6 +276,14 @@ struct Prepared2DMorph {
     uniform_offset: u32,
 }
 
+/// 已准备的一次**书写动画**绘制（单 vertex buffer + 区间 uniform，`draw_indexed` 一次）。
+struct Prepared2DReveal {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    uniform_offset: u32,
+}
+
 /// 本帧缓存命中统计（S4.2 / S4.3：让"合批 + 缓存"可观测、可证伪）。
 ///
 /// 稳态（内容不变）下 `geom_misses == 0`：几何条目只要本帧被再次用到就会
@@ -274,6 +299,11 @@ pub struct FrameCacheStats {
     /// 其中缓存未命中的数。⚠️ `t` 变化**不**计入 − 形变几何与 `t` 无关，
     /// 稳态（只有 `t` 在变）下本值恒为 0。
     pub morph_misses: usize,
+    /// 本帧请求的书写动画几何数（R0）。
+    pub reveal_requests: usize,
+    /// 其中缓存未命中的数。⚠️ reveal 区间 `[a,b]` 变化**不**计入
+    /// − 几何与区间无关，稳态（只有区间在变）下本值恒为 0。
+    pub reveal_misses: usize,
 }
 
 /// 一帧的离屏结果（`prepare` 阶段产出、由回调交给合成器）。
@@ -315,6 +345,8 @@ pub struct WgpuBackend2D {
     batch_cache: ResourceCache<()>,
     /// 形变（from/to 双侧）GPU 缓冲缓存（S4.3）：`t` 不参与键 ⇒ 稳态零上传。
     morph_cache: ResourceCache<()>,
+    /// 书写动画 GPU 缓冲缓存（R0）：区间 `[a,b]` 不参与键 ⇒ 稳态零上传。
+    reveal_cache: ResourceCache<()>,
     /// 按 [`LayerId`] 分别持有的离屏目标（尺寸变化时重建）。
     targets: HashMap<LayerId, OffscreenTargets>,
     /// 本帧几何（`begin_frame` 设置，`finish_frame` 消费）。
@@ -322,6 +354,8 @@ pub struct WgpuBackend2D {
     recorder: Vec<Recorded2D>,
     /// 本帧形变项（S4.3，`begin_frame_at` 清空）。
     morph_recorder: Vec<MorphItem>,
+    /// 本帧书写动画项（R0，`begin_frame_at` 清空）。
+    reveal_recorder: Vec<RevealItem>,
 }
 
 impl WgpuBackend2D {
@@ -480,6 +514,7 @@ impl WgpuBackend2D {
             geom_cache: ResourceCache::new(),
             batch_cache: ResourceCache::new(),
             morph_cache: ResourceCache::new(),
+            reveal_cache: ResourceCache::new(),
             targets: HashMap::new(),
             geometry: Frame2DGeometry {
                 viewport_points: Rect2D::default(),
@@ -488,6 +523,7 @@ impl WgpuBackend2D {
             },
             recorder: Vec::new(),
             morph_recorder: Vec::new(),
+            reveal_recorder: Vec::new(),
         }
     }
 
@@ -496,6 +532,7 @@ impl WgpuBackend2D {
         self.geometry = geometry;
         self.recorder.clear();
         self.morph_recorder.clear();
+        self.reveal_recorder.clear();
     }
 
     /// 追加一个**形变**绘制项（S4.3）：`from` / `to` 常量化，逐帧只变 `t`。
@@ -503,9 +540,19 @@ impl WgpuBackend2D {
         self.morph_recorder.push(item);
     }
 
+    /// 追加一个**书写动画**绘制项（R0）：路径常量化，逐帧只变区间 `[start, end]`。
+    pub fn push_reveal(&mut self, item: RevealItem) {
+        self.reveal_recorder.push(item);
+    }
+
     /// 录制器中的形变项数（S4.3 诊断）。
     pub fn recorded_morph_len(&self) -> usize {
         self.morph_recorder.len()
+    }
+
+    /// 录制器中的书写动画项数（R0 诊断）。
+    pub fn recorded_reveal_len(&self) -> usize {
+        self.reveal_recorder.len()
     }
 
     /// 追加一条绘制指令（`z` 用于稳定排序；同 z 保调用顺序）。
@@ -553,6 +600,11 @@ impl WgpuBackend2D {
     /// S4.3 诊断：形变（from/to 双侧 GPU 缓冲）缓存的存活条目数。
     pub fn morph_cache_len(&self) -> usize {
         self.morph_cache.len()
+    }
+
+    /// R0 诊断：书写动画 GPU 缓冲缓存的存活条目数。
+    pub fn reveal_cache_len(&self) -> usize {
+        self.reveal_cache.len()
     }
 
     /// G7 诊断（R5-2）：graveyard 中等待延迟销毁的 GPU 条目数。
@@ -860,6 +912,72 @@ impl WgpuBackend2D {
             });
         }
 
+        // ── 趟 4（R0）：书写动画项 ──
+        // 几何 = 路径按 `REVEAL_STEP_PX` 预细分 + 每顶点归一化弧长 `s`；逐帧变的只有
+        // 区间 `[a,b]`（走 uniform）⇒ **缓存键不含区间**，稳态零上传。
+        // 区间逐项不同 ⇒ 同批只能共享一个区间 ⇒ **不进合批**，每项一次 `draw_indexed`
+        // （与形变同一口径）。用的是**同一个** `pipeline_2d`（`shape_2d.wgsl` 内分支），
+        // 即"新增书写动画不改 shader 之外的渲染结构"。
+        let mut prepared_reveal: Vec<Prepared2DReveal> =
+            Vec::with_capacity(self.reveal_recorder.len());
+        for item in mem::take(&mut self.reveal_recorder) {
+            stats.reveal_requests += 1;
+            let style = Style2D {
+                space: MeasureSpace::Screen,
+                ..item.style
+            };
+            let Some(tess) =
+                tessellate_reveal(&item.path, &local, &style, tolerance, REVEAL_STEP_PX)
+            else {
+                continue;
+            };
+            if tess.vertices.is_empty() || tess.indices.is_empty() {
+                continue;
+            }
+            let rkey = ResourceKey::content::<Reveal2DTag>(hash_tessellation(&tess));
+            if !self.reveal_cache.mark_used(&rkey) {
+                stats.reveal_misses += 1;
+                let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-reveal-vertices"),
+                    contents: bytes_of(&tess.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("xcal-2d-reveal-indices"),
+                    contents: bytes_of(&tess.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                self.reveal_cache.insert_handle(
+                    rkey,
+                    (),
+                    GpuHandle::new(RevealBuffers {
+                        vertex_buffer: vb,
+                        index_buffer: ib,
+                        index_count: tess.indices.len() as u32,
+                    }),
+                );
+            }
+            let reveal = self
+                .reveal_cache
+                .get(rkey)
+                .and_then(|h| h.downcast_ref::<RevealBuffers>())
+                .expect("书写动画条目必须存在（刚插入或已命中）");
+            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
+            let block = self.arena.push(&uniform_bytes_reveal(
+                clip,
+                color,
+                style.stroke_width,
+                item.start,
+                item.end,
+            ));
+            prepared_reveal.push(Prepared2DReveal {
+                vertex_buffer: reveal.vertex_buffer.clone(),
+                index_buffer: reveal.index_buffer.clone(),
+                index_count: reveal.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+
         // 帧末驱逐：未被本帧用到的条目投入 deferred destroyer
         // （graveyard 3 次 submit 后才真正 drop），保证动画内容下缓存与显存有界。
         self.geom_cache.evict_unused(0);
@@ -868,6 +986,8 @@ impl WgpuBackend2D {
         self.batch_cache.notify_submit();
         self.morph_cache.evict_unused(0);
         self.morph_cache.notify_submit();
+        self.reveal_cache.evict_unused(0);
+        self.reveal_cache.notify_submit();
 
         // 一次性上传全部 uniform。bind group 绑定 arena buffer，因此只在 arena
         // 扩容重建 buffer（generation 变化）时重建，避免每帧创建。
@@ -942,15 +1062,26 @@ impl WgpuBackend2D {
                     pass.draw_indexed(0..m.index_count, 0, 0..1);
                 }
             }
+            // R0：书写动画复用 `pipeline_2d`（`shape_2d.wgsl` 按 `advance` 与区间
+            // `params.z/w` 分支），不需要新管线；区间逐项不同 ⇒ 每项一次 `draw_indexed`。
+            if !prepared_reveal.is_empty() {
+                pass.set_pipeline(&self.pipeline_2d);
+                for r in &prepared_reveal {
+                    pass.set_bind_group(0, &arena_bind_group, &[r.uniform_offset]);
+                    pass.set_vertex_buffer(0, r.vertex_buffer.slice(..));
+                    pass.set_index_buffer(r.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..r.index_count, 0, 0..1);
+                }
+            }
         }
 
         // ── 产出离屏结果（合成由调用方 / 回调经合成器完成） ──
         Frame2DData {
             offscreen: targets.view.clone(),
-            // 「几何条数」= 合批前的三角化几何数 + 形变项数（每项 1 条图元）。
-            draw_count: geoms.len() + prepared_morph.len(),
-            // 实际 `draw_indexed` 次数 = 批数 + 形变项数（每项自成一次绘制）。
-            batch_count: prepared.len() + prepared_morph.len(),
+            // 「几何条数」= 合批前的三角化几何数 + 形变项数 + 书写动画项数。
+            draw_count: geoms.len() + prepared_morph.len() + prepared_reveal.len(),
+            // 实际 `draw_indexed` 次数 = 批数 + 形变项数 + 书写动画项数。
+            batch_count: prepared.len() + prepared_morph.len() + prepared_reveal.len(),
             cache: stats,
             _arena_buffer: arena_buffer,
         }
@@ -1062,6 +1193,9 @@ fn hash_morph(from: &Tessellation2D, to: &Tessellation2D) -> u64 {
 ///
 /// `params.x` 写 `stroke_width`（偏移 80）——shader 用它沿 `normal` 外扩半个线宽，
 /// 把顶点存着的**路径点**还原成轮廓点（R1 几何参数化）。
+///
+/// `params.w` 写 **1.0**（偏移 92，reveal 区间终点）—— 普通绘制必须写 `[0,1]`
+/// （起点 `params.z` 默认 0），否则 `shape_2d.wgsl` 会把整条几何当成"区间外"裁掉。
 fn uniform_bytes(
     transform: Mat4,
     color: Color32,
@@ -1078,6 +1212,8 @@ fn uniform_bytes(
     ];
     data[64..80].copy_from_slice(bytes_of(&c));
     data[80..84].copy_from_slice(bytes_of(&[stroke_width]));
+    // reveal 区间默认全开：z = 0.0（已由零初始化），w = 1.0。
+    data[92..96].copy_from_slice(bytes_of(&[1.0f32]));
     data
 }
 
@@ -1091,6 +1227,22 @@ fn uniform_bytes_morph(
 ) -> [u8; UNIFORM_SIZE as usize] {
     let mut data = uniform_bytes(transform, color, stroke_width);
     data[84..88].copy_from_slice(bytes_of(&[t]));
+    data
+}
+
+/// 书写动画 uniform 字节（R0）：与 [`uniform_bytes`] 同块，额外写
+/// **`params.z = a`（偏移 88）/ `params.w = b`（偏移 92）** ——
+/// `shape_2d.wgsl` 用它们决定"写"到哪（`advance` 落在区间外的顶点塌缩）。
+fn uniform_bytes_reveal(
+    transform: Mat4,
+    color: Color32,
+    stroke_width: f32,
+    start: f32,
+    end: f32,
+) -> [u8; UNIFORM_SIZE as usize] {
+    let mut data = uniform_bytes(transform, color, stroke_width);
+    data[88..92].copy_from_slice(bytes_of(&[start]));
+    data[92..96].copy_from_slice(bytes_of(&[end]));
     data
 }
 
@@ -1192,17 +1344,34 @@ mod tests {
     /// 🔴 R3：描边宽度写在 **偏移 80**（`params.x`），且宽度 0 也不越界。
     ///
     /// 半宽/全宽或偏移算错的话，实机表现为线条偏细/偏粗一倍——这里把它钉死在字节层。
+    /// R0 后 `params.w`（偏移 92）是 **reveal 区间终点**，普通绘制必须为 1.0
+    /// （否则 `shape_2d.wgsl` 会把整条几何裁掉）。
     #[test]
     fn uniform_stroke_width_lands_at_offset_80() {
         for w in [0.0f32, 1.0, 2.0, 8.0] {
             let b = uniform_bytes(Mat4::IDENTITY, Color32::WHITE, w);
             // params.x（偏移 80）必须是原样写入的宽度。
             assert_eq!(f32_at_of(&b, 80), w, "params.x 应为 stroke_width={w}");
-            // y/z/w 预留为 0（不参与偏移计算）。
+            // y = 形变参数（本路径不写）、z = reveal 起点，均为 0。
             assert_eq!(f32_at_of(&b, 84), 0.0);
             assert_eq!(f32_at_of(&b, 88), 0.0);
-            assert_eq!(f32_at_of(&b, 92), 0.0);
+            // w = reveal 终点 → 必须为 1.0（全可见）。
+            assert_eq!(f32_at_of(&b, 92), 1.0, "params.w 必须是 1.0（区间全开）");
         }
+    }
+
+    /// R0：reveal 区间写在 **params.z（88）/ params.w（92）**，且与形变的 `t`（84）不冲突。
+    #[test]
+    fn uniform_reveal_range_lands_at_offsets_88_and_92() {
+        let b = uniform_bytes_reveal(Mat4::IDENTITY, Color32::WHITE, 2.0, 0.25, 0.75);
+        assert_eq!(f32_at_of(&b, 80), 2.0, "params.x 仍是描边宽度");
+        assert_eq!(f32_at_of(&b, 84), 0.0, "params.y（形变 t）不受影响");
+        assert_eq!(f32_at_of(&b, 88), 0.25, "params.z = reveal 起点");
+        assert_eq!(f32_at_of(&b, 92), 0.75, "params.w = reveal 终点");
+        // 与形变共用同一块：`t` 与区间互不覆盖。
+        let m = uniform_bytes_morph(Mat4::IDENTITY, Color32::WHITE, 2.0, 0.5);
+        assert_eq!(f32_at_of(&m, 84), 0.5, "params.y = t");
+        assert_eq!(f32_at_of(&m, 92), 1.0, "形变不带 reveal ⇒ 区间全开");
     }
 
     fn f32_at_of(bytes: &[u8], off: usize) -> f32 {
@@ -1307,17 +1476,23 @@ mod tests {
                 label: Some("xcal-2d-test-e2e"),
             });
         let frame = backend.finish_frame(&mut enc, LayerId(0), &g);
-        let compositor = Compositor::new(&ctx.device, ctx.target_format);
-        let composite = compositor.prepare(
-            &ctx.device,
-            &[CompositeOp {
-                texture: frame.offscreen.clone(),
-                src_format: OFFSCREEN_FORMAT,
-                blend: LayerBlend::Alpha,
-                opacity: 1.0,
-                rect_px: (left as f32, top as f32, vw as f32, vh as f32),
-            }],
+        let mut compositor = Compositor::new(&ctx.device, ctx.target_format);
+        let op = CompositeOp {
+            texture: frame.offscreen.clone(),
+            src_format: OFFSCREEN_FORMAT,
+            blend: LayerBlend::Alpha,
+            opacity: 1.0,
+            rect_px: (left as f32, top as f32, vw as f32, vh as f32),
+        };
+        let ops = [op];
+        // C3：管线惰性建 ⇒ 合成前先确保本帧用到的组合已就绪（1 = 首帧现场建一条）。
+        assert_eq!(compositor.ensure_for(&ctx.device, &ops), 1, "首帧应现场建 1 条");
+        assert_eq!(
+            compositor.ensure_for(&ctx.device, &ops),
+            0,
+            "同组合第二帧应命中缓存（不重复建）"
         );
+        let composite = compositor.prepare(&ctx.device, &ops);
         {
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2033,20 +2208,197 @@ mod tests {
         );
     }
 
-    /// 契约布局：stride 20 / 三槽（无硬编码字面量的可测证明）。
+    // ── R0/R5：书写动画的 GPU 像素级验收 ─────────────────────────────────
+
+    /// 屏幕坐标下的一条水平直线：视口 (100,50) 起点 ⇒ 离屏本地 `x ∈ [10,190]`、`y = 50`。
+    fn reveal_line_path() -> xc_notion::Path2D {
+        xc_notion::Path2D::from_polyline(
+            &[Vec2::new(110.0, 100.0), Vec2::new(290.0, 100.0)],
+            false,
+        )
+    }
+
+    /// 书写动画的描边样式（青色、宽 6 —— 足够宽，像素判据稳定）。
+    fn reveal_style() -> Style2D {
+        Style2D {
+            fill: None,
+            stroke: Some(Color32::new(0, 200, 200, 255)),
+            stroke_width: 6.0,
+            space: MeasureSpace::Screen,
+            ..Default::default()
+        }
+    }
+
+    /// 只画一条书写动画项并回读离屏像素（`200×100`，紧凑 `w*4` 行距）。
+    fn reveal_frame(
+        backend: &mut WgpuBackend2D,
+        ctx: &crate::RenderContext,
+        g: Frame2DGeometry,
+        span: (f32, f32),
+    ) -> Vec<u8> {
+        backend.begin_frame_at(g);
+        backend.push_reveal(RevealItem {
+            path: reveal_line_path(),
+            start: span.0,
+            end: span.1,
+            style: reveal_style(),
+        });
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("xcal-2d-reveal-frame"),
+            });
+        let out = backend.finish_frame(&mut enc, LayerId(0), &g);
+        assert_eq!(out.batch_count, 1, "一个书写动画项 = 一次 draw call");
+        assert_eq!(out.cache.reveal_requests, 1);
+        ctx.queue.submit([enc.finish()]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("书写动画帧提交后 poll");
+        read_texture(
+            ctx,
+            backend.offscreen_texture(LayerId(0)).unwrap(),
+            (200, 100),
+        )
+    }
+
+    /// 离屏像素 alpha（`w = 200` 的紧凑回读）。
+    fn alpha_at(px: &[u8], x: u32, y: u32) -> u8 {
+        px[((y * 200 + x) * 4 + 3) as usize]
+    }
+
+    /// 🔴 R5-1：`end` 从 0 → 1 时**覆盖像素数严格递增**，且 `end = 0` 时零像素。
+    ///
+    /// 证伪：若 `advance` 没进顶点（或 shader 没比较区间），各帧像素数会完全相同；
+    /// 若区间外的顶点没有被塌缩，`end = 0` 就会是"整条线"。
+    #[test]
+    fn reveal_grows_monotonically() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let mut covered = Vec::new();
+        for end in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+            let px = reveal_frame(&mut backend, &ctx, g, (0.0, end));
+            covered.push(px.chunks_exact(4).filter(|p| p[3] > 0).count());
+        }
+        assert_eq!(covered[0], 0, "end = 0 应零像素：{covered:?}");
+        for w in covered.windows(2) {
+            assert!(w[1] > w[0], "覆盖像素数必须**严格递增**：{covered:?}");
+        }
+    }
+
+    /// 🔴 R5-2：`end` 小时被覆盖的像素集中在**路径起点侧**（防止"两端同时出现"这类顺序错误）。
+    #[test]
+    fn reveal_is_ordered_along_path() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        let px = reveal_frame(&mut backend, &ctx, g, (0.0, 0.25));
+        let (mut min_x, mut max_x) = (u32::MAX, 0u32);
+        for y in 0..100u32 {
+            for x in 0..200u32 {
+                if alpha_at(&px, x, y) > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                }
+            }
+        }
+        // 本地 x ∈ [10,190]，总长 180 ⇒ `end = 0.25` 的切口在 x ≈ 55。
+        assert!(min_x <= 12, "起点侧必须有像素（min_x = {min_x}）");
+        assert!(
+            max_x <= 58,
+            "end = 0.25 时不得越过四分之一处（max_x = {max_x}）"
+        );
+    }
+
+    /// 🔴 R5-3：`[0,1]` 全区间与**不带 reveal** 的同一条路径**逐位一致**。
+    ///
+    /// 这是"新增书写动画不改既有画面"的机器判据：几何各自三角化（一条带预细分、
+    /// 一条不带），光栅化结果必须完全相同。
+    #[test]
+    fn reveal_full_range_matches_no_reveal() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        // 基线：普通 2D 路径（走 `DrawQueue` → `tessellate`）。
+        backend.begin_frame_at(g);
+        backend.push(
+            &Shape2D::Path(reveal_line_path()),
+            &Transform2D::identity(),
+            &reveal_style(),
+            0,
+        );
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("xcal-2d-reveal-baseline"),
+            });
+        let out = backend.finish_frame(&mut enc, LayerId(0), &g);
+        assert_eq!(out.cache.reveal_requests, 0, "基线不含 reveal 项");
+        ctx.queue.submit([enc.finish()]);
+        ctx.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("基线帧提交后 poll");
+        let plain = read_texture(
+            &ctx,
+            backend.offscreen_texture(LayerId(0)).unwrap(),
+            (200, 100),
+        );
+
+        let reveal = reveal_frame(&mut backend, &ctx, g, (0.0, 1.0));
+        assert_eq!(plain, reveal, "[0,1] 必须与不带 reveal 的画面逐位一致");
+    }
+
+    /// 🔴 R5-4：区间版本 `[a,b]` 只覆盖**中段**，两端无像素。
+    #[test]
+    fn reveal_interval_covers_middle_only() {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
+            return; // 无 GPU 环境：跳过
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(200.0, 100.0, 1.0, [400, 200]);
+
+        // 本地 x ∈ [10,190] ⇒ `[0.3, 0.7]` 对应 x ∈ [64, 136]。
+        let px = reveal_frame(&mut backend, &ctx, g, (0.3, 0.7));
+        assert_eq!(alpha_at(&px, 20, 50), 0, "起点侧（x=20）不应有像素");
+        assert_eq!(alpha_at(&px, 180, 50), 0, "终点侧（x=180）不应有像素");
+        assert!(alpha_at(&px, 100, 50) > 0, "区间中段（x=100）必须有像素");
+        assert!(alpha_at(&px, 70, 50) > 0, "区间内侧（x=70）必须有像素");
+        assert!(alpha_at(&px, 130, 50) > 0, "区间内侧（x=130）必须有像素");
+    }
+
+    /// 契约布局：R0 后 stride 24 / 四槽（无硬编码字面量的可测证明）。
     #[test]
     fn pipeline_vertex_layout_comes_from_contract() {
         use xcal_render::Vertex2D;
         let l = VertexLayout::standard(AaModel::None, CacheStrategy::PerFrame);
         l.validate().unwrap();
-        assert_eq!(l.stride, 20);
+        assert_eq!(l.stride, 24);
         assert_eq!(std::mem::size_of::<Vertex2D>(), l.stride as usize);
         let mut attrs = Vec::new();
         let wgpu_layout = to_wgpu(&l, &mut attrs);
-        assert_eq!(wgpu_layout.array_stride, 20);
-        assert_eq!(wgpu_layout.attributes.len(), 3);
+        assert_eq!(wgpu_layout.array_stride, 24);
+        assert_eq!(wgpu_layout.attributes.len(), 4);
         assert_eq!(wgpu_layout.attributes[0].offset, 0);
         assert_eq!(wgpu_layout.attributes[1].offset, 8);
         assert_eq!(wgpu_layout.attributes[2].offset, 16);
+        assert_eq!(wgpu_layout.attributes[3].offset, 20);
     }
 }

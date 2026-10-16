@@ -55,16 +55,23 @@ xcal-render 同时承载两套渲染抽象：
 
 ### ② S3-0 三角化适配层（`tessellate.rs`，纯 CPU / headless）
 `Shape2D + Transform2D + Style2D` → 索引化顶点缓冲，顶点结构**严格**符合自有顶点
-契约（[`VertexLayout::standard`]，stride = 20，三槽 position/attrib0/attrib1）：
-- `Vertex2D { position, normal, side }`（`#[repr(C)]`，`size == 20` 编译期断言）。
+契约（[`VertexLayout::standard`]，R0 后 stride = 24，四槽
+position/attrib0/attrib1/attrib2）：
+- `Vertex2D { position, normal, side, advance }`（`#[repr(C)]`，`size == 24` 编译期断言）。
   **描边几何参数化**：`position` 槽存 lyon `position_on_path()`（路径点，**不含宽度**），
   轮廓点由后端 shader 现场补偿 `position + normal * (stroke_width * 0.5)`
   （`normal` 保持 lyon 原样、含 miter 缩放，**不得归一化**）。因此几何与
   `stroke_width` / `camera.scale` **无关**；填充顶点 `normal = [0,0]` → 偏移恒 0。
   宽度仍由 CPU 侧唯一换算点 `draw.rs::resolve_style` 解析（shader 只做几何偏移）
+- `advance`（**R0 书写动画**）：lyon `advancement()` 归一化到 `[0,1]`（除以本条几何的
+  实测最大推进量）。`lyon` 在子路径起点沿用上一条的推进量 ⇒ **跨子路径累加**，
+  故书写顺序是"轮廓依次写出"（`reveal_advance_accumulates_across_subpaths` 锁死）
 - `Tessellation2D { vertices, indices, layout, kind: Fill | Stroke }`
 - `tessellate(shape, transform, style, tolerance) -> Vec<Tessellation2D>`
   （`Group` 递归展开；`Empty` 返回**空 Vec**）
+- `tessellate_reveal(path, transform, style, tolerance, step) -> Option<Tessellation2D>`
+  （**R0**：进 lyon 之前按 `step`（`REVEAL_STEP_PX = 2.0` 输出空间 px）**预细分** ——
+  lyon 不细分直线段，不补点则切口精度 = 顶点间距；只做描边，填充无 `advancement`）
 - `tolerance_for_scale(scale) = (0.25 / scale).clamp(1e-4, 1.0)`（≈0.25 屏幕像素误差）
 - 不自研三角化：内部用 `lyon_tessellation` 1.0 做填充 / 描边
 - `tessellation_layout()` 声明 `(AaModel::Analytic, CacheStrategy::PerFrame)`；
@@ -106,10 +113,11 @@ xcal-render 同时承载两套渲染抽象：
 | 模块 | 说明 |
 |------|------|
 | `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
-| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
-| `record_systems` | P4 从 `xcal-egui` 归位的三个录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem`（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle`，不读 UI 类型） |
+| `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + push_morph_item + push_reveal_item`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`） |
+| `record_systems` | P4 从 `xcal-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle`，不读 UI 类型） |
 | `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |
-| `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
+| `filters` | **C 线（纯数据）**：`PostFilterChain`（Resource；顺序即应用顺序、最多 `MAX_FILTER_SLOTS = 4` 个）+ `FilterSlot` + `FilterKind`（`code()` 与 WGSL 常量表一一对应）+ 160 B uniform 编码；**空链 ⇒ 渲染层走直通、画面逐位不变** |
+| `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / **`tessellate_reveal`（R0 书写动画）** / `REVEAL_STEP_PX` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_3d` | 3D 双列表队列（`DrawQueue3D` / `MeshDraw` / `LineDraw`）|
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
 | `shape` | `Shape2D` + `Style2D` + `CustomShapeData/CustomTypeId` 自定义图元钩子 |

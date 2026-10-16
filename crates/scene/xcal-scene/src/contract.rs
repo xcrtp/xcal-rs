@@ -23,7 +23,8 @@
 // 故动态创建必须**按类型登记**。下表即唯一登记点：
 //
 //   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform` / `ZOrder`
-//   相机：      `Camera2D` / `Camera3D` / `Projection` / `Framing2D`（2D 取景参数，P1-2）
+//   相机：      `Camera2D` / `Camera3D` / `Projection` / `Framing2D`（2D 取景参数，P1-2）/
+//               `CameraMode`（相机交互模式，K0）/ `FpsView`（FPS 朝向状态，K1）
 //   样式：      `StrokeSolid` / `FillSolid`
 //   装配对象：  `Axes2D` / `AxesLine` / `FunctionGraph`（M4：网格与函数图像归对象层）
 //   动画与标记：`PhaseAnim` / `MorphShape` / `ContentTextureItem`
@@ -35,8 +36,8 @@
 use hecs::{Entity, EntityBuilder, World};
 
 use xc_object::{
-    Axes2D, AxesLine, Camera2D, Camera3D, Circle, Framing2D, FunctionGraph, Line, Path, Projection,
-    Rect, Transform, ZOrder,
+    Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line, Path,
+    Projection, Rect, Transform, ZOrder,
 };
 use xc_render_ir::{FillSolid, StrokeSolid};
 use xc_scene_contract::{Components, Parent, Scene};
@@ -48,6 +49,7 @@ use xc_scene_contract::{Components, Parent, Scene};
 /// 同时转发身份类型 [`ObjectId`]（句柄 / 目标都要用到它）。
 pub use xc_scene_contract::{ObjectId, SceneRead};
 
+use crate::domain::CameraMode;
 use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim};
 
 /// `hecs::Entity` → 契约层 [`ObjectId`]（位模式直通：低 32 位 index、高 32 位 generation）。
@@ -221,6 +223,8 @@ fn add_known(
     arm!(Camera3D);
     arm!(Projection);
     arm!(Framing2D);
+    arm!(CameraMode);
+    arm!(FpsView);
     arm!(StrokeSolid);
     arm!(FillSolid);
     arm!(Axes2D);

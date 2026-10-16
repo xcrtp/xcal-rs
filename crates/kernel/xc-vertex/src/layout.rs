@@ -1,12 +1,16 @@
 // layout.rs
 //
-// 顶点布局描述符（V1 + V4 + 实例化扩展）。
+// 顶点布局描述符（V1 + V4 + 实例化扩展 + R0 四槽）。
 //
-// 契约（§4.1）：固定属性 position + 两个通用槽 attrib0/attrib1，不再增加固定属性。
-// 通用槽的含义由 [`AaModel`](super::aa::AaModel) 决定（见 super::aa）。
+// 契约（§4.1）：固定属性 position + 三个通用槽 attrib0/attrib1/attrib2，
+// 不再增加固定属性。通用槽的含义由 [`AaModel`](super::aa::AaModel) 决定（见 super::aa）。
 //
-// 留两个通用槽而不是按需扩展的意义：从 MSAA 切到解析 AA 时，
+// 为什么留通用槽而不是按需扩展有意义：从 MSAA 切到解析 AA 时，
 // 顶点格式不动，只换 shader 变体和三角化器实现。
+//
+// R0（书写动画 reveal）：第三个通用槽 `attrib2(F32)` 承载**沿路径的推进量**
+// （归一化弧长 `s ∈ [0,1]`），填上 `aa::AttribSemantic::Advance` 这条早已预留的语义。
+// 不改前三个槽的既有承诺（`position` = 路径点、`attrib0` = 边法线、`attrib1` = side）。
 //
 // 实例化扩展：wgpu 的 VertexBufferLayout 描述**单个**顶点缓冲，而实例化需要
 // **多个**缓冲（buffer0 = 顶点数据 step=Vertex + buffer1 = 实例数据 step=Instance）。
@@ -76,7 +80,8 @@ impl AttribType {
 /// 单个顶点属性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct VertexAttrib {
-    /// 语义标签。契约词汇表固定为 `"position"` / `"attrib0"` / `"attrib1"`（§4.1）。
+    /// 语义标签。契约词汇表固定为 `"position"` / `"attrib0"` / `"attrib1"` /
+    /// `"attrib2"`（§4.1）。
     pub semantic: &'static str,
     pub ty: AttribType,
     /// 字节偏移。由 [`VertexLayout::compute_layout`] 填写；手工构造时置 0 即可。
@@ -84,8 +89,8 @@ pub struct VertexAttrib {
 }
 
 impl VertexAttrib {
-    /// 契约词汇表（§4.1：固定属性 + 两个通用槽，不再增加）。
-    pub const VOCABULARY: [&'static str; 3] = ["position", "attrib0", "attrib1"];
+    /// 契约词汇表（§4.1：固定属性 + 三个通用槽，不再增加）。
+    pub const VOCABULARY: [&'static str; 4] = ["position", "attrib0", "attrib1", "attrib2"];
 }
 
 // 反序列化宽松：接受任意非空语义名。
@@ -129,6 +134,11 @@ impl<'de> Deserialize<'de> for VertexAttrib {
 /// `step_mode` 字段加入后**所有布局的哈希值都变了** —— 已缓存 / persist 的
 /// 布局哈希全部失效，pipeline 变体缓存 key 需重建。这是可接受的代价
 /// （趁契约刚落地、外部依赖少时改，正是最佳时机）；本注释即为存证。
+///
+/// **R0（reveal）第二次漂移**：`standard()` 从三槽（stride 20）扩到四槽（stride 24），
+/// 布局哈希再次全变。影响面：pipeline 变体缓存的 key 变化（进程内重建一次，
+/// 无持久化 ⇒ 无迁移成本）；顶点缓冲的字节布局变化（所有写入点都是
+/// `bytes_of(&[Vertex2D])` 这类"按结构体原样上传"，故自动跟随，无需逐处改）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VertexLayout {
     /// 属性列表。**顺序即 shader location 顺序**（单 buffer 时 location = 下标；
@@ -174,7 +184,7 @@ pub enum VertexLayoutError {
         needed: u32,
     },
     // ── 实例化扩展 ──
-    #[error("Vertex 步进 buffer 的属性（下标 {index}）语义 {semantic:?} 不在契约词汇表 [\"position\", \"attrib0\", \"attrib1\"] 内（宿主自定义语义请放 Instance 步进 buffer）")]
+    #[error("Vertex 步进 buffer 的属性（下标 {index}）语义 {semantic:?} 不在契约词汇表 [\"position\", \"attrib0\", \"attrib1\", \"attrib2\"] 内（宿主自定义语义请放 Instance 步进 buffer）")]
     IllegalSemantic { index: usize, semantic: String },
     #[error("顶点输入描述至少需要一个 buffer")]
     EmptyInput,
@@ -183,7 +193,8 @@ pub enum VertexLayoutError {
 }
 
 impl VertexLayout {
-    /// 标准布局（§4.4）：position(F32x2) + attrib0(F32x2) + attrib1(F32) → stride = 20。
+    /// 标准布局（§4.4 + R0）：
+    /// `position(F32x2) + attrib0(F32x2) + attrib1(F32) + attrib2(F32)` → stride = 24。
     pub fn standard(aa: AaModel, cache: CacheStrategy) -> Self {
         let mut attribs = vec![
             VertexAttrib {
@@ -198,6 +209,11 @@ impl VertexLayout {
             },
             VertexAttrib {
                 semantic: "attrib1",
+                ty: AttribType::F32,
+                offset: 0,
+            },
+            VertexAttrib {
+                semantic: "attrib2",
                 ty: AttribType::F32,
                 offset: 0,
             },
@@ -231,7 +247,7 @@ impl VertexLayout {
     /// 校验布局自洽（校验分层，见模块文档头）：
     ///
     /// - `step_mode = Vertex`（顶点数据 buffer）→ **严格契约词汇表**
-    ///   （AA 契约管通用槽，语义必须是 position/attrib0/attrib1）；
+    ///   （AA 契约管通用槽，语义必须是 position/attrib0/attrib1/attrib2）；
     /// - `step_mode = Instance`（实例数据 buffer）→ **宽松**：语义名宿主自定义，
     ///   只要求非空；
     /// - 两者共同：offset 对齐 / 无重叠（属性须按 offset 升序）/ stride 覆盖全部属性。
@@ -348,16 +364,21 @@ mod tests {
 
     // ── V1：offset 递增无重叠、stride 正确 ────────────────────────────────
 
+    /// R0：四槽布局 —— `position@0` / `attrib0@8` / `attrib1@16` / `attrib2@20`，
+    /// stride = 24（F32 对齐 4 ⇒ cursor 20 已是 4 的倍数，无填充）。
     #[test]
     fn standard_layout_offsets_stride() {
         let l = standard();
+        assert_eq!(l.attribs.len(), 4);
         assert_eq!(l.attribs[0].semantic, "position");
         assert_eq!(l.attribs[0].offset, 0);
         assert_eq!(l.attribs[1].semantic, "attrib0");
         assert_eq!(l.attribs[1].offset, 8);
         assert_eq!(l.attribs[2].semantic, "attrib1");
         assert_eq!(l.attribs[2].offset, 16);
-        assert_eq!(l.stride, 20);
+        assert_eq!(l.attribs[3].semantic, "attrib2");
+        assert_eq!(l.attribs[3].offset, 20);
+        assert_eq!(l.stride, 24);
         l.validate().unwrap();
     }
 
@@ -428,7 +449,7 @@ mod tests {
         ));
 
         let mut l = standard();
-        l.stride = 19; // 未覆盖 attrib1 结尾（16+4=20）
+        l.stride = 23; // 未覆盖 attrib2 结尾（20+4=24）
         assert!(matches!(
             l.validate(),
             Err(VertexLayoutError::StrideTooSmall { .. })
@@ -534,13 +555,28 @@ mod tests {
     // ── 实例化扩展 ────────────────────────────────────────────────────────
 
     /// 向后兼容：旧 JSON（无 step_mode 字段）能加载，解析为 Vertex。
+    ///
+    /// R0 后 JSON 载体更新为**四槽 / stride 24**（三槽 JSON 仍能加载 —— 语义都在
+    /// 词汇表内 —— 只是不再等于 `standard()`；本用例的目的是 `step_mode` 缺省兼容，
+    /// 故用当前形态书写）。
     #[test]
     fn old_json_without_step_mode_loads_as_vertex() {
-        let old = r#"{"attribs":[{"semantic":"position","ty":"F32x2","offset":0},{"semantic":"attrib0","ty":"F32x2","offset":8},{"semantic":"attrib1","ty":"F32","offset":16}],"stride":20,"aa_model":"None","cache":"Static"}"#;
+        let old = r#"{"attribs":[{"semantic":"position","ty":"F32x2","offset":0},{"semantic":"attrib0","ty":"F32x2","offset":8},{"semantic":"attrib1","ty":"F32","offset":16},{"semantic":"attrib2","ty":"F32","offset":20}],"stride":24,"aa_model":"None","cache":"Static"}"#;
         let l: VertexLayout = serde_json::from_str(old).unwrap();
         assert_eq!(l.step_mode, StepMode::Vertex);
         assert_eq!(l, standard(), "旧数据应与 standard() 等价");
         l.validate().unwrap();
+    }
+
+    /// R0 反例：三槽（stride 20）JSON 仍可加载且**语义合法**（词汇表是成员判定，
+    /// 不要求完整性）—— 证明扩槽不是破坏性变更，只是 `standard()` 换了形态。
+    #[test]
+    fn three_slot_json_still_loads_and_validates() {
+        let three = r#"{"attribs":[{"semantic":"position","ty":"F32x2","offset":0},{"semantic":"attrib0","ty":"F32x2","offset":8},{"semantic":"attrib1","ty":"F32","offset":16}],"stride":20,"aa_model":"None","cache":"Static"}"#;
+        let l: VertexLayout = serde_json::from_str(three).unwrap();
+        assert_eq!(l.stride, 20);
+        l.validate().unwrap();
+        assert_ne!(l, standard(), "三槽已不等于 standard()（四槽）");
     }
 
     /// 哈希区分：step_mode 不同 → 布局哈希不同（pipeline 变体 key 必须能区分）。

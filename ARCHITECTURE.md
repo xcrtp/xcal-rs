@@ -322,8 +322,8 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 
 **S3-0 三角化适配层**（`xcal-render::tessellate`，纯 CPU / headless，无 feature 门控）：
 `Shape2D + Transform2D + Style2D` → `Vec<Tessellation2D>`，顶点**严格**符合顶点契约
-（`VertexLayout::standard`，stride 20，三槽 position/attrib0/attrib1；
-`Vertex2D { position, normal, side }`，`size == 20` 编译期断言）。三角化用
+（`VertexLayout::standard`，**R0 后 stride 24、四槽** position/attrib0/attrib1/attrib2；
+`Vertex2D { position, normal, side, advance }`，`size == 24` 编译期断言）。三角化用
 `lyon_tessellation` 1.0，不自研；`tolerance_for_scale(scale) = (0.25/scale).clamp(1e-4, 1.0)`。
 **描边几何参数化（R1）**：`position` 槽 = lyon `position_on_path()`（路径点，不含宽度），
 轮廓点由 shader 现场补偿 `position + normal * (stroke_width * 0.5)`（`normal` 保持 lyon
@@ -567,5 +567,130 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   首尾之间多出一条**可见的弦**（画在 x 轴上）。改为**闭合性由两端共同决定**
 >   （任一端带 `Close` 即闭合，两端都开口则保持开口）。
 >   用例：`open_morph_endpoints_stay_open_without_chord` / `closed_morph_endpoints_stay_closed`。
+
+### 相机控制与合成器滤镜（K 线 / C 线）
+
+> 两条**无交集**的线：K 线在 `xcal-scene` / `xcal-egui` / `xcal-app`，C 线在
+> `xcal-render` / `xcal-render-backends`。执行中**未发生文件冲突**。
+
+**K 线（相机控制）**
+
+> - **K0 模式接线**：`CameraMode` 从"零消费方预留变体"变为**真正被消费** ——
+>   模式是**相机对象的组件**（支持多相机各自不同模式；未挂 ⇒ `Default` = `PanZoom`）。
+>   新增 `Fps` 变体；因枚举是 `#[non_exhaustive]`，另给 `CameraMode::{PAN_ZOOM,ORBIT,FPS,PATH}`
+>   关联常量作为**下游构造路径**。
+> - **命令路由（实测收敛的结论）**：app 中央视口里 2D / 3D 图层**占据同一矩形**，
+>   "在哪层拖拽"无法从坐标区分 ⇒ 路由按**模式能力**：各模式只消费属于自己的命令，
+>   其余 no-op（`PanZoom`：Pan/Zoom；`Orbit`：Orbit/Dolly；`Fps`：Look/Move；`Path`：全部忽略）。
+>   `SceneEvent::Camera` 的 `layer` 字段因此**未被消费**（单视口 + 模式互不重叠）。
+> - **K1 FPS**：新增命令 `Look{delta_yaw,delta_pitch}` / `Move{delta:Vec3}`（x=右/y=上/z=前）
+>   + 组件 `xc_object::FpsView{yaw,pitch}`（**显式存朝向**：增量旋转会漂移且 pitch 无法 clamp）
+>   + 纯函数 `apply_fps`；pitch 钳 `±FPS_PITCH_LIMIT = π/2 − 0.01`。
+> - **K2 轨迹相机**：`Path` 模式**忽略全部交互命令**（与既有语义注释一致）；
+>   轨迹**未新增 Curve 变体** —— `Keyframes`/`Sampled` 已能驱动 `Framing2D.center` /
+>   `CameraEye`（分镜的镜头推进即生产中的 2D 轨迹样例）。
+> - **K3 3D 轨道**：纯函数 `apply_orbit`（Orbit 绕 target 保持半径 + 俯仰钳制；Dolly 改
+>   eye↔target 距离）。**与自动轨道动画的冲突：会打架**（`CameraEye` 绑定每帧无条件写 `eye`）；
+>   处置 = **模式互斥 + 显式让位**：`CameraDriveSystem`（app 层）按「视口操作目标」把
+>   3D 相机模式切到 `Orbit`/`Fps` 时，把该轨道绑定**移出 `BindingTable`**（切回 2D 时放回）。
+> - **K3 补（2D 也让位）**：同一条实测结论对 2D 相机同样成立 —— 分镜的 `Camera2DFraming` 绑定
+>   （`center` + `scale`）也每帧无条件写、把用户的 Pan/Zoom **同帧抹掉**（相位序
+>   `Input` → `SceneSync`）。处置 = 新增 `UiConfig::free_2d_camera` 开关：
+>   打开 ⇒ 这 2 条分镜绑定**移出**、2D 相机模式改 `PanZoom`（接受交互）；关闭（默认）⇒ 放回、
+>   模式 `Path`（分镜驱动）。两台相机的让位判定由**同一个** `CameraDriveSystem` 原子完成 ——
+>   它们让位的是同一张 `BindingTable`（见下条「实测坑」）。
+> - **GPU 像素级验收**：`test_k_line_camera_controllers_change_pixels`（同一场景用
+>   控制器产出的位姿渲染 4 次：Look 后覆盖塌缩 / Move 后覆盖增大 / Orbit 后画面改变 /
+>   轨迹三采样帧互不相同）。
+> - **实测坑（app 启动即 panic）**：3D 模式 System 起初注册在 `LogicUpdate`，
+>   与 `ParamPanelSystem` **同相位写 `BindingTable`** ⇒ `Scheduler::add_system` 的
+>   debug 静态冲突检查在启动时 panic。**分别安装单个 System 的单测测不出来**
+>   （`App::new` 需要 `eframe::CreationContext`，跑不到）。
+>   处置：相机驱动 System 移到 **`Input` 相位**（那里没有别的 `BindingTable` 写者），
+>   并在 `CameraInputSystem` **之前**注册（同帧改模式 ⇒ 同帧按新模式解释输入）；
+>   同时把注册序列抽成**唯一注册点** `register_systems`，由
+>   `full_system_graph_assembles_without_borrow_conflicts` 覆盖整张图
+>   （已用"放回 LogicUpdate"证伪：该用例能复现同一条 conflict panic）。
+>   **相位约束记账**：`BindingTable` 的写者 —— `ParamPanelSystem`(LogicUpdate) 与
+>   `CameraDriveSystem`(Input)；`BindingApplySystem`(SceneSync) 只读。
+
+**C 线（合成器滤镜）**
+
+> - **C0 post 基础设施**：新增**中间全屏纹理**（格式 = 主 pass 目标格式 ⇒ 不再多一次域转换）
+>   + 一次全屏 pass。**空滤镜链走直通路径（零改动、逐位不变）**；非空才建中间纹理。
+>   证据：`gpu_post_route_with_identity_filter_matches_direct_bit_exactly`
+>   （恒等滤镜槽走完整 post 路径 ⇔ 直通，**逐位一致**）。
+> - **C1 uber shader + 4 固定槽位**：`shaders/post_filter.wgsl` 按 `kind` 分支（uniform 分支），
+>   滤镜**不再是管线维度** ⇒ 管线数仍 = 3 blend × 3 域转换；`FilterKind::code()` 与 WGSL
+>   常量表一一对应（单测锁定）。uniform 160 B（头 + 纹素步长 + 4×32 B 槽）。
+>   证据：`gpu_filters_add_no_pipelines_and_pipelines_are_lazy`（三种滤镜跑完整链路后
+>   `pipeline_count() == 1`）。
+> - **C2 三类滤镜各一**：点运算 `Gain`（每通道增益）、几何重映射 `Distortion`
+>   （**逆向映射** `uv' = c + (uv−c)·scale·(1+k1·r²n+k2·r²n²)`）、邻域 `Blur`（3×3 高斯，
+>   权重 4/2/1、和 16）。**预乘 alpha 硬约束**：增益对 rgb 与 a 同乘（或 rgb 增益 ≤ 1）、
+>   模糊在**预乘空间**做 —— 证据：`gpu_post_filters_point_geometry_neighborhood`
+>   断言边界半透明像素 `r ≈ a`（非预乘空间会出现黑边 ⇒ 该断言会失败）。
+> - **C3 惰性管线缓存**：`Compositor::new` **不再预建** 9 条；`ensure_for(&mut self, ..)`
+>   按本帧 `(blend, 域转换)` 组合现场建、建后入表。**签名核查结论**：`paint` 拿到的是
+>   `&CallbackResources`（不可变）⇒ 不能把 `composite_layers` 改 `&mut self`；落点是
+>   **在 `prepare`（有 `&mut`）里 `ensure_for`** ⇒ `composite_layers` 借用形式**零改动**，
+>   无需 `RefCell`/`Mutex`。实测（debug）：首建 **2.58 ms**、命中 **2.0 µs**。
+
+**R 线（书写动画 reveal）**
+
+> - **R0 契约扩容（解锁项）**：`VertexAttrib::VOCABULARY` 三槽 → 四槽（`+ "attrib2"`），
+>   `VertexLayout::standard()` 加 `attrib2(F32)@20` ⇒ **stride 20 → 24**；`AaSlotSemantics`
+>   加 `attrib2` 字段，`Analytic → AttribSemantic::Advance`（填上契约里**早已预留**的语义）。
+>   连带改动（逐条都在计划 §11 清单里）：`Vertex2D` 加 `advance`（`size == 24` 编译期断言）、
+>   `vertex_layout` 翻译测试的 offset/stride/location、`COMPOSITE_QUAD` 字面量、
+>   `quad_bytes_are_twenty_per_vertex` → `..._twenty_four_...`、`shape_2d_morph.wgsl` 的
+>   `to_*` location **顺延 +1**（from 占 0..3 / to 占 4..7）。
+>   **哈希漂移**：布局哈希全变一次（进程内 pipeline 变体缓存重建；无持久化 ⇒ 无迁移成本）。
+> - **R1 三角化填 `s`**：`StrokeCtor` 取 lyon `advancement()`，`tessellate_stroke` 末尾
+>   `normalize_advance` 除以**实测最大值** ⇒ `s ∈ [0,1]`。除以实测值而非自算弧长，是为了
+>   与 lyon 的两条内部口径（丢近点、闭合收尾边）**同源**，不依赖对它的推断。
+>   **预细分**（`REVEAL_STEP_PX = 2.0` 输出空间 px）：lyon **完全不细分直线段**，
+>   不补点则切口精度 = 顶点间距（`sin` 曲线放大后几十像素的阶梯）。
+>   **多子路径 = 累加**（实测，`lyon_tessellation/src/stroke.rs:1359`：新子路径起点沿用
+>   上一条末点的推进量，中间不补"抬笔"距离）⇒ 书写顺序是"轮廓依次写出"。
+> - **R2 shader 消费**：`shape_2d.wgsl` 加 `@location(3) advance`（顶点）+ 同名 varying
+>   （片元），并在 `fs_main` **discard** 掉 `s ∉ [params.z, params.w]` 的片元。
+>   **做法从 (a) 顶点塌缩改为 (b) 片元丢弃（实测证伪 (a)）**：塌缩到同一个视口外点只对
+>   "整个三角形都在区间外"成立；实测描边三角化里存在**恰有一个顶点越界**的三角形
+>   （miter join 邻域），它会从塌缩点拉出覆盖屏幕的楔形 —— `b = 0` 时仍有 **747** 个
+>   不透明像素、且覆盖数**不单调**（`b = 0.75` 的 1162 > `b = 1` 的 1080）。切 (b) 后
+>   三条像素判据全绿。`REVEAL_EPS = 1e-6` 吸收插值末位误差（否则 `b = 1` 会误丢末端片元，
+>   `[0,1]` 无法与既有画面逐位一致）。`params.z/w` 是**空闲位**（原本 `w` 恒 0 ⇒
+>   现在普通绘制写 `w = 1.0` 表示"区间全开"，这是**必须**改的一处：漏了会把整条几何裁空）。
+> - **R3 动画接线**：组件 `Reveal { path, start, end }`（与 `MorphShape` 同级；独立组件
+>   ⇒ 不进 `record_scene` 的组件组合，天然避免"整条路径被画两遍"）+ target
+>   `RevealRange`（`Scalar → end`、`Vec2 → (start, end)`，口径对齐 `Camera2DFraming`）+
+>   `TargetKind::RevealRange`。**不改枚举以外任何 System**（P0 trait 化的红利）。
+> - **R4 队列与录制**：`RevealItem { path, start, end, style }` + `RevealQueue` +
+>   `push_reveal_item`（屏幕空间 + 唯一换算点）+ `RevealRecordSystem`（RenderCommit，
+>   `R=(ViewRect, Camera2DHandle)`、`W=(RevealQueue,)`）。后端 `wgpu_2d` 的**趟 4**：
+>   `tessellate_reveal` → 缓存键 = 内容哈希（**不含区间**）⇒ 稳态零上传；区间逐项不同
+>   ⇒ **不进合批**，每项一次 `draw_indexed`；**复用同一个 `pipeline_2d`**
+>   （即"新增书写动画不改 shader 之外的渲染结构"，管线数不变）。
+>   `SceneCompositorCallback` 多一个 `reveals` 快照（`host::present` 从 `RevealQueue` 取）。
+> - **R5 像素级验收（4 条，全部实测通过）**：`reveal_grows_monotonically`
+>   （`b = 0/0.25/0.5/0.75/1` 覆盖像素 `0 → 严格递增`）、`reveal_is_ordered_along_path`
+>   （`b = 0.25` 时 `max_x` 不越过四分之一处）、`reveal_full_range_matches_no_reveal`
+>   （`[0,1]` 与不带 reveal **逐位一致**）、`reveal_interval_covers_middle_only`
+>   （`[0.3,0.7]` 中段可见、两端无像素）。
+> - **端到端**：整图注册回归（`full_system_graph_assembles_without_borrow_conflicts`
+>   加 `RevealQueue`，13 个 System 无冲突）、真实 `cargo run -p xcal-app` 跑 1700+ 帧无 panic、
+>   强制重编后零新增 warning。
+> - **分镜表达同步改变**：分镜 3 / 6 从 `MorphShape`（整条曲线从一点"绽开"）改为
+>   `Reveal`（笔尖沿路径推进）—— 这才是 §0.1 要的 Write 类效果；形变管线仍在（GPU 用例覆盖）。
+>   **公式必须逐轮廓"依次"写**（第一版用了 `.parallel` ⇒ 全部轮廓共享同一 `ClockNode`，
+>   实测表现是"每个字符同时被画出来"，不是写字）：改为连续 `play`（顺序游标首尾相接），
+>   把分镜 6 的 1s 平摊给 N 个轮廓；判据 = `storyboard_declares_six_shots_with_declared_timing`
+>   断言"≥2 段且严格首尾相接、合计 1s" + 运行期断言"t=4s 时仍有 end==0 的轮廓"
+>   （并行动作时该断言必然失败，因为那时所有轮廓都是 0.5）。
+>   **书写方向显式定义**：轮廓按包围盒 `min_x` 升序排期（`order_by_reading_order`，
+>   **稳定排序**、无包围盒者排最后）—— 引擎输出顺序**不是** API 承诺，不能拿它当书写顺序。
+>   排序放在"编译产物 → spawn"之间（`compile_to_stroke_paths` 是通用工具，不知道书写语义）。
+>   **局限**：单键 `min_x` ⇒ 单行公式正确；多行 / 上下标需换键 `(min_y, min_x)` 或行聚类，本轮不做。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。
