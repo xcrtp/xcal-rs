@@ -25,7 +25,7 @@ use xcal_render_backends::RenderContext;
 use xcal_scene::animation::CameraEye;
 use xcal_scene::animation::{Binding, BindingApplySystem};
 use xcal_scene::camera_input::CameraInputSystem;
-use xcal_scene::contract::{GroupVisibility, object_id_of};
+use xcal_scene::contract::{GroupVisibility, SceneRead, object_id_of};
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
 use xcal_scene::domain::{CameraMode, ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
@@ -41,7 +41,7 @@ use xcal_scene::types::Color32;
 use xc_notion::{Rect2D, SurfaceFn};
 use xc_object::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
-    Camera3D, Camera3DHandle, Projection, Transform,
+    Camera3D, Camera3DHandle, Framing2D, Projection, Transform,
 };
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
@@ -86,6 +86,21 @@ pub struct App {
     /// 墙钟时间基准：每帧用 Instant::now() - last_frame 算 dt，
     /// 不依赖渲染帧间隔（帧率波动、卡顿都不影响 Director 时间流速）。
     last_frame: Instant,
+}
+
+/// 2D 相机的**语义判据**：场景里唯一带 `Framing2D` 的对象。
+///
+/// 不能按"第几个句柄"取：脚本可以任意安排创建顺序（当前坐标轴先于相机）。
+fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
+    let mut cameras = Vec::new();
+    scene.for_each::<Framing2D>(|id, _| cameras.push(id));
+    cameras
+        .first()
+        .copied()
+        .map(Camera2DHandle)
+        .ok_or_else(|| {
+            Error::InitializationError("场景没有 2D 相机对象（缺少 Framing2D）".to_string())
+        })
 }
 
 /// **唯一的 System 注册点**（`App::new` 与回归测试共用）。
@@ -251,7 +266,8 @@ impl App {
         // 静态一条公式，启动时烘焙一次并 spawn 实体；它同时是 3D 曲面材质的纹理源
         // （带 `ContentTextureItem` 标记）。零 System 改动：公式作为普通
         // `(Path, StrokeSolid)` 对象参与既有录制。
-        let engine = formula::build_engine();
+        // 排版引擎在 App 侧建一次：内容纹理、硬编码分镜与脚本内容服务共用。
+        let engine = Arc::new(formula::build_engine());
         let spec = formula::FormulaSpec::new("x^2 + 1", 1.3, glam::Vec2::new(-2.8, 3.0));
         // 内容纹理相机（S3-3）：由公式的世界包围盒导出——`rect` 即纹理矩形
         // （0,0–512,512），让包围盒适配它（margin 0.8 ⇒ 公式宽度 ≈ 纹理宽 × 0.8）。
@@ -312,11 +328,13 @@ impl App {
                 (d.forest, d.bindings, d.camera, d.group_visibility)
             }
             SceneChoice::ScriptStoryboard => {
-                // L5：镜头 2–5 由 **Lua 脚本**编排（装配期一次），宿主只负责
-                // "注入 Service → 调 run → commit"。等价性由 `xcal-script` 的用例锁定。
-                let host = xcal_script::ScriptHost::new().map_err(|e| {
-                    Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
-                })?;
+                // 全部 6 个镜头由 **Lua 脚本**编排（装配期一次），宿主只负责
+                // "注入 scene / content 两个 Service → 调 run → commit"。
+                // 与硬编码版的等价性由 `xcal-app` 的 `script_storyboard_matches_hardcoded` 锁定。
+                let host =
+                    xcal_script::ScriptHost::with_engine(Arc::clone(&engine)).map_err(|e| {
+                        Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
+                    })?;
                 let script = host.run(xcal_script::STORYBOARD_LUA).map_err(|e| {
                     Error::InitializationError(format!("Lua 分镜执行失败：{e}"))
                 })?;
@@ -328,10 +346,8 @@ impl App {
                 let recipe = script.commit(&mut scene).map_err(|e| {
                     Error::InitializationError(format!("脚本 commit 失败：{e}"))
                 })?;
-                // 脚本第 0 个对象是 2D 相机（与 `storyboard.lua` 的约定一致）。
-                let camera = Camera2DHandle(*recipe.handles.first().ok_or_else(|| {
-                    Error::InitializationError("脚本没有创建相机对象".to_string())
-                })?);
+                // **不能假设第 0 个句柄是相机**：脚本先建坐标轴容器。
+                let camera = find_camera2d(&scene)?;
                 (recipe.forest, recipe.bindings, camera, GroupVisibility::default())
             }
         };
@@ -781,6 +797,239 @@ mod tests {
         let lit_gone = count_lit(&render(&sched, &mut backend, &ctx, &g));
         eprintln!("[deferred-gpu] despawn 后亮像素 = {lit_gone}（期望 0）");
         assert_eq!(lit_gone, 0, "延迟 despawn 的对象下一帧必须消失");
+    }
+
+    // ─── W3：完整脚本分镜 ⇔ 硬编码分镜 ─────────────────────────────────
+
+    #[derive(Debug, PartialEq)]
+    struct BindRow {
+        object: usize,
+        offset: f64,
+        span: (f64, f64),
+        mode: String,
+        target: String,
+        curve: String,
+    }
+
+    /// 浮点量化到 1e-4（计划允许 Lua f64 → f32 的 1 ulp 差异）。
+    fn qf(value: f32) -> i64 {
+        (value as f64 * 1e4).round() as i64
+    }
+
+    fn rgba(color: xcal_scene::types::Color32) -> String {
+        format!("{},{},{},{}", color.r(), color.g(), color.b(), color.a())
+    }
+
+    fn path_bounds(path: &xc_notion::Path2D) -> String {
+        match path.compute_bounds() {
+            Some(bounds) => format!(
+                "{},{},{},{}",
+                qf(bounds.min.x),
+                qf(bounds.min.y),
+                qf(bounds.max.x),
+                qf(bounds.max.y)
+            ),
+            None => "none".to_string(),
+        }
+    }
+
+    /// 逐组件指纹（类型 + 值；浮点量化）。
+    fn object_fingerprint(scene: &Scene, id: xcal_scene::contract::ObjectId) -> String {
+        use xcal_scene::contract::SceneRead;
+        use xcal_scene::scene::components::Reveal;
+        use xcal_render::{FillSolid, StrokeSolid};
+        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
+
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(text) = scene.with::<Axes2D, _>(id, |a| {
+            format!(
+                "axes(tick={},grid={}:{}:{:?},axis={}:{}:{:?},x={:?},y={:?})",
+                qf(a.tick.min_px),
+                qf(a.grid_stroke.width),
+                rgba(a.grid_stroke.color),
+                a.grid_stroke.space,
+                qf(a.axis_stroke.width),
+                rgba(a.axis_stroke.color),
+                a.axis_stroke.space,
+                a.x_range,
+                a.y_range
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Framing2D, _>(id, |f| {
+            format!("frame({},{},{})", qf(f.center.x), qf(f.center.y), qf(f.scale))
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Reveal, _>(id, |r| {
+            format!("reveal({})", path_bounds(&r.path))
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<ObjectPath, _>(id, |p| {
+            format!("path({})", path_bounds(&p.0))
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Arrow, _>(id, |a| {
+            format!(
+                "arrow({},{},{},{},{},{})",
+                qf(a.0.from.x),
+                qf(a.0.from.y),
+                qf(a.0.to.x),
+                qf(a.0.to.y),
+                qf(a.0.head_length),
+                qf(a.0.head_width)
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<FillSolid, _>(id, |f| format!("fill({})", rgba(f.color)))
+        {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<StrokeSolid, _>(id, |s| {
+            format!("stroke({}:{}:{:?})", qf(s.width), rgba(s.color), s.space)
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Transform, _>(id, |t| {
+            format!(
+                "transform({},{},{})",
+                qf(t.position.x),
+                qf(t.position.y),
+                qf(t.position.z)
+            )
+        }) {
+            parts.push(text);
+        }
+        parts.join("|")
+    }
+
+    /// 故事板对象（创建顺序 = `ObjectId.index` 升序；无 despawn）。
+    fn storyboard_ids(scene: &Scene) -> Vec<xcal_scene::contract::ObjectId> {
+        use xcal_scene::contract::{ObjectId, SceneRead};
+        use xcal_scene::scene::components::Reveal;
+        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
+
+        let mut ids: Vec<ObjectId> = Vec::new();
+        scene.for_each::<Axes2D>(|id, _| ids.push(id));
+        scene.for_each::<Framing2D>(|id, _| ids.push(id));
+        scene.for_each::<Reveal>(|id, _| ids.push(id));
+        scene.for_each::<ObjectPath>(|id, _| ids.push(id));
+        scene.for_each::<Arrow>(|id, _| ids.push(id));
+        ids.sort_by_key(|id| id.index);
+        ids.dedup();
+        ids
+    }
+
+    fn binding_rows(
+        forest: &ClockForest,
+        bindings: &BindingTable,
+        ids: &[xcal_scene::contract::ObjectId],
+    ) -> Vec<BindRow> {
+        bindings
+            .bindings
+            .iter()
+            .map(|binding| {
+                let node = forest.get(binding.clock).expect("时钟节点在");
+                let span = node.span.expect("Timeline 编译的节点必有 span");
+                let object = ids
+                    .iter()
+                    .position(|id| *id == binding.target.target_id())
+                    .expect("target 必须指向本场景对象");
+                BindRow {
+                    object,
+                    offset: node.local_offset,
+                    span,
+                    mode: format!("{:?}", node.mode),
+                    target: binding.target.name().to_string(),
+                    curve: format!("{:?}", binding.curve),
+                }
+            })
+            .collect()
+    }
+
+    /// **W3 验收**：脚本版（全部 6 镜头）与硬编码版逐对象、逐绑定相等。
+    ///
+    /// 覆盖：对象数、组件类型**与值**、绑定数、offset / span / mode、曲线与 target。
+    #[test]
+    fn script_storyboard_matches_hardcoded() {
+        use xc_prerender::placeholder_engine;
+
+        // 硬编码参考实现。
+        let mut scene_a = Scene::new();
+        let engine_a = placeholder_engine();
+        let sb = crate::storyboard::build(&mut scene_a, &engine_a);
+
+        // 脚本版：同一个 placeholder 引擎（App 侧真实路径用 Typst 引擎）。
+        let host =
+            xcal_script::ScriptHost::with_engine(std::sync::Arc::new(placeholder_engine()))
+                .expect("脚本宿主装配成功（scene + content）");
+        let script = host
+            .run(xcal_script::STORYBOARD_LUA)
+            .expect("Lua 分镜执行成功");
+        let mut scene_b = Scene::new();
+        let recipe = script.commit(&mut scene_b).expect("commit");
+
+        let ids_a = storyboard_ids(&scene_a);
+        let ids_b = storyboard_ids(&scene_b);
+        assert_eq!(ids_a.len(), ids_b.len(), "对象数必须一致");
+        assert_eq!(recipe.handles.len(), ids_b.len(), "句柄数 = 对象数");
+
+        let fingerprints_a: Vec<String> = ids_a
+            .iter()
+            .map(|id| object_fingerprint(&scene_a, *id))
+            .collect();
+        let fingerprints_b: Vec<String> = ids_b
+            .iter()
+            .map(|id| object_fingerprint(&scene_b, *id))
+            .collect();
+        assert_eq!(
+            fingerprints_a, fingerprints_b,
+            "组件类型与值必须逐对象相等"
+        );
+
+        let rows_a = binding_rows(&sb.forest, &sb.bindings, &ids_a);
+        let rows_b = binding_rows(&recipe.forest, &recipe.bindings, &ids_b);
+        assert_eq!(rows_a, rows_b, "时序 / 曲线 / target 必须全等");
+
+        eprintln!(
+            "[W3] 对象 {} / 绑定 {}；前 3 个对象指纹:\n{:#?}",
+            fingerprints_a.len(),
+            rows_a.len(),
+            &fingerprints_a[..fingerprints_a.len().min(3)]
+        );
+    }
+
+    /// 回归（本次踩过）：**相机不能按"第 0 个句柄"取** —— 脚本先建坐标轴。
+    ///
+    /// 判据：按 `Framing2D` 组件找到唯一的 2D 相机，且它不是第 0 个对象。
+    #[test]
+    fn script_camera_is_found_by_framing_component() {
+        use xcal_scene::contract::SceneRead;
+        use xc_prerender::placeholder_engine;
+
+        let host =
+            xcal_script::ScriptHost::with_engine(std::sync::Arc::new(placeholder_engine()))
+                .expect("装配成功");
+        let script = host
+            .run(xcal_script::STORYBOARD_LUA)
+            .expect("Lua 分镜执行成功");
+        let mut scene = Scene::new();
+        let recipe = script.commit(&mut scene).expect("commit");
+
+        let camera = crate::find_camera2d(&scene).expect("能按 Framing2D 找到相机");
+        assert_ne!(
+            camera.0, recipe.handles[0],
+            "第 0 个对象是坐标轴容器，不是相机"
+        );
+        assert_eq!(
+            scene.with::<Framing2D, _>(camera.0, |f| *f),
+            Some(Framing2D::new(glam::Vec2::ZERO, 40.0)),
+            "找到的必须是初始取景的 2D 相机"
+        );
     }
 }
 

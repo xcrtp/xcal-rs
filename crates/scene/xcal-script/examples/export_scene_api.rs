@@ -7,6 +7,7 @@
 //! 产物写到 `target/scene_api/`；两个文件都从 `SceneApi::docs()` 生成。
 
 use xc_vm::Capability;
+use xcal_script::{ContentApi, SceneApi};
 
 fn main() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -18,5 +19,9 @@ fn main() {
     let [json, lua] = xcal_script::export_scene_api(&dir).expect("写导出文件");
     println!("JSON  : {}", json.display());
     println!("LuaLS : {}", lua.display());
-    println!("函数数: {}", xcal_script::SceneApi::signatures().len());
+    println!(
+        "函数数: scene {} / content {}",
+        SceneApi::signatures().len(),
+        ContentApi::signatures().len()
+    );
 }

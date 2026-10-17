@@ -492,6 +492,20 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （`Circle { ... }` / `Curve.Phase { ... }` 构造器），手写胶水只剩宿主落点转换；
 > - `SceneApi` 升至 v2：4 个曲线函数 → `Curve` 枚举、`rgba:u32` → `Color` 结构体，
 >   共 10 个函数。**未开启 `bindings` 的 capability 不受影响**（`calls()` 默认空）。
+>
+> **脚本接口补全（2026-10-17，W 线）**：
+> - **target 变枚举**：`TargetKind`（`xcal-scene`，`#[derive(VmType)]`）成为唯一真源；
+>   `target_ctor_by_name` 退化为 `TargetKind::from_name` 的薄查询，字符串表已删除。
+>   拼错变体在 Lua 绑定层即报错（不再静默不排期）；
+> - **接口补齐**：`Axes2D` / `Arrow` / `Fill` / `Transform` / `RevealPath` / `PathShape`；
+>   组件句柄可对应**组件组**（`RevealPath` = `Reveal` + `StrokeSolid`），内容样式不必在脚本重述；
+> - **Injector 第二次真实使用**：`ContentApi`（`formula` / `text` → `Array<Path>`）独立成
+>   Service，与场景服务共享 `PathStore`；排版引擎仍由 App 建一次后传入；
+> - `storyboard.lua` 覆盖**全部 6 个镜头**；与硬编码参考实现逐对象 / 逐绑定等价
+>   （占位引擎：25 对象 / 9 绑定）。`storyboard.rs` 保留为**参考实现**（默认启动路径仍在用），
+>   是否删除由用户决定；
+> - **W4**：删除 `spawn` 的 `ComponentList` 字符串 override（`Vec<Handle>` 自带 schema 名
+>   `Array<xc_vm.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
 
 ### cargo-archtest 适配状态
 

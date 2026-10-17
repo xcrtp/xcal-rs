@@ -23,7 +23,9 @@ pub mod transform;
 pub mod types;
 pub mod utils;
 
-pub use animation::{Binding, BindingTable, SeekKind, Target, Timeline, TransformValue};
+pub use animation::{
+    Binding, BindingTable, SeekKind, Target, TargetKind, Timeline, TransformValue,
+};
 pub use camera_input::{
     CameraInputSystem, apply_command_2d, apply_command_3d, apply_fps, apply_orbit, apply_pan_zoom,
 };

@@ -6037,6 +6037,7 @@ dependencies = [
  "xc-scene-contract",
  "xc-time",
  "xc-vm",
+ "xc-vm-macro",
  "xcal-schedule",
 ]
 
@@ -6058,8 +6059,10 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "serde_json",
+ "xc-content",
  "xc-notion",
  "xc-object",
+ "xc-prerender",
  "xc-render-ir",
  "xc-scene-contract",
  "xc-vm",

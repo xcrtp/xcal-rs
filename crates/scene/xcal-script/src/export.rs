@@ -1,11 +1,8 @@
 // export.rs — 文档导出：**JSON 是唯一真源**，LuaLS 注解从同一份 `calls()` 生成。
 //
-// 与 V0 前相比：
-// - 形参名不再是 `p1..pN`（来自 schema 的 `ParamSpec.name`）；
-// - 类型是**结构化的**（struct / enum / array），LuaLS 生成真正的
-//   `---@class` / `---@field`；
-// - `stroke.color` 是 `Color` 结构体（不再是 `u32`）；
-// - `Curve` 的五个形态是**同一枚举的不同 variant**。
+// 两组能力（scene / content）都进了同一个产物；类型表覆盖两者的可达类型。
+// 形参名来自 schema 的 `ParamSpec.name`（不再是 p1..pN）；unit 枚举变体
+// （如 `Target.RevealRange`）在 LuaLS 里是**值**而不是函数。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,19 +10,45 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use xc_vm::{Capability, ScalarKind, TypeSpec};
+use xc_vm::{Capability, CapabilityMeta, ErasedFn, FnDoc, ScalarKind, TypeSpec};
 
-use crate::api::SceneApi;
-use crate::binding::{component_ctor, collect_types, short_name};
+use crate::api::{ContentApi, SceneApi};
+use crate::binding::{collect_types, component_ctor, short_name};
 
-/// 收集 `SceneApi` 全部可达的命名类型（含嵌套）。
+/// 一组能力的导出视图。
+struct CapabilityDocs {
+    name: &'static str,
+    calls: &'static [ErasedFn],
+    docs: &'static [FnDoc],
+    meta: CapabilityMeta,
+}
+
+fn capabilities() -> [CapabilityDocs; 2] {
+    [
+        CapabilityDocs {
+            name: "scene",
+            calls: SceneApi::calls(),
+            docs: SceneApi::docs(),
+            meta: SceneApi::meta(),
+        },
+        CapabilityDocs {
+            name: "content",
+            calls: ContentApi::calls(),
+            docs: ContentApi::docs(),
+            meta: ContentApi::meta(),
+        },
+    ]
+}
+
 fn reachable_types() -> BTreeMap<&'static str, &'static TypeSpec> {
     let mut types = BTreeMap::new();
-    for item in SceneApi::calls() {
-        for param in item.io.params {
-            collect_types(param.ty, &mut types);
+    for capability in capabilities() {
+        for item in capability.calls {
+            for param in item.io.params {
+                collect_types(param.ty, &mut types);
+            }
+            collect_types(item.io.ret, &mut types);
         }
-        collect_types(item.io.ret, &mut types);
     }
     types
 }
@@ -122,17 +145,17 @@ fn spec_def(spec: &'static TypeSpec) -> Value {
     }
 }
 
-/// 导出 `scene_api.json`（机器可读真源，含结构化类型表）。
-pub fn scene_api_json() -> String {
-    let meta = SceneApi::meta();
-    let calls = SceneApi::calls();
-    let docs = SceneApi::docs();
-
-    let functions: Vec<Value> = calls
+fn functions_json(capability: &CapabilityDocs) -> Vec<Value> {
+    capability
+        .calls
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let description = docs.get(index).map(|d| d.description).unwrap_or("");
+            let description = capability
+                .docs
+                .get(index)
+                .map(|doc| doc.description)
+                .unwrap_or("");
             json!({
                 "qualified": item.signature.qualified().to_string(),
                 "namespace": item.signature.namespace,
@@ -145,13 +168,28 @@ pub fn scene_api_json() -> String {
                 "returns": spec_ref(item.io.ret),
             })
         })
+        .collect()
+}
+
+/// 导出 `scene_api.json`（机器可读真源，含两组能力与结构化类型表）。
+pub fn scene_api_json() -> String {
+    let capabilities: serde_json::Map<String, Value> = capabilities()
+        .iter()
+        .map(|capability| {
+            (
+                capability.name.to_string(),
+                json!({
+                    "version": capability.meta.version,
+                    "description": capability.meta.description,
+                    "functions": functions_json(capability),
+                }),
+            )
+        })
         .collect();
 
     let value = json!({
-        "api": "xcal.scene",
-        "version": meta.version,
-        "description": meta.description,
-        "functions": functions,
+        "api": "xcal.script",
+        "capabilities": Value::Object(capabilities),
         "types": reachable_types()
             .into_values()
             .map(spec_def)
@@ -170,14 +208,14 @@ fn push_description(out: &mut String, text: &str) {
 
 /// 导出 `scene_api.lua`（LuaLS 注解；与 JSON 同源）。
 pub fn scene_api_lua() -> String {
-    let calls = SceneApi::calls();
-    let docs = SceneApi::docs();
+    let capabilities = capabilities();
     let types = reachable_types();
 
     let mut out = String::from(
         "---@meta\n\n---@class Handle xcal 场景句柄（组件 / 对象 / 曲线 / 动作）\n\n",
     );
 
+    // ── 类型（一次）────────────────────────────────────────────────────
     for (full_name, spec) in &types {
         let lua_name = short_name(full_name);
         match spec {
@@ -191,7 +229,7 @@ pub fn scene_api_lua() -> String {
                     ));
                 }
                 out.push('\n');
-                let returns = if component_ctor(calls, full_name).is_some() {
+                let returns = if component_ctor(SceneApi::calls(), full_name).is_some() {
                     "Handle"
                 } else {
                     lua_name
@@ -203,6 +241,14 @@ pub fn scene_api_lua() -> String {
             TypeSpec::Enum { variants, .. } => {
                 out.push_str(&format!("---@class {lua_name}\n{lua_name} = {{}}\n\n"));
                 for variant in *variants {
+                    if variant.fields.is_empty() {
+                        // unit 变体是值（不是函数）。
+                        out.push_str(&format!(
+                            "---@type {lua_name}\n{lua_name}.{} = {{}}\n\n",
+                            variant.name
+                        ));
+                        continue;
+                    }
                     out.push_str(&format!("---@class {lua_name}.{}\n", variant.name));
                     for field in variant.fields {
                         out.push_str(&format!(
@@ -221,29 +267,45 @@ pub fn scene_api_lua() -> String {
         }
     }
 
-    out.push_str("---@class SceneApi\nscene = {}\n\n");
-    for (index, item) in calls.iter().enumerate() {
-        if let Some(doc) = docs.get(index) {
-            push_description(&mut out, doc.description);
-        }
-        for param in item.io.params {
+    // ── 能力表（scene / content）──────────────────────────────────────
+    for capability in &capabilities {
+        out.push_str(&format!(
+            "---@class {}Api\n{} = {{}}\n\n",
+            capitalize(capability.name),
+            capability.name
+        ));
+        for (index, item) in capability.calls.iter().enumerate() {
+            if let Some(doc) = capability.docs.get(index) {
+                push_description(&mut out, doc.description);
+            }
+            for param in item.io.params {
+                out.push_str(&format!(
+                    "---@param {} {}\n",
+                    param.name,
+                    lua_type_name(param.ty)
+                ));
+            }
+            if !matches!(item.io.ret, TypeSpec::Struct { name: "()", .. }) {
+                out.push_str(&format!("---@return {}\n", lua_type_name(item.io.ret)));
+            }
+            let names: Vec<&str> = item.io.params.iter().map(|param| param.name).collect();
             out.push_str(&format!(
-                "---@param {} {}\n",
-                param.name,
-                lua_type_name(param.ty)
+                "function {}.{}({}) end\n\n",
+                capability.name,
+                item.signature.name,
+                names.join(", ")
             ));
         }
-        if !matches!(item.io.ret, TypeSpec::Struct { name: "()", .. }) {
-            out.push_str(&format!("---@return {}\n", lua_type_name(item.io.ret)));
-        }
-        let names: Vec<&str> = item.io.params.iter().map(|param| param.name).collect();
-        out.push_str(&format!(
-            "function scene.{}({}) end\n\n",
-            item.signature.name,
-            names.join(", ")
-        ));
     }
     out
+}
+
+fn capitalize(name: &str) -> &'static str {
+    match name {
+        "scene" => "Scene",
+        "content" => "Content",
+        _ => "Api",
+    }
 }
 
 /// 把两份产物写到 `dir`（返回实际写入的两个路径）。

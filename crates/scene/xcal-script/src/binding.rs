@@ -23,7 +23,7 @@ use xc_vm::{
     Capability, ErasedFn, Field, Handle, ScalarKind, ScalarValue, TypeSpec, Vm, VmValue,
 };
 
-use crate::api::SceneApi;
+// 绑定层不引用具体 capability 类型：泛型 `C: Capability` 由调用方指定。
 
 /// Lua 侧的**不透明句柄**令牌。
 #[derive(Clone, Copy, Debug)]
@@ -37,14 +37,20 @@ pub struct LuaVmValue(pub VmValue);
 
 impl UserData for LuaVmValue {}
 
-/// 注册 `scene` 全局表与全部类型构造器。
-pub(crate) fn bind(lua: &Lua, service: Arc<dyn Vm>) -> mlua::Result<()> {
-    let calls = SceneApi::calls();
+/// 注册一个 capability 的全局表（`scene` / `content`）与全部类型构造器。
+///
+/// 完全由 `C::calls()` 驱动：新增 capability 函数 ⇒ 无需改本文件。
+pub(crate) fn bind<C: Capability<'static>>(
+    lua: &Lua,
+    global_name: &str,
+    service: Arc<dyn Vm>,
+) -> mlua::Result<()> {
+    let calls = C::calls();
     let table = lua.create_table()?;
     for item in calls {
         register_function(lua, &table, *item, Arc::clone(&service))?;
     }
-    lua.globals().set("scene", table)?;
+    lua.globals().set(global_name, table)?;
     register_types(lua, calls, service)?;
     Ok(())
 }
@@ -128,11 +134,19 @@ fn register_types(
                     let type_name = *name;
                     let variant_name = variant.name;
                     let fields = variant.fields;
-                    let func = lua.create_function(move |_, spec: Table| {
-                        table_to_vm(&spec, fields, type_name, Some(variant_name))
-                            .map(LuaVmValue)
-                    })?;
-                    table.set(variant_name, func)?;
+                    if fields.is_empty() {
+                        // unit 变体是**值**（`Target.RevealRange`），不是函数。
+                        table.set(
+                            variant_name,
+                            LuaVmValue(VmValue::Enum(type_name, variant_name, Vec::new())),
+                        )?;
+                    } else {
+                        let func = lua.create_function(move |_, spec: Table| {
+                            table_to_vm(&spec, fields, type_name, Some(variant_name))
+                                .map(LuaVmValue)
+                        })?;
+                        table.set(variant_name, func)?;
+                    }
                 }
                 lua.globals().set(lua_name, table)?;
             }

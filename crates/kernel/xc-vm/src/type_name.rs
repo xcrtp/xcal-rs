@@ -74,3 +74,12 @@ impl_vm_type_name! {
 impl IntoVmTypeName for Handle {
     const NAME: VmTypeName = "xc_vm.Handle";
 }
+
+/// `Vec<Handle>` 的协商名与 **schema 形态**一致（`Array<Opaque>`）。
+///
+/// 只为这一具体类型实现（`Vec<T>` 的通用名需要 const 字符串拼接，stable 不可用）。
+/// 有了它，capability 字段不再需要 `#[vm_type(param0 = "ComponentList")]` 这类
+/// 与 schema 脱节的字符串 override。
+impl IntoVmTypeName for Vec<Handle> {
+    const NAME: VmTypeName = "Array<xc_vm.Handle>";
+}

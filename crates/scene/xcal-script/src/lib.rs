@@ -28,19 +28,25 @@
 
 pub mod api;
 pub mod binding;
+pub mod content;
 pub mod export;
 pub mod lua_vm;
 pub mod service;
 pub mod types;
 
-pub use api::SceneApi;
+pub use api::{ContentApi, SceneApi};
 pub use binding::{LuaHandle, LuaVmValue};
+pub use content::{CONTENT_SERVICE_NAME, ContentServiceVm, PathStore};
 pub use export::{export_scene_api, scene_api_json, scene_api_lua};
 pub use lua_vm::{INJECT_PATH, LuaVm, REQUIREMENTS_PATH, RUN_PATH, ScriptHost};
 pub use service::{FINISH_PATH, RESET_PATH, SERVICE_NAME, SceneServiceVm};
-pub use types::{Camera2D, Circle, Color, Curve, Reveal, Stroke, Vec2};
+pub use types::{
+    Arrow, Axes2D, Camera2D, Circle, Color, Curve, Fill, Formula, LineStyle, Path, PathList,
+    PathShape, Reveal, RevealPath, Stroke, Text, Transform, Vec2,
+};
 
-/// L5 的脚本输入：现有分镜中**可被最小接口表达**的那一段（镜头 2–5）。
+/// **完整分镜的脚本输入**（6 个镜头 + T2 箭头 + T3 标注文字）。
 ///
-/// 公式书写（Typst）/ 标注文字 / 箭头 / 坐标轴不在本轮接口内 —— 见交付说明的缺口记账。
+/// 与 `xcal-app` 的硬编码参考实现逐对象 / 逐绑定等价
+/// （用例 `script_storyboard_matches_hardcoded`）。
 pub const STORYBOARD_LUA: &str = include_str!("../scripts/storyboard.lua");

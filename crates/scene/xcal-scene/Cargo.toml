@@ -13,6 +13,8 @@ xc-object = { path = "../../object/xc-object" }
 # VM（A 线）：内置数学函数以 `RegistryVm` 为唯一来源 —— xcal-scene 是
 # `xc-vm` 的**第一个生产消费方**（`math_vm` 模块）。xc-notion 仍不依赖 xc-vm。
 xc-vm = { path = "../../kernel/xc-vm" }
+# `TargetKind` 的 schema：target 枚举是持久化表与脚本绑定的**唯一真源**。
+xc-vm-macro = { path = "../../kernel/xc-vm-macro" }
 # 渲染 IR（样式组件）：ECS 里存的 `StrokeSolid` / `FillSolid` 组件来自此处。
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
 # 契约层（M3-7/M3-8）：本层为 `xc_scene_contract::Scene` 提供 hecs 实现，

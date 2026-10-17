@@ -24,6 +24,7 @@
 
 use std::sync::Arc;
 use xc_notion::Vec3;
+use xc_vm_macro::VmType;
 use xc_object::{Camera3D, Circle, Framing2D, Transform};
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
@@ -135,25 +136,79 @@ impl TargetCtor for TransformValue {
     }
 }
 
+/// **动画目标的稳定枚举**（持久化 + 脚本绑定的**唯一真源**）。
+///
+/// 变体名即持久化名字；[`Self::ctor`] 是唯一的 variant → 构造器映射。
+/// 新增 target 只需加一个变体 —— 编译器会强制补全 `name()` / `ctor()` 两个
+/// 穷尽 match（不存在第三张字符串表）。
+///
+/// 注意：它不能叫 `Target` —— 同名 trait 已存在（本枚举是"目标种类"）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, VmType)]
+#[vm_type(name = "xcal.Target")]
+pub enum TargetKind {
+    CircleRadius,
+    Phase,
+    CameraEye,
+    MorphT,
+    Camera2DFraming,
+    RevealRange,
+    OpacityValue,
+    TransformValue,
+}
+
+impl TargetKind {
+    /// 全部变体（文档 / 校验用）。
+    pub const ALL: &'static [Self] = &[
+        Self::CircleRadius,
+        Self::Phase,
+        Self::CameraEye,
+        Self::MorphT,
+        Self::Camera2DFraming,
+        Self::RevealRange,
+        Self::OpacityValue,
+        Self::TransformValue,
+    ];
+
+    /// 稳定语义名（= 变体名；持久化只写它）。
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::CircleRadius => "CircleRadius",
+            Self::Phase => "Phase",
+            Self::CameraEye => "CameraEye",
+            Self::MorphT => "MorphT",
+            Self::Camera2DFraming => "Camera2DFraming",
+            Self::RevealRange => "RevealRange",
+            Self::OpacityValue => "OpacityValue",
+            Self::TransformValue => "TransformValue",
+        }
+    }
+
+    /// 声明期构造器（`commit` 时按真实 `ObjectId` 生成 trait object）。
+    pub fn ctor(self) -> fn(ObjectId) -> Arc<dyn Target> {
+        match self {
+            Self::CircleRadius => CircleRadius::make,
+            Self::Phase => Phase::make,
+            Self::CameraEye => CameraEye::make,
+            Self::MorphT => MorphT::make,
+            Self::Camera2DFraming => Camera2DFraming::make,
+            Self::RevealRange => RevealRange::make,
+            Self::OpacityValue => OpacityValue::make,
+            Self::TransformValue => TransformValue::make,
+        }
+    }
+
+    /// 名字 → 枚举（未知名字 ⇒ `None`）。
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|kind| kind.name() == name)
+    }
+}
+
 /// **反序列化用**：按 target 名字取构造器（名字 ↔ 构造器唯一映射）。
 ///
-/// 这是持久化引入的一处**集中表**（必要性：`serde::Deserialize` 拿不到外部
-/// registry）。新增 target 时除了 `impl TargetCtor` 还要在这里加一行 ——
-/// 与既有"新增 target 无需集中清单"的口径不同，故明确记账。
-///
+/// 现在它只是 [`TargetKind`] 的薄查询：字符串表已删除，枚举是唯一真源。
 /// 返回值同时给出 `&'static str`，供反序列化构造 `ActionTarget::Pending.name`。
 pub fn target_ctor_by_name(name: &str) -> Option<(fn(ObjectId) -> Arc<dyn Target>, &'static str)> {
-    match name {
-        "CircleRadius" => Some((CircleRadius::make, "CircleRadius")),
-        "Phase" => Some((Phase::make, "Phase")),
-        "CameraEye" => Some((CameraEye::make, "CameraEye")),
-        "MorphT" => Some((MorphT::make, "MorphT")),
-        "Camera2DFraming" => Some((Camera2DFraming::make, "Camera2DFraming")),
-        "RevealRange" => Some((RevealRange::make, "RevealRange")),
-        "OpacityValue" => Some((OpacityValue::make, "OpacityValue")),
-        "TransformValue" => Some((TransformValue::make, "TransformValue")),
-        _ => None,
-    }
+    TargetKind::from_name(name).map(|kind| (kind.ctor(), kind.name()))
 }
 
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。

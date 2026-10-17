@@ -15,6 +15,10 @@ xc-object = { path = "../../object/xc-object" }
 xc-notion = { path = "../../kernel/xc-notion" }
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
 xc-scene-contract = { path = "../../kernel/xc-scene-contract" }
+# 内容编译能力（Injector 的第二次真实使用）：IR + 排版引擎。
+# 两者都是 kernel 层轻 crate；不引入 xcal-render（那会反向依赖 scene 层）。
+xc-content = { path = "../../kernel/xc-content" }
+xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 
 # Lua 5.4 解释器**编进二进制**（vendored）⇒ 部署零运行时依赖。
 # 不开 async / send / serde：本轮不需要（最小 feature 集）。
