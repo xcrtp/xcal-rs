@@ -489,8 +489,7 @@ mod tests {
     /// 不依赖声明序（R2）。
     #[test]
     fn content_layer_before_viewport_3d() {
-        let Ok(ctx) = RenderContext::headless() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
             return;
         };
         let device = ctx.device();
@@ -664,8 +663,7 @@ mod tests {
         use xcal_render::{FilterSlot, StrokeSolid};
         use xc_object::Line;
 
-        let Ok(ctx) = RenderContext::headless() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
             return;
         };
         let device = ctx.device();

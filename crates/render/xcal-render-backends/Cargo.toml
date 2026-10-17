@@ -15,6 +15,8 @@ xc-object = { path = "../../object/xc-object" }
 glam.workspace = true
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
+# GPU 测试汇报：直接写 fd 2，绕过 libtest 的线程输出捕获。
+libc.workspace = true
 
 # wgpu / egui 均为可选：按 feature 组合提供后端实现。
 wgpu = { workspace = true, optional = true }

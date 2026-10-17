@@ -5939,6 +5939,7 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "hecs",
+ "libc",
  "pollster 0.3.0",
  "thiserror 2.0.20",
  "wgpu",

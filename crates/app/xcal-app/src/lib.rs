@@ -772,7 +772,7 @@ mod t_capabilities_gpu {
     use xc_notion::{Rect2D, Transform2D, Vec2};
     use xc_object::{Camera2D, Transform};
 
-    /// 离屏尺寸（紧凑 RGBA，行距 = `W * 4`）。
+    /// 离屏尺寸（紧凑像素，行距 = `W * 4`；目标格式字节序，默认 BGRA）。
     const W: u32 = 160;
     const H: u32 = 120;
     /// 相机缩放：1 世界单位 = 20px；世界原点落在屏幕中心 (80, 60)。

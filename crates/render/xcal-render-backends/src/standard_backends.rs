@@ -215,7 +215,9 @@ impl BackendStore for TypeMapStore<'_> {
 ///   viewport / scissor 设成 `(0,0,w,h)` —— 于是 NDC 全屏四边形正好铺满目标，
 ///   与 egui 路径的几何关系完全一致。
 ///
-/// 返回**紧凑 RGBA8**（行距 `w*4`，左上角为原点），可直接喂给 PNG 编码器。
+/// 返回**紧凑像素**（行距 `w*4`，左上角为原点）；字节序为目标纹理格式
+/// （默认 `Bgra8UnormSrgb` ⇒ **BGRA**）。喂给 PNG 编码器前需按
+/// [`RenderContext::target_format`] 转换通道（示例：`xcal_app::export::to_rgba`）。
 pub fn render_frame_headless(
     ctx: &RenderContext,
     backends: &mut StandardBackends,

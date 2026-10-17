@@ -54,6 +54,8 @@ serde_json = { version = "1.0" }
 serde_yaml = { version = "1.0" }
 # 序列帧导出：最小 PNG 编码器（全仓此前零图像库）。
 png = "0.17"
+# GPU 测试汇报：直接写 fd 2，绕过 libtest 的输出捕获（见 gpu_test.rs）。
+libc = "0.2"
 
 # 可观测性（telemetry feature 下启用）
 tracing = "0.1"

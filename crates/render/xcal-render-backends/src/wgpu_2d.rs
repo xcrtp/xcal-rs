@@ -1673,8 +1673,8 @@ mod tests {
     /// 合成管线的双入口由 `compositor` 侧覆盖。
     #[test]
     fn gpu_pipeline_builds_for_srgb_and_non_srgb_targets() {
-        let Ok(ctx) = crate::RenderContext::headless() else {
-            return; // 无 GPU 环境：跳过
+        let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
+            return;
         };
         for format in [
             wgpu::TextureFormat::Bgra8UnormSrgb,

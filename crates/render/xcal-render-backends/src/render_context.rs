@@ -86,7 +86,12 @@ impl RenderContext {
         self.queue.write_buffer(buffer, offset, data);
     }
 
-    /// **回读纹理为紧凑 RGBA8 像素**（行距 = `width * 4`，不含 wgpu 的 256 对齐填充）。
+    /// **回读纹理为紧凑像素**（行距 = `width * 4`，不含 wgpu 的 256 对齐填充）。
+    ///
+    /// ⚠️ **字节序 = 目标纹理格式的字节序**，不是无条件 RGBA8：
+    /// 默认 headless 格式是 `Bgra8UnormSrgb` ⇒ 返回的是 **BGRA**。
+    /// 调用方需按 [`RenderContext::target_format`] 自行转换
+    /// （示例见 `xcal_app::export::to_rgba`）。
     ///
     /// W1：此前这是三份重复的测试 helper（`wgpu_2d` / `compositor` / `scene_callback`），
     /// 提升为公开 API 后三处改为调用它 —— 导出（序列帧抓帧）与测试共用同一条路径。

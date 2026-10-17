@@ -441,6 +441,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
+| 非原生 VM 的 `FunctionX2Y` 适配器 | `xcal-scene::math_vm` | 现有 `function_from_vm` 只支持 **typed 快路径**（`resolve` 的裸 fn 指针）；Python / IPC 等**纯解释型 VM 只有 erased `call`**，需要另一个走慢路径的适配器 | 接入第一个非原生 VM 时（本轮不写：无消费方） |
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
 > （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /

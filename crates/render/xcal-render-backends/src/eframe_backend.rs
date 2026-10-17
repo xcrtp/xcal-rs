@@ -127,10 +127,10 @@ mod tests {
 
     #[test]
     fn test_headless_backend_lifecycle() {
-        let Ok(mut backend) = EframeWgpuBackend::headless() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
             return;
         };
+        let mut backend = EframeWgpuBackend::from_context(ctx);
 
         assert!(backend.target().is_none());
         assert!(!backend.is_frame_active());

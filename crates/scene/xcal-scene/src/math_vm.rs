@@ -22,6 +22,13 @@
 // 调用走 **typed 快路径**（`resolve` 拿到的 fn 指针），不查表、不比字符串。
 // 纯解释型 VM（只有 erased `call`）不适用本适配器 —— 它们本来也提供不了
 // `DynFn` 的零成本调用形态。
+//
+// # 适用边界（C3 记账）
+//
+// 本适配器要求 VM **能提供 typed 裸 fn 指针**（`RegistryVm` / 原生 VM）。
+// 当初 VM 抽象的愿景里，Python 脚本与 IPC 远程 VM 也是 VM，但它们**只有
+// erased `call`** ⇒ 本适配器对它们无效。接入这类 VM 时需要一个**走慢路径的
+// 独立适配器**（把 `call` 包成 `Fn`）；本轮不写（无消费方，写了就是纸面能力）。
 
 use std::sync::{Arc, OnceLock};
 

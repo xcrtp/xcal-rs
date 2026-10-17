@@ -1267,11 +1267,13 @@ mod tests {
     use xc_notion::{SurfaceFn, Vec3};
     use xcal_render::{DrawQueue3D, Viewport};
 
-    fn headless_backend() -> Option<(WgpuBackend3D, RenderContext)> {
-        let ctx = RenderContext::headless().ok()?;
+    /// 3D 后端的 headless 夹具：**守卫必须活到测试结束**（调用点绑定 `_gpu`）。
+    #[track_caller]
+    fn headless_backend() -> Option<(crate::gpu_test::GpuGuard, WgpuBackend3D, RenderContext)> {
+        let (gpu, ctx) = crate::gpu_test::require_gpu()?;
         let backend =
             WgpuBackend3D::with_default_shader(ctx.device(), ctx.queue(), ctx.target_format());
-        Some((backend, ctx))
+        Some((gpu, backend, ctx))
     }
 
     // ── P0-1：SHADER_VARIANTS 穷举（纯 CPU，无需 GPU） ────────────────
@@ -1366,8 +1368,7 @@ mod tests {
 
     #[test]
     fn test_uniform_arena_push_and_flush_headless() {
-        let Some((_backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, _backend, ctx)) = headless_backend() else {
             return;
         };
         let mut arena = UniformArena::new(UNIFORM_SIZE, 256);
@@ -1407,8 +1408,7 @@ mod tests {
 
     #[test]
     fn test_backend_creation_does_not_panic() {
-        let Some((backend, _ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, _ctx)) = headless_backend() else {
             return;
         };
         let buffer = backend.device().create_buffer(&wgpu::BufferDescriptor {
@@ -1435,8 +1435,7 @@ mod tests {
 
     #[test]
     fn test_submit_layer_records_without_panic() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
 
@@ -1471,8 +1470,7 @@ mod tests {
     /// 若清屏不透明（旧值 alpha = 1.0），该层会像一张不透明卡片盖住背景与下层。
     #[test]
     fn test_render_layer_offscreen_clears_transparent() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         // 64 × 4 = 256 字节 = COPY_BYTES_PER_ROW_ALIGNMENT，回读无需补行距。
@@ -1570,8 +1568,7 @@ mod tests {
 
     #[test]
     fn test_prepare_draws_counts() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let mut queue = DrawQueue3D::new();
@@ -1604,8 +1601,7 @@ mod tests {
 
     #[test]
     fn test_300_frames_no_growth() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let mut queue = DrawQueue3D::new();
@@ -1684,8 +1680,7 @@ mod tests {
     /// 白色而非绿色 → 失败。
     #[test]
     fn test_material_samples_registered_texture() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let size = 64u32;
@@ -1778,8 +1773,7 @@ mod tests {
     /// 两例的"远处几何后绘制"都被深度拒绝；去掉深度测试则中心像素会变成后画的颜色。
     #[test]
     fn test_depth_test_occludes_farther_geometry() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let size = 64u32;
@@ -1827,8 +1821,7 @@ mod tests {
     /// `Flat` 无光照（`lit = 1`）。两者像素必然不同 —— 若相同则变体机制失效。
     #[test]
     fn test_shader_variant_changes_pixels() {
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let size = 64u32;
@@ -1994,8 +1987,7 @@ mod tests {
         use xcal_scene::{AnimValue, Curve, Interp};
         use xc_object::FpsView;
 
-        let Some((backend, ctx)) = headless_backend() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;
         };
         let size = 64u32;

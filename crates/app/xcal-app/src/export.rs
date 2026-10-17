@@ -32,7 +32,6 @@ use std::time::{Duration, Instant};
 use xcal_render_backends::{
     RenderContext, SceneCompositorCallback, ScreenParams, StandardBackends, render_frame_headless,
 };
-
 /// 导出规格。
 #[derive(Debug, Clone)]
 pub struct ExportSpec {
@@ -307,8 +306,7 @@ mod tests {
     /// B2 验收：N 帧文件数正确、命名有序、**每帧内容确实在变**。
     #[test]
     fn export_writes_ordered_and_changing_frames() {
-        let Ok(ctx) = RenderContext::headless() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, ctx)) = xcal_render_backends::require_gpu() else {
             return;
         };
         let dir = temp_dir("sequence");
@@ -357,8 +355,7 @@ mod tests {
     /// B4 验收：导出用的回调在 **headless 与 egui 宿主路径** 上逐字节一致。
     #[test]
     fn export_frame_matches_egui_path_bit_for_bit() {
-        let Ok(ctx) = RenderContext::headless() else {
-            eprintln!("no GPU adapter, skipping");
+        let Some((_gpu, ctx)) = xcal_render_backends::require_gpu() else {
             return;
         };
         let device = ctx.device();
