@@ -22,15 +22,16 @@
 // 2. `dyn Trait` 不能 serde —— 将来动画脚本若要存盘/序列化，这里会痛；
 // 3. `Debug` supertrait 强制所有实现可 `Debug`。
 
-use hecs::World;
 use std::sync::Arc;
 use xc_notion::Vec3;
 use xc_object::{Camera3D, Circle, Framing2D, Transform};
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
+// `Scene as _`：只为方法解析（`WorldScene::get_mut`）—— **target 不再认识 hecs**。
+use xc_scene_contract::Scene as _;
 use xc_time::AnimValue;
 
-use crate::contract::entity_of;
+use crate::contract::WorldScene;
 use crate::scene::components::{MorphShape, PhaseAnim, Reveal};
 
 /// 驱动目标：把 `Curve::sample` 产出的 [`AnimValue`] 写进**某对象**的**某个组件字段**。
@@ -41,7 +42,17 @@ pub trait Target: Send + Sync + std::fmt::Debug + 'static {
     /// 把本帧的动画值写入世界。
     ///
     /// **既有语义逐位保留**：曲线输出类型与目标字段不符时**跳过本帧写入，不 panic**。
-    fn apply(&self, world: &mut World, v: &AnimValue);
+    ///
+    /// # 去 hecs 化（本轮兑现）
+    ///
+    /// 参数是**契约层适配器** [`WorldScene`]（`ObjectId` + `Scene::get_mut`），
+    /// 不再是**具体 ECS 的世界类型** —— 兑现"target 不依赖 hecs"的既有承诺。
+    ///
+    /// 为什么不是 `&mut dyn Scene`：`Scene` 含泛型访客方法（`for_each` / `with` …），
+    /// **不 object-safe**；而 `Target` 必须保持 object-safe（`BindingTable` 装
+    /// `Arc<dyn Target>`）。`WorldScene` 是契约的本地实现适配器，写入仍全部走契约
+    /// 方法（`get_mut`）⇒ target 层与具体 ECS 的接触面归零。
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue);
 
     /// 目标**语义名**（如 `"CircleRadius"`）—— 供 UI 显示 / 分类。
     ///
@@ -126,17 +137,15 @@ impl TargetCtor for TransformValue {
 
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。
 ///
-/// 四个实现里"取组件 + 类型匹配 + 赋值"的公共骨架只此一份。
-fn with_component<T, F>(world: &mut World, id: ObjectId, f: F)
+/// 八个实现里"取组件 + 类型匹配 + 赋值"的公共骨架只此一份。
+/// **写入走契约层 `Scene::get_mut`** —— 本文件不认识 hecs。
+fn with_component<T, F>(scene: &mut WorldScene<'_>, id: ObjectId, f: F)
 where
-    T: hecs::Component,
+    T: 'static + Send + Sync,
     F: FnOnce(&mut T),
 {
-    let Some(e) = entity_of(id) else {
-        return;
-    };
-    if let Ok(mut c) = world.get::<&mut T>(e) {
-        f(&mut c);
+    if let Some(c) = scene.get_mut::<T>(id) {
+        f(c);
     }
 }
 
@@ -147,11 +156,11 @@ pub struct CircleRadius {
 }
 
 impl Target for CircleRadius {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         let Some(v) = v.try_scalar() else {
             return;
         };
-        with_component::<Circle, _>(world, self.id, |c| c.radius = v);
+        with_component::<Circle, _>(scene, self.id, |c| c.radius = v);
     }
 
     fn name(&self) -> &'static str {
@@ -170,11 +179,11 @@ pub struct Phase {
 }
 
 impl Target for Phase {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         let Some(v) = v.try_scalar() else {
             return;
         };
-        with_component::<PhaseAnim, _>(world, self.id, |c| c.phase = v);
+        with_component::<PhaseAnim, _>(scene, self.id, |c| c.phase = v);
     }
 
     fn name(&self) -> &'static str {
@@ -193,11 +202,11 @@ pub struct CameraEye {
 }
 
 impl Target for CameraEye {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         let Some(v) = v.try_vec3() else {
             return;
         };
-        with_component::<Camera3D, _>(world, self.id, |c| c.eye = v);
+        with_component::<Camera3D, _>(scene, self.id, |c| c.eye = v);
     }
 
     fn name(&self) -> &'static str {
@@ -216,11 +225,11 @@ pub struct MorphT {
 }
 
 impl Target for MorphT {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         let Some(v) = v.try_scalar() else {
             return;
         };
-        with_component::<MorphShape, _>(world, self.id, |c| c.t = v);
+        with_component::<MorphShape, _>(scene, self.id, |c| c.t = v);
     }
 
     fn name(&self) -> &'static str {
@@ -242,11 +251,11 @@ pub struct Camera2DFraming {
 }
 
 impl Target for Camera2DFraming {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         if let Some(scale) = v.try_scalar() {
-            with_component::<Framing2D, _>(world, self.id, |f| f.scale = scale);
+            with_component::<Framing2D, _>(scene, self.id, |f| f.scale = scale);
         } else if let Some(center) = v.try_vec2() {
-            with_component::<Framing2D, _>(world, self.id, |f| f.center = center);
+            with_component::<Framing2D, _>(scene, self.id, |f| f.center = center);
         }
     }
 
@@ -271,11 +280,11 @@ pub struct RevealRange {
 }
 
 impl Target for RevealRange {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         if let Some(end) = v.try_scalar() {
-            with_component::<Reveal, _>(world, self.id, |r| r.end = end);
+            with_component::<Reveal, _>(scene, self.id, |r| r.end = end);
         } else if let Some(range) = v.try_vec2() {
-            with_component::<Reveal, _>(world, self.id, |r| {
+            with_component::<Reveal, _>(scene, self.id, |r| {
                 r.start = range.x;
                 r.end = range.y;
             });
@@ -308,16 +317,16 @@ pub struct TransformValue {
 }
 
 impl Target for TransformValue {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         if let Some(p) = v.try_vec2() {
-            with_component::<Transform, _>(world, self.id, |t| {
+            with_component::<Transform, _>(scene, self.id, |t| {
                 t.position.x = p.x;
                 t.position.y = p.y;
             });
         } else if let Some(p) = v.try_vec3() {
-            with_component::<Transform, _>(world, self.id, |t| t.position = p);
+            with_component::<Transform, _>(scene, self.id, |t| t.position = p);
         } else if let Some(s) = v.try_scalar() {
-            with_component::<Transform, _>(world, self.id, |t| t.scale = Vec3::splat(s));
+            with_component::<Transform, _>(scene, self.id, |t| t.scale = Vec3::splat(s));
         }
     }
 
@@ -343,11 +352,11 @@ pub struct OpacityValue {
 }
 
 impl Target for OpacityValue {
-    fn apply(&self, world: &mut World, v: &AnimValue) {
+    fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
         let Some(v) = v.try_scalar() else {
             return;
         };
-        with_component::<Opacity, _>(world, self.id, |o| o.0 = v);
+        with_component::<Opacity, _>(scene, self.id, |o| o.0 = v);
     }
 
     fn name(&self) -> &'static str {
@@ -364,119 +373,142 @@ mod tests {
     use super::*;
     use xc_notion::{Vec2, Vec3};
     use xc_object::{Camera3D, Circle, Projection};
+    // 测试也走契约层（`spawn_dyn` / `with`）—— **本文件不出现 hecs**。
+    // （`Scene` trait 已由父模块的 `use ... as _` 经 `use super::*` 带入。）
+    use xc_scene_contract::SceneRead;
 
-    /// 契约层句柄（`ObjectId`）↔ hecs 实体的往返。
-    fn id_of(e: hecs::Entity) -> ObjectId {
-        crate::contract::object_id_of(e)
+    use crate::scene::Scene as SceneStruct;
+
+    /// 用契约层 `spawn_dyn` 创建单组件对象（同时验证该组件已登记）。
+    fn spawn_one(scene: &mut SceneStruct, c: impl Send + Sync + 'static) -> ObjectId {
+        scene
+            .spawn_dyn(vec![Box::new(c)])
+            .expect("组件已在登记表中")
+    }
+
+    /// 经契约适配器施加一次动画值。
+    fn apply_once(t: &dyn Target, scene: &mut SceneStruct, v: AnimValue) {
+        t.apply(&mut WorldScene::new(scene.world_mut()), &v);
+    }
+
+    /// 读回组件（缺失 ⇒ 测试失败）。
+    fn read<T: 'static + Send + Sync, R>(
+        scene: &SceneStruct,
+        id: ObjectId,
+        f: impl FnOnce(&T) -> R,
+    ) -> R {
+        scene.with::<T, _>(id, f).expect("组件在场景里")
     }
 
     /// `CircleRadius`：`Scalar` 写入半径；类型不符跳过（不 panic）。
     #[test]
     fn circle_radius_writes_scalar_and_skips_mismatch() {
-        let mut world = World::new();
-        let e = world.spawn((Circle::new((0.0, 0.0), 1.0),));
-        let t = CircleRadius { id: id_of(e) };
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(&mut scene, Circle::new((0.0, 0.0), 1.0));
+        let t = CircleRadius { id };
 
-        t.apply(&mut world, &AnimValue::Scalar(2.5));
-        assert_eq!(world.get::<&Circle>(e).unwrap().radius, 2.5);
+        apply_once(&t, &mut scene, AnimValue::Scalar(2.5));
+        assert_eq!(read::<Circle, _>(&scene, id, |c| c.radius), 2.5);
 
         // Vec3 与目标字段不符 ⇒ 跳过，半径保持不变。
-        t.apply(&mut world, &AnimValue::Vec3(Vec3::ONE));
-        assert_eq!(world.get::<&Circle>(e).unwrap().radius, 2.5);
+        apply_once(&t, &mut scene, AnimValue::Vec3(Vec3::ONE));
+        assert_eq!(read::<Circle, _>(&scene, id, |c| c.radius), 2.5);
     }
 
     /// `Phase`：写 `PhaseAnim.phase`。
     #[test]
     fn phase_writes_phase_anim() {
-        let mut world = World::new();
-        let e = world.spawn((PhaseAnim::new(0.0, 1.5),));
-        let t = Phase { id: id_of(e) };
-        t.apply(&mut world, &AnimValue::Scalar(0.75));
-        assert_eq!(world.get::<&PhaseAnim>(e).unwrap().phase, 0.75);
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(&mut scene, PhaseAnim::new(0.0, 1.5));
+        let t = Phase { id };
+        apply_once(&t, &mut scene, AnimValue::Scalar(0.75));
+        assert_eq!(read::<PhaseAnim, _>(&scene, id, |c| c.phase), 0.75);
     }
 
     /// `CameraEye`：写 `Camera3D.eye`。
     #[test]
     fn camera_eye_writes_camera3d() {
-        let mut world = World::new();
-        let e = world.spawn((Camera3D::new(
-            Vec3::ZERO,
-            Vec3::ZERO,
-            Vec3::Y,
-            Projection::perspective(1.0, 1.0, 0.1, 100.0),
-        ),));
-        let t = CameraEye { id: id_of(e) };
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(
+            &mut scene,
+            Camera3D::new(
+                Vec3::ZERO,
+                Vec3::ZERO,
+                Vec3::Y,
+                Projection::perspective(1.0, 1.0, 0.1, 100.0),
+            ),
+        );
+        let t = CameraEye { id };
         let eye = Vec3::new(1.0, 2.0, 3.0);
-        t.apply(&mut world, &AnimValue::Vec3(eye));
-        assert_eq!(world.get::<&Camera3D>(e).unwrap().eye, eye);
+        apply_once(&t, &mut scene, AnimValue::Vec3(eye));
+        assert_eq!(read::<Camera3D, _>(&scene, id, |c| c.eye), eye);
     }
 
     /// `Camera2DFraming`：单 target 按 `AnimValue` 变体分派 —— `Scalar` → `scale`、
     /// `Vec2` → `center`（同一条绑定可以只驱动其中一个）。
     #[test]
     fn camera_framing_dispatches_by_variant() {
-        let mut world = World::new();
-        let e = world.spawn((Framing2D::new(Vec2::ZERO, 40.0),));
-        let t = Camera2DFraming { id: id_of(e) };
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(&mut scene, Framing2D::new(Vec2::ZERO, 40.0));
+        let t = Camera2DFraming { id };
 
-        t.apply(&mut world, &AnimValue::Scalar(120.0));
-        assert_eq!(world.get::<&Framing2D>(e).unwrap().scale, 120.0);
-        assert_eq!(world.get::<&Framing2D>(e).unwrap().center, Vec2::ZERO);
+        apply_once(&t, &mut scene, AnimValue::Scalar(120.0));
+        assert_eq!(read::<Framing2D, _>(&scene, id, |f| f.scale), 120.0);
+        assert_eq!(read::<Framing2D, _>(&scene, id, |f| f.center), Vec2::ZERO);
 
-        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(1.5, 1.0)));
+        apply_once(&t, &mut scene, AnimValue::Vec2(Vec2::new(1.5, 1.0)));
         assert_eq!(
-            world.get::<&Framing2D>(e).unwrap().center,
+            read::<Framing2D, _>(&scene, id, |f| f.center),
             Vec2::new(1.5, 1.0)
         );
-        assert_eq!(world.get::<&Framing2D>(e).unwrap().scale, 120.0);
+        assert_eq!(read::<Framing2D, _>(&scene, id, |f| f.scale), 120.0);
     }
 
     /// 失效 / 不存在的句柄：静默跳过（不 panic）。
     #[test]
     fn dangling_handle_is_noop() {
-        let mut world = World::new();
+        let mut scene = SceneStruct::new();
         let t = CircleRadius {
             id: ObjectId::DANGLING,
         };
-        t.apply(&mut world, &AnimValue::Scalar(1.0));
+        apply_once(&t, &mut scene, AnimValue::Scalar(1.0));
     }
 
     /// `RevealRange`：`Scalar` 只推 `end`（"笔尖往前走"），`Vec2` 写整个区间。
     #[test]
     fn reveal_range_dispatches_by_variant() {
-        let mut world = World::new();
-        let e = world.spawn((crate::scene::components::Reveal::new(
-            xc_notion::Path2D::from_polyline(
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(
+            &mut scene,
+            Reveal::new(xc_notion::Path2D::from_polyline(
                 &[xc_notion::Vec2::ZERO, xc_notion::Vec2::new(1.0, 0.0)],
                 false,
-            ),
-        ),));
-        let t = RevealRange { id: id_of(e) };
+            )),
+        );
+        let t = RevealRange { id };
 
-        t.apply(&mut world, &AnimValue::Scalar(0.4));
-        {
-            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
-            assert_eq!(r.end, 0.4);
-            assert_eq!(r.start, 0.0, "Scalar 不得改动 start");
-        }
+        apply_once(&t, &mut scene, AnimValue::Scalar(0.4));
+        let (start, end) = read::<Reveal, _>(&scene, id, |r| (r.start, r.end));
+        assert_eq!(end, 0.4);
+        assert_eq!(start, 0.0, "Scalar 不得改动 start");
 
-        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(0.3, 0.7)));
-        {
-            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
-            assert_eq!((r.start, r.end), (0.3, 0.7));
-        }
+        apply_once(&t, &mut scene, AnimValue::Vec2(Vec2::new(0.3, 0.7)));
+        assert_eq!(
+            read::<Reveal, _>(&scene, id, |r| (r.start, r.end)),
+            (0.3, 0.7)
+        );
 
         // 类型不符 ⇒ 跳过（保持上一帧的值）。
-        t.apply(&mut world, &AnimValue::Vec3(Vec3::ONE));
-        {
-            let r = world.get::<&crate::scene::components::Reveal>(e).unwrap();
-            assert_eq!((r.start, r.end), (0.3, 0.7));
-        }
+        apply_once(&t, &mut scene, AnimValue::Vec3(Vec3::ONE));
+        assert_eq!(
+            read::<Reveal, _>(&scene, id, |r| (r.start, r.end)),
+            (0.3, 0.7)
+        );
     }
 
     /// `name()` / `target_id()` 与实现的对应关系（UI 显示 + 按对象筛选）。
     ///
-    /// ⚠️ 这不是"集中清单"——名字**由各 target 自带**；本用例只是把**既有**七个的
+    /// ⚠️ 这不是"集中清单"——名字**由各 target 自带**；本用例只是把**既有**八个的
     /// 字面量钉住（防手滑改错），新增 target **不需要**在这里加一行。
     #[test]
     fn names_and_target_ids_are_reported() {
@@ -499,42 +531,41 @@ mod tests {
     /// `Vec3` → 整个 `position`、`Scalar` → 统一缩放。
     #[test]
     fn transform_value_dispatches_by_variant() {
-        let mut world = World::new();
-        let e = world.spawn((Transform::default(),));
-        let t = TransformValue { id: id_of(e) };
-        let read = |world: &World| {
-            let tr = world.get::<&Transform>(e).unwrap();
-            (tr.position, tr.scale)
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(&mut scene, Transform::default());
+        let t = TransformValue { id };
+        let read_tr = |scene: &SceneStruct| {
+            read::<Transform, _>(scene, id, |tr| (tr.position, tr.scale))
         };
 
         // 只动 xy，z 保持。
-        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(2.0, -3.0)));
-        assert_eq!(read(&world).0, Vec3::new(2.0, -3.0, 0.0));
-        assert_eq!(read(&world).1, Vec3::ONE, "Vec2 不得改缩放");
+        apply_once(&t, &mut scene, AnimValue::Vec2(Vec2::new(2.0, -3.0)));
+        assert_eq!(read_tr(&scene).0, Vec3::new(2.0, -3.0, 0.0));
+        assert_eq!(read_tr(&scene).1, Vec3::ONE, "Vec2 不得改缩放");
 
         // 整体写位置。
-        t.apply(&mut world, &AnimValue::Vec3(Vec3::new(1.0, 2.0, 3.0)));
-        assert_eq!(read(&world).0, Vec3::new(1.0, 2.0, 3.0));
+        apply_once(&t, &mut scene, AnimValue::Vec3(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(read_tr(&scene).0, Vec3::new(1.0, 2.0, 3.0));
 
         // 统一缩放。
-        t.apply(&mut world, &AnimValue::Scalar(2.5));
-        assert_eq!(read(&world).1, Vec3::splat(2.5));
-        assert_eq!(read(&world).0, Vec3::new(1.0, 2.0, 3.0), "缩放不改位置");
+        apply_once(&t, &mut scene, AnimValue::Scalar(2.5));
+        assert_eq!(read_tr(&scene).1, Vec3::splat(2.5));
+        assert_eq!(read_tr(&scene).0, Vec3::new(1.0, 2.0, 3.0), "缩放不改位置");
     }
 
     /// `OpacityValue`：`Scalar` 写入 `Opacity.0`；其它变体跳过（不 panic）。
     #[test]
     fn opacity_value_writes_scalar_and_skips_mismatch() {
-        let mut world = World::new();
-        let e = world.spawn((Opacity::new(1.0),));
-        let t = OpacityValue { id: id_of(e) };
+        let mut scene = SceneStruct::new();
+        let id = spawn_one(&mut scene, Opacity::new(1.0));
+        let t = OpacityValue { id };
 
-        t.apply(&mut world, &AnimValue::Scalar(0.25));
-        assert_eq!(world.get::<&Opacity>(e).unwrap().0, 0.25);
+        apply_once(&t, &mut scene, AnimValue::Scalar(0.25));
+        assert_eq!(read::<Opacity, _>(&scene, id, |o| o.0), 0.25);
 
-        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(0.1, 0.2)));
+        apply_once(&t, &mut scene, AnimValue::Vec2(Vec2::new(0.1, 0.2)));
         assert_eq!(
-            world.get::<&Opacity>(e).unwrap().0,
+            read::<Opacity, _>(&scene, id, |o| o.0),
             0.25,
             "非 Scalar 变体不得写入（静默跳过）"
         );

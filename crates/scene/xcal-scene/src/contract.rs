@@ -32,7 +32,8 @@
 //   关系：      `Parent`
 //
 // 未登记的组件类型 ⇒ `spawn_dyn` 返回 `None`（**不静默丢组件**——宁可失败也不
-// 造出"少了一半组件"的对象）。新增可装配组件时，在此加一行即可。
+// 造出"少了一半组件"的对象）。新增可装配组件时，在 `known_component_table!`
+// 里加一行即可 —— **正向 / 类型名 / 克隆三向同时生效**（同一张表，只写一处）。
 
 use hecs::{Entity, EntityBuilder, World};
 
@@ -225,54 +226,116 @@ impl SceneRead for WorldScene<'_> {
     }
 }
 
+/// **组件登记表（唯一来源）**：正向 downcast、类型名反查、克隆三件事共用这一份。
+///
+/// # 为什么是"一张表 + 三个展开器"
+///
+/// 核心约束是"新增一个已登记类型只写一处"。故 [`add_known`] / [`known_type_name`] /
+/// [`clone_known`] 全部由本表展开，各自只需一个极薄的 `macro_rules!` 臂。
+///
+/// # `clone:` 与 `manual:` 两段
+///
+/// - `clone:`：已 `derive(Clone)` 的类型（26 个）；
+/// - `manual:`：**未 derive `Clone`** 的登记类型（1 个：`AxesLine`）。
+///   按本轮约束**不为凑齐而改它的定义**，故在此显式给出克隆表达式
+///   （它只有一个 `ObjectId` 字段，`ObjectId` 是 `Copy`）。
+macro_rules! known_component_table {
+    ($mac:ident) => {
+        $mac! {
+            clone: Circle, Line, Path, Rect, Arrow, Transform, ZOrder,
+                   Name, Group, Visibility, Opacity,
+                   Camera2D, Camera3D, Projection, Framing2D, CameraMode, FpsView,
+                   StrokeSolid, FillSolid,
+                   Axes2D, FunctionGraph,
+                   PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent;
+            manual: AxesLine => |v: &AxesLine| AxesLine { owner: v.owner }
+        }
+    };
+}
+
+/// 反向能力 ①：已登记类型的**稳定名字**（即 Rust 类型名）。
+///
+/// 供"脚本 / dylib / 序列化"侧把类型记录成可持久化的名字。未登记 ⇒ `None`
+/// （与 `spawn_dyn` 的"未登记即失败"同口径）。名字来自 `stringify!`
+/// ⇒ **不会与类型定义漂移**。
+pub fn known_type_name<T: 'static>() -> Option<&'static str> {
+    // 宏定义在函数体内：宏体里的 `T` 才能解析到本函数的泛型参数
+    // （与 `add_known` 的 `arm!` 同法 —— 本地变量 / 泛型参数是**定义点卫生**的）。
+    macro_rules! name_arms {
+        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+            $(
+                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$c>() {
+                    return Some(stringify!($c));
+                }
+            )+
+            $(
+                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$m>() {
+                    return Some(stringify!($m));
+                }
+            )+
+        }};
+    }
+    known_component_table!(name_arms);
+    None
+}
+
+/// 反向能力 ②：克隆一个**类型擦除**的已登记组件。
+///
+/// 用途：外部来源（VM / dylib / 反序列化）拿到一个组件后要把它**复制**进
+/// [`Components`] 交给 `spawn_dyn`，而 `Box<dyn Any>` 本身不可 `Clone`。
+///
+/// 未登记类型 ⇒ `None`（与 `spawn_dyn` 同口径，不 panic）。
+pub fn clone_known(
+    c: &(dyn std::any::Any + Send + Sync),
+) -> Option<Box<dyn std::any::Any + Send + Sync>> {
+    macro_rules! clone_arms {
+        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+            $(
+                if let Some(v) = c.downcast_ref::<$t>() {
+                    return Some(Box::new(v.clone()));
+                }
+            )+
+            $(
+                if let Some(v) = c.downcast_ref::<$m>() {
+                    let make = $ctor;
+                    return Some(Box::new(make(v)));
+                }
+            )+
+        }};
+    }
+    known_component_table!(clone_arms);
+    None
+}
+
 /// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `Err(原组件)`。
 fn add_known(
     builder: &mut EntityBuilder,
     mut c: Box<dyn std::any::Any + Send + Sync>,
 ) -> Result<(), Box<dyn std::any::Any + Send + Sync>> {
-    macro_rules! arm {
-        ($t:ty) => {
-            match c.downcast::<$t>() {
-                Ok(v) => {
-                    builder.add(*v);
-                    return Ok(());
+    // 与 `known_type_name` / `clone_known` **同一张表**（`known_component_table!`）。
+    macro_rules! add_arms {
+        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+            $(
+                match c.downcast::<$c>() {
+                    Ok(v) => {
+                        builder.add(*v);
+                        return Ok(());
+                    }
+                    Err(b) => c = b,
                 }
-                Err(b) => c = b,
-            }
-        };
+            )+
+            $(
+                match c.downcast::<$m>() {
+                    Ok(v) => {
+                        builder.add(*v);
+                        return Ok(());
+                    }
+                    Err(b) => c = b,
+                }
+            )+
+        }};
     }
-
-    arm!(Circle);
-    arm!(Line);
-    arm!(Path);
-    arm!(Rect);
-    // T2：箭头是**一等图元**（`spawn_dyn` 必须认得它；漏登记 ⇒ 静默返回 `None`）。
-    arm!(Arrow);
-    arm!(Transform);
-    arm!(ZOrder);
-    // N 阶段（对象的组织与可见性）：四个都必须登记，漏一个 ⇒ 带它的对象
-    // `spawn_dyn` 静默返回 `None`（见模块头"不造半成品对象"）。
-    arm!(Name);
-    arm!(Group);
-    arm!(Visibility);
-    arm!(Opacity);
-    arm!(Camera2D);
-    arm!(Camera3D);
-    arm!(Projection);
-    arm!(Framing2D);
-    arm!(CameraMode);
-    arm!(FpsView);
-    arm!(StrokeSolid);
-    arm!(FillSolid);
-    arm!(Axes2D);
-    arm!(AxesLine);
-    arm!(FunctionGraph);
-    arm!(PhaseAnim);
-    arm!(MorphShape);
-    arm!(ContentTextureItem);
-    // R0 书写动画对象：此前**漏登记**（分镜走 `Scene::spawn` 未暴露，`spawn_dyn` 会失败）。
-    arm!(Reveal);
-    arm!(Parent);
+    known_component_table!(add_arms);
 
     Err(c)
 }
@@ -437,6 +500,128 @@ mod tests {
         let mut ws = WorldScene::new(&mut world);
         assert!(ws.spawn_dyn(vec![Box::new(NotRegistered)]).is_none());
         assert_eq!(SceneRead::len(&ws), 0, "拒绝时必须不留下半成品实体");
+    }
+
+    // ─── 登记表双向化（本轮）────────────────────────────────────────────
+
+    /// 反向 ①：27 个登记类型**逐个**有稳定名字；未登记 ⇒ `None`。
+    ///
+    /// ⚠️ 本用例是**覆盖度绊线**（新增类型时提醒补样例），不是注册表 ——
+    /// 生产侧的登记表只有 `known_component_table!` 一处。
+    #[test]
+    fn known_type_name_reports_every_registered_type() {
+        assert_eq!(known_type_name::<Circle>(), Some("Circle"));
+        assert_eq!(known_type_name::<Line>(), Some("Line"));
+        assert_eq!(known_type_name::<Path>(), Some("Path"));
+        assert_eq!(known_type_name::<Rect>(), Some("Rect"));
+        assert_eq!(known_type_name::<Arrow>(), Some("Arrow"));
+        assert_eq!(known_type_name::<Transform>(), Some("Transform"));
+        assert_eq!(known_type_name::<ZOrder>(), Some("ZOrder"));
+        assert_eq!(known_type_name::<Name>(), Some("Name"));
+        assert_eq!(known_type_name::<Group>(), Some("Group"));
+        assert_eq!(known_type_name::<Visibility>(), Some("Visibility"));
+        assert_eq!(known_type_name::<Opacity>(), Some("Opacity"));
+        assert_eq!(known_type_name::<Camera2D>(), Some("Camera2D"));
+        assert_eq!(known_type_name::<Camera3D>(), Some("Camera3D"));
+        assert_eq!(known_type_name::<Projection>(), Some("Projection"));
+        assert_eq!(known_type_name::<Framing2D>(), Some("Framing2D"));
+        assert_eq!(known_type_name::<CameraMode>(), Some("CameraMode"));
+        assert_eq!(known_type_name::<FpsView>(), Some("FpsView"));
+        assert_eq!(known_type_name::<StrokeSolid>(), Some("StrokeSolid"));
+        assert_eq!(known_type_name::<FillSolid>(), Some("FillSolid"));
+        assert_eq!(known_type_name::<Axes2D>(), Some("Axes2D"));
+        assert_eq!(known_type_name::<AxesLine>(), Some("AxesLine"));
+        assert_eq!(known_type_name::<FunctionGraph>(), Some("FunctionGraph"));
+        assert_eq!(known_type_name::<PhaseAnim>(), Some("PhaseAnim"));
+        assert_eq!(known_type_name::<MorphShape>(), Some("MorphShape"));
+        assert_eq!(
+            known_type_name::<ContentTextureItem>(),
+            Some("ContentTextureItem")
+        );
+        assert_eq!(known_type_name::<Reveal>(), Some("Reveal"));
+        assert_eq!(known_type_name::<Parent>(), Some("Parent"));
+
+        struct NotRegistered;
+        assert_eq!(
+            known_type_name::<NotRegistered>(),
+            None,
+            "未登记类型必须返回 None（与 spawn_dyn 同口径）"
+        );
+    }
+
+    /// 反向 ②：27 个登记类型**逐个**可克隆（不能只测一两个）。
+    ///
+    /// `AxesLine` 未 derive `Clone` —— 由登记表的 `manual:` 段显式重构
+    /// （**没有改它的定义**）。
+    #[test]
+    fn clone_known_covers_every_registered_type() {
+        let samples: Vec<Box<dyn std::any::Any + Send + Sync>> = vec![
+            Box::new(Circle::new((0.0, 0.0), 1.0)),
+            Box::new(Line::new((0.0, 0.0), (1.0, 0.0))),
+            Box::new(Path::new(xc_notion::Path2D::new())),
+            Box::new(Rect::new((0.0, 0.0), (1.0, 1.0))),
+            Box::new(Arrow::new((0.0, 0.0), (1.0, 0.0), 0.1, 0.1)),
+            Box::new(Transform::default()),
+            Box::new(ZOrder::new(1)),
+            Box::new(Name::new("x")),
+            Box::new(Group::new(GroupId::new(1))),
+            Box::new(Visibility::default()),
+            Box::new(Opacity::new(1.0)),
+            Box::new(Camera2D::new(
+                xc_notion::Vec2::ZERO,
+                40.0,
+                xc_notion::Rect2D::new(
+                    xc_notion::Vec2::ZERO,
+                    xc_notion::Vec2::new(800.0, 600.0),
+                ),
+            )),
+            Box::new(Camera3D::new(
+                xc_notion::Vec3::ZERO,
+                xc_notion::Vec3::ZERO,
+                xc_notion::Vec3::Y,
+                Projection::perspective(1.0, 1.0, 0.1, 100.0),
+            )),
+            Box::new(Projection::perspective(1.0, 1.0, 0.1, 100.0)),
+            Box::new(Framing2D::default()),
+            Box::new(CameraMode::default()),
+            Box::new(FpsView::new(0.0, 0.0)),
+            Box::new(StrokeSolid::new(1.0, (0, 0, 0, 255))),
+            Box::new(FillSolid::new((0, 0, 0, 255))),
+            Box::new(Axes2D::new((-1.0, 1.0), (-1.0, 1.0))),
+            Box::new(AxesLine {
+                owner: ObjectId::DANGLING,
+            }),
+            Box::new(FunctionGraph::new(
+                xc_notion::FunctionX2Y::new(|x: f32| x),
+                xc_notion::Sampler1D::new(0.0f32, 1.0, 1.0),
+            )),
+            Box::new(PhaseAnim::new(0.0, 1.0)),
+            Box::new(MorphShape::new(
+                xc_notion::Path2D::new(),
+                xc_notion::Path2D::new(),
+            )),
+            Box::new(ContentTextureItem),
+            Box::new(Reveal::new(xc_notion::Path2D::new())),
+            Box::new(Parent(ObjectId::DANGLING)),
+        ];
+        assert_eq!(samples.len(), 27, "登记表当前应为 27 个类型");
+
+        for (i, c) in samples.iter().enumerate() {
+            let cloned = clone_known(c.as_ref())
+                .unwrap_or_else(|| panic!("第 {i} 个已登记类型必须可克隆"));
+            assert_eq!(
+                cloned.as_ref().type_id(),
+                c.as_ref().type_id(),
+                "第 {i} 个类型克隆后 TypeId 必须一致"
+            );
+        }
+    }
+
+    /// 未登记类型 ⇒ `clone_known` 返回 `None`（不 panic）。
+    #[test]
+    fn clone_known_rejects_unregistered_type() {
+        struct NotRegistered;
+        assert!(clone_known(&NotRegistered).is_none());
     }
 
     /// 本地类型 `xcal_scene::Scene` 也实现了契约（孤儿规则合法落点之一）。

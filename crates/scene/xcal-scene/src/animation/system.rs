@@ -13,6 +13,7 @@ use xcal_schedule::system::System;
 use xcal_scene::TimeState;
 
 use crate::animation::binding::BindingTable;
+use crate::contract::WorldScene;
 
 /// 遍历 BindingTable，按 `Binding.target` 把 `Curve::sample(forest.eval_local(clock, t))` 写入组件字段。
 pub struct BindingApplySystem;
@@ -34,11 +35,14 @@ impl System for BindingApplySystem {
             None => return,
         };
 
+        // 目标层**不认识 hecs**：把世界包成契约层适配器再派发，
+        // `apply` 内部只走契约方法（`Scene::get_mut`）。
+        let mut scene = WorldScene::new(&mut *ctx.world);
         for b in &table.bindings {
             let lt = forest.eval_local(b.clock, t_global);
             let value: AnimValue = b.curve.sample(lt);
             // 目标自己负责"类型匹配 + 写组件"（不符则跳过本帧，不 panic）。
-            b.target.apply(&mut ctx.world, &value);
+            b.target.apply(&mut scene, &value);
         }
     }
 }
@@ -226,5 +230,166 @@ mod tests {
         assert!((x_at(&mut sched, 1.0) - 1.0).abs() < 1e-4, "段内线性插值");
         assert!((x_at(&mut sched, 2.0) - 2.0).abs() < 1e-4, "段末到终值");
         assert!((x_at(&mut sched, 5.0) - 2.0).abs() < 1e-6, "段外冻结（Hold）");
+    }
+
+    /// **改动 1 的行为等价证据**：同一场景里八个 target 各一条绑定，`BindingApplySystem`
+    /// 跑一帧后各组件值 = 曲线在 `t = 0.5` 的精确取值（`Keyframes` 线性中点）。
+    ///
+    /// 这钉住的是"apply 改成契约适配器后，写入落点与字段逐位不变"。
+    #[test]
+    fn all_eight_targets_write_expected_values_in_one_frame() {
+        use crate::animation::target::{
+            Camera2DFraming, CameraEye, MorphT, OpacityValue, Phase as PhaseTarget, RevealRange,
+            TransformValue,
+        };
+        use crate::scene::components::{MorphShape, PhaseAnim, Reveal};
+        use std::sync::Arc;
+        use xc_object::{Camera3D, Framing2D, Projection, Transform};
+        use xc_render_ir::Opacity;
+        use xc_time::{AnimValue, Interp};
+
+        fn kf(from: AnimValue, to: AnimValue) -> Curve {
+            Curve::Keyframes {
+                keys: vec![(0.0, from), (1.0, to)],
+                interpolation: Interp::Linear,
+            }
+        }
+
+        let mut world = World::new();
+        let circle = world.spawn((Circle::new((0.0, 0.0), 1.0),));
+        let phase = world.spawn((PhaseAnim::new(0.0, 1.0),));
+        let camera3d = world.spawn((
+            Camera3D::new(
+                Vec3::ZERO,
+                Vec3::ZERO,
+                Vec3::Y,
+                Projection::perspective(1.0, 1.0, 0.1, 100.0),
+            ),
+        ));
+        let morph = world.spawn((MorphShape::new(
+            xc_notion::Path2D::new(),
+            xc_notion::Path2D::new(),
+        ),));
+        let camera2d = world.spawn((Framing2D::default(),));
+        let reveal = world.spawn((Reveal::new(xc_notion::Path2D::new()),));
+        let opacity = world.spawn((Opacity::new(1.0),));
+        let transform = world.spawn((Transform::default(),));
+
+        let mut forest = XcClockForest::new();
+        let root = forest.insert(ClockNode::new(None)).unwrap();
+        let mut table = BindingTable::new();
+        let mut bind = |curve: Curve, target: Arc<dyn crate::animation::Target>| {
+            table.add(Binding {
+                clock: root,
+                curve,
+                target,
+                seek_kind: SeekKind::O1,
+            });
+        };
+        bind(
+            kf(AnimValue::Scalar(0.0), AnimValue::Scalar(1.0)),
+            Arc::new(CircleRadius {
+                id: crate::contract::object_id_of(circle),
+            }),
+        );
+        bind(
+            kf(AnimValue::Scalar(0.0), AnimValue::Scalar(2.0)),
+            Arc::new(PhaseTarget {
+                id: crate::contract::object_id_of(phase),
+            }),
+        );
+        bind(
+            kf(
+                AnimValue::Vec3(Vec3::ZERO),
+                AnimValue::Vec3(Vec3::new(1.0, 2.0, 3.0)),
+            ),
+            Arc::new(CameraEye {
+                id: crate::contract::object_id_of(camera3d),
+            }),
+        );
+        bind(
+            kf(AnimValue::Scalar(0.0), AnimValue::Scalar(1.0)),
+            Arc::new(MorphT {
+                id: crate::contract::object_id_of(morph),
+            }),
+        );
+        // 相机取景：scale（Scalar）与 center（Vec2）各一条绑定。
+        bind(
+            kf(AnimValue::Scalar(40.0), AnimValue::Scalar(80.0)),
+            Arc::new(Camera2DFraming {
+                id: crate::contract::object_id_of(camera2d),
+            }),
+        );
+        bind(
+            kf(
+                AnimValue::Vec2(vec2(0.0, 0.0)),
+                AnimValue::Vec2(vec2(2.0, 4.0)),
+            ),
+            Arc::new(Camera2DFraming {
+                id: crate::contract::object_id_of(camera2d),
+            }),
+        );
+        // 书写区间：end（Scalar）与 (start, end)（Vec2）各一条。
+        bind(
+            kf(AnimValue::Scalar(0.0), AnimValue::Scalar(1.0)),
+            Arc::new(RevealRange {
+                id: crate::contract::object_id_of(reveal),
+            }),
+        );
+        bind(
+            kf(
+                AnimValue::Vec2(vec2(0.0, 0.0)),
+                AnimValue::Vec2(vec2(0.5, 1.0)),
+            ),
+            Arc::new(RevealRange {
+                id: crate::contract::object_id_of(reveal),
+            }),
+        );
+        bind(
+            kf(AnimValue::Scalar(1.0), AnimValue::Scalar(0.0)),
+            Arc::new(OpacityValue {
+                id: crate::contract::object_id_of(opacity),
+            }),
+        );
+        bind(
+            kf(
+                AnimValue::Vec2(vec2(0.0, 0.0)),
+                AnimValue::Vec2(vec2(2.0, 4.0)),
+            ),
+            Arc::new(TransformValue {
+                id: crate::contract::object_id_of(transform),
+            }),
+        );
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.5 });
+        resources.insert(forest);
+        resources.insert(table);
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::SceneSync, BindingApplySystem);
+        sched.init_resources();
+        sched.run_frame(0.0);
+
+        let w = sched.world();
+        assert_eq!(w.get::<&Circle>(circle).unwrap().radius, 0.5);
+        assert_eq!(w.get::<&PhaseAnim>(phase).unwrap().phase, 1.0);
+        assert_eq!(w.get::<&Camera3D>(camera3d).unwrap().eye, Vec3::new(0.5, 1.0, 1.5));
+        assert_eq!(w.get::<&MorphShape>(morph).unwrap().t, 0.5);
+        {
+            let f = w.get::<&Framing2D>(camera2d).unwrap();
+            assert_eq!(f.scale, 60.0);
+            assert_eq!(f.center, vec2(1.0, 2.0));
+        }
+        {
+            let r = w.get::<&Reveal>(reveal).unwrap();
+            assert_eq!((r.start, r.end), (0.25, 0.5));
+        }
+        assert_eq!(w.get::<&Opacity>(opacity).unwrap().0, 0.5);
+        {
+            let t = w.get::<&Transform>(transform).unwrap();
+            assert_eq!(t.position, Vec3::new(1.0, 2.0, 0.0));
+            assert_eq!(t.scale, Vec3::ONE);
+        }
     }
 }

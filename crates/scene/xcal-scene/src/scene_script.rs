@@ -469,20 +469,19 @@ mod tests {
     #[test]
     fn new_target_requires_no_central_list_change() {
         use crate::animation::target::TargetCtor;
+        use crate::contract::WorldScene;
         use std::sync::Arc;
         use xc_render_ir::Opacity;
+        use xc_scene_contract::Scene as _;
 
         #[derive(Debug, Clone, Copy)]
         struct TestOpacity {
             id: ObjectId,
         }
         impl Target for TestOpacity {
-            fn apply(&self, world: &mut hecs::World, v: &AnimValue) {
+            fn apply(&self, scene: &mut WorldScene<'_>, v: &AnimValue) {
                 let Some(v) = v.try_scalar() else { return };
-                let Some(e) = crate::contract::entity_of(self.id) else {
-                    return;
-                };
-                if let Ok(mut o) = world.get::<&mut Opacity>(e) {
+                if let Some(o) = scene.get_mut::<Opacity>(self.id) {
                     o.0 = v;
                 }
             }
