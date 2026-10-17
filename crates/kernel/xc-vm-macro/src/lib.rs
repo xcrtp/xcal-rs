@@ -3,11 +3,13 @@
 //! # 输入
 //!
 //! ```ignore
-//! #[capability(namespace = "xcal.math")]
+//! #[capability(namespace = "xcal.math", version = "1", description = "数学函数")]
 //! struct MathVm<'a> {
 //!     sin: fn(&'a dyn Vm, f32) -> f32,
 //!     #[vm_type(param0 = "xcal.Path2D", ret = "xcal.Vec2")]
 //!     sample: fn(&'a dyn Vm, Path2D, f32) -> Vec2,
+//!     // 方法语义：次参为 `Handle` ⇒ receiver（C 风格 `obj_method(vm, obj, args)`）
+//!     bounds: fn(&'a dyn Vm, Handle) -> f32,
 //! }
 //! ```
 //!
@@ -18,7 +20,9 @@
 //!
 //! 1. struct 本身：`__vm: &'a dyn Vm` + 各函数的裸 fn 指针；
 //! 2. inherent 方法：`pub fn sin(&self, x: f32) -> f32` —— 调用 = 一次间接寻址；
-//! 3. `impl Capability<'a>`：`signatures()`（声明逐条对应）与 `from_negotiated()`。
+//!    receiver 字段生成 `pub fn bounds(&self, receiver: Handle) -> f32`；
+//! 3. `impl Capability<'a>`：`signatures()`（声明逐条对应）、`meta()`（可选）与
+//!    `from_negotiated()`。
 //!
 //! # 类型名
 //!
@@ -40,6 +44,14 @@ use syn::{Field, Fields, Ident, ItemStruct, Lifetime, LitStr, ReturnType, Type, 
 /// capability 的 VM 借用字段名（带 `__` 前缀，避免与用户字段冲突）。
 const VM_FIELD: &str = "__vm";
 
+/// `#[capability(...)]` 的参数。
+#[derive(Default)]
+struct MetaArgs {
+    namespace: String,
+    version: Option<String>,
+    description: Option<String>,
+}
+
 struct FieldSpec {
     ident: Ident,
     vis: Visibility,
@@ -57,18 +69,26 @@ struct FieldSpec {
     ret_name: Option<String>,
 }
 
-/// `#[capability]` / `#[capability(namespace = "...")]`。
+/// `#[capability]` / `#[capability(namespace = "...", version = "...", description = "...")]`。
 #[proc_macro_attribute]
 pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut namespace = String::new();
+    let mut args = MetaArgs::default();
     if !attr.is_empty() {
         let parser = syn::meta::parser(|meta| {
             if meta.path.is_ident("namespace") {
                 let lit: LitStr = meta.value()?.parse()?;
-                namespace = lit.value();
+                args.namespace = lit.value();
+                Ok(())
+            } else if meta.path.is_ident("version") {
+                let lit: LitStr = meta.value()?.parse()?;
+                args.version = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("description") {
+                let lit: LitStr = meta.value()?.parse()?;
+                args.description = Some(lit.value());
                 Ok(())
             } else {
-                Err(meta.error("未知参数（仅支持 namespace = \"...\"）"))
+                Err(meta.error("未知参数（支持 namespace / version / description = \"...\"）"))
             }
         });
         if let Err(e) = parser.parse(attr) {
@@ -77,13 +97,13 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     let input: ItemStruct = syn::parse_macro_input!(item as ItemStruct);
-    match expand(&namespace, input) {
+    match expand(&args, input) {
         Ok(tokens) => tokens.into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-fn expand(namespace: &str, input: ItemStruct) -> syn::Result<TokenStream2> {
+fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let vis = &input.vis;
     let generics = &input.generics;
@@ -133,9 +153,24 @@ fn expand(namespace: &str, input: ItemStruct) -> syn::Result<TokenStream2> {
     }
 
     let (impl_generics, ty_generics, _) = generics.split_for_impl();
-    let namespace_lit = LitStr::new(namespace, name.span());
+    let namespace_lit = LitStr::new(&args.namespace, name.span());
     let input_attrs = &input.attrs;
     let vm_ident = Ident::new(VM_FIELD, name.span());
+
+    let version_expr = match &args.version {
+        Some(v) => {
+            let lit = LitStr::new(v, name.span());
+            quote!(::core::option::Option::Some(#lit))
+        }
+        None => quote!(::core::option::Option::None),
+    };
+    let description_expr = match &args.description {
+        Some(d) => {
+            let lit = LitStr::new(d, name.span());
+            quote!(::core::option::Option::Some(#lit))
+        }
+        None => quote!(::core::option::Option::None),
+    };
 
     // ── struct 本身：__vm + 各函数的裸 fn 指针 ───────────────────────────
     let struct_fields = specs.iter().map(|s| {
@@ -150,8 +185,22 @@ fn expand(namespace: &str, input: ItemStruct) -> syn::Result<TokenStream2> {
     let methods = specs.iter().map(|s| {
         let ident = &s.ident;
         let ret = &s.ret;
-        let arg_names: Vec<Ident> = (0..s.params.len())
-            .map(|i| format_ident!("arg{}", i))
+        // 方法语义：次参是 `Handle` ⇒ 它就是 receiver（C 风格 obj_method(vm, obj, ..)）。
+        let has_receiver = s.params.first().is_some_and(is_handle_type);
+        let mut free_index = 0usize;
+        let arg_names: Vec<Ident> = s
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if i == 0 && has_receiver {
+                    Ident::new("receiver", s.ident.span())
+                } else {
+                    let name = format_ident!("arg{}", free_index);
+                    free_index += 1;
+                    name
+                }
+            })
             .collect();
         let arg_tys = &s.params;
         quote! {
@@ -225,6 +274,10 @@ fn expand(namespace: &str, input: ItemStruct) -> syn::Result<TokenStream2> {
             fn signatures() -> &'static [::xc_vm::FnSig] {
                 const SIGS: &[::xc_vm::FnSig] = &[#(#sig_entries),*];
                 SIGS
+            }
+
+            fn meta() -> ::xc_vm::CapabilityMeta {
+                ::xc_vm::CapabilityMeta::new(#version_expr, #description_expr)
             }
 
             fn from_negotiated(
@@ -364,4 +417,22 @@ fn parse_vm_type_attrs(
     }
 
     Ok((params, ret))
+}
+
+/// 次参是否为 `Handle`（方法语义的 receiver）。
+///
+/// 语法级判断（取类型路径最后一段）：`Handle` / `xc_vm::Handle` 都识别；
+/// 类型别名不会被识别（文档已注明）。
+fn is_handle_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(path) => {
+            path.qself.is_none()
+                && path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "Handle")
+        }
+        _ => false,
+    }
 }

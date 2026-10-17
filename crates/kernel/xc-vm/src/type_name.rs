@@ -9,6 +9,8 @@
 //! **为什么不能直接复用 `xc-node::TypeTag`**：`xc-vm` 是零依赖 kernel crate，
 //! 不得依赖任何 `xcal-*` / `xc-*`（见 Cargo.toml 依赖铁律）。故只照其**形态**内建。
 
+use crate::handle::Handle;
+
 /// 稳定类型名。
 ///
 /// 只描述"逻辑类型"，不含泛型参数或生命周期；同一类型在所有 VM 间必须给出同一字符串。
@@ -66,4 +68,9 @@ impl_vm_type_name! {
     u128 => "u128",
     usize => "usize",
     String => "String",
+}
+
+// 本 crate 自己的大类型句柄：方法语义的 receiver 参数就是它。
+impl IntoVmTypeName for Handle {
+    const NAME: VmTypeName = "xc_vm.Handle";
 }

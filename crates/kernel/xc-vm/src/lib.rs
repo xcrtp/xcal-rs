@@ -28,6 +28,24 @@
 // 快慢两路径都用 `&self`；有状态 VM 自行用内部可变性（`RefCell` / `Cell` / 锁）。
 // 状态归 VM 自己管，外部不应看到"它在变"。
 //
+// # 双向对接（宿主 ⇄ VM）
+//
+// 宿主 → VM：[`Vm::negotiate`] / [`negotiate_dyn`] 拿到 capability 句柄并调用。
+//
+// VM → 宿主：宿主把能力以 [`Service`]（`Arc<dyn Vm>`）为单位，经 [`Injector`]
+// capability 注入 VM。**默认拒绝**：VM 不暴露 `Injector` ⇒ 协商返回 `None` ⇒ 天然沙箱。
+// 生命周期（[`Lifecycle`]）是独立的普通 capability，由宿主调用。
+//
+// ## 重入约束（必须遵守）
+//
+// 双向对接后会出现：**宿主调 VM → VM 回调宿主**。约定：
+//
+// > **回调只做只读查询；要改变场景状态，VM 产出命令（SceneScript），不直接调宿主改。**
+//
+// 理由：导出 / 重播时宿主侧能力可能不存在（headless 渲染没有 UI、没有实时时间）。
+// 这条约束无法在类型层完全强制（回调仍是普通函数调用），故以文档 + 用例
+// （只读查询）为准。
+//
 // # 零依赖
 //
 // 本 crate 只使用 std，且必须能编译到 `wasm32-unknown-unknown`。
@@ -37,15 +55,22 @@
 mod capability;
 mod error;
 mod handle;
+mod inject;
+mod lifecycle;
 mod qualified;
 mod registry;
 mod type_name;
 mod vm;
 
-pub use capability::{Capability, FnSig, Resolved};
+pub use capability::{Capability, CapabilityMeta, FnSig, Resolved};
 pub use error::VmError;
 pub use handle::{Handle, HandleTable, VmId};
+pub use inject::{
+    INJECTOR_NAMESPACE, Injector, MissingRequirements, Service, ServiceRequirement,
+    validate_requirements,
+};
+pub use lifecycle::{LIFECYCLE_NAMESPACE, Lifecycle};
 pub use qualified::QualifiedName;
 pub use registry::{ErasedCall, RegistryVm};
 pub use type_name::{IntoVmTypeName, VmTypeName};
-pub use vm::{FunctionId, Vm};
+pub use vm::{FunctionId, Vm, negotiate_dyn};

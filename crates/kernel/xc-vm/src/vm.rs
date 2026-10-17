@@ -76,22 +76,45 @@ pub trait Vm: 'static {
     /// 以 capability struct 为泛型实参协商；**全有或全无**。
     ///
     /// `C` 是 **struct**（如 `MathVm<'a>`），不是 trait —— 见 [`Capability`]。
+    ///
+    /// 对 `dyn Vm`（如注入后的 `Arc<dyn Vm>`）请用自由函数
+    /// [`negotiate_dyn`]：泛型方法不进入 vtable，trait object 上调不到。
     fn negotiate<'a, C>(&'a self) -> Option<C>
     where
         C: Capability<'a>,
         Self: Sized + 'a,
     {
-        let sigs = C::signatures();
-        let mut resolved: Vec<Resolved<'a>> = Vec::with_capacity(sigs.len());
-        for sig in sigs {
-            let name = sig.qualified();
-            // 任一签名缺失 ⇒ 整个协商失败（不返回"有的能调、有的崩"的句柄）。
-            let callable = self.resolve(&name)?;
-            resolved.push(Resolved {
-                signature: *sig,
-                callable,
-            });
-        }
-        C::from_negotiated(self, &resolved)
+        negotiate_dyn::<C>(self)
     }
+}
+
+/// 对 **trait object**（`&dyn Vm`）可用的协商入口。
+///
+/// # 为什么是自由函数而不是 trait 方法
+///
+/// `Vm::negotiate` 是泛型方法 + `Self: Sized` ⇒ 只存在于具体类型，trait object
+/// 上没有这个符号。泛型方法**无法** object-safe（即便去掉 `Self: Sized`，
+/// vtable 也放不下单态化后的所有 `C`）。
+///
+/// 宿主把能力以 `Arc<dyn Vm>` 注入后，VM 侧拿到的正是 trait object ——
+/// 这条路径必须用自由函数。
+///
+/// 行为与 [`Vm::negotiate`] **完全一致**：按完整函数名逐个解析，全有或全无；
+/// 调用期仍是一次 fn 指针间接寻址（协商只发生一次）。
+pub fn negotiate_dyn<'a, C>(vm: &'a dyn Vm) -> Option<C>
+where
+    C: Capability<'a>,
+{
+    let sigs = C::signatures();
+    let mut resolved: Vec<Resolved<'a>> = Vec::with_capacity(sigs.len());
+    for sig in sigs {
+        let name = sig.qualified();
+        // 任一签名缺失 ⇒ 整个协商失败（不返回"有的能调、有的崩"的句柄）。
+        let callable = vm.resolve(&name)?;
+        resolved.push(Resolved {
+            signature: *sig,
+            callable,
+        });
+    }
+    C::from_negotiated(vm, &resolved)
 }
