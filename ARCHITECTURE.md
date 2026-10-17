@@ -564,8 +564,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **P0 目标 trait 化**：`BindingTarget` 枚举 → `Arc<dyn Target>`
 >   （`xcal-scene::animation::target`）。五个目标：`CircleRadius` / `Phase` / `CameraEye` /
 >   `MorphT` / `Camera2DFraming`（新增）。新增驱动目标**不改枚举、不改 System 源码**。
->   代价（记账）：失去 enum exhaustiveness；`dyn Trait` 不能 serde。为 UI 分类另加
->   `Target::kind() -> TargetKind`（无载荷判别式）。
+>   代价（记账）：失去 enum exhaustiveness；`dyn Trait` 不能 serde。为 UI 分类当时另加了
+>   无载荷的类别判别式（**T0-② 已删除**：改由 target 自报 `name()` / `target_id()`）。
 > - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`xc_object::Framing2D`，
 >   无 `rect`）；`Camera2D` 与渲染目标 `rect` 解绑（录制时经 `ViewRect` 绑定，方案 a）；
 >   控制器纯函数移到 `xcal-scene::camera_input::apply_pan_zoom`；
@@ -692,7 +692,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **R3 动画接线**：组件 `Reveal { path, start, end }`（与 `MorphShape` 同级；独立组件
 >   ⇒ 不进 `record_scene` 的组件组合，天然避免"整条路径被画两遍"）+ target
 >   `RevealRange`（`Scalar → end`、`Vec2 → (start, end)`，口径对齐 `Camera2DFraming`）+
->   `TargetKind::RevealRange`。**不改枚举以外任何 System**（P0 trait 化的红利）。
+>   目标类别变体（**T0-② 已删除**）。**不改枚举以外任何 System**（P0 trait 化的红利）。
 > - **R4 队列与录制**：`RevealItem { path, start, end, style }` + `RevealQueue` +
 >   `push_reveal_item`（屏幕空间 + 唯一换算点）+ `RevealRecordSystem`（RenderCommit，
 >   `R=(ViewRect, Camera2DHandle)`、`W=(RevealQueue,)`）。后端 `wgpu_2d` 的**趟 4**：
@@ -777,8 +777,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （两处注释各写一句：`build_scene_view` 与 `record_scene_tagged`）。
 > - **N4 `Opacity`**：`Opacity(pub f32)` 在 `xc-render-ir`（样式侧），缺席 = 1.0，
 >   **显式 `impl Default` = `FULL`**（不 derive，以免得到 `0.0` 全透明这种危险缺省）。
->   通道 = 组件 + target `OpacityValue`（`Scalar → Opacity.0`）+ `TargetKind::OpacityValue`
->   （照 `Camera2DFraming` 的"单 target 按变体分派"口径）。
+>   通道 = 组件 + target `OpacityValue`（`Scalar → Opacity.0`）+ 目标类别变体
+>   （**T0-② 已删除**，照 `Camera2DFraming` 的"单 target 按变体分派"口径）。
 >   ⚠️ **预乘 alpha 硬约束（实测纠正计划初稿）**：`Style2D` 存**直色**，预乘发生在 GPU 侧
 >   （`uniform_bytes` 写 `rgb * a`）⇒ **施加不透明度 = 只缩直色的 alpha**（`rgb` 不动）；
 >   计划 §6.2.4 写的"`rgb` 与 `a` 同乘"对直色是**错的** —— 同乘会被 GPU 再乘一次 `a`，

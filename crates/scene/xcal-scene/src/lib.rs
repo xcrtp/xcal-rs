@@ -30,7 +30,7 @@ pub use deferred::{DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicOb
 pub use transform::{Transform2D, Transform2DInto};
 pub use time_state::TimeState;
 pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
-pub use animation::{Binding, BindingTable, SeekKind, Target, TargetKind, Timeline};
+pub use animation::{Binding, BindingTable, SeekKind, Target, Timeline, TransformValue};
 pub use camera_input::{
     CameraInputSystem, apply_command_2d, apply_command_3d, apply_fps, apply_orbit, apply_pan_zoom,
 };

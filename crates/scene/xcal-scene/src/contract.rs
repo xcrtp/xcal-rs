@@ -22,7 +22,7 @@
 // hecs 没有类型擦除的 bundle 入口（`EntityBuilder` 只有 `add::<T>()`），
 // 故动态创建必须**按类型登记**。下表即唯一登记点：
 //
-//   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Transform` / `ZOrder`
+//   图元与摆放：`Circle` / `Line` / `Path` / `Rect` / `Arrow`（T2） / `Transform` / `ZOrder`
 //   组织与可见性（N 阶段）：`Name` / `Group` / `Visibility` / `Opacity`
 //   相机：      `Camera2D` / `Camera3D` / `Projection` / `Framing2D`（2D 取景参数，P1-2）/
 //               `CameraMode`（相机交互模式，K0）/ `FpsView`（FPS 朝向状态，K1）
@@ -37,8 +37,8 @@
 use hecs::{Entity, EntityBuilder, World};
 
 use xc_object::{
-    Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line, Path,
-    Projection, Rect, Transform, ZOrder,
+    Arrow, Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line,
+    Path, Projection, Rect, Transform, ZOrder,
 };
 use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
 use xc_scene_contract::Parent;
@@ -246,6 +246,8 @@ fn add_known(
     arm!(Line);
     arm!(Path);
     arm!(Rect);
+    // T2：箭头是**一等图元**（`spawn_dyn` 必须认得它；漏登记 ⇒ 静默返回 `None`）。
+    arm!(Arrow);
     arm!(Transform);
     arm!(ZOrder);
     // N 阶段（对象的组织与可见性）：四个都必须登记，漏一个 ⇒ 带它的对象

@@ -27,7 +27,7 @@ pub use xc_notion::{
     SyncSendFn,
 };
 // 图元对象与摆放组件（M3-4/M3-5：定义在场景对象层 `xc-object`，此处转发）。
-pub use xc_object::{Circle, Line, Path, Rect, Transform};
+pub use xc_object::{Arrow, Circle, Line, Path, Rect, Transform};
 pub use xc_render_ir::{FillSolid, FillStyle, StrokeSolid, StrokeStyle};
 
 #[cfg(test)]

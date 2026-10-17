@@ -24,12 +24,13 @@
 //   [`MorphQueue`] 以"两端几何 + `t`"的原样形态直达 2D 后端；
 // - 两端几何与 `t` 无关 ⇒ 三角化与 GPU 缓冲都帧间命中，每帧只写一个 `t` uniform。
 
-use crate::components::{Circle, FillSolid, Line, Path, Rect, StrokeSolid};
+use crate::components::{Arrow, Circle, FillSolid, Line, Path, Rect, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
 use xc_notion::Transform2D as Affine2D;
 use xc_object::Camera2D;
 // 对象层的绘制层级（M4）：可缺席 —— 缺席即用录制默认层。
-use xc_object::ZOrder;
+// T1：逐对象摆放（`Transform`，可缺席 ⇒ 恒等）。
+use xc_object::{Transform, ZOrder};
 // `Path::to_screen(camera)`（世界 → 屏幕）由 xcal-scene 的场景层 trait 提供。
 use xcal_scene::transform::Transform2D as _;
 // 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
@@ -501,13 +502,18 @@ pub fn apply_opacity(style: &mut Style2D, opacity: Opacity) {
 
 /// 录制**一组** `(图元, 样式)` 组合：契约层访客形态 → [`DrawQueue`]。
 ///
-/// 拆出来是为了让 [`record_scene_tagged`] 的 7 组调用保持"一组一行"的可读性，
+/// 拆出来是为了让 [`record_scene_tagged`] 的 9 组调用保持"一组一行"的可读性，
 /// 同时把"**可见性过滤** + 降级 + **不透明度施加** + 剔除 + 入队"的逻辑只写一遍。
 ///
 /// 层级（M4）：对象上**可选**的 [`ZOrder`] 优先（网格 / 坐标轴靠它压在内容之下），
 /// 缺席则用 `z_default`（内容默认层）。可缺席是必须的：绝大多数对象不分层。
 ///
 /// 顺序（N5）：**先判可见性**（不可见 ⇒ 连降级都不做），再降级，最后施加不透明度。
+///
+/// 摆放（T1）：对象上**可选**的 [`Transform`] 提供逐对象本地变换；
+/// 世界 → 屏幕 = `相机 ∘ 对象` ⇒ 逐对象仿射**先**作用于几何，相机仿射**后**作用
+/// （`Transform2D::compose` 的"先 self 后 other"语义，见 `xc_object::Transform::to_affine2d`）。
+/// **缺席 `Transform` ⇒ 直接用相机仿射（逐位不变）** —— 不引入"乘恒等"的浮点噪声。
 fn record_group<S, A, B>(
     scene: &S,
     t: &Affine2D,
@@ -525,7 +531,12 @@ fn record_group<S, A, B>(
         if !visible_for(scene, id, camera_tag, groups) {
             return;
         }
-        if let Some((shape, mut style)) = (a, b).to_primitive(t, scale) {
+        // T1：逐对象摆放（缺席 ⇒ **保持原样** `*t`，保证"未使用新能力时逐位不变"）。
+        let world_t = match scene.with::<Transform, _>(id, |tr| tr.to_affine2d()) {
+            Some(obj) => obj.compose(*t),
+            None => *t,
+        };
+        if let Some((shape, mut style)) = (a, b).to_primitive(&world_t, scale) {
             apply_opacity(&mut style, opacity_of(scene, id));
             let z = z.map_or(z_default as i32, |z| z.0);
             queue.push(DrawCommand::new(ZIndex::new(z), shape, style));
@@ -562,7 +573,7 @@ pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut Draw
 /// 下列组合的顺序即同 `z` 下的绘制顺序（[`DrawQueue`] 稳定排序），
 /// 与重构前逐位一致。
 ///
-/// **M3-7：不认识 hecs。** 参数是契约层 [`Scene`]（`for_each_pair_opt` 完成 7 组
+/// **M3-7：不认识 hecs。** 参数是契约层 [`Scene`]（`for_each_pair_opt` 完成 9 组
 /// `(图元, 样式)` 组合查询）；hecs 的实现（适配器 `WorldScene`）在 `xcal-scene`，
 /// 本 crate 的依赖里没有 hecs。
 ///
@@ -595,6 +606,11 @@ pub fn record_scene_tagged<S: SceneRead>(
     record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
     record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
     record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    // T2：箭头是**一等图元**，两种样式各一组（`FillSolid` ⇒ 实心箭头，`StrokeSolid` ⇒ 空心）。
+    // 加在既有 7 组之后 ⇒ 同 `z` 下的绘制顺序向后追加，**不影响**已有对象之间的相对顺序
+    // （`DrawQueue` 稳定排序）。
+    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Arrow, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
 }
 
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
@@ -1228,6 +1244,184 @@ mod tests {
             panic!("expected Shape2D::Circle");
         };
         assert!((radius - 20.0).abs() < 1e-4, "radius = {radius}");
+    }
+
+    // ─── T1：逐对象 `Transform`（2D 摆放通道）────────────────────────────
+
+    fn transform_at(x: f32, y: f32) -> xc_object::Transform {
+        xc_object::Transform {
+            position: glam::Vec3::new(x, y, 0.0),
+            ..Default::default()
+        }
+    }
+
+    fn circle_center(cmd: &DrawCommand) -> glam::Vec2 {
+        match &cmd.shape {
+            Shape2D::Circle { center, .. } => *center,
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    /// **缺席（或恒等）`Transform` ⇒ 逐位不变**：实心写入恒等摆放与完全不写摆放
+    /// 得到**完全相同**的几何（证明"未使用新能力时画面逐位不变"）。
+    #[test]
+    fn absent_or_identity_transform_is_bit_identical() {
+        let mut world = TestScene::new();
+        world.spawn((mk_circle(3.0), mk_stroke()));
+        world.spawn((
+            mk_circle(3.0),
+            mk_stroke(),
+            xc_object::Transform::default(),
+        ));
+        // spawn 顺序 = 查询顺序 ⇒ 两条命令一一对应。
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.commands()[0].shape.bounds(), q.commands()[1].shape.bounds());
+    }
+
+    /// **T1**：摆放 `position = (1, 0)` ⇒ 几何整体右移 `1 × camera.scale` 像素。
+    #[test]
+    fn object_transform_translates_geometry() {
+        let mut world = TestScene::new();
+        world.spawn((mk_circle(0.0), mk_stroke()));
+        world.spawn((mk_circle(0.0), mk_stroke(), transform_at(1.0, 0.0)));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+
+        let base = circle_center(&q.commands()[0]);
+        let moved = circle_center(&q.commands()[1]);
+        assert!((base.x - 50.0).abs() < 1e-4, "基准圆心 = {base:?}");
+        assert!(
+            (moved.x - base.x - 10.0).abs() < 1e-4,
+            "右移 1 世界单位 × scale 10 = 10px（{base:?} → {moved:?}）"
+        );
+        assert!((moved.y - base.y).abs() < 1e-6, "y 不变");
+    }
+
+    /// **T1**：摆放 `scale = 2` ⇒ 半径（覆盖像素数）增大（半径 × 2）。
+    #[test]
+    fn object_transform_scales_geometry() {
+        let mut world = TestScene::new();
+        world.spawn((mk_circle(0.0), mk_stroke()));
+        world.spawn((
+            mk_circle(0.0),
+            mk_stroke(),
+            xc_object::Transform {
+                scale: glam::Vec3::splat(2.0),
+                ..Default::default()
+            },
+        ));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+
+        let radius = |cmd: &DrawCommand| match &cmd.shape {
+            Shape2D::Circle { radius, .. } => *radius,
+            other => panic!("expected Circle, got {other:?}"),
+        };
+        let (r0, r1) = (radius(&q.commands()[0]), radius(&q.commands()[1]));
+        assert!((r1 - r0 * 2.0).abs() < 1e-4, "{r0} × 2 ≠ {r1}");
+    }
+
+    /// **T1**：摆放绕 Z 旋转 90° ⇒ 端点位置按旋转后落点（可证伪：顺序错则落到别处）。
+    #[test]
+    fn object_transform_rotates_geometry_about_z() {
+        let mut world = TestScene::new();
+        world.spawn((Line::new((0.0, 0.0), (1.0, 0.0)), mk_stroke()));
+        world.spawn((
+            Line::new((0.0, 0.0), (1.0, 0.0)),
+            mk_stroke(),
+            xc_object::Transform {
+                rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                ..Default::default()
+            },
+        ));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+
+        let Shape2D::Line { start: s0, end: e0 } = &q.commands()[0].shape else {
+            panic!("expected Line");
+        };
+        // 基准（未摆放）：世界 (0,0)→(1,0) ⇒ 屏幕 (50,50)→(60,50)。
+        assert_eq!((*s0, *e0), (glam::Vec2::new(50.0, 50.0), glam::Vec2::new(60.0, 50.0)));
+
+        let Shape2D::Line { start: s1, end: e1 } = &q.commands()[1].shape else {
+            panic!("expected Line");
+        };
+        // 旋转 90°：世界 (1,0) → (0,1) ⇒ 屏幕 (50, 40)（Y-down 翻转）。
+        assert!((s1.x - 50.0).abs() < 1e-4 && (s1.y - 50.0).abs() < 1e-4, "start = {s1:?}");
+        assert!(
+            (e1.x - 50.0).abs() < 1e-4 && (e1.y - 40.0).abs() < 1e-4,
+            "旋转后终点应为 (50, 40)，实际 {e1:?}"
+        );
+    }
+
+    // ─── T2：箭头（一等图元，`Group` 降解）─────────────────────────────────
+
+    /// **T2**：`Arrow` 两种样式都进队列；均降解为 `Group { [杆, 头] }`（2 个多边形）。
+    #[test]
+    fn arrow_records_as_group_in_both_styles() {
+        let a = Arrow::new((0.0, 0.0), (1.0, 0.0), 0.2, 0.2);
+        let mut world = TestScene::new();
+        // 组顺序：`record_scene_tagged` 先 (Arrow, StrokeSolid) 后 (Arrow, FillSolid)。
+        world.spawn((a, mk_stroke()));
+        world.spawn((a, mk_fill()));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &test_camera(), &mut q);
+        assert_eq!(q.len(), 2, "描边 + 填充各一条");
+
+        for (i, cmd) in q.commands().iter().enumerate() {
+            match &cmd.shape {
+                Shape2D::Group { children } => {
+                    assert_eq!(children.len(), 2, "第 {i} 条：杆 + 头");
+                    for c in children {
+                        assert!(matches!(c, Shape2D::Polygon { .. }), "子图元必须是闭合多边形");
+                    }
+                }
+                other => panic!("第 {i} 条应为 Group，实际 {other:?}"),
+            }
+        }
+        assert!(q.commands()[0].style.fill.is_none(), "第一条是描边箭头");
+        assert!(q.commands()[1].style.stroke.is_none(), "第二条是实心箭头");
+    }
+
+    /// **T2**：方向可证伪 —— 把 `from` / `to` 对调后，头部像素/几何分布镜像。
+    #[test]
+    fn arrow_direction_is_mirrored_when_reversed() {
+        let mut world = TestScene::new();
+        world.spawn((Arrow::new((0.0, 0.0), (1.0, 0.0), 0.2, 0.2), mk_fill()));
+        world.spawn((Arrow::new((1.0, 0.0), (0.0, 0.0), 0.2, 0.2), mk_fill()));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &test_camera(), &mut q);
+
+        let head_tip_x = |cmd: &DrawCommand| match &cmd.shape {
+            Shape2D::Group { children } => match &children[1] {
+                // 头的第二个顶点就是箭尖 `to`。
+                Shape2D::Polygon { points } => points[1].x,
+                other => panic!("expected head polygon, got {other:?}"),
+            },
+            other => panic!("expected Group, got {other:?}"),
+        };
+        // 世界 x = 1 → 屏幕 51（test_camera scale = 1）；世界 x = 0 → 屏幕 50。
+        assert!((head_tip_x(&q.commands()[0]) - 51.0).abs() < 1e-4);
+        assert!((head_tip_x(&q.commands()[1]) - 50.0).abs() < 1e-4);
+    }
+
+    /// `Arrow` 也受 T1 的逐对象 `Transform` 影响（两个能力可组合）。
+    #[test]
+    fn arrow_honors_object_transform() {
+        let a = Arrow::new((0.0, 0.0), (1.0, 0.0), 0.2, 0.2);
+        let mut world = TestScene::new();
+        world.spawn((a, mk_fill()));
+        world.spawn((a, mk_fill(), transform_at(1.0, 0.0)));
+        let mut q = DrawQueue::new();
+        record_scene(&world, &cam_with_scale(10.0), &mut q);
+        let bounds = |cmd: &DrawCommand| cmd.shape.bounds().unwrap();
+        let (b0, b1) = (bounds(&q.commands()[0]), bounds(&q.commands()[1]));
+        assert!(
+            (b1.min.x - b0.min.x - 10.0).abs() < 1e-4,
+            "Transform 应把整条箭头右移 10px（{b0:?} → {b1:?}）"
+        );
     }
 
     /// 形变端点的**闭合口径**（实测修）：两端都开口 ⇒ 不得补弦。

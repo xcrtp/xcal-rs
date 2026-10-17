@@ -101,9 +101,9 @@ xcal-app (装配 + ParamPanelSystem)
   （值取自本帧 `SceneView` 的 2D 图层 —— UI 不再持有相机状态）。
 - **时间面板（左）**：播放/暂停按钮、**`⟲ 重新播放` 按钮**（拨回 `t = 0` 并恢复播放 →
   `Button(REPLAY)` → `TimeControlSystem`）、速度滑块、时间轴 seek 滑块。
-- **参数面板（右）**：按 **(目标类别, 曲线类型)** 展示绑定滑块——圆半径 `base/amp/omega`、
-  函数相位 `omega`、3D 轨道相机 `radius/speed/angle`（目标 trait 化后用
-  `Target::kind()` 分类，见 `xcal_scene::animation::TargetKind`）。
+- **参数面板（右）**：**按曲线类型**展示绑定滑块——圆半径 `base/amp/omega`、
+  函数相位 `omega`、3D 轨道相机 `radius/speed/angle`（标签取 `Target::name()`，
+  可选中文映射缺失时回退原名；写回由场景侧按 `WidgetId` 完成）。
 
 所有控件交互都以 `SceneEvent`（按 `WidgetId` 标识）上报，由场景侧 System 消费。
 

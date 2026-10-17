@@ -28,14 +28,14 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use xcal_render::{MeasureSpace, StrokeSolid};
+use xcal_render::{FillSolid, MeasureSpace, StrokeSolid};
 use xcal_scene::animation::{Camera2DFraming, RevealRange};
 use xcal_scene::scene::components::Reveal;
 use xcal_scene::scene::Scene;
 use xcal_scene::scene_script::{Handle, SceneEncoder};
 use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 use xc_notion::Path2D;
-use xc_object::{Axes2D, Camera2DHandle, Framing2D};
+use xc_object::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
 use xc_prerender::InMemoryEngine;
 
 use crate::formula;
@@ -54,6 +54,14 @@ const CAMERA_SCALE_PUSHED: f32 = 110.0;
 /// 固定"总窗口"而不是"每轮廓固定时长"：保持六条分镜声明的时序（3.5–4.5s）不变，
 /// 轮廓多则每笔更快（字形越多写得越急），但整段不会溢出到 4.5s 之后。
 const FORMULA_WRITE_SECONDS: f64 = 1.0;
+
+/// **T3 标注文字**：纯文本标注的摆放位置（世界坐标，经 `Transform` 施加）。
+///
+/// 选点使它在**镜头推进前后都在可见范围内**（推进后可见 x ∈ [-2.07, 5.21]、
+/// y ∈ [-1.73, 3.73]）；文字几何在原点编译，位置由 `Transform` 负责 ⇒ T1 + T3 联用。
+const TEXT_POS: glam::Vec3 = glam::Vec3::new(-1.5, 3.0, 0.0);
+/// 标注文字的目标字号（世界单位高度）。
+const TEXT_FONT_SIZE: f32 = 0.55;
 
 /// 曲线采样区间：`[-π, π]`（关于原点对称、两端恰在 x 轴上）。
 ///
@@ -101,6 +109,22 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Storyboard {
 
     // 分镜 6：公式 `y = sin x` 的书写动画对象（每个描边子轮廓一个）。
     let formula_h = spawn_formula_reveal(&mut enc, engine);
+
+    // ── T3 标注文字：纯文本 → 描边路径，经 `Transform` 摆放（T1 + T3 联用）──
+    // 每个描边子轮廓一个对象（与公式同口径）；静态，不参与分镜时序。
+    spawn_text_label(&mut enc, engine);
+
+    // ── T2 箭头：实心箭头指向曲线峰值 (π/2, 1)（一等图元 + Group 降解）────────
+    // 静态标注，不参与分镜时序；`FillSolid` ⇒ 3B1B 式的实心箭头。
+    enc.spawn(vec![
+        Box::new(Arrow::new(
+            (0.2_f32, 2.1_f32),
+            (CAMERA_PEAK.x - 0.15, CAMERA_PEAK.y + 0.15),
+            0.25,
+            0.25,
+        )),
+        Box::new(FillSolid::new((255, 220, 120, 255))),
+    ]);
 
     // ── 时间编排（顺序 + 段内并行）─────────────────────────────────────
     // 0–2s：曲线书写（`end` 在段内 0 → 1）
@@ -241,10 +265,36 @@ fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<
     handles
 }
 
+/// **T3 标注文字**：纯文本 → 描边路径 → 每个子轮廓一个**带 `Transform` 的对象**。
+///
+/// 与 [`spawn_formula_reveal`] 同口径（逐轮廓独立对象，避免轮廓间桥接线），
+/// 差别只在：这里是**静态**文字（不进时间轴），位置由 T1 的 `Transform` 施加
+/// （文字几何在原点编译）—— 同时验证 Text 与摆放通道可组合。
+///
+/// 编译失败（如 Typst 引擎不可用）时静默跳过（优雅降级，不 panic）。
+fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
+    let text = formula::TextSpec::new("math animation", TEXT_FONT_SIZE, glam::Vec2::ZERO);
+    let spec = text.to_formula_spec();
+    let Some(ir) = formula::rebuild(engine, &spec) else {
+        eprintln!("[xcal-app] T3 标注文字编译失败，跳过");
+        return;
+    };
+    for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+        enc.spawn(vec![
+            Box::new(Path::new(path)),
+            Box::new(StrokeSolid::new_in(width, color, space)),
+            Box::new(Transform {
+                position: TEXT_POS,
+                ..Default::default()
+            }),
+        ]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_scene::animation::{Target, TargetKind, Timeline};
+    use xcal_scene::animation::{Target, Timeline};
     use xcal_scene::contract::{ObjectId, SceneRead};
     use xc_prerender::placeholder_engine;
 
@@ -304,11 +354,12 @@ mod tests {
         }
 
         // 分镜 5 是**并行**两动作（scale + center）：同区间、同节点。
+        // T0-②：按**对象**筛选（指向本分镜那台 2D 相机的绑定），比按类别更精确。
         let cam_nodes: Vec<_> = sb
             .bindings
             .bindings
             .iter()
-            .filter(|b| b.target.kind() == TargetKind::Camera2DFraming)
+            .filter(|b| b.target.target_id() == sb.camera.0)
             .map(|b| b.clock)
             .collect();
         assert_eq!(cam_nodes.len(), 2, "scale 与 center 各一条绑定");
@@ -348,6 +399,41 @@ mod tests {
                 "轮廓必须按 min_x 升序排期（从左往右写），实际 {xs:?}"
             );
         }
+    }
+
+    /// **T3 + T1 在分镜里的落点**：标注文字对象存在、带真实几何，且经 `Transform` 摆放。
+    #[test]
+    fn storyboard_spawns_transformed_text_label() {
+        let mut scene = Scene::new();
+        let _ = build(&mut scene, &placeholder_engine());
+
+        // 分镜里的 `Path` 组件只属于 T3 标注文字（公式用 `Reveal`，网格用 `Line`）。
+        let mut ids = Vec::new();
+        scene.for_each::<Path>(|id, _| ids.push(id));
+        assert!(!ids.is_empty(), "T3 标注文字应已装配");
+
+        let mut placed = 0usize;
+        for id in ids {
+            if scene.with::<Transform, _>(id, |t| t.position) == Some(TEXT_POS) {
+                placed += 1;
+                let has_geometry = scene
+                    .with::<Path, _>(id, |p| p.0.compute_bounds().is_some())
+                    .unwrap_or(false);
+                assert!(has_geometry, "文字对象应带真实几何");
+            }
+        }
+        assert!(placed > 0, "标注文字必须经 `Transform` 摆放到 {TEXT_POS:?}");
+    }
+
+    /// **T2 在分镜里的落点**：箭头图元已装配（同时证明 `add_known` 登记齐备 ——
+    /// 未登记时 `commit` 会直接 `Err`）。
+    #[test]
+    fn storyboard_spawns_arrow() {
+        let mut scene = Scene::new();
+        let _ = build(&mut scene, &placeholder_engine());
+        let mut n = 0;
+        scene.for_each::<Arrow>(|_, _| n += 1);
+        assert_eq!(n, 1, "分镜应装配一支静态箭头");
     }
 
     /// [`order_by_reading_order`] 的**乱序输入**用例（含无包围盒者 + 稳定性）。
@@ -401,12 +487,16 @@ mod tests {
 
     /// §11.2：新增驱动目标**不需要改枚举、也不需要改 System 源码** ——
     /// 本脚本用的 `Camera2DFraming` 就是 P0 新增、无 System 改动的目标。
+    ///
+    /// T0-② 后判据从 `kind()` 改为 **`name()` / `target_id()`**：名字由 target 自带，
+    /// 全仓**没有**需要同步维护的目标清单。
     #[test]
     fn new_target_needs_no_enum_or_system_change() {
         let t = Camera2DFraming {
             id: ObjectId::DANGLING,
         };
-        assert_eq!(t.kind(), TargetKind::Camera2DFraming);
+        assert_eq!(t.name(), "Camera2DFraming");
+        assert_eq!(t.target_id(), ObjectId::DANGLING);
     }
 
     /// §11.3：改掉第一段动画的时长后，后续动画的时刻**自动跟随**。

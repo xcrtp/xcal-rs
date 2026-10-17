@@ -53,7 +53,8 @@ pub use lerp::Lerp;
 pub use mat::{Mat3, Mat4, Quat};
 pub use path::{DEFAULT_MORPH_SAMPLES, MORPH_TOLERANCE, Path2D, Path3D, PathCommand};
 pub use primitives::{
-    Circle2D, Ellipse2D, Line2D, Line3D, Point3D, Polygon2D, Polyline2D, Triangle2D,
+    ARROW_SHAFT_WIDTH_RATIO, Arrow2D, Circle2D, Ellipse2D, Line2D, Line3D, Point3D, Polygon2D,
+    Polyline2D, Triangle2D,
 };
 pub use rect::Rect2D;
 pub use sample::{Interpolator, Sampler1D, Sampler2D};

@@ -136,7 +136,7 @@ let mut bindings = bindings2d;
 // 开关打开时它们被**移出**绑定表（否则每帧无条件写 center/scale，用户的 Pan/Zoom 同帧被抹掉）、
 // 关闭时放回。
 let cam2d_bindings: Vec<Binding> =
-    bindings.bindings.iter().filter(|b| b.target.kind() == TargetKind::Camera2DFraming).cloned().collect();
+    bindings.bindings.iter().filter(|b| b.target.target_id() == camera2d_handle.0).cloned().collect();
 // 唯一一条手工绑定：3D 轨道相机（与分镜编排无关，时间源 = 全局 t）
 // K3：这条绑定由 `CameraDriveSystem` **托管** —— 「视口操作」切到 3D 时它会从表里
 // **移出**（让位给交互：否则 `CameraEye` 每帧无条件写 eye，拖拽效果立刻被覆盖），

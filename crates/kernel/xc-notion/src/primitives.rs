@@ -275,6 +275,83 @@ impl Line2D {
     }
 }
 
+/// 箭头**杆宽**相对**头宽**的比例（T2）。
+///
+/// 用户决策的字段表只有 `from` / `to` / `head_length` / `head_width`（见计划 §3.1），
+/// 没有独立的杆宽字段 ⇒ 杆宽由此比例导出 —— 避免"为假想需求设计"的额外参数。
+pub const ARROW_SHAFT_WIDTH_RATIO: f32 = 0.5;
+
+/// 2D 直线箭头：起点 + 终点 + 头部尺寸。
+///
+/// **度量空间 = 世界单位**（与 [`Circle2D::radius`] 同口径）：`head_length` / `head_width`
+/// 随相机 `scale` 一同缩放；"屏幕恒定粗细的箭头"需另接 [`MeasureSpace`](crate::MeasureSpace)
+/// （本轮不做）。
+///
+/// 头部样式本轮**只做实心三角**（参数里不放样式枚举，将来要扩展时再加字段）。
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Arrow2D {
+    /// 箭尾（起点）。
+    pub from: Vec2,
+    /// 箭头（终点）。
+    pub to: Vec2,
+    /// 头部长度（从 `to` 沿轴向回退的距离，世界单位）。
+    pub head_length: f32,
+    /// 头底宽度（世界单位）。
+    pub head_width: f32,
+}
+
+impl Arrow2D {
+    pub fn new(from: Vec2, to: Vec2, head_length: f32, head_width: f32) -> Self {
+        Self {
+            from,
+            to,
+            head_length,
+            head_width,
+        }
+    }
+
+    /// 全长（`from` → `to`）。
+    pub fn length(&self) -> f32 {
+        (self.to - self.from).length()
+    }
+
+    /// 单位方向向量（退化零长 ⇒ [`Vec2::ZERO`]，不 panic）。
+    pub fn direction(&self) -> Vec2 {
+        (self.to - self.from).normalize_or_zero()
+    }
+
+    /// 几何分解：`(杆, 头)`，二者均为**闭合多边形**（逆时针）。
+    ///
+    /// - 杆 = 从 `from` 到头底的细长矩形，宽 = `head_width ×` [`ARROW_SHAFT_WIDTH_RATIO`]；
+    /// - 头 = 以头底为底、`to` 为顶点的三角；`head_length` 被钳到全长以内（不越过起点）。
+    ///
+    /// 退化（零长 / 头宽或头长为 0）⇒ 返回空多边形（不 panic，由三角化静默丢弃）。
+    pub fn parts(&self) -> (Polygon2D, Polygon2D) {
+        let d = self.to - self.from;
+        let len = d.length();
+        if len <= f32::EPSILON {
+            return (Polygon2D::new(Vec::new()), Polygon2D::new(Vec::new()));
+        }
+        let dir = d / len;
+        // 左法线（用于给杆 / 头"张开宽度"）。
+        let n = Vec2::new(-dir.y, dir.x);
+        let half_head = self.head_width.max(0.0) * 0.5;
+        let half_shaft = half_head * ARROW_SHAFT_WIDTH_RATIO;
+        // 头长不得超过全长（否则头会越过起点）。
+        let head_len = self.head_length.clamp(0.0, len);
+        let head_base = self.to - dir * head_len;
+
+        let shaft = Polygon2D::new(vec![
+            self.from - n * half_shaft,
+            head_base - n * half_shaft,
+            head_base + n * half_shaft,
+            self.from + n * half_shaft,
+        ]);
+        let head = Polygon2D::new(vec![head_base - n * half_head, self.to, head_base + n * half_head]);
+        (shaft, head)
+    }
+}
+
 /// 2D 折线：开放或闭合的顶点序列（顶点即精确表示，非采样产物）。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polyline2D {
@@ -688,5 +765,49 @@ mod tests {
         // 镜像（行列式 < 0）→ 绕序翻转。
         let flip = Transform2D::scale(Vec2::new(-1.0, 1.0));
         assert!(!sq.transformed(&flip).is_ccw());
+    }
+
+    // ── 箭头（T2）──────────────────────────────────────────────────────
+
+    /// 杆是矩形（4 顶点）、头是三角（3 顶点），且两极都落在 `from` / `to`。
+    #[test]
+    fn arrow2d_parts_are_quad_and_triangle() {
+        let a = Arrow2D::new(Vec2::ZERO, Vec2::new(4.0, 0.0), 1.0, 1.0);
+        let (shaft, head) = a.parts();
+        assert_eq!(shaft.len(), 4, "杆 = 细长矩形");
+        assert_eq!(head.len(), 3, "头 = 三角");
+        // 杆起点 = from；头顶点 = to。
+        assert!((shaft.points[0].x - 0.0).abs() < 1e-6);
+        assert!((head.points.iter().find(|p| p.x == 4.0).unwrap().x - 4.0).abs() < 1e-6);
+        // 头底在 `to - dir*head_length` = x = 3。
+        let base_x = head.points[0].x;
+        assert!((base_x - 3.0).abs() < 1e-6, "头底 x = {base_x}");
+        // 头宽 > 杆宽（判据：头部确实张开）。
+        let head_w = (head.points[0].y - head.points[2].y).abs();
+        let shaft_w = (shaft.points[0].y - shaft.points[2].y).abs();
+        assert!(head_w > shaft_w, "头宽 {head_w} 应大于杆宽 {shaft_w}");
+        assert!(shaft.is_ccw() && head.is_ccw(), "两极应为逆时针");
+    }
+
+    /// 退化：零长 ⇒ 空多边形（不 panic）。
+    #[test]
+    fn arrow2d_degenerate_is_empty() {
+        let a = Arrow2D::new(Vec2::new(1.0, 1.0), Vec2::new(1.0, 1.0), 1.0, 1.0);
+        let (shaft, head) = a.parts();
+        assert!(shaft.is_empty() && head.is_empty());
+        assert_eq!(a.length(), 0.0);
+        assert_eq!(a.direction(), Vec2::ZERO);
+    }
+
+    /// 头长超过全长 ⇒ 钳到全长（头底回到起点，不越过）。
+    #[test]
+    fn arrow2d_head_length_is_clamped_to_total_length() {
+        let a = Arrow2D::new(Vec2::ZERO, Vec2::new(1.0, 0.0), 99.0, 1.0);
+        let (_, head) = a.parts();
+        assert!(
+            (head.points[0].x - 0.0).abs() < 1e-6,
+            "头底应被钳到起点，实际 x = {}",
+            head.points[0].x
+        );
     }
 }

@@ -302,7 +302,17 @@ impl SceneScript {
                 handles.get(refid.index as usize).copied().unwrap_or(ObjectId::DANGLING)
             });
             match scene.spawn_dyn(components) {
-                Some(id) => handles.push(id),
+                Some(id) => {
+                    // **T0-① 不变量防御**：`handle_ref` 用 `generation == 0` 编码"声明期占位
+                    // 引用"（见上），其前提是**真实对象的 `generation` 恒 ≥ 1**。该前提若被
+                    // 破坏，`is_handle_ref` 会把真实对象误判成占位引用 ⇒ 解析时改写 ⇒ 指向
+                    // 错误对象（不报错、不崩溃，只画面错乱）。这里把不变量钉在**解析路径**上。
+                    debug_assert!(
+                        id.generation >= 1,
+                        "真实对象的 generation 必须 ≥ 1（0 被 handle_ref 保留作占位引用）：{id:?}"
+                    );
+                    handles.push(id)
+                }
                 None => return Err(ScriptError::CreateFailed { handle: Handle(i) }),
             }
         }
@@ -339,7 +349,7 @@ impl From<SceneEncoder> for SceneScript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::target::{OpacityValue, TargetKind};
+    use crate::animation::target::{OpacityValue, Target};
     use crate::contract::SceneRead;
     use crate::scene::Scene as SceneStruct;
     use std::collections::HashMap;
@@ -416,6 +426,97 @@ mod tests {
         // commit 顺序 = 声明顺序：cam 先建 ⇒ index 更小（hecs 顺序分配）。
         assert!(cam_id.index < obj_id.index);
         assert_eq!(scene.len(), 2);
+    }
+
+    /// **T0-① 不变量用例**：把"真实对象 `generation` 恒 ≥ 1"钉在测试里（不只是注释）。
+    ///
+    /// 可证伪：若 `ObjectId` 的分配方将来把 `generation` 从 0 起（或复用槽位后回 0），
+    /// 本用例 RED。它与 `commit` 里的 `debug_assert!` 是同一不变量的两条守卫。
+    #[test]
+    fn spawned_objects_have_generation_at_least_one() {
+        let mut enc = SceneEncoder::new();
+        for i in 0..8 {
+            enc.spawn(circle_components(i as f32));
+        }
+        let script = enc.finish();
+
+        let mut scene = SceneStruct::new();
+        let recipe = script.commit(&mut scene).expect("组件均已登记");
+
+        assert_eq!(recipe.handles.len(), 8);
+        for (i, id) in recipe.handles.iter().enumerate() {
+            assert!(
+                id.generation >= 1,
+                "第 {i} 个真实对象的 generation 必须 ≥ 1（0 为句柄引用保留值）：{id:?}"
+            );
+        }
+        // 反面对照：声明期占位引用的 generation **恒为 0** —— 这正是判据的另一半。
+        assert_eq!(handle_ref(Handle(3)).generation, 0);
+        assert!(is_handle_ref(handle_ref(Handle(3))));
+        assert!(
+            recipe.handles.iter().all(|id| !is_handle_ref(*id)),
+            "真实对象绝不能被判成声明期占位引用"
+        );
+    }
+
+    /// **T0-② 核心判据**：新增一个 target **全程不改任何集中清单**。
+    ///
+    /// 本用例**就地**定义一个测试专有的 target（`TestOpacity`）：它只实现 [`Target`] /
+    /// [`TargetCtor`]，**没有任何枚举、映射表或 System** 需要同步改动，经
+    /// `SceneEncoder::animate::<TestOpacity>`（泛型 + 关联函数）直接接线。
+    ///
+    /// 可证伪：若"新增 target"仍需在某处集中清单加变体 / 分支，本用例无法只靠本地定义编译通过。
+    #[test]
+    fn new_target_requires_no_central_list_change() {
+        use crate::animation::target::TargetCtor;
+        use std::sync::Arc;
+        use xc_render_ir::Opacity;
+
+        #[derive(Debug, Clone, Copy)]
+        struct TestOpacity {
+            id: ObjectId,
+        }
+        impl Target for TestOpacity {
+            fn apply(&self, world: &mut hecs::World, v: &AnimValue) {
+                let Some(v) = v.try_scalar() else { return };
+                let Some(e) = crate::contract::entity_of(self.id) else {
+                    return;
+                };
+                if let Ok(mut o) = world.get::<&mut Opacity>(e) {
+                    o.0 = v;
+                }
+            }
+            fn name(&self) -> &'static str {
+                "TestOpacity"
+            }
+            fn target_id(&self) -> ObjectId {
+                self.id
+            }
+        }
+        impl TargetCtor for TestOpacity {
+            fn make(id: ObjectId) -> Arc<dyn Target> {
+                Arc::new(Self { id })
+            }
+        }
+
+        let mut enc = SceneEncoder::new();
+        let h = enc.spawn(vec![
+            Box::new(Circle::new((0.0, 0.0), 1.0)),
+            Box::new(Opacity::new(1.0)),
+        ]);
+        enc.animate::<TestOpacity>(h, ramp(1.0), 1.0);
+
+        let mut scene = SceneStruct::new();
+        let recipe = enc.finish().commit(&mut scene).expect("组件均已登记");
+        assert_eq!(recipe.bindings.bindings.len(), 1);
+        let b = &recipe.bindings.bindings[0];
+        assert_eq!(b.target.name(), "TestOpacity", "名字由 target 自带");
+        assert_eq!(
+            b.target.target_id(),
+            recipe.handles[0],
+            "目标必须指向脚本创建的那个对象"
+        );
+        assert_eq!(SceneRead::len(&scene), 1);
     }
 
     /// **§7.2.4 合并三条**：句柄不撞号 / 对象数 = 两段之和 / `b` 首段起始 = `a` 总时长。
@@ -526,12 +627,12 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert_ne!(ids[0], ids[1]);
         assert_eq!(recipe.bindings.bindings.len(), 2);
-        // 两个目标都是 OpacityValue 类别。
+        // 两个目标都是 OpacityValue（T0-② 按 `name()` 判类别，无集中清单）。
         assert!(recipe
             .bindings
             .bindings
             .iter()
-            .all(|b| b.target.kind() == TargetKind::OpacityValue));
+            .all(|b| b.target.name() == "OpacityValue"));
     }
 
     /// 段内从 0 线性到 1 的曲线（供脚本测试构造"名义"动画）。
@@ -558,7 +659,7 @@ mod tests {
     /// **目标类别**逐条相同。
     ///
     /// 比对口径说明：`Arc<dyn Target>` 无法直接相等比较，故比对
-    /// `target.kind()`（类别）+ 时钟节点。这正是"两种写法产出同一条驱动链路"的判据。
+    /// `target.name()`（自带语义名）+ 时钟节点。这正是"两种写法产出同一条驱动链路"的判据。
     #[test]
     fn encoder_matches_handwritten_timeline() {
         // ── 手写路径：先建对象，再 `find_by_name` 取 id，再手写 Timeline ──
@@ -606,7 +707,7 @@ mod tests {
                 format!("{:?}", h_b.curve),
                 "曲线必须一致"
             );
-            assert_eq!(enc_b.target.kind(), h_b.target.kind(), "目标类别必须一致");
+            assert_eq!(enc_b.target.name(), h_b.target.name(), "目标语义名必须一致");
         }
     }
 

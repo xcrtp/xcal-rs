@@ -16,7 +16,7 @@
 // `#[describable(..)]` 的槽位清单**逐项决定** `Descriptors` 元组内容 ——
 // 因此"线段不能填色"在**类型层面**成立（`Line::Descriptors` 无 `FillDesc` 槽位）。
 
-use xc_notion::{Circle2D, Line2D, Path2D, Rect2D, Transform2D, Vec2};
+use xc_notion::{Arrow2D, Circle2D, Line2D, Path2D, Polygon2D, Rect2D, Transform2D, Vec2};
 use xc_render_ir::{Shape2D, ToShape2D};
 
 use crate::affine::{map_path_affine, uniform_scale};
@@ -128,6 +128,66 @@ impl ToShape2D for Line {
     }
 }
 
+// ─── Arrow ────────────────────────────────────────────────────────────────
+
+/// 直线箭头图元对象（T2，**一等图元**）。
+///
+/// # 为什么用 `Group` 逃生舱降解（不改 IR / 后端）
+///
+/// `ToShape2D` **拿不到样式**（样式由 `record_group` 的另一个类型参数决定），无法
+/// "描边时出线段、填充时出实体"。故统一降解为 [`Shape2D::Group`] =
+/// `[杆(细长矩形多边形), 头(三角形多边形)]` —— 两种样式下都成立：
+/// - `FillSolid` ⇒ 实心箭头（3B1B 的标准外观）；
+/// - `StrokeSolid` ⇒ 空心箭头（轮廓）。
+///
+/// `Shape2D::Group` 已被 2D 后端递归三角化（`tessellate`），故此降解**零后端改动**。
+/// 已知局限（记账）：描边模式下细杆轮廓在极小宽度下观感欠佳，**推荐箭头用 `FillSolid`**。
+///
+/// ⚠️ 箭头的书写动画（`Reveal` 持 `Path2D`）与曲线箭头本轮**不做**（见计划 §3.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[describable(Stroke, Fill)]
+pub struct Arrow(pub Arrow2D);
+
+impl Arrow {
+    pub fn new(
+        from: impl Into<Vec2>,
+        to: impl Into<Vec2>,
+        head_length: f32,
+        head_width: f32,
+    ) -> Self {
+        Self(Arrow2D::new(
+            from.into(),
+            to.into(),
+            head_length,
+            head_width,
+        ))
+    }
+
+    /// 内层理念层值。
+    pub fn as_primitive(&self) -> &Arrow2D {
+        &self.0
+    }
+}
+
+impl From<Arrow2D> for Arrow {
+    fn from(v: Arrow2D) -> Self {
+        Self(v)
+    }
+}
+
+impl ToShape2D for Arrow {
+    fn to_shape2d(&self, t: &Transform2D) -> Shape2D {
+        let (shaft, head) = self.0.parts();
+        let poly = |p: &Polygon2D| Shape2D::Polygon {
+            points: p.points.iter().map(|v| t.apply_point(*v)).collect(),
+        };
+        // 杆在前、头在后（同层内稳定顺序；实心时头覆盖杆端，视觉无缝）。
+        Shape2D::Group {
+            children: vec![poly(&shaft), poly(&head)],
+        }
+    }
+}
+
 // ─── Rect ─────────────────────────────────────────────────────────────────
 
 /// 轴对齐矩形图元对象（可描边 / 填充）。
@@ -164,10 +224,28 @@ impl From<Rect2D> for Rect {
 
 impl ToShape2D for Rect {
     fn to_shape2d(&self, t: &Transform2D) -> Shape2D {
-        // 轴对齐矩形在相机仿射（无旋转）下仍是轴对齐矩形：映射两角点后取 min/max。
-        let a = t.apply_point(self.0.min);
-        let b = t.apply_point(self.0.max);
-        Shape2D::Rect(Rect2D::new(a.min(b), a.max(b)))
+        // 轴对齐矩形在**无旋转**仿射下仍是轴对齐矩形：映射两角点后取 min/max。
+        // 相机降级仿射的线性部分恒为 `diag(s, -s)`（无旋转）⇒ 既有画面逐位不变。
+        //
+        // T1：逐对象 `Transform` 可含**旋转** ⇒ 轴对齐矩形无法用 `Shape2D::Rect`
+        // 表达（该变体没有旋转字段），必须降级为 4 角点多边形（几何精确）。
+        let m = &t.matrix;
+        let axis_aligned = m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6;
+        if axis_aligned {
+            let a = t.apply_point(self.0.min);
+            let b = t.apply_point(self.0.max);
+            Shape2D::Rect(Rect2D::new(a.min(b), a.max(b)))
+        } else {
+            let (min, max) = (self.0.min, self.0.max);
+            Shape2D::Polygon {
+                points: vec![
+                    t.apply_point(Vec2::new(min.x, min.y)),
+                    t.apply_point(Vec2::new(max.x, min.y)),
+                    t.apply_point(Vec2::new(max.x, max.y)),
+                    t.apply_point(Vec2::new(min.x, max.y)),
+                ],
+            }
+        }
     }
 }
 
@@ -270,6 +348,58 @@ mod tests {
             }
             other => panic!("expected Rect, got {other:?}"),
         }
+    }
+
+    /// T1：带旋转的仿射下 `Rect` 降级为 4 角点多边形（`Shape2D::Rect` 无旋转字段）；
+    /// 无旋转时仍走 `Shape2D::Rect`（既有画面逐位不变）。
+    #[test]
+    fn rect_degrades_to_polygon_under_rotation() {
+        let r = Rect::new((0.0, 0.0), (1.0, 1.0));
+        assert!(
+            matches!(r.to_shape2d(&camera_like(2.0, 10.0, 20.0)), Shape2D::Rect(_)),
+            "无旋转 ⇒ 仍用 Rect 变体"
+        );
+        match r.to_shape2d(&Transform2D::rotate(std::f32::consts::FRAC_PI_4)) {
+            Shape2D::Polygon { points } => assert_eq!(points.len(), 4, "旋转 ⇒ 4 角点多边形"),
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    /// `Arrow` 降解为 `Group { [杆, 头] }`，且相机仿射落到每个多边形顶点上。
+    #[test]
+    fn arrow_degrades_to_group_of_polygons() {
+        let a = Arrow::new((0.0, 0.0), (2.0, 0.0), 0.5, 0.5);
+        match a.to_shape2d(&camera_like(10.0, 100.0, 50.0)) {
+            Shape2D::Group { children } => {
+                assert_eq!(children.len(), 2, "杆 + 头");
+                let Shape2D::Polygon { points: shaft } = &children[0] else {
+                    panic!("expected shaft polygon");
+                };
+                let Shape2D::Polygon { points: head } = &children[1] else {
+                    panic!("expected head polygon");
+                };
+                assert_eq!(shaft.len(), 4);
+                assert_eq!(head.len(), 3);
+                // 杆起点是矩形角点 (0, -0.125) → 屏幕 (100, 51.25)；
+                // 头顶点 (2, 0) → 屏幕 (120, 50)（头宽 0.5 ⇒ 半个杆宽 0.125）。
+                assert_eq!(shaft[0], Vec2::new(100.0, 51.25));
+                assert!(head.iter().any(|p| *p == Vec2::new(120.0, 50.0)), "头顶点 = to");
+            }
+            other => panic!("expected Group, got {other:?}"),
+        }
+    }
+
+    /// `Arrow` 有 Stroke + Fill 两个槽位（一等图元，两种样式都成立）。
+    #[test]
+    fn describable_arrow_has_stroke_and_fill_slots() {
+        use xc_scene_contract::FillDesc;
+        let d: <Arrow as Describable>::Descriptors = (
+            Some(StrokeDesc::new(Color32::RED, 2.0)),
+            Some(FillDesc::new(Color32::BLUE)),
+        );
+        let style = Arrow::new((0.0, 0.0), (1.0, 0.0), 0.3, 0.3).apply(&d);
+        assert_eq!(style.stroke, Some(Color32::RED));
+        assert_eq!(style.fill, Some(Color32::BLUE));
     }
 
     /// `Path` 经 Deref 直接可用 `Path2D` 的方法；降级保留 `Close`。

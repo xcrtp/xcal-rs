@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use egui::Panel;
 
-use xcal_scene::animation::{BindingTable, TargetKind};
+use xcal_scene::animation::BindingTable;
 use xcal_scene::contract::WorldView;
 use xcal_scene::director_state::DirectorState;
 use xcal_scene::domain::{
@@ -518,9 +518,15 @@ impl EguiSceneHost {
 
     /// 参数面板（原 ParamPanelSystem 的 UI chrome）。
     ///
-    /// 按 **(目标类别, 曲线类型)** 匹配展示绑定（与 A5 一致，不依赖插入顺序）——
-    /// `BindingTarget` trait 化后目标无法模式匹配，故用 `TargetKind` 分类。
-    /// 滑块交互以 `Slider { id }` 事件上报，由场景侧 `ParamPanelSystem` 消费。
+    /// **T0-② 后**：`dyn Target` 无法模式匹配，且集中分类清单已删除 ⇒
+    /// **滑块集由曲线类型决定**（`Sin` 显示 `base/amp/omega`、`Orbit` 显示
+    /// `radius/speed/angle`……），target 只提供**标签文字**（`target.name()`，可选中文化）。
+    /// 滑块交互以 `Slider { id }` 事件上报，由场景侧 `ParamPanelSystem` 按 `WidgetId` 写回。
+    ///
+    /// 行为变化（T0-② 记账）：从 `match (kind, curve)` 改为 `match curve` ⇒
+    /// **任何 `Sin` 曲线都会显示三个滑块**（原来只有 `CircleRadius` 的才显示）。
+    /// 这是**更通用**的改进；当前场景里 `Curve::Phase` 会被 `RevealRange` 绑定用到
+    /// （书写动画的 `omega`），故该滑块现在也会出现 —— 见交付说明。
     fn draw_param_panel(ui: &mut egui::Ui, res: &mut Resources) -> Vec<SceneEvent> {
         let table = res.get::<BindingTable>().cloned().unwrap_or_default();
 
@@ -533,9 +539,9 @@ impl EguiSceneHost {
                 ui.separator();
 
                 for binding in table.bindings.iter() {
-                    match (binding.target.kind(), &binding.curve) {
-                        (TargetKind::CircleRadius, Curve::Sin { base, amp, omega }) => {
-                            ui.label("圆半径");
+                    match &binding.curve {
+                        Curve::Sin { base, amp, omega } => {
+                            ui.label(target_label(binding.target.name()));
                             for (id, label, value, range, step) in [
                                 (ids::CIRCLE_BASE, "base", *base, 0.0..=3.0, 0.1),
                                 (ids::CIRCLE_AMP, "amp", *amp, 0.0..=2.0, 0.05),
@@ -551,8 +557,8 @@ impl EguiSceneHost {
                             }
                             ui.separator();
                         }
-                        (TargetKind::Phase, Curve::Phase { omega }) => {
-                            ui.label("函数曲线相位");
+                        Curve::Phase { omega } => {
+                            ui.label(target_label(binding.target.name()));
                             let mut v = *omega;
                             if ui
                                 .add(
@@ -569,16 +575,13 @@ impl EguiSceneHost {
                             }
                             ui.separator();
                         }
-                        (
-                            TargetKind::CameraEye,
-                            Curve::Orbit {
-                                radius,
-                                speed,
-                                initial_angle,
-                                ..
-                            },
-                        ) => {
-                            ui.label("3D 轨道相机");
+                        Curve::Orbit {
+                            radius,
+                            speed,
+                            initial_angle,
+                            ..
+                        } => {
+                            ui.label(target_label(binding.target.name()));
                             for (id, label, value, range, step) in [
                                 (ids::ORBIT_RADIUS, "radius", *radius, 1.0..=20.0, 0.5),
                                 (ids::ORBIT_SPEED, "speed", *speed, -2.0..=2.0, 0.1),
@@ -733,6 +736,23 @@ impl EguiSceneHost {
         painter.add(egui::epaint::Shape::Callback(
             egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
         ));
+    }
+}
+
+/// 参数面板的**可选**中文标签映射（T0-②）。
+///
+/// 名字由各 target **自带**（`Target::name()`）；本表只是 UI 侧的增强 ——
+/// **未收录的名字 fallback 到原样输出**，故它**不是**"新增 target 必须登记的清单"。
+fn target_label(name: &str) -> &str {
+    match name {
+        "CircleRadius" => "圆半径",
+        "Phase" => "函数曲线相位",
+        "CameraEye" => "3D 轨道相机",
+        "Camera2DFraming" => "2D 相机取景",
+        "RevealRange" => "书写动画",
+        "OpacityValue" => "不透明度",
+        "TransformValue" => "摆放（位移/缩放）",
+        _ => name,
     }
 }
 

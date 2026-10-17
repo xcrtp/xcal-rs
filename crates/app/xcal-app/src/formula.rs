@@ -86,6 +86,62 @@ pub fn rebuild(engine: &InMemoryEngine, spec: &FormulaSpec) -> Option<ContentIR>
     engine.take(handle).and_then(|r| r.ok())
 }
 
+/// 纯文本标注的源描述（T3）：与 [`FormulaSpec`] 同形，但源码按**正文**语义编译。
+///
+/// # 核查结论（Typst 模式：math vs 正文）
+///
+/// `xc_prerender::typst::compile` 的 `wrap_if_math` 规则是：**源码不以 `$` 开头 ⇒
+/// 一律包成 `$ 源码 $`（inline math）**。故既有机制里**没有**"正文模式"入口
+/// —— 任何非 `$` 源码都会被当数学排版（标识符变斜体）。
+///
+/// 本轮**不改内核**，改用数学模式下的**字符串字面量**：把文本包成 `"文本"`
+/// ⇒ Typst 渲染为**直立正文**（非斜体、空格原样保留），观感与正文一致。
+/// 于是 `rebuild` / `compile_to_stroke_paths` 一行不动 ⇒ 自动继承
+/// `Reveal`（书写）/ `Opacity`（淡入）/ `Visibility` / `Group` / `Transform`。
+#[derive(Debug, Clone)]
+pub struct TextSpec {
+    /// 纯文本内容（无需 Typst 语法）。
+    pub source: String,
+    /// 目标显示字号（pt ≈ 世界单位高度），语义同 [`FormulaSpec::font_size`]。
+    pub font_size: f32,
+    /// 世界坐标锚点（Y-up；IR 原点位于墨迹包围盒左下方）。
+    pub world_pos: glam::Vec2,
+    /// Typst 编译用的标称字号（pt）。
+    pub nominal_font_size: f32,
+}
+
+impl TextSpec {
+    /// 用默认标称字号（12.0）构造。
+    pub fn new(source: impl Into<String>, font_size: f32, world_pos: glam::Vec2) -> Self {
+        Self {
+            source: source.into(),
+            font_size,
+            world_pos,
+            nominal_font_size: DEFAULT_NOMINAL_FONT_SIZE,
+        }
+    }
+
+    /// 转成等价的 [`FormulaSpec`]：源码包装为 Typst 数学模式下的字符串字面量。
+    ///
+    /// 其余字段原样保留 ⇒ 缩放 / 锚点 / 标称字号口径与公式完全一致。
+    pub fn to_formula_spec(&self) -> FormulaSpec {
+        FormulaSpec {
+            source: text_literal_source(&self.source),
+            font_size: self.font_size,
+            world_pos: self.world_pos,
+            nominal_font_size: self.nominal_font_size,
+        }
+    }
+}
+
+/// 纯文本 → Typst 数学模式下的**字符串字面量**（upright 正文外观）。
+///
+/// 只需转义反斜杠与双引号（字面量内部）。
+fn text_literal_source(text: &str) -> String {
+    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 /// 一条可 spawn 的描边路径：`(路径, 颜色, 线宽, 线宽所属空间)`。
 ///
 /// 每个子轮廓单独一条——多轮廓字形（`o`/`B`/`8`）不会在轮廓之间
@@ -422,5 +478,143 @@ mod tests {
 
         let spec = FormulaSpec::new("n", 10.0, glam::Vec2::ZERO);
         assert!(compile_to_stroke_paths(&ir, &spec).is_empty());
+    }
+
+    // ─── T3：纯文本（复用 Typst 数学模式下的字符串字面量）──────────────────
+
+    /// 文本源码被包装为**字符串字面量**（直立正文外观），且能编译出描边路径。
+    ///
+    /// T3 验收 1：`路径数 > 0`（headless，不依赖 typst feature）。
+    #[test]
+    fn text_spec_compiles_to_nonempty_stroke_paths() {
+        let text = TextSpec::new("Hello world", 1.0, glam::Vec2::ZERO);
+        let fs = text.to_formula_spec();
+        // 包装形态：`"Hello world"`（非斜体正文的关键）。
+        assert_eq!(fs.source, "\"Hello world\"");
+
+        let engine = xc_prerender::placeholder_engine();
+        let ir = rebuild(&engine, &fs).expect("placeholder IR");
+        let paths = compile_to_stroke_paths(&ir, &fs);
+        assert!(!paths.is_empty(), "文本应编译出描边路径，实际为空");
+        for (path, _, width, space) in &paths {
+            assert!(!path_points(path).is_empty(), "每条文本路径应至少有一个点");
+            assert!(*width > 0.0);
+            assert_eq!(*space, MeasureSpace::World);
+        }
+    }
+
+    /// 引号 / 反斜杠转义（否则 Typst 字面量会被提前闭合 / 转义错）。
+    #[test]
+    fn text_spec_escapes_quotes_and_backslashes() {
+        let fs = TextSpec::new("a\"b\\c", 1.0, glam::Vec2::ZERO).to_formula_spec();
+        assert_eq!(fs.source, "\"a\\\"b\\\\c\"");
+    }
+
+    /// T3 验收 4：文字路径经 `record_scene` 受 **`Transform` 摆放** + **`Opacity` 淡入**。
+    #[test]
+    fn text_paths_honor_transform_and_opacity() {
+        use xcal_render::components::Path;
+        use xcal_render::{DrawQueue, Opacity, StrokeSolid, record_scene};
+        use xcal_scene::contract::WorldView;
+        use xc_object::{Camera2D, Transform};
+
+        let engine = xc_prerender::placeholder_engine();
+        let text = TextSpec::new("hi", 1.0, glam::Vec2::ZERO);
+        let fs = text.to_formula_spec();
+        let ir = rebuild(&engine, &fs).expect("placeholder IR");
+        let paths = compile_to_stroke_paths(&ir, &fs);
+        assert!(!paths.is_empty());
+        let (path, color, width, space) = paths[0].clone();
+
+        let rect = xc_notion::Rect2D::new(
+            xc_notion::Vec2::ZERO,
+            xc_notion::Vec2::new(800.0, 600.0),
+        );
+        let camera = Camera2D::new(xc_notion::Vec2::ZERO, 40.0, rect);
+
+        let mut scene = xcal_scene::scene::Scene::new();
+        // 基准：仅淡入（不摆放）。
+        scene.spawn((
+            Path::new(path.clone()),
+            StrokeSolid::new_in(width, color, space),
+            Opacity::new(0.5),
+        ));
+        // 叠加 T1：右移 1 世界单位。
+        scene.spawn((
+            Path::new(path),
+            StrokeSolid::new_in(width, color, space),
+            Opacity::new(0.5),
+            Transform {
+                position: glam::Vec3::new(1.0, 0.0, 0.0),
+                ..Default::default()
+            },
+        ));
+        let world = scene.into_world();
+
+        let mut q = DrawQueue::new();
+        record_scene(&WorldView::new(&world), &camera, &mut q);
+        assert_eq!(q.len(), 2);
+
+        let alpha = |i: usize| q.commands()[i].style.stroke.expect("文本应有描边").a();
+        assert_eq!(alpha(0), 128, "opacity = 0.5 ⇒ alpha 255→128");
+        assert_eq!(alpha(1), 128);
+
+        let b0 = q.commands()[0].shape.bounds().expect("文本有包围盒");
+        let b1 = q.commands()[1].shape.bounds().expect("文本有包围盒");
+        assert!(
+            (b1.min.x - b0.min.x - 40.0).abs() < 1e-3,
+            "Transform 右移 1 世界单位 = 40px（{b0:?} → {b1:?}）"
+        );
+    }
+
+    /// T3 验收 3：文字路径能被 **`Reveal` 书写**（沿用公式那套，headless 断言）。
+    #[test]
+    fn text_paths_can_be_revealed() {
+        use xcal_render::{RevealQueue, RevealRecordSystem, StrokeSolid, ViewRect};
+        use xcal_scene::scene::components::Reveal;
+
+        let engine = xc_prerender::placeholder_engine();
+        let text = TextSpec::new("ab", 1.0, glam::Vec2::ZERO);
+        let fs = text.to_formula_spec();
+        let ir = rebuild(&engine, &fs).expect("placeholder IR");
+        let (path, _, _, _) = compile_to_stroke_paths(&ir, &fs)
+            .into_iter()
+            .next()
+            .expect("至少一条文本路径");
+
+        let mut scene = xcal_scene::scene::Scene::new();
+        let cam = xc_object::spawn_camera2d(
+            &mut scene,
+            xc_object::Framing2D::new(glam::Vec2::ZERO, 40.0),
+        )
+        .expect("Framing2D 已登记");
+        scene.spawn((
+            Reveal::visible(path),
+            StrokeSolid::new(2.0, (255, 255, 255, 255)),
+        ));
+        let world = scene.into_world();
+
+        let mut res = xcal_schedule::resource::Resources::new();
+        res.insert(cam);
+        res.insert(ViewRect {
+            rect: xc_notion::Rect2D::new(
+                xc_notion::Vec2::ZERO,
+                xc_notion::Vec2::new(800.0, 600.0),
+            ),
+        });
+        res.insert(RevealQueue::default());
+
+        let mut sched = xcal_schedule::scheduler::Scheduler::new(world, res);
+        sched.add_system(
+            xcal_schedule::scheduler::Phase::RenderCommit,
+            RevealRecordSystem,
+        );
+        sched.init_resources();
+        sched.run_frame(0.0);
+
+        let items = &sched.resources().get::<RevealQueue>().unwrap().0;
+        assert_eq!(items.len(), 1, "文本路径应录进书写队列");
+        assert_eq!((items[0].start, items[0].end), (0.0, 1.0), "沿用 Reveal 区间");
+        assert!(!items[0].path.commands.is_empty(), "书写项应带真实几何");
     }
 }

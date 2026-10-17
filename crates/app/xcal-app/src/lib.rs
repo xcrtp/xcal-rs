@@ -23,7 +23,7 @@ use xcal_render::{
 };
 use xcal_render_backends::RenderContext;
 use xcal_scene::animation::CameraEye;
-use xcal_scene::animation::{Binding, BindingApplySystem, TargetKind};
+use xcal_scene::animation::{Binding, BindingApplySystem};
 use xcal_scene::camera_input::CameraInputSystem;
 use xcal_scene::contract::{GroupVisibility, object_id_of};
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
@@ -322,11 +322,14 @@ impl App {
         // 「2D 相机自由」开关：分镜里指向 2D 相机（`Camera2DFraming`）的绑定
         // （`center` + `scale` 各一条）也被 `CameraDriveSystem` 托管——开关打开时从表里
         // 移出（否则每帧覆盖用户的 Pan/Zoom）、关闭时放回（分镜驱动）。
-        // 能力 demo 没有 `Camera2DFraming` 绑定 ⇒ 此向量为空，托管自然退化为 no-op。
+        // 能力 demo 没有 2D 相机取景绑定 ⇒ 此向量为空，托管自然退化为 no-op。
+        //
+        // T0-②：筛选口径从"按 target 类别"改为"**按对象**"（`target_id() == 相机句柄`）
+        // —— 比按类别更精确：真正想要的是"作用于**这台**相机的绑定"。
         let cam2d_bindings: Vec<Binding> = bindings
             .bindings
             .iter()
-            .filter(|b| b.target.kind() == TargetKind::Camera2DFraming)
+            .filter(|b| b.target.target_id() == camera2d_handle.0)
             .cloned()
             .collect();
         let orbit_clock = forest.insert(ClockNode::new(None)).unwrap();
@@ -751,5 +754,326 @@ mod tests {
         let lit_gone = count_lit(&render(&sched, &mut backend, &ctx, &g));
         eprintln!("[deferred-gpu] despawn 后亮像素 = {lit_gone}（期望 0）");
         assert_eq!(lit_gone, 0, "延迟 despawn 的对象下一帧必须消失");
+    }
+}
+
+/// **T1 / T2 / T3 的 GPU 像素级验收**（计划 §2.4 / §3.4 / §4.4）。
+///
+/// 与既有 GPU 用例同一口径：headless wgpu 离屏渲染 + 像素回读 ——
+/// **不得只靠 System / 队列链路断言**。
+#[cfg(test)]
+mod t_capabilities_gpu {
+    use xcal_render::components::{Arrow, Circle, Rect};
+    use xcal_render::{DrawQueue, FillSolid, Opacity, StrokeSolid, record_scene_tagged};
+    use xcal_render_backends::{Frame2DGeometry, RenderContext, WgpuBackend2D};
+    use xcal_scene::contract::{GroupId, GroupVisibility, Visibility, WorldView};
+    use xcal_scene::domain::LayerId;
+    use xc_notion::{Rect2D, Transform2D, Vec2};
+    use xc_object::{Camera2D, Transform};
+
+    /// 离屏尺寸（紧凑 RGBA，行距 = `W * 4`）。
+    const W: u32 = 160;
+    const H: u32 = 120;
+    /// 相机缩放：1 世界单位 = 20px；世界原点落在屏幕中心 (80, 60)。
+    const SCALE: f32 = 20.0;
+
+    fn geometry() -> Frame2DGeometry {
+        Frame2DGeometry {
+            viewport_points: Rect2D::new(Vec2::ZERO, Vec2::new(W as f32, H as f32)),
+            pixels_per_point: 1.0,
+            screen_size_px: [W, H],
+        }
+    }
+
+    fn camera() -> Camera2D {
+        Camera2D::new(
+            Vec2::ZERO,
+            SCALE,
+            Rect2D::new(Vec2::ZERO, Vec2::new(W as f32, H as f32)),
+        )
+    }
+
+    /// 走**完整录制路径**（`record_scene_tagged`）→ GPU 离屏渲染 → 回读像素。
+    fn render(world: &hecs::World, groups: &GroupVisibility) -> Vec<u8> {
+        let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+            .expect("headless GPU 上下文");
+        let mut backend = WgpuBackend2D::new(ctx.device(), ctx.queue());
+
+        let mut q = DrawQueue::new();
+        record_scene_tagged(&WorldView::new(world), &camera(), None, groups, &mut q);
+
+        let g = geometry();
+        backend.begin_frame_at(g);
+        for cmd in q.commands() {
+            backend.push(&cmd.shape, &Transform2D::identity(), &cmd.style, cmd.z.0);
+        }
+        let mut enc = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("xcal-t-capabilities"),
+            });
+        backend.finish_frame(&mut enc, LayerId(0), &g);
+        ctx.queue().submit([enc.finish()]);
+        ctx.read_texture(backend.offscreen_texture(LayerId(0)).unwrap(), (W, H))
+    }
+
+    fn render_visible(world: &hecs::World) -> Vec<u8> {
+        render(world, &GroupVisibility::default())
+    }
+
+    fn is_lit(p: &[u8]) -> bool {
+        p[0] as u32 + p[1] as u32 + p[2] as u32 > 150
+    }
+
+    fn count_lit(px: &[u8]) -> usize {
+        px.chunks_exact(4).filter(|p| is_lit(p)).count()
+    }
+
+    /// 亮像素的 x 重心（无亮像素 ⇒ `NaN`）。
+    fn centroid_x(px: &[u8]) -> f32 {
+        let mut sum = 0.0f64;
+        let mut n = 0u32;
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if is_lit(p) {
+                sum += ((i as u32) % W) as f64;
+                n += 1;
+            }
+        }
+        if n == 0 {
+            f32::NAN
+        } else {
+            (sum / n as f64) as f32
+        }
+    }
+
+    /// 亮像素包围盒 `(min_x, min_y, max_x, max_y)`；无亮像素 ⇒ `None`。
+    fn bbox(px: &[u8]) -> Option<(u32, u32, u32, u32)> {
+        let mut out: Option<(u32, u32, u32, u32)> = None;
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if !is_lit(p) {
+                continue;
+            }
+            let (x, y) = ((i as u32) % W, (i as u32) / W);
+            out = Some(match out {
+                None => (x, y, x, y),
+                Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+            });
+        }
+        out
+    }
+
+    /// 亮像素最多的列（x）—— 用来判定"头在哪一端"（头底是最宽处）。
+    fn widest_column_x(px: &[u8]) -> u32 {
+        let mut counts = vec![0u32; W as usize];
+        for (i, p) in px.chunks_exact(4).enumerate() {
+            if is_lit(p) {
+                counts[(i as u32 % W) as usize] += 1;
+            }
+        }
+        let (mut best, mut best_n) = (0u32, 0u32);
+        for (x, n) in counts.into_iter().enumerate() {
+            if n > best_n {
+                best = x as u32;
+                best_n = n;
+            }
+        }
+        best
+    }
+
+    fn white_fill() -> FillSolid {
+        FillSolid::new((255, 255, 255, 255))
+    }
+
+    fn transform_at(x: f32, y: f32) -> Transform {
+        Transform {
+            position: glam::Vec3::new(x, y, 0.0),
+            ..Default::default()
+        }
+    }
+
+    // ─── T1 ─────────────────────────────────────────────────────────────
+
+    /// **T1-2**：`position = (1, 0)` ⇒ 像素整体右移 `1 × scale = 20px`。
+    #[test]
+    fn t1_translation_shifts_pixels_by_scale() {
+        let mut base = hecs::World::new();
+        base.spawn((Circle::new((0.0, 0.0), 0.5), white_fill()));
+        let mut moved = hecs::World::new();
+        moved.spawn((
+            Circle::new((0.0, 0.0), 0.5),
+            white_fill(),
+            transform_at(1.0, 0.0),
+        ));
+
+        let (a, b) = (render_visible(&base), render_visible(&moved));
+        let (ca, cb) = (centroid_x(&a), centroid_x(&b));
+        eprintln!("[T1-GPU] 位移：重心 x {ca:.2} → {cb:.2}（期望 +{SCALE}）");
+        assert!((ca - 80.0).abs() < 2.0, "基准圆心应在屏幕中心 80，实际 {ca}");
+        assert!(
+            (cb - ca - SCALE).abs() < 2.0,
+            "右移 1 世界单位应位移 {SCALE}px，实际 {}",
+            cb - ca
+        );
+    }
+
+    /// **T1-3**：`scale = 2` ⇒ 覆盖像素数显著增大（半径 ×2 ⇒ 面积 ×4）。
+    #[test]
+    fn t1_scale_increases_covered_pixels() {
+        let mut base = hecs::World::new();
+        base.spawn((Circle::new((0.0, 0.0), 0.5), white_fill()));
+        let mut scaled = hecs::World::new();
+        scaled.spawn((
+            Circle::new((0.0, 0.0), 0.5),
+            white_fill(),
+            Transform {
+                scale: glam::Vec3::splat(2.0),
+                ..Default::default()
+            },
+        ));
+
+        let (n0, n1) = (
+            count_lit(&render_visible(&base)),
+            count_lit(&render_visible(&scaled)),
+        );
+        eprintln!("[T1-GPU] 缩放：亮像素 {n0} → {n1}（期望约 ×4）");
+        assert!(n0 > 0, "基准圆必须有像素");
+        assert!(
+            n1 > n0 * 2,
+            "scale = 2 ⇒ 覆盖面积应显著增大（{n0} → {n1}）"
+        );
+    }
+
+    /// **T1-4**：绕 Z 旋转 45° ⇒ 包围盒变化正确（矩形从 40×10px 变成约 35×35px）。
+    #[test]
+    fn t1_rotation_changes_bounding_box() {
+        let rect = Rect::new((-1.0, -0.25), (1.0, 0.25));
+        let mut base = hecs::World::new();
+        base.spawn((rect, white_fill()));
+        let mut rotated = hecs::World::new();
+        rotated.spawn((
+            rect,
+            white_fill(),
+            Transform {
+                rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+                ..Default::default()
+            },
+        ));
+
+        let b0 = bbox(&render_visible(&base)).expect("基准矩形有像素");
+        let b1 = bbox(&render_visible(&rotated)).expect("旋转后矩形有像素");
+        let (h0, h1) = (b0.3 - b0.1, b1.3 - b1.1);
+        let (w0, w1) = (b0.2 - b0.0, b1.2 - b1.0);
+        eprintln!("[T1-GPU] 旋转：包围盒 {w0}×{h0} → {w1}×{h1}");
+        assert!((w0 as i32 - 40).abs() <= 2, "基准宽应约 40px，实际 {w0}");
+        assert!((h0 as i32 - 10).abs() <= 2, "基准高应约 10px，实际 {h0}");
+        assert!(
+            h1 > h0 * 2 && w1 < w0,
+            "旋转 45° 后应明显变高、变窄（{w0}×{h0} → {w1}×{h1}）"
+        );
+    }
+
+    // ─── T2 ─────────────────────────────────────────────────────────────
+
+    /// **T2-1/2**：`FillSolid` ⇒ 实心箭头；`StrokeSolid` ⇒ 空心（杆内部无像素）。
+    #[test]
+    fn t2_arrow_fill_and_stroke_both_have_pixels() {
+        let arrow = Arrow::new((-1.0, 0.0), (1.0, 0.0), 0.5, 0.6);
+        let mut filled = hecs::World::new();
+        filled.spawn((arrow, white_fill()));
+        let mut stroked = hecs::World::new();
+        stroked.spawn((arrow, StrokeSolid::new(2.0, (255, 255, 255, 255))));
+
+        let px_fill = render_visible(&filled);
+        let px_stroke = render_visible(&stroked);
+        let (n_fill, n_stroke) = (count_lit(&px_fill), count_lit(&px_stroke));
+
+        // 杆内部采样点：世界 (-0.25, 0) ⇒ 屏幕 (75, 60)（杆半宽 3px，描边 2px）。
+        let at = |px: &[u8], x: u32, y: u32| {
+            let i = ((y * W + x) * 4) as usize;
+            is_lit(&px[i..i + 4])
+        };
+        eprintln!(
+            "[T2-GPU] 箭头：实心 {n_fill} 像素 / 空心 {n_stroke} 像素；\
+             杆内部 (75,60) 实心={} 空心={}",
+            at(&px_fill, 75, 60),
+            at(&px_stroke, 75, 60)
+        );
+        assert!(n_fill > 0, "实心箭头必须有像素");
+        assert!(n_stroke > 0, "空心箭头必须有像素");
+        assert!(at(&px_fill, 75, 60), "实心箭头的杆内部必须是实心");
+        assert!(!at(&px_stroke, 75, 60), "空心箭头的杆内部必须是空的（只有轮廓）");
+    }
+
+    /// **T2-3**：方向可证伪 —— 头底（最宽列）落在 `to` 一侧。
+    #[test]
+    fn t2_arrow_head_is_at_to_end() {
+        let mut fwd = hecs::World::new();
+        fwd.spawn((Arrow::new((-1.0, 0.0), (1.0, 0.0), 0.5, 0.6), white_fill()));
+        let mut rev = hecs::World::new();
+        rev.spawn((Arrow::new((1.0, 0.0), (-1.0, 0.0), 0.5, 0.6), white_fill()));
+
+        let (x_fwd, x_rev) = (
+            widest_column_x(&render_visible(&fwd)),
+            widest_column_x(&render_visible(&rev)),
+        );
+        eprintln!("[T2-GPU] 箭头方向：最宽列 forward={x_fwd} reversed={x_rev}");
+        // 头底 = to - head_length：正向 x=0.5（屏幕 90），反向 x=-0.5（屏幕 70）。
+        assert!(x_fwd > 85, "正向箭头最宽列应在右侧（to 侧），实际 {x_fwd}");
+        assert!(x_rev < 75, "反向箭头最宽列应在左侧（to 侧），实际 {x_rev}");
+    }
+
+    /// **T2-5**：新图元同样受 N 线的 `Opacity` / `Group` 通道控制。
+    #[test]
+    fn t2_arrow_honors_opacity_and_group() {
+        let arrow = Arrow::new((-1.0, 0.0), (1.0, 0.0), 0.5, 0.6);
+        let g = GroupId::new(7);
+
+        let mut world = hecs::World::new();
+        world.spawn((arrow, white_fill()));
+        let visible = count_lit(&render_visible(&world));
+        assert!(visible > 0, "基准箭头必须有像素");
+
+        // Opacity = 0 ⇒ 完全消失。
+        let mut transparent = hecs::World::new();
+        transparent.spawn((arrow, white_fill(), Opacity::new(0.0)));
+        let n_opacity = count_lit(&render_visible(&transparent));
+        assert_eq!(n_opacity, 0, "Opacity = 0 的箭头像素必须归零");
+
+        // 组开关隐藏 ⇒ 完全消失。
+        let mut grouped = hecs::World::new();
+        grouped.spawn((
+            arrow,
+            white_fill(),
+            Visibility::of_group(g),
+        ));
+        let mut hidden = GroupVisibility::new();
+        hidden.hide(g);
+        let n_hidden = count_lit(&render(&grouped, &hidden));
+        eprintln!("[T2-GPU] 箭头通道：可见 {visible} / opacity0 {n_opacity} / 隐藏组 {n_hidden}");
+        assert_eq!(n_hidden, 0, "隐藏组后箭头像素必须归零");
+    }
+
+    // ─── T3 ─────────────────────────────────────────────────────────────
+
+    /// **T3-2**：文字区域有像素（占位引擎的轮廓矩形；真实字形由 `cargo run` 目视）。
+    #[test]
+    fn t3_text_has_pixels() {
+        let engine = xc_prerender::placeholder_engine();
+        let text = crate::formula::TextSpec::new("abc", 1.0, glam::Vec2::ZERO);
+        let spec = text.to_formula_spec();
+        let ir = crate::formula::rebuild(&engine, &spec).expect("placeholder IR");
+        let paths = crate::formula::compile_to_stroke_paths(&ir, &spec);
+        assert!(!paths.is_empty(), "文本应编译出描边路径");
+
+        let mut world = hecs::World::new();
+        for (path, color, width, space) in paths {
+            world.spawn((
+                xc_object::Path::new(path),
+                StrokeSolid::new_in(width, color, space),
+            ));
+        }
+        let lit = count_lit(&render_visible(&world));
+        eprintln!("[T3-GPU] 文字区域亮像素 = {lit}");
+        assert!(lit > 0, "文字区域必须有像素");
     }
 }

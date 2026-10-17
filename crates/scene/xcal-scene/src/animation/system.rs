@@ -181,4 +181,50 @@ mod tests {
         // t=0, sin(0)=0 → radius = 1.0 + 0.5 * 0 = 1.0
         assert!((radius - 1.0).abs() < 1e-5);
     }
+
+    /// **T1 验收 5**：`Timeline` 驱动 `TransformValue` —— 段内插值、段外冻结（`Hold`）。
+    #[test]
+    fn timeline_drives_transform_value_with_hold() {
+        use crate::animation::target::TransformValue;
+        use crate::animation::timeline::Timeline;
+        use xc_object::Transform;
+        use xc_time::{AnimValue, Curve, Interp};
+
+        let mut world = World::new();
+        let entity = world.spawn((Transform::default(),));
+        let id = crate::contract::object_id_of(entity);
+
+        let curve = Curve::Keyframes {
+            keys: vec![
+                (0.0, AnimValue::Vec2(vec2(0.0, 0.0))),
+                (2.0, AnimValue::Vec2(vec2(2.0, 0.0))),
+            ],
+            interpolation: Interp::Linear,
+        };
+        let mut tl = Timeline::new();
+        tl.play(curve, TransformValue { id }, 2.0);
+
+        let mut forest = XcClockForest::new();
+        let mut table = BindingTable::new();
+        tl.compile(&mut forest, &mut table);
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.0 });
+        resources.insert(forest);
+        resources.insert(table);
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::SceneSync, BindingApplySystem);
+        sched.init_resources();
+
+        let x_at = |sched: &mut Scheduler, t: f32| -> f32 {
+            sched.resources_mut().get_mut::<TimeState>().unwrap().elapsed = t;
+            sched.run_frame(0.0);
+            sched.world().get::<&Transform>(entity).unwrap().position.x
+        };
+        assert_eq!(x_at(&mut sched, 0.0), 0.0);
+        assert!((x_at(&mut sched, 1.0) - 1.0).abs() < 1e-4, "段内线性插值");
+        assert!((x_at(&mut sched, 2.0) - 2.0).abs() < 1e-4, "段末到终值");
+        assert!((x_at(&mut sched, 5.0) - 2.0).abs() < 1e-6, "段外冻结（Hold）");
+    }
 }

@@ -24,7 +24,8 @@
 
 use hecs::World;
 use std::sync::Arc;
-use xc_object::{Camera3D, Circle, Framing2D};
+use xc_notion::Vec3;
+use xc_object::{Camera3D, Circle, Framing2D, Transform};
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
 use xc_time::AnimValue;
@@ -42,37 +43,17 @@ pub trait Target: Send + Sync + std::fmt::Debug + 'static {
     /// **既有语义逐位保留**：曲线输出类型与目标字段不符时**跳过本帧写入，不 panic**。
     fn apply(&self, world: &mut World, v: &AnimValue);
 
-    /// 目标**类别**（无载荷的判别式）。
+    /// 目标**语义名**（如 `"CircleRadius"`）—— 供 UI 显示 / 分类。
     ///
-    /// 为什么需要它：UI 参数面板（`ParamPanelSystem` / `host::draw_param_panel`）要按
-    /// "曲线 × 目标类别"匹配来编辑曲线参数，而 `dyn Target` 无法模式匹配。
-    /// 它是**分类**而不是"驱动目标清单"——新增 target 不必改它（UI 不认识就不显示）。
-    fn kind(&self) -> TargetKind;
-}
+    /// **由 target 自带**：新增 target 只需在实现里写一行字面量，
+    /// **不改任何集中清单**（这正是删掉集中分类枚举的收益）。
+    /// UI 面板可按此名做增强映射（如中文标签），**缺失时 fallback 到本名**，
+    /// ⇒ 映射表是可选增强，不是必需清单。
+    fn name(&self) -> &'static str;
 
-/// 目标类别（供 UI 分类；不含载荷）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetKind {
-    /// 写 `Circle.radius`（2D 圆半径振荡）。
-    CircleRadius,
-    /// 写 `PhaseAnim.phase`（函数图像水平采样滑动）。
-    Phase,
-    /// 写 `Camera3D.eye`（3D 轨道相机）。
-    CameraEye,
-    /// 写 `MorphShape.t`（形状形变参数）。
-    MorphT,
-    /// 写 `Framing2D`（2D 相机取景：`Scalar` → `scale`，`Vec2` → `center`）。
-    ///
-    /// 一个组件 = 一个 target：`Framing2D` 是单 target，**按 [`AnimValue`] 变体分派**，
-    /// 将来给相机加字段不必加 target 类型。
-    Camera2DFraming,
-    /// 写 `Reveal`（书写动画区间：`Scalar` → `end`，`Vec2` → `(start, end)`）。
-    ///
-    /// 与 `Camera2DFraming` 同一分派口径：单 target、按变体决定写哪个字段
-    /// （"从 0 写到 1"只需 `Scalar` 一条绑定）。
-    RevealRange,
-    /// 写 `Opacity`（对象级不透明度：`Scalar` → `Opacity.0`；N4 淡入淡出通道）。
-    OpacityValue,
+    /// 目标作用的**对象句柄** —— 供"按对象筛选绑定"用
+    /// （例如"作用于这台 2D 相机的绑定"，比按类别筛选更精确）。
+    fn target_id(&self) -> ObjectId;
 }
 
 /// **声明期可引用的动画目标构造器**（场景脚本 P6）。
@@ -137,6 +118,12 @@ impl TargetCtor for OpacityValue {
     }
 }
 
+impl TargetCtor for TransformValue {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。
 ///
 /// 四个实现里"取组件 + 类型匹配 + 赋值"的公共骨架只此一份。
@@ -167,8 +154,12 @@ impl Target for CircleRadius {
         with_component::<Circle, _>(world, self.id, |c| c.radius = v);
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::CircleRadius
+    fn name(&self) -> &'static str {
+        "CircleRadius"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -186,8 +177,12 @@ impl Target for Phase {
         with_component::<PhaseAnim, _>(world, self.id, |c| c.phase = v);
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::Phase
+    fn name(&self) -> &'static str {
+        "Phase"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -205,8 +200,12 @@ impl Target for CameraEye {
         with_component::<Camera3D, _>(world, self.id, |c| c.eye = v);
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::CameraEye
+    fn name(&self) -> &'static str {
+        "CameraEye"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -224,8 +223,12 @@ impl Target for MorphT {
         with_component::<MorphShape, _>(world, self.id, |c| c.t = v);
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::MorphT
+    fn name(&self) -> &'static str {
+        "MorphT"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -247,8 +250,12 @@ impl Target for Camera2DFraming {
         }
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::Camera2DFraming
+    fn name(&self) -> &'static str {
+        "Camera2DFraming"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -275,8 +282,51 @@ impl Target for RevealRange {
         }
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::RevealRange
+    fn name(&self) -> &'static str {
+        "RevealRange"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
+    }
+}
+
+/// 写 [`Transform`]（T1 的逐对象摆放通道）。
+///
+/// 按 [`AnimValue`] 变体分派（与 `Camera2DFraming` / `RevealRange` 同口径）：
+/// - `Vec2(v)` → `position.xy`（z 不变）；
+/// - `Vec3(v)` → `position`（整体）；
+/// - `Scalar(v)` → **统一缩放**（`scale = Vec3::splat(v)`）；
+/// - 其它变体静默跳过（不 panic）。
+///
+/// **不做旋转**：`Scalar` 已被统一缩放占用（见计划 §2.3 记账 —— 需要旋转时再拆
+/// `PositionValue` / `ScaleValue` / `RotationValue` 三个 target）。
+/// **也不做非统一缩放**（`scale.xy` 各自动画）：触发条件同上。
+#[derive(Debug, Clone, Copy)]
+pub struct TransformValue {
+    pub id: ObjectId,
+}
+
+impl Target for TransformValue {
+    fn apply(&self, world: &mut World, v: &AnimValue) {
+        if let Some(p) = v.try_vec2() {
+            with_component::<Transform, _>(world, self.id, |t| {
+                t.position.x = p.x;
+                t.position.y = p.y;
+            });
+        } else if let Some(p) = v.try_vec3() {
+            with_component::<Transform, _>(world, self.id, |t| t.position = p);
+        } else if let Some(s) = v.try_scalar() {
+            with_component::<Transform, _>(world, self.id, |t| t.scale = Vec3::splat(s));
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "TransformValue"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -300,8 +350,12 @@ impl Target for OpacityValue {
         with_component::<Opacity, _>(world, self.id, |o| o.0 = v);
     }
 
-    fn kind(&self) -> TargetKind {
-        TargetKind::OpacityValue
+    fn name(&self) -> &'static str {
+        "OpacityValue"
+    }
+
+    fn target_id(&self) -> ObjectId {
+        self.id
     }
 }
 
@@ -420,20 +474,52 @@ mod tests {
         }
     }
 
-    /// `kind()` 与实现的对应关系（UI 参数面板按它分类）。
+    /// `name()` / `target_id()` 与实现的对应关系（UI 显示 + 按对象筛选）。
+    ///
+    /// ⚠️ 这不是"集中清单"——名字**由各 target 自带**；本用例只是把**既有**七个的
+    /// 字面量钉住（防手滑改错），新增 target **不需要**在这里加一行。
     #[test]
-    fn kinds_are_distinct() {
-        let id = ObjectId::DANGLING;
-        assert_eq!(CircleRadius { id }.kind(), TargetKind::CircleRadius);
-        assert_eq!(Phase { id }.kind(), TargetKind::Phase);
-        assert_eq!(CameraEye { id }.kind(), TargetKind::CameraEye);
-        assert_eq!(MorphT { id }.kind(), TargetKind::MorphT);
-        assert_eq!(
-            Camera2DFraming { id }.kind(),
-            TargetKind::Camera2DFraming
-        );
-        assert_eq!(RevealRange { id }.kind(), TargetKind::RevealRange);
-        assert_eq!(OpacityValue { id }.kind(), TargetKind::OpacityValue);
+    fn names_and_target_ids_are_reported() {
+        let id = ObjectId::new(7, 3);
+        assert_eq!(CircleRadius { id }.name(), "CircleRadius");
+        assert_eq!(Phase { id }.name(), "Phase");
+        assert_eq!(CameraEye { id }.name(), "CameraEye");
+        assert_eq!(MorphT { id }.name(), "MorphT");
+        assert_eq!(Camera2DFraming { id }.name(), "Camera2DFraming");
+        assert_eq!(RevealRange { id }.name(), "RevealRange");
+        assert_eq!(OpacityValue { id }.name(), "OpacityValue");
+        assert_eq!(TransformValue { id }.name(), "TransformValue");
+        // 全部 target 都如实报告自己的对象句柄（筛选的唯一依据）。
+        assert_eq!(CircleRadius { id }.target_id(), id);
+        assert_eq!(TransformValue { id }.target_id(), id);
+        assert_eq!(OpacityValue { id }.target_id(), id);
+    }
+
+    /// `TransformValue`：按 `AnimValue` 变体分派 —— `Vec2` → `position.xy`（z 不动）、
+    /// `Vec3` → 整个 `position`、`Scalar` → 统一缩放。
+    #[test]
+    fn transform_value_dispatches_by_variant() {
+        let mut world = World::new();
+        let e = world.spawn((Transform::default(),));
+        let t = TransformValue { id: id_of(e) };
+        let read = |world: &World| {
+            let tr = world.get::<&Transform>(e).unwrap();
+            (tr.position, tr.scale)
+        };
+
+        // 只动 xy，z 保持。
+        t.apply(&mut world, &AnimValue::Vec2(Vec2::new(2.0, -3.0)));
+        assert_eq!(read(&world).0, Vec3::new(2.0, -3.0, 0.0));
+        assert_eq!(read(&world).1, Vec3::ONE, "Vec2 不得改缩放");
+
+        // 整体写位置。
+        t.apply(&mut world, &AnimValue::Vec3(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(read(&world).0, Vec3::new(1.0, 2.0, 3.0));
+
+        // 统一缩放。
+        t.apply(&mut world, &AnimValue::Scalar(2.5));
+        assert_eq!(read(&world).1, Vec3::splat(2.5));
+        assert_eq!(read(&world).0, Vec3::new(1.0, 2.0, 3.0), "缩放不改位置");
     }
 
     /// `OpacityValue`：`Scalar` 写入 `Opacity.0`；其它变体跳过（不 panic）。

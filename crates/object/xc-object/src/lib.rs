@@ -1,6 +1,6 @@
 // xc-object — 场景对象层（新层 `crates/object/`，M3 建立）
 //
-// 用户可见的**场景对象**：图元 newtype（`Circle` / `Path` / `Line` / `Rect`）、
+// 用户可见的**场景对象**：图元 newtype（`Circle` / `Path` / `Line` / `Rect` / `Arrow`）、
 // 摆放组件（`Transform` / `ZOrder`）与**装配对象**（`Axes2D` / `FunctionGraph`）。
 // 它们把"理念层的数学值"封装成"可放进场景、可被描述符驱动样式"的对象，
 // 并实现渲染 IR 的降级 trait（`ToShape2D`）与契约层的样式描述符接口（`Describable`）。
@@ -41,5 +41,5 @@ pub use camera::{
 pub use content_texture::{CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH};
 pub use graph::{CONTENT_Z, FunctionGraph};
 pub use placement::Transform;
-pub use primitives::{Circle, Line, Path, Rect};
+pub use primitives::{Arrow, Circle, Line, Path, Rect};
 pub use zorder::ZOrder;
