@@ -45,6 +45,7 @@ use xc_object::{
 // `xc_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT}`。
 
 mod camera_drive;
+mod capability_demo;
 mod formula;
 mod health;
 mod param_panel;
@@ -54,6 +55,22 @@ use camera_drive::CameraDriveSystem;
 use health::HealthOverlay;
 use param_panel::ParamPanelSystem;
 use systems_3d::SceneRecord3DSystem;
+
+/// **2D 场景选择**（启动参数切换，见 `main.rs`）。
+///
+/// 为什么是启动参数而不是 UI 开关：场景在 `App::new` 里**一次性装配**（spawn 决定
+/// `ObjectId`、时钟树与绑定表在装配期编译），运行态重建整张场景图需要尚未具备的
+/// 生命周期设施（见「运行时创建/销毁对象」的记账）。故本轮用**启动参数**切换：
+///
+/// - `SceneChoice::Storyboard`（默认）：§1.1 六条分镜（`storyboard.rs`）；
+/// - `SceneChoice::CapabilityDemo`：N 线能力测试 demo（`capability_demo.rs`）——
+///   最小场景，四项能力（Name/Group/Visibility/Opacity）各落一处。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SceneChoice {
+    #[default]
+    Storyboard,
+    CapabilityDemo,
+}
 
 pub struct App {
     scheduler: Scheduler,
@@ -128,7 +145,13 @@ fn register_systems(
 }
 
 impl App {
+    /// 默认场景（§1.1 分镜）。保留此入口是为了不改既有调用点（`main.rs` / 测试）。
     pub fn new(ctx: &eframe::CreationContext) -> Result<Self> {
+        Self::new_with_scene(ctx, SceneChoice::Storyboard)
+    }
+
+    /// 按 [`SceneChoice`] 装配 App（**唯一的装配入口**）。
+    pub fn new_with_scene(ctx: &eframe::CreationContext, choice: SceneChoice) -> Result<Self> {
         // 宿主字体（平台相关）：候选路径 + `XCAL_CJK_FONT`；找不到只提示、不中止。
         if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() {
             eprintln!(
@@ -250,24 +273,45 @@ impl App {
             None => eprintln!("[xcal-app] 公式编译失败，跳过公式实体"),
         }
 
-        // ── 首个数学动画原型（§1.1 六条分镜）─────────────────────────────
-        // 分镜脚本在 `storyboard.rs`：声明式地表达"先…再…"，编译成 `ClockNode + Binding`
-        // （求值层零改动）。返回：时钟树 + 绑定表 + 主 2D 相机句柄。
-        let sb = storyboard::build(&mut scene, &engine);
+        // ── 2D 场景：分镜 / 能力 demo（启动参数切换，见 `SceneChoice`）────────
+        // 两个场景产出**同形的三样东西**：时钟树 + 绑定表 + 主 2D 相机句柄；
+        // demo 额外产出一个"待插入的组级开关"（N2 的组控制）。
+        let (forest2d, bindings2d, camera2d_handle, group_visibility) = match choice {
+            SceneChoice::Storyboard => {
+                // 分镜脚本在 `storyboard.rs`：声明式地表达"先…再…"，编译成
+                // `ClockNode + Binding`（求值层零改动）。
+                let sb = storyboard::build(&mut scene, &engine);
+                (
+                    sb.forest,
+                    sb.bindings,
+                    sb.camera,
+                    GroupVisibility::default(),
+                )
+            }
+            SceneChoice::CapabilityDemo => {
+                // N 线能力测试 demo：最小场景（两条曲线 + 一个对照组）。
+                // 默认**不隐藏任何组**（全可见）⇒ 看得见 `cos` 淡出（N4）；
+                // 组控制（N2）由 `capability_demo` 的测试与 GPU 用例证明。
+                eprintln!("[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）");
+                let d = capability_demo::build(&mut scene);
+                (d.forest, d.bindings, d.camera, d.group_visibility)
+            }
+        };
 
         let world = scene.into_world();
 
         // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
-        // 分镜已把时间编排编译进 `sb.forest` / `sb.bindings`；下面只补一条与
-        // 分镜编排无关的手工绑定：3D 轨道相机（时间源 = 全局 t）。
+        // 2D 场景已把时间编排编译进 `forest2d` / `bindings2d`；下面只补一条与
+        // 2D 编排无关的手工绑定：3D 轨道相机（时间源 = 全局 t）。
         //
         // K3：这条绑定由 `CameraDriveSystem` **托管**——"视口操作"切到 3D 时
         // 它会从表里移出（让位给交互）、切回 2D 时放回。
-        let mut forest = sb.forest;
-        let mut bindings = sb.bindings;
+        let mut forest = forest2d;
+        let mut bindings = bindings2d;
         // 「2D 相机自由」开关：分镜里指向 2D 相机（`Camera2DFraming`）的绑定
         // （`center` + `scale` 各一条）也被 `CameraDriveSystem` 托管——开关打开时从表里
         // 移出（否则每帧覆盖用户的 Pan/Zoom）、关闭时放回（分镜驱动）。
+        // 能力 demo 没有 `Camera2DFraming` 绑定 ⇒ 此向量为空，托管自然退化为 no-op。
         let cam2d_bindings: Vec<Binding> = bindings
             .bindings
             .iter()
@@ -294,7 +338,7 @@ impl App {
         let mut resources = Resources::new();
         // P1-1：相机状态**不再是 Resource** —— 场景里有一个 2D 相机对象，
         // 这里只放它的**句柄**（引用型，P2）；K3 再加 3D 相机句柄。
-        resources.insert(sb.camera);
+        resources.insert(camera2d_handle);
         resources.insert(camera3d);
         resources.insert(TimeState::default());
         resources.insert(UiConfig::default());
@@ -334,7 +378,8 @@ impl App {
         resources.insert(DirectorState::new());
         // N3：组级可见性开关（纯数据资源；默认空 ⇒ 所有组可见）。
         // 录制路径（`SceneRecordSystem` 等）以"可缺席资源"方式读取，缺席同样按空处理。
-        resources.insert(GroupVisibility::default());
+        // 分镜场景给默认空；能力 demo 也用默认空（组控制由测试填上以验证 N2）。
+        resources.insert(group_visibility);
 
         let mut scheduler = Scheduler::new(world, resources);
         register_systems(&mut scheduler, cam2d_bindings, orbit_binding);

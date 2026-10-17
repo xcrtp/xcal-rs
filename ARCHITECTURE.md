@@ -817,5 +817,13 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **一处登记缺口顺带补上**：`Reveal` 此前**未进 `add_known` 白名单**（R 线遗留）——
 >   漏登记会让 `spawn_dyn` 静默返回 `None`；本轮与 `Name`/`Group`/`Visibility`/`Opacity`
 >   一并 `arm!`。
+> - **能力测试 demo**（N 线之后追加）：`xcal-app` 增 `capability_demo.rs`，用**最小场景**
+>   （两条曲线 + 一个对照组）把四项能力各跑一遍；`--demo` / `XCAL_DEMO=1` 切换
+>   （`SceneChoice`）。**它不是作品，是能力检验** —— 每条能力落在一处、GPU 像素判据
+>   两两互斥（实测：组全开 `sin`=714 / `cos`=643 / 对照组=0；隐藏 `GROUP_COS` ⇒
+>   `cos`=**0** 而 `sin` **仍为 714**；`Opacity = 0` ⇒ `cos`=0 / `sin` 仍 714）。
+>   三条实测教训见该模块头注与 `xcal-app/README.md`：① 光挂 `Group` **不会**随组开关走
+>   （还要 `Visibility::of_group`，两组件正交）；② 两条曲线相交 ⇒ 像素读数互相污染
+>   （demo 里竖直错开）；③ `Opacity` 组件缺席时 `OpacityValue` **静默跳过**（动画静默失效）。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。

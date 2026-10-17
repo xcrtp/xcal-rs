@@ -5,7 +5,9 @@
 > 提供的所有 System、Resource、Backend 按阶段装配成一个可运行的桌面应用。
 
 ```bash
-cargo run -p xcal-app
+cargo run -p xcal-app              # 默认：§1.1 六条分镜（storyboard）
+cargo run -p xcal-app -- --demo    # N 线能力测试 demo（capability_demo）
+# 亦可用环境变量：XCAL_DEMO=1 cargo run -p xcal-app
 ```
 
 ---
@@ -49,6 +51,45 @@ cargo run -p xcal-app
 
 ---
 
+## 能力测试 demo（`--demo`，`src/capability_demo.rs`）
+
+> **定位：不是作品，是能力检验**。用最小场景把 N 线四项能力（`Name` / `Group` /
+> `Visibility` / `Opacity`）各跑一遍，每条能力恰好落在**一处**，便于"哪条坏了"一眼定位。
+> 它也是能力是否真的可用的**可证伪**检验（测试在 `capability_demo.rs` 的 `tests` 模块）。
+
+场景：**两条曲线 + 一个对照组**（无网格、无公式、无 3D 依赖）。
+
+| 对象 | `Name` | `Group` | 可见性 | 不透明度 |
+|------|--------|---------|--------|----------|
+| `curve_sin`（青） | ✓ | `GROUP_SIN` | `Visibility::for_camera(本相机)` | — |
+| `curve_cos`（橙） | ✓ | `GROUP_COS` | `Visibility::of_group(GROUP_COS)` | `Timeline` 1.0 → 0.0（2s 淡出）|
+| `curve_control`（品红） | ✓ | — | `Visibility::for_camera(不存在的相机)` | — |
+
+- **N1（声明式引用）**：装配时 `spawn` 的返回值**刻意丢弃**，绑定目标一律
+  `find_by_name("curve_cos")` 取回 —— 这正是 N1 的目的。
+- **N2（组控制）**：`GroupVisibility` 是**可缺席 Resource**（缺席/空 = 全可见）。
+  默认不隐藏任何组 ⇒ 运行态看得见 `cos` 淡出；隐藏 `GROUP_COS` 由测试与 GPU 用例验证。
+  ⚠️ **实测发现**：光挂 `Group` 标签**不会**让对象随组开关走 —— 组控制是
+  `VisibilityTag::Group` 这条**可见性关系**在起作用（两个组件**正交**，都要挂）。
+- **N3（对谁可见）**：`curve_sin` 只对**本相机**可见（相机 tag 由 `SceneRecordSystem`
+  从 `Camera2DHandle` 取）；对照组声明"一台场景里不存在的相机" ⇒ 任何相机下都不进队列。
+- **N4（淡入淡出）**：`Opacity` 是动画目标 ⇒ 组件必须**在 spawn 时就有**
+  （缺席时 `OpacityValue` 静默跳过，动画会**静默失效**）。
+
+**GPU 像素级验收**（`240×200` 离屏回读，颜色判据两两互斥）—— 实测数值：
+
+| 情形 | `sin`（青） | `cos`（橙） | 对照组（品红）|
+|------|-------------|-------------|----------------|
+| 组全开 | 714 | 643 | 0 |
+| 隐藏 `GROUP_COS` | **714（不变）** | **0** | 0 |
+| `cos` 的 `Opacity = 0` | **714（不变）** | **0** | — |
+
+> ⚠️ 两条曲线在竖直方向**错开**（`cos` 加 `-2.5` 的世界偏移）：`sin` 与 `cos` 在
+> `[-π, π]` 上相交三次，叠在一起时后画的橙线会盖住青线 ⇒ 像素读数互相污染
+> （实测：隐藏 cos 后青像素 688 → 714）。最小 demo 里两条曲线互不接触，判据才一一对应。
+
+---
+
 ## App::new 初始化流程（关键代码）
 
 > ⚠️ 以下为**当前**装配流程的压缩版（P1~P5 后）。完整代码见 `src/lib.rs`；
@@ -75,13 +116,22 @@ if let Some(ir) = formula::rebuild(&engine, &spec /* "x^2 + 1" */) {
     content_camera = Some(base_camera.fit_bounds(bounds, 0.8));         // 内容纹理取景
 }
 
-// ── 4. 首个数学动画原型（§1.1 六条分镜，声明式）──
-// 内部：Axes2D::build + spawn_camera2d（取 handle）+ 曲线 MorphShape + 公式浮现实体
-//       + Timeline 把"先…再…"编译成 ClockNode(offset+span+Hold) + Binding
-let sb = storyboard::build(&mut scene, &engine);                        // → forest / bindings / camera
+// ── 4. 2D 场景：分镜 / 能力 demo（启动参数切换，见 `SceneChoice`）──
+// 两者产出**同形**的三样：ClockForest + BindingTable + Camera2DHandle
+//   Storyboard     → storyboard::build（六条分镜，声明式）
+//   CapabilityDemo → capability_demo::build（N 线四项能力，最小场景）
+let (forest2d, bindings2d, camera2d_handle, group_visibility) = match choice {
+    // 内部：Axes2D::build + spawn_camera2d（取 handle）+ 曲线 Reveal + 公式浮现实体
+    //       + Timeline 把"先…再…"编译成 ClockNode(offset+span+Hold) + Binding
+    SceneChoice::Storyboard => { let sb = storyboard::build(&mut scene, &engine);
+                                 (sb.forest, sb.bindings, sb.camera, GroupVisibility::default()) }
+    // 内部：两条曲线 + 一个对照组；`Name`/`Group`/`Visibility`/`Opacity` 各落一处
+    SceneChoice::CapabilityDemo => { let d = capability_demo::build(&mut scene);
+                                     (d.forest, d.bindings, d.camera, d.group_visibility) }
+};
 let world = scene.into_world();
-let mut forest = sb.forest;
-let mut bindings = sb.bindings;
+let mut forest = forest2d;
+let mut bindings = bindings2d;
 // 「2D 相机自由」开关托管的分镜绑定：指 2D 相机（`Camera2DFraming`）的 center/scale 各一条。
 // 开关打开时它们被**移出**绑定表（否则每帧无条件写 center/scale，用户的 Pan/Zoom 同帧被抹掉）、
 // 关闭时放回。
@@ -113,7 +163,7 @@ r.insert(render_ctx.clone());
 r.insert(forest);
 r.insert(bindings);
 r.insert(DirectorState::new());
-r.insert(GroupVisibility::default());     // N3：组级可见性开关（默认空 ⇒ 所有组可见）
+r.insert(group_visibility);               // N3：组级可见性开关（分镜/demo 各自给出；默认空 ⇒ 全可见）
 
 // ── 6. Scheduler 注册 System（参见下方"阶段分配"） ──
 let mut sched = Scheduler::new(world, r);
