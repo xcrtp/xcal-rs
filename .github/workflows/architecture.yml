@@ -33,7 +33,7 @@ jobs:
       - name: Kernel wasm gate
         run: |
           rustup target add wasm32-unknown-unknown
-          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender; do
+          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender xc-vm; do
             echo "== $c (wasm32-unknown-unknown) =="
             cargo check -p "$c" --target wasm32-unknown-unknown || exit 1
           done

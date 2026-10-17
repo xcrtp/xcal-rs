@@ -9,6 +9,8 @@ members = [
     "crates/kernel/xc-vertex",
     "crates/kernel/xc-resource",
     "crates/kernel/xc-macro",
+    "crates/kernel/xc-vm",
+    "crates/kernel/xc-vm-macro",
     "crates/object/xc-object",
     "crates/graph/xc-node",
     "crates/graph/xc-graph-algo",

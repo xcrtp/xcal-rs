@@ -5805,6 +5805,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-vm"
+version = "0.1.0"
+
+[[package]]
+name = "xc-vm-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "xc-vm",
+]
+
+[[package]]
 name = "xcal-app"
 version = "0.1.0"
 dependencies = [
