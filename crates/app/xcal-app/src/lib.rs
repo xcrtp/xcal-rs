@@ -49,6 +49,7 @@ use xc_object::{
 
 mod camera_drive;
 mod capability_demo;
+pub mod export;
 mod formula;
 mod health;
 mod param_panel;

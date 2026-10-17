@@ -455,9 +455,19 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > **W1 记账（非 UI 路径已被验证）**：`StandardBackends` + `render_frame_headless`
 > 让渲染有了一条**不依赖 egui** 的入口，且与 egui 宿主路径**逐字节一致**
 > （GPU 用例 `headless_path_matches_egui_path_bit_for_bit`）—— "Scene 可被任意消费"
-> 从**类型层面的声明**变成**被验证的事实**。**导出（序列帧）仍未做**：只提供
-> "抓一帧 → RGBA8 紧凑像素"的入口；且**没有 seek**（Scene 不保证纯）⇒ 导出只能是
-> **实时录制**（播放 → 逐帧抓 → PNG），不能随机访问 `t`。编码交给 ffmpeg（本轮不做）。
+> 从**类型层面的声明**变成**被验证的事实**。
+>
+> **B 线（序列帧导出，本轮已接线）**：`xcal_app::export` 在 headless 入口上做
+> "逐帧 → 抓像素 → PNG"，入口为 `cargo run -p xcal-app --example export_frames`。
+> **没有 seek**（Scene 不保证纯）⇒ 只能边跑边抓；视频编码仍交给外部工具。
+> 每帧自建目标纹理的开销**只测不优化**（导出示例会打印 ms/帧）。
+>
+> **T0-② 判据口径已收窄（本轮修正）**：`new_target_requires_no_central_list_change`
+> 只证明**构造期**（`SceneEncoder::animate::<T>` 走 `TargetCtor::make`）无需集中清单。
+> **持久化期**仍需在 `target_ctor_by_name` 加一行（`serde::Deserialize` 拿不到外部
+> registry 的必要取舍）—— 新增 target 若要可持久化，必须同步那张表。
+> 函数侧走的是另一套（两步走：序列化写 name，反序列化由 VM / registry 反查），
+> 两套口径的差异是真实取舍，记账于此。
 
 ### cargo-archtest 适配状态
 

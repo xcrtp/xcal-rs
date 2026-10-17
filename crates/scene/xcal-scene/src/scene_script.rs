@@ -537,13 +537,18 @@ mod tests {
         );
     }
 
-    /// **T0-② 核心判据**：新增一个 target **全程不改任何集中清单**。
+    /// **T0-② 核心判据（口径已收窄）**：新增一个 target 在**构造期**无需改任何集中清单。
     ///
     /// 本用例**就地**定义一个测试专有的 target（`TestOpacity`）：它只实现 [`Target`] /
     /// [`TargetCtor`]，**没有任何枚举、映射表或 System** 需要同步改动，经
     /// `SceneEncoder::animate::<TestOpacity>`（泛型 + 关联函数）直接接线。
     ///
-    /// 可证伪：若"新增 target"仍需在某处集中清单加变体 / 分支，本用例无法只靠本地定义编译通过。
+    /// ⚠️ **持久化路径不适用**：`serde::Deserialize` 拿不到外部 registry，
+    /// 反序列化要靠 `animation::target::target_ctor_by_name` 的集中表。
+    /// 故新增 target 若要**可持久化**，仍需在那张表加一行（记账见 ARCHITECTURE）。
+    ///
+    /// 可证伪：若"新增 target"在**构造期**仍需在某处集中清单加变体 / 分支，
+    /// 本用例无法只靠本地定义编译通过。
     #[test]
     fn new_target_requires_no_central_list_change() {
         use crate::animation::target::TargetCtor;

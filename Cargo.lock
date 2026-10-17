@@ -5832,6 +5832,7 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "hecs",
+ "png 0.17.16",
  "tracing",
  "wgpu",
  "xc-content",
@@ -5966,6 +5967,7 @@ dependencies = [
  "xc-render-ir",
  "xc-scene-contract",
  "xc-time",
+ "xc-vm",
  "xcal-schedule",
 ]
 

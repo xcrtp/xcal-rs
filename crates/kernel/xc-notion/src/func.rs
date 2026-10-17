@@ -67,6 +67,8 @@ pub struct FunctionX2Y<X = f32, Y = f32> {
     pub f: Arc<dyn DynFn<X, Y>>,
     /// `Some` = 具名（可序列化）；`None` = 匿名（序列化时**明确报错**）。
     pub name: Option<String>,
+    /// 函数体是否已绑定（反序列化得到的"名字壳"为 `false`）。
+    bound: bool,
 }
 
 impl<X: 'static, Y: 'static> FunctionX2Y<X, Y> {
@@ -75,6 +77,7 @@ impl<X: 'static, Y: 'static> FunctionX2Y<X, Y> {
         Self {
             f: Arc::new(f),
             name: None,
+            bound: true,
         }
     }
 
@@ -86,12 +89,29 @@ impl<X: 'static, Y: 'static> FunctionX2Y<X, Y> {
         Self {
             f: Arc::new(f),
             name: Some(name.into()),
+            bound: true,
         }
     }
 
     /// 是否为具名函数（可持久化）。
     pub fn is_named(&self) -> bool {
         self.name.is_some()
+    }
+
+    /// 函数体是否已绑定。
+    ///
+    /// 反序列化只拿得到名字 ⇒ `false`；由 VM / 内置表按名反查后变 `true`。
+    /// 未绑定时调用会 panic（明确失败）。
+    pub fn is_bound(&self) -> bool {
+        self.bound
+    }
+
+    /// 绑定函数体（把"名字壳"补成可调用对象）。
+    ///
+    /// 名字保持不变（`name` 仍是持久化替身）；`bound` 置 `true`。
+    pub fn bind(&mut self, f: impl Fn(X) -> Y + Send + Sync + Clone + 'static) {
+        self.f = Arc::new(f);
+        self.bound = true;
     }
 }
 
@@ -101,6 +121,7 @@ impl<X: 'static, Y: 'static> Clone for FunctionX2Y<X, Y> {
         Self {
             f: self.f.clone_dyn(),
             name: self.name.clone(),
+            bound: self.bound,
         }
     }
 }
@@ -134,6 +155,7 @@ where
         Ok(Self {
             f: unbound(),
             name: Some(name),
+            bound: false,
         })
     }
 }
@@ -260,28 +282,6 @@ impl<'de> serde::Deserialize<'de> for SurfaceFn {
     }
 }
 
-/// 内置数学函数表（**可选**注册方法，不强制）。
-///
-/// 反序列化只得到 `name`，在没有 VM / 外部 registry 时可用本表把函数体绑回来：
-///
-/// ```ignore
-/// let shell: FunctionX2Y<f32, f32> = serde_json::from_str(r#""xcal.math.sin""#)?;
-/// let f = xc_notion::func::builtin_f32(shell.name.as_deref()?).unwrap();
-/// ```
-pub fn builtin_f32(name: &str) -> Option<FunctionX2Y<f32, f32>> {
-    let f: fn(f32) -> f32 = match name {
-        "xcal.math.sin" => f32::sin,
-        "xcal.math.cos" => f32::cos,
-        "xcal.math.tan" => f32::tan,
-        "xcal.math.abs" => f32::abs,
-        "xcal.math.sqrt" => f32::sqrt,
-        "xcal.math.exp" => f32::exp,
-        "xcal.math.ln" => f32::ln,
-        _ => return None,
-    };
-    Some(FunctionX2Y::named(name, f))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,15 +290,6 @@ mod tests {
     fn test_function_x2y_call() {
         let g = FunctionX2Y::new(|x: f32| x * 2.0);
         assert_eq!((g.f)(3.0), 6.0);
-    }
-
-    /// 内置表：名字 → 函数体（反序列化后的"重新绑定"入口）。
-    #[test]
-    fn builtin_table_rebinds_by_name() {
-        let g = builtin_f32("xcal.math.sin").expect("内置函数");
-        assert_eq!(g.name.as_deref(), Some("xcal.math.sin"));
-        assert!(((g.f)(0.5) - 0.5f32.sin()).abs() < f32::EPSILON);
-        assert!(builtin_f32("xcal.math.nope").is_none());
     }
 
     /// `DynFn` 抽象的性质：函数可作为 ECS 组件的必要条件。

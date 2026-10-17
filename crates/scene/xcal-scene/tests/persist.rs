@@ -9,7 +9,7 @@ use xc_object::{
 use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
 use xcal_scene::animation::Timeline;
 use xcal_scene::contract::{
-    Component, Components, Group, GroupId, Name, ObjectId, Parent, SceneRead, Visibility,
+    Components, Group, GroupId, Name, ObjectId, Parent, SceneRead, Visibility,
 };
 use xcal_scene::domain::CameraMode;
 use xcal_scene::persist::{
@@ -135,11 +135,12 @@ fn anonymous_function_is_an_explicit_error() {
     );
 }
 
-/// **两步走**：反序列化得到的函数是"只有名字的壳"，调用方按名字重新绑定。
+/// **两步走（非内置名字）**：反序列化得到"只有名字的壳"；该名字不在 VM 表里
+/// ⇒ 调用方按名字自行绑定后才能采样（与 `math_vm` 的自动绑定对照）。
 #[test]
-fn deserialized_function_can_be_rebound_by_name() {
+fn deserialized_unknown_function_can_be_rebound_manually() {
     let components: Components = vec![Box::new(FunctionGraph::new(
-        FunctionX2Y::named("xcal.math.sin", |x: f32| x.sin()),
+        FunctionX2Y::named("test::identity", |x: f32| x),
         Sampler1D::new(0.0f32, 1.0, 0.25),
     ))];
     let decoded = deserialize_components(serialize_components(&components).unwrap()).unwrap();
@@ -148,17 +149,19 @@ fn deserialized_function_can_be_rebound_by_name() {
         .as_any()
         .downcast_ref::<FunctionGraph>()
         .expect("FunctionGraph");
-    let name = shell.func.name.as_deref().expect("具名函数");
-    let rebound = xc_notion::builtin_f32(name).expect("内置表可绑定");
+    assert_eq!(shell.func.name.as_deref(), Some("test::identity"));
+    assert!(
+        !shell.func.is_bound(),
+        "未知名字不应被默认 VM 自动绑定（仍是名字壳）"
+    );
+
+    // 调用方自己提供函数体（真实场景里来自 VM / 插件 registry）。
+    let rebound = FunctionX2Y::named("test::identity", |x: f32| x);
     let graph = FunctionGraph::new(rebound, shell.sampler.clone());
 
     let pts = graph.sample_points(0.0);
     assert_eq!(pts.len(), 5, "pts = {pts:?}");
-    assert!(
-        (pts[1].y - 0.25f32.sin()).abs() < f32::EPSILON,
-        "pts = {pts:?}，期望 y1 = {}",
-        0.25f32.sin()
-    );
+    assert_eq!(pts[1].y, 0.25, "手工绑定后采样正确");
 }
 
 /// 未知类型名 ⇒ 明确错误。

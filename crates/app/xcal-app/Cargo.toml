@@ -37,6 +37,8 @@ glam.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
 tracing.workspace = true
+# 序列帧导出（B 线）：最小 PNG 编码器。
+png.workspace = true
 
 [features]
 # typst 默认开：否则看不见真公式，demo 无意义。

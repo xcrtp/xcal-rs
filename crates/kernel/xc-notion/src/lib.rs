@@ -48,7 +48,7 @@ pub mod vec;
 
 pub use color::Color32;
 pub use curve::{ParameterCurveT2XY, ParameterCurveT2XYZ};
-pub use func::{DynFn, FunctionX2Y, SurfaceFn, builtin_f32};
+pub use func::{DynFn, FunctionX2Y, SurfaceFn};
 pub use lerp::Lerp;
 pub use mat::{Mat3, Mat4, Quat};
 pub use path::{DEFAULT_MORPH_SAMPLES, MORPH_TOLERANCE, Path2D, Path3D, PathCommand};
