@@ -41,17 +41,22 @@ use xc_object::{
     Projection, Rect, Transform, ZOrder,
 };
 use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
-use xc_scene_contract::{Components, Parent, Scene};
+use xc_scene_contract::Parent;
 
-/// 契约层的**只读**能力（`for_each*` / `with`）在此处对外转发：
-/// 消费方（UI 层 / 装配层）只需 `xcal_scene::contract::SceneRead` 一个入口，
+/// 契约层的**只读 / 读写**能力在此处对外转发：
+/// 消费方（UI 层 / 装配层 / App）只需 `xcal_scene::contract::*` 一个入口，
 /// 不必额外依赖 `xc-scene-contract`（本 crate 已依赖它）。
 ///
 /// 同时转发身份与**组织**类型（句柄 / 目标 / 可见性判定都要用到它们）：
 /// `ObjectId`、`Name`、`Group` / `GroupId`、`Visibility` / `VisibilityTag`、
 /// `GroupVisibility`（组级开关）。
+///
+/// **B0（场景脚本可达性修复）**：此前这里**只**转发 `SceneRead` 一族，写 trait
+/// [`Scene`]（`spawn_dyn` 的宿主）与载荷类型 [`Components`] **没有对外路径**
+/// ⇒ 装配层无法走"经 `add_known` 登记表"的动态创建入口。二者在此补发。
 pub use xc_scene_contract::{
-    Group, GroupId, GroupVisibility, Name, ObjectId, SceneRead, Visibility, VisibilityTag,
+    Components, Group, GroupId, GroupVisibility, Name, ObjectId, Scene, SceneRead, Visibility,
+    VisibilityTag,
 };
 
 use crate::domain::CameraMode;

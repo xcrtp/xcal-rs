@@ -31,7 +31,10 @@ use xcal_scene::domain::{CameraMode, ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
 use xcal_scene::scene::components::{ContentTextureItem, Material3D, TextureHandle};
 use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
-use xcal_scene::{ClockNode, Curve, SeekKind, TimeState};
+use xcal_scene::{
+    ClockNode, Curve, DeferredApplySystem, DeferredCommands, DynamicObjects, ReplaySystem, SeekKind,
+    TimeState,
+};
 use xcal_schedule::resource::Resources;
 use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::types::Color32;
@@ -142,6 +145,14 @@ fn register_systems(
     // R0：书写动画录制（同相位第四个写者，写集 `RevealQueue` 与前三者不相交）。
     scheduler.add_system(Phase::RenderCommit, RevealRecordSystem);
     scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+
+    // P6/B3：延迟命令应用 —— `Phase::FrameEnd` 此前为空（架构文档记"有意留空"），
+    // 正好用作"帧末统一应用延迟命令"（避免录制遍历中删对象）。
+    // 写集 `(DeferredCommands, DynamicObjects)` 与任何相位都不相交。
+    scheduler.add_system(Phase::FrameEnd, DeferredApplySystem);
+    // P6/B4：重播清理 —— 运行时创建的对象在重播时销毁（`Prepare`，在录制之前；
+    // 该相位当前无其它 Resource 写者）。
+    scheduler.add_system(Phase::Prepare, ReplaySystem);
 }
 
 impl App {
@@ -380,6 +391,10 @@ impl App {
         // 录制路径（`SceneRecordSystem` 等）以"可缺席资源"方式读取，缺席同样按空处理。
         // 分镜场景给默认空；能力 demo 也用默认空（组控制由测试填上以验证 N2）。
         resources.insert(group_visibility);
+        // P6/B3：运行时延迟命令队列（帧末由 `DeferredApplySystem` 应用）。
+        resources.insert(DeferredCommands::new());
+        // P6/B4：运行时创建对象台账（重播清理用）。
+        resources.insert(DynamicObjects::new());
 
         let mut scheduler = Scheduler::new(world, resources);
         register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
@@ -557,5 +572,184 @@ mod tests {
         sched.init_resources();
         // 运行期借用（BorrowTracker）也不得冲突。
         sched.run_frame(0.016);
+    }
+
+    /// **B0 验收**：装配层能经 `xcal_scene` 写"用契约层 `spawn_dyn` 动态创建对象"的代码。
+    ///
+    /// 可证伪：`xcal_scene::contract` 若不转发写 trait `Scene`，本测试**编译失败**。
+    /// 这里也顺带钉住登记表（`add_known`）齐备性：`Name` 未登记 ⇒ `spawn_dyn` 返回 `None`。
+    #[test]
+    fn app_layer_can_spawn_dyn_via_contract() {
+        use xcal_scene::contract::{
+            Components, Name, Scene as SceneTrait, SceneRead, find_by_name,
+        };
+        use xcal_scene::scene::Scene;
+
+        let mut scene = Scene::new();
+        let components: Components = vec![Box::new(Name::new("hero"))];
+        let id = scene
+            .spawn_dyn(components)
+            .expect("Name 已登记 ⇒ 动态创建成功（未登记会返回 None）");
+        assert!(scene.contains(id));
+        assert_eq!(find_by_name(&scene, "hero"), Some(id));
+        assert_eq!(scene.len(), 1);
+    }
+
+    // ─── B3 GPU 像素级：延迟命令的相位顺序陷阱（§9.2.1 / §9.2.3）────────────
+
+    /// 离屏回读尺寸（与 [`deferred_gpu_geometry`] 的视口一致）。
+    const DEF_W: u32 = 240;
+    const DEF_H: u32 = 200;
+
+    fn deferred_gpu_geometry() -> xcal_render_backends::Frame2DGeometry {
+        xcal_render_backends::Frame2DGeometry {
+            viewport_points: Rect2D::new(
+                xc_notion::Vec2::new(100.0, 50.0),
+                xc_notion::Vec2::new(340.0, 250.0),
+            ),
+            pixels_per_point: 1.0,
+            screen_size_px: [400, 300],
+        }
+    }
+
+    /// "亮像素"计数（通道序无关：背景透明/黑都为 0，红描边 ≈255）。
+    fn count_lit(px: &[u8]) -> usize {
+        px.chunks_exact(4)
+            .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 150)
+            .count()
+    }
+
+    /// 🔴 **B3 验收（GPU 像素级）**：延迟 spawn 的对象**本帧不出现、下一帧出现**。
+    ///
+    /// 判据：帧 N 回读的亮像素 = 0（新对象尚未创建，录制先于 FrameEnd）；
+    /// 帧 N+1 回读的亮像素 > 0。若把 `DeferredApplySystem` 挪到 `RenderCommit`
+    /// 之前（破坏相位顺序），帧 N 就会有像素 ⇒ 本用例 RED。
+    #[test]
+    fn deferred_spawn_pixels_appear_next_frame() {
+        use xcal_render::{DrawQueue, MeasureSpace, SceneRecordSystem};
+        use xcal_render_backends::{RenderContext, WgpuBackend2D};
+        use xcal_scene::contract::WorldScene;
+        use xcal_scene::types::Rect2D;
+        use xcal_scene::{DeferredApplySystem, DeferredCommands, DynamicObjects};
+        use xc_notion::Transform2D;
+        use xc_object::{Circle, Framing2D, spawn_camera2d};
+
+        let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+            .expect("headless GPU 上下文");
+        let mut backend = WgpuBackend2D::new(ctx.device(), ctx.queue());
+
+        // 场景：只有相机（对象稍后经延迟命令创建）。
+        let mut world = hecs::World::new();
+        let camera = {
+            let mut ws = WorldScene::new(&mut world);
+            spawn_camera2d(&mut ws, Framing2D::new(glam::Vec2::ZERO, 25.0)).expect("Framing2D 已登记")
+        };
+
+        let view_rect = Rect2D::new(
+            xc_notion::Vec2::new(100.0, 50.0),
+            xc_notion::Vec2::new(340.0, 250.0),
+        );
+        let mut res = Resources::new();
+        res.insert(camera);
+        res.insert(ViewRect { rect: view_rect });
+        res.insert(DrawQueue::new());
+        res.insert(DeferredCommands::new());
+        res.insert(DynamicObjects::new());
+
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, SceneRecordSystem);
+        sched.add_system(Phase::FrameEnd, DeferredApplySystem);
+        sched.init_resources();
+
+        let render = |sched: &Scheduler,
+                      backend: &mut WgpuBackend2D,
+                      ctx: &RenderContext,
+                      g: &xcal_render_backends::Frame2DGeometry|
+         -> Vec<u8> {
+            use xcal_scene::domain::LayerId;
+            let queue = sched.resources().get::<DrawQueue>().expect("DrawQueue");
+            backend.begin_frame_at(*g);
+            for cmd in queue.commands() {
+                backend.push(
+                    &cmd.shape,
+                    &Transform2D::identity(),
+                    &cmd.style,
+                    cmd.z.0,
+                );
+            }
+            let mut enc = ctx
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("xcal-deferred-frame"),
+                });
+            backend.finish_frame(&mut enc, LayerId(0), g);
+            ctx.queue().submit([enc.finish()]);
+            ctx.read_texture(
+                backend.offscreen_texture(LayerId(0)).unwrap(),
+                (DEF_W, DEF_H),
+            )
+        };
+
+        // 帧 N 前：入队一条延迟创建（半径 1 世界单位 ≈ 25px 的红色描边圆）。
+        sched
+            .resources_mut()
+            .get_mut::<DeferredCommands>()
+            .unwrap()
+            .spawn(vec![
+                Box::new(Circle::new((0.0, 0.0), 1.0)),
+                Box::new(xcal_render::StrokeSolid::new_in(
+                    8.0,
+                    (255, 0, 0, 255),
+                    MeasureSpace::Screen,
+                )),
+            ]);
+
+        let g = deferred_gpu_geometry();
+        // ⚠️ `record_scene_tagged` **不清队列**（清理由宿主 `end_frame` 负责）——
+        // 测试里必须每帧前清空，否则上一帧的命令会残留在回读里。
+        let clear_queue = |sched: &mut Scheduler| {
+            sched
+                .resources_mut()
+                .get_mut::<DrawQueue>()
+                .unwrap()
+                .clear();
+        };
+
+        clear_queue(&mut sched);
+        sched.run_frame(0.0);
+        let lit_n = count_lit(&render(&sched, &mut backend, &ctx, &g));
+        eprintln!("[deferred-gpu] 帧 N 亮像素 = {lit_n}（期望 0：新对象下一帧才出现）");
+
+        clear_queue(&mut sched);
+        sched.run_frame(0.0);
+        let lit_n1 = count_lit(&render(&sched, &mut backend, &ctx, &g));
+        eprintln!("[deferred-gpu] 帧 N+1 亮像素 = {lit_n1}（期望 > 0）");
+
+        assert_eq!(lit_n, 0, "延迟 spawn 的对象本帧不得出现（相位顺序陷阱）");
+        assert!(lit_n1 > 0, "延迟 spawn 的对象下一帧必须出现，实测 {lit_n1}");
+
+        // ── §9.2.2：延迟 despawn 后对象消失（下一帧生效）──
+        let runtime_id = sched
+            .resources()
+            .get::<DynamicObjects>()
+            .unwrap()
+            .ids
+            .first()
+            .copied()
+            .expect("运行时创建的对象已登记");
+        sched
+            .resources_mut()
+            .get_mut::<DeferredCommands>()
+            .unwrap()
+            .despawn(runtime_id);
+        clear_queue(&mut sched);
+        sched.run_frame(0.0);
+        let lit_after_enqueue = count_lit(&render(&sched, &mut backend, &ctx, &g));
+        assert!(lit_after_enqueue > 0, "延迟 despawn 本帧仍可见（FrameEnd 才删）");
+        clear_queue(&mut sched);
+        sched.run_frame(0.0);
+        let lit_gone = count_lit(&render(&sched, &mut backend, &ctx, &g));
+        eprintln!("[deferred-gpu] despawn 后亮像素 = {lit_gone}（期望 0）");
+        assert_eq!(lit_gone, 0, "延迟 despawn 的对象下一帧必须消失");
     }
 }

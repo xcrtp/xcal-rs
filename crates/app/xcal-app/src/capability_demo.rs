@@ -7,7 +7,7 @@
 //
 // | 能力 | 落点 |
 // |------|------|
-// | N1 `Name` + `find_by_name` | 三条对象各挂 `Name`；**绑定目标一律经名字取回** |
+// | N1 `Name` + `find_by_name` | 三条对象各挂 `Name`；装配时以 `find_by_name` 与**脚本句柄**互相印证 |
 // | N2 `Group` + `VisibilityTag::Group` | `curve_sin` → `GROUP_SIN`、`curve_cos` → `GROUP_COS`（**两者都要挂**，见下）|
 // | N3 `Visibility` | `curve_sin` → `for_camera(本相机)`；对照组 → `for_camera(别的 id)`（应不可见）|
 // | N4 `Opacity` | `curve_cos` 的 `Opacity` 由 `Timeline` 从 1.0 淡到 0.0 |
@@ -29,15 +29,14 @@
 // 3. **`Opacity` 组件缺席 ⇒ 动画静默失效** —— `OpacityValue` 只是每帧写字段，
 //    `with_component` 在组件缺席时静默跳过（不 panic、不报错），表现为"淡出没反应"。
 //
-// # 装配口径（刻意如此）
+// # 装配口径（B0/B1/B2 后更新）
 //
-// - 对象用**元组** `Scene::spawn` 建（`xcal-scene` 文档指定的"App 侧启动装配"入口），
-//   且**不接住返回值**：后续一律 `find_by_name` 取回 `ObjectId` —— 这正是 N1 要证明的
-//   事（声明式引用，而不是手递句柄）。
-// - ⚠️ **没有**走契约层的 `spawn_dyn`（那条路径会过 `add_known` 登记表，是"四个组件
-//   登记齐备"的可证伪检查）：`xcal_app` 不直接依赖 `xc-scene-contract`，而
-//   `xcal_scene::contract` **只转发了只读能力**（`SceneRead` 一族），写 trait
-//   `Scene`（`spawn_dyn` 的宿主）**没有对外可达的路径**。详见交付说明的"新问题"。
+// - 对象经**场景脚本** `SceneEncoder` 创建（`enc.spawn` → 句柄 → `commit`）：
+//   走契约层 `spawn_dyn` ⇒ 过 `add_known` 登记表 —— 这正是"四个组件登记齐备"的
+//   可证伪检查（漏登记 ⇒ `commit` 直接 `Err`，不再靠运气）。
+// - 相机（N3 的 `Visibility::for_camera` 目标）以 [`handle_ref`](xcal_scene::handle_ref)
+//   **声明期引用**，`commit` 时解析为真实 `ObjectId`。
+// - N1 的 `find_by_name` 仍成立：`commit` 后以名字与脚本句柄**互相印证**。
 //
 // # 已知的比较别扭之处（交付说明里逐条展开）
 //
@@ -49,14 +48,16 @@
 
 use xcal_render::components::Path;
 use xcal_render::{MeasureSpace, Opacity, StrokeSolid};
-use xcal_scene::animation::{OpacityValue, Timeline};
+use xcal_scene::animation::OpacityValue;
 use xcal_scene::contract::{
     find_by_name, Group, GroupId, GroupVisibility, Name, ObjectId, Visibility,
 };
+use xcal_scene::handle_ref;
 use xcal_scene::scene::Scene;
+use xcal_scene::scene_script::SceneEncoder;
 use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 use xc_notion::Path2D;
-use xc_object::{Camera2DHandle, Framing2D, spawn_camera2d};
+use xc_object::{Camera2DHandle, Framing2D};
 
 /// 主 2D 相机的初始取景（世界原点居中、45 px/世界单位）。
 const CAMERA_SCALE: f32 = 45.0;
@@ -108,62 +109,81 @@ pub struct CapabilityDemo {
 }
 
 /// 把能力 demo 装配进场景，并返回产物（可渲染性由调用方经既有 System 链路验证）。
+///
+/// # B0/B1/B2 后：改用**场景脚本**装配（装配代码的简化）
+///
+/// 改动前是"手工 `scene.spawn` 元组 + `find_by_name` 取 id + 手写 `Timeline` +
+/// 手工 `compile`"；现在只声明**句柄 → 组件 → 曲线**：
+/// - 对象经 `enc.spawn` 创建 ⇒ 走契约层 `spawn_dyn` ⇒ 过 `add_known` 登记表
+///   （"四个组件登记齐备"的可证伪检查）；
+/// - N3 的 `Visibility::for_camera` 目标用 [`handle_ref`] **声明期引用**相机句柄，
+///   `commit` 时解析为真实 `ObjectId`（B1 句柄引用的真实用例）；
+/// - N4 的淡出目标直接是 `cos` 的脚本句柄（声明期无需 `ObjectId`）。
+///
+/// N1（`find_by_name`）仍成立：commit 后以名字与脚本句柄**互相印证**（见函数尾）。
 pub fn build(scene: &mut Scene) -> CapabilityDemo {
-    // ── 相机（**必须先建**：`Visibility::for_camera` 需要它的 `ObjectId`）──────
-    let camera = spawn_camera2d(scene, Framing2D::new(glam::Vec2::ZERO, CAMERA_SCALE))
-        .expect("Framing2D 已登记");
+    // ── 场景脚本：声明期只有句柄，`commit` 时才创建对象 / 编译时序 ─────────
+    let mut enc = SceneEncoder::new();
+
+    // ── 相机（**必须先建**：`Visibility::for_camera` 需要引用它的句柄）──────
+    let camera_h = enc.spawn(vec![Box::new(Framing2D::new(glam::Vec2::ZERO, CAMERA_SCALE))]);
 
     // ── N1 + N2 + N3：两条曲线 + 一个对照组 ────────────────────────────────
-    // **刻意不接住 `spawn` 的返回值** —— 后续一律按名字取回 id（N1 的目的）。
-    scene.spawn((
-        Path::new(Path2D::from_polyline(&samples(f32::sin), false)),
-        StrokeSolid::new_in(3.0, COLOR_SIN, MeasureSpace::Screen),
-        Name::new(NAME_SIN),
-        Group::new(GROUP_SIN),
-        // N3：只对**本相机**可见（相机 tag 由 `SceneRecordSystem` 从 `Camera2DHandle` 取）。
-        Visibility::for_camera(camera.0),
-    ));
-    scene.spawn((
-        Path::new(Path2D::from_polyline(
+    // 三条对象各挂 `Name`（N1）；**不接住** `spawn` 的返回值也可以，但这里接住
+    // `cos` 的句柄作为 N4 的动画目标。
+    enc.spawn(vec![
+        Box::new(Path::new(Path2D::from_polyline(&samples(f32::sin), false))),
+        Box::new(StrokeSolid::new_in(3.0, COLOR_SIN, MeasureSpace::Screen)),
+        Box::new(Name::new(NAME_SIN)),
+        Box::new(Group::new(GROUP_SIN)),
+        // N3：只对**本相机**可见（声明期句柄引用，commit 时解析）。
+        Box::new(Visibility::for_camera(handle_ref(camera_h))),
+    ]);
+    let cos_h = enc.spawn(vec![
+        Box::new(Path::new(Path2D::from_polyline(
             &samples(|x| x.cos() + COS_OFFSET),
             false,
-        )),
-        StrokeSolid::new_in(3.0, COLOR_COS, MeasureSpace::Screen),
-        Name::new(NAME_COS),
+        ))),
+        Box::new(StrokeSolid::new_in(3.0, COLOR_COS, MeasureSpace::Screen)),
+        Box::new(Name::new(NAME_COS)),
         // ⚠️ 实测发现：**光挂 `Group` 标签**不会让对象随组开关走 —— 组控制是
         // `VisibilityTag::Group` 这条**可见性关系**在起作用，而 `Group` 只是"我属于哪组"
         // 的组织标签（两个组件**正交**）。两者都挂上才等于"这条曲线随该组开关"。
-        Group::new(GROUP_COS),
-        Visibility::of_group(GROUP_COS),
+        Box::new(Group::new(GROUP_COS)),
+        Box::new(Visibility::of_group(GROUP_COS)),
         // N4：`Opacity` 必须**在 spawn 时就有** —— `OpacityValue` 目标只是每帧写它的
         // 字段；组件缺席时 `with_component` 静默跳过（动画会静默失效）。
-        Opacity::new(1.0),
-    ));
+        Box::new(Opacity::new(1.0)),
+    ]);
     // 对照组：只对**另一台**相机可见 ⇒ 本相机下永不进队列（N3 的反向判据）。
-    scene.spawn((
-        Path::new(Path2D::from_polyline(&control_samples(), false)),
-        StrokeSolid::new_in(3.0, COLOR_CONTROL, MeasureSpace::Screen),
-        Name::new(NAME_CONTROL),
-        Visibility::for_camera(OTHER_CAMERA),
-    ));
+    enc.spawn(vec![
+        Box::new(Path::new(Path2D::from_polyline(&control_samples(), false))),
+        Box::new(StrokeSolid::new_in(3.0, COLOR_CONTROL, MeasureSpace::Screen)),
+        Box::new(Name::new(NAME_CONTROL)),
+        Box::new(Visibility::for_camera(OTHER_CAMERA)),
+    ]);
 
-    // ── N1：**按名字**取回 `ObjectId`（不手递 `spawn` 的返回值）─────────────
-    // 两个名字都必须解析出来，且必须是不同对象（后者用 `debug_assert` 钉住）。
-    let sin_id = find_by_name(scene, NAME_SIN).expect("curve_sin 已 spawn");
-    let cos_id = find_by_name(scene, NAME_COS).expect("curve_cos 已 spawn");
-    debug_assert_ne!(sin_id, cos_id, "两条曲线必须是不同对象");
+    // ── N4：`curve_cos` 的 `Opacity` 1.0 → 0.0（淡出）── 目标 = `cos` 脚本句柄 ──
+    enc.animate::<OpacityValue>(cos_h, fade_out(FADE_SECONDS), FADE_SECONDS);
 
-    // ── N4：`curve_cos` 的 `Opacity` 1.0 → 0.0（淡出）── 目标句柄**来自名字** ──
-    let mut tl = Timeline::new();
-    tl.play(fade_out(FADE_SECONDS), OpacityValue { id: cos_id }, FADE_SECONDS);
+    // ── 提交到**已有 Scene**（不新建）──
+    let recipe = enc
+        .finish()
+        .commit(scene)
+        .expect("能力 demo 脚本 commit 成功（组件均已登记）");
+    let camera = Camera2DHandle(recipe.id(camera_h).expect("相机句柄已解析"));
 
-    let mut forest = ClockForest::new();
-    let mut bindings = BindingTable::new();
-    tl.compile(&mut forest, &mut bindings);
+    // ── N1：名字引用与脚本句柄**互相印证**（两条引用路径指向同一对象）────────
+    // 用 `assert!`（非 `debug_assert!`）：这是 demo 的**能力检验**，不是开发期便利。
+    assert_eq!(
+        find_by_name(scene, NAME_COS),
+        Some(recipe.id(cos_h).expect("cos 句柄已解析")),
+        "`find_by_name` 与脚本句柄必须指向同一对象（N1）"
+    );
 
     CapabilityDemo {
-        forest,
-        bindings,
+        forest: recipe.forest,
+        bindings: recipe.bindings,
         camera,
         // N2 的"另一半"：默认**空**（全可见）。要验证组控制就把它填上 ——
         // 本模块的测试即如此（隐藏 `GROUP_COS`）。

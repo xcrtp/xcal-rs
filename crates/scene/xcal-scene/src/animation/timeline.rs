@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 
+use xc_scene_contract::ObjectId;
 use xc_time::{ClockForest, ClockNode, Curve, PlayMode};
 
 use crate::animation::binding::BindingTable;
@@ -49,13 +50,32 @@ impl Segment {
     }
 }
 
+/// 段内一个动作的目标：**已解析** / **声明期待解析**（P6 场景脚本）。
+///
+/// `Ready` 是手写 `play` / `parallel` 走的那条（目标已构造好）；
+/// `Pending` 是场景脚本（`SceneEncoder::animate`）走的那条 —— 声明期还没有
+/// `ObjectId`，只记一个 `Handle` 下标；`commit` 时经 [`Timeline::compile_with`]
+/// 的 `resolve` 求出真实 id，再调 `make(id)` 生成 target。
+#[derive(Clone)]
+enum ActionTarget {
+    Ready(Arc<dyn Target>),
+    /// `make` 是 `TargetCtor::make` 的**函数指针**（不捕获任何环境 ⇒ 天然 `Send + Sync`）；
+    /// `handle` 是**本段脚本内**的句柄下标（`append` 时整体偏移）。
+    Pending {
+        make: fn(ObjectId) -> Arc<dyn Target>,
+        handle: usize,
+    },
+}
+
 /// 段内的一个动作：一条 `曲线 → 目标` 绑定。
+#[derive(Clone)]
 struct Action {
     curve: Curve,
-    target: Arc<dyn Target>,
+    target: ActionTarget,
 }
 
 /// 编排步骤：`Wait` 只推进游标；`Play` 产出一个时间区间（区间内可含多个**并行**动作）。
+#[derive(Clone)]
 enum Step {
     Wait(f64),
     Play {
@@ -96,12 +116,27 @@ impl Timeline {
     /// 段内还可以用 [`Timeline::parallel`] 追加与它**同区间**的其它动作
     /// （如"镜头推进"同时改 `scale` 与 `center`）。
     pub fn play(&mut self, curve: Curve, target: impl Target, dur: f64) -> &mut Self {
+        self.play_action(curve, ActionTarget::Ready(Arc::new(target)), dur)
+    }
+
+    /// 声明一段动画，但目标**尚未解析**（场景脚本：`Handle` → `commit` 时求 id）。
+    ///
+    /// `make` 是 `TargetCtor::make` 的函数指针；`handle` 是脚本内句柄下标。
+    /// 语义与 [`Timeline::play`] 逐位相同，差别只在"目标何时变成具体 trait object"。
+    pub fn play_pending(
+        &mut self,
+        curve: Curve,
+        make: fn(ObjectId) -> Arc<dyn Target>,
+        handle: usize,
+        dur: f64,
+    ) -> &mut Self {
+        self.play_action(curve, ActionTarget::Pending { make, handle }, dur)
+    }
+
+    fn play_action(&mut self, curve: Curve, target: ActionTarget, dur: f64) -> &mut Self {
         self.steps.push(Step::Play {
             duration: dur,
-            actions: vec![Action {
-                curve,
-                target: Arc::new(target),
-            }],
+            actions: vec![Action { curve, target }],
         });
         self
     }
@@ -111,11 +146,22 @@ impl Timeline {
     /// 上一段不是 `play`（无可依附的区间）时本调用**不产生任何效果** ——
     /// 调用方须紧跟在一个 `play` 之后使用。
     pub fn parallel(&mut self, curve: Curve, target: impl Target) -> &mut Self {
+        self.parallel_action(curve, ActionTarget::Ready(Arc::new(target)))
+    }
+
+    /// [`Timeline::parallel`] 的"待解析目标"版本（场景脚本用）。
+    pub fn parallel_pending(
+        &mut self,
+        curve: Curve,
+        make: fn(ObjectId) -> Arc<dyn Target>,
+        handle: usize,
+    ) -> &mut Self {
+        self.parallel_action(curve, ActionTarget::Pending { make, handle })
+    }
+
+    fn parallel_action(&mut self, curve: Curve, target: ActionTarget) -> &mut Self {
         if let Some(Step::Play { actions, .. }) = self.steps.last_mut() {
-            actions.push(Action {
-                curve,
-                target: Arc::new(target),
-            });
+            actions.push(Action { curve, target });
         }
         self
     }
@@ -161,7 +207,21 @@ impl Timeline {
     ///
     /// `ClockNode::insert` 不可能失败（新 id 不在任何已有祖先链上，见 `clock.rs`），
     /// 失败（理论不可达）即跳过该段。
+    ///
+    /// 全部动作必须**已解析**（手写 `play` / `parallel`）；若含待解析动作，其目标按
+    /// `DANGLING` 构造（表现为"静默不命中"）—— 场景脚本请走 [`Timeline::compile_with`]。
     pub fn compile(&self, forest: &mut ClockForest, bindings: &mut BindingTable) {
+        self.compile_with(&|_| ObjectId::DANGLING, forest, bindings);
+    }
+
+    /// [`Timeline::compile`] 的"带句柄解析"版本：待解析动作经 `resolve(handle)` 求
+    /// 真实 `ObjectId`，再 `make(id)` 生成 target（场景脚本 `commit` 的落点）。
+    pub fn compile_with(
+        &self,
+        resolve: &impl Fn(usize) -> ObjectId,
+        forest: &mut ClockForest,
+        bindings: &mut BindingTable,
+    ) {
         let mut cursor = 0.0f64;
         for step in &self.steps {
             match step {
@@ -173,10 +233,59 @@ impl Timeline {
                     node.mode = PlayMode::Hold;
                     if let Ok(id) = forest.insert(node) {
                         for action in actions {
-                            bindings.bind_arc(id, action.curve.clone(), Arc::clone(&action.target));
+                            let target: Arc<dyn Target> = match &action.target {
+                                ActionTarget::Ready(t) => Arc::clone(t),
+                                ActionTarget::Pending { make, handle } => make(resolve(*handle)),
+                            };
+                            bindings.bind_arc(id, action.curve.clone(), target);
                         }
                     }
                     cursor += duration;
+                }
+            }
+        }
+    }
+
+    /// 编排总时长（所有 `wait` + 所有段时长之和）—— 合并（append）的时间游标依据。
+    pub fn total_duration(&self) -> f64 {
+        let mut cursor = 0.0f64;
+        for step in &self.steps {
+            match step {
+                Step::Wait(d) => cursor += d,
+                Step::Play { duration, .. } => cursor += duration,
+            }
+        }
+        cursor
+    }
+
+    /// 把 `other` 的步骤**整体追加**到本编排之后（合并语义，§3.3）。
+    ///
+    /// - **时间游标**：`other` 的步骤直接续在本编排末尾 ⇒ `other` 的首段起点
+    ///   自动落到本编排的 [`Timeline::total_duration`] 之后；
+    /// - **句柄偏移**：`other` 的待解析动作里 `handle` 整体 `+ base`（`base` = 本编排
+    ///   已占用的段内句柄数）。
+    pub fn append_shifted(&mut self, other: &Timeline, base: usize) {
+        for step in &other.steps {
+            match step {
+                Step::Wait(d) => self.steps.push(Step::Wait(*d)),
+                Step::Play { duration, actions } => {
+                    let actions = actions
+                        .iter()
+                        .map(|a| Action {
+                            curve: a.curve.clone(),
+                            target: match &a.target {
+                                ActionTarget::Ready(t) => ActionTarget::Ready(Arc::clone(t)),
+                                ActionTarget::Pending { make, handle } => ActionTarget::Pending {
+                                    make: *make,
+                                    handle: handle + base,
+                                },
+                            },
+                        })
+                        .collect();
+                    self.steps.push(Step::Play {
+                        duration: *duration,
+                        actions,
+                    });
                 }
             }
         }

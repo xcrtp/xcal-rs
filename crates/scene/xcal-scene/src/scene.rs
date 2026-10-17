@@ -34,9 +34,22 @@ pub mod resource {}
 
 pub use components as comp;
 
+use crate::contract::WorldScene;
+use crate::deferred::DeferredCmd;
+// 契约层写 trait 的方法（`spawn_dyn` / `despawn`）经此进入方法解析；
+// 匿名导入避免与本模块的**结构体** `Scene` 同名冲突。
+use xc_scene_contract::Scene as _;
+
 pub struct Scene {
     world: hecs::World,
     resources: ResourceMap,
+    /// **延迟命令队列**（P6/B3，§4.1）：装配期的 spawn / despawn 先入队，
+    /// `apply_deferred()`（或 `into_world()`）时统一应用 —— 避免"边遍历边删"。
+    ///
+    /// ⚠️ 运行时（场景已 `into_world()` 交给调度器）的延迟命令走另一条路径：
+    /// Resource `xc_scene::deferred::DeferredCommands` + `FrameEnd` 相位的
+    /// `DeferredApplySystem`（本字段那时已随 `into_world` 消耗掉）。
+    deferred: Vec<DeferredCmd>,
 }
 
 impl Scene {
@@ -44,6 +57,7 @@ impl Scene {
         Self {
             world: hecs::World::new(),
             resources: HashMap::new(),
+            deferred: Vec::new(),
         }
     }
 
@@ -92,8 +106,44 @@ impl Scene {
     }
 
     /// ECS 特定入口（替换实现时随之重写）：把场景所有权交给调度器。
-    pub fn into_world(self) -> hecs::World {
+    ///
+    /// **B3**：交出前先 `apply_deferred()` —— 否则待应用的延迟命令会被**静默丢弃**
+    /// （`deferred` 字段不属于 `hecs::World`）。
+    pub fn into_world(mut self) -> hecs::World {
+        self.apply_deferred();
         self.world
+    }
+
+    // ─── 延迟命令（B3，§4.1）──────────────────────────────────────────────
+
+    /// 入队一条延迟命令（`commit` 风格的声明期创建 / 销毁）。
+    pub fn defer(&mut self, cmd: DeferredCmd) {
+        self.deferred.push(cmd);
+    }
+
+    /// 当前待应用的延迟命令数。
+    pub fn deferred_len(&self) -> usize {
+        self.deferred.len()
+    }
+
+    /// **统一应用**延迟命令（清空队列）。经契约层写路径 [`WorldScene`] 落地，
+    /// 与运行时路径 [`crate::deferred::DeferredApplySystem`] 应用的是同一套操作。
+    pub fn apply_deferred(&mut self) {
+        let cmds = std::mem::take(&mut self.deferred);
+        if cmds.is_empty() {
+            return;
+        }
+        let mut ws = WorldScene::new(&mut self.world);
+        for cmd in cmds {
+            match cmd {
+                DeferredCmd::Spawn { components } => {
+                    ws.spawn_dyn(components);
+                }
+                DeferredCmd::Despawn { target } => {
+                    ws.despawn(target);
+                }
+            }
+        }
     }
 }
 

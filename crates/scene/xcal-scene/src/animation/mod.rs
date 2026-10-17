@@ -19,6 +19,6 @@ pub use morph::MorphApplySystem;
 pub use system::BindingApplySystem;
 pub use target::{
     Camera2DFraming, CameraEye, CircleRadius, MorphT, OpacityValue, Phase, RevealRange, Target,
-    TargetKind,
+    TargetCtor, TargetKind,
 };
 pub use timeline::Timeline;

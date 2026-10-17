@@ -23,6 +23,7 @@
 // 3. `Debug` supertrait 强制所有实现可 `Debug`。
 
 use hecs::World;
+use std::sync::Arc;
 use xc_object::{Camera3D, Circle, Framing2D};
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
@@ -72,6 +73,68 @@ pub enum TargetKind {
     RevealRange,
     /// 写 `Opacity`（对象级不透明度：`Scalar` → `Opacity.0`；N4 淡入淡出通道）。
     OpacityValue,
+}
+
+/// **声明期可引用的动画目标构造器**（场景脚本 P6）。
+///
+/// `Target::apply(&self, ..)` 的全部实现都**持有 `ObjectId`**；而场景脚本的声明期
+/// 还没有 `ObjectId`（`commit` 时才分配）。本 trait 让"目标"在声明期只以**类型**出现：
+/// `commit` 时按真实 id 调 `Self::make(id)` 生成 trait object。
+///
+/// # 为什么是 trait 而不是闭包 / 枚举（§2.2）
+///
+/// 1. 闭包 `Box<dyn FnOnce(ObjectId) -> Arc<dyn Target>>` 要 `Send + Sync` 才能进
+///    `SceneScript`，而带捕获的闭包需要额外约束；
+/// 2. 枚举所有 target ⇒ 退化成"加一个改一处"。
+///
+/// 本 trait 的 `make` 是**关联函数**（语义上等价于函数指针，不捕获环境）⇒ 天然
+/// `Send + Sync + 'static`，且新增 target 只需多写一行 `impl` ⇒ **保持开放**。
+/// [`Target`] trait 本身**零改动**，运行时零额外开销（`commit` 时构造一次）。
+pub trait TargetCtor: Send + Sync + 'static {
+    /// 按真实 [`ObjectId`] 生成驱动目标。
+    fn make(id: ObjectId) -> Arc<dyn Target>;
+}
+
+impl TargetCtor for CircleRadius {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for Phase {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for CameraEye {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for MorphT {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for Camera2DFraming {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for RevealRange {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
+}
+
+impl TargetCtor for OpacityValue {
+    fn make(id: ObjectId) -> Arc<dyn Target> {
+        Arc::new(Self { id })
+    }
 }
 
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。

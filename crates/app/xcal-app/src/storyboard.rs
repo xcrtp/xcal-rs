@@ -29,12 +29,13 @@
 use std::f32::consts::FRAC_PI_2;
 
 use xcal_render::{MeasureSpace, StrokeSolid};
-use xcal_scene::animation::{Camera2DFraming, RevealRange, Timeline};
+use xcal_scene::animation::{Camera2DFraming, RevealRange};
 use xcal_scene::scene::components::Reveal;
 use xcal_scene::scene::Scene;
+use xcal_scene::scene_script::{Handle, SceneEncoder};
 use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 use xc_notion::Path2D;
-use xc_object::{Axes2D, Camera2DHandle, Framing2D, spawn_camera2d};
+use xc_object::{Axes2D, Camera2DHandle, Framing2D};
 use xc_prerender::InMemoryEngine;
 
 use crate::formula;
@@ -71,66 +72,72 @@ pub struct Storyboard {
 /// 把 §1.1 分镜装配进场景，并**把时间编排编译成 `ClockNode + Binding`**。
 ///
 /// `engine` 是已建好的 Typst / 占位引擎（App 侧建一次，与内容纹理公式共用）。
+///
+/// # B1/B2：本函数改用**场景脚本**（`SceneEncoder`）——装配代码的简化
+///
+/// 改动前是"手工 `scene.spawn` + 接住 `Entity` + `object_id_of` + 手写 `Timeline`
+/// + 手工 `compile`"；现在只声明**句柄 → 曲线 → 时长**，`commit` 时一次性创建对象、
+/// 解析句柄、编译时序。收益：
+/// - 不再出现 `object_id_of` / 手写 `ClockNode` / 手写 `Binding`；
+/// - 相机 / 曲线 / 公式轮廓的**目标绑定**全部经句柄（声明期无需 `ObjectId`）。
 pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Storyboard {
     // ── 分镜 1：常驻网格与坐标轴 ────────────────────────────────────────
     // 几何在对象层 `Axes2D`；`AxesRefreshSystem` 逐帧按相机 refresh。
     Axes2D::unbounded().build(scene).expect("Axes2D 已登记");
 
-    // ── 分镜 2：2D 相机作为场景对象（脚本取出 handle）────────────────────
-    let camera = spawn_camera2d(scene, CAMERA_START).expect("Framing2D 已登记");
+    // ── 场景脚本：声明期只有句柄，`commit` 时才创建对象 / 编译时序 ─────────
+    let mut enc = SceneEncoder::new();
 
-    // ── 分镜 3：曲线 y = sin x 的**书写动画**对象（R0）──────────────────
+    // 分镜 2：2D 相机作为场景对象（脚本句柄）。
+    let camera_h = enc.spawn(vec![Box::new(CAMERA_START)]);
+
+    // 分镜 3：曲线 y = sin x 的**书写动画**对象（R0）──────────────────────
     // `Reveal`：几何 = 完整折线（帧间不变），可见性由归一化弧长区间 `[start, end]` 决定
     // ⇒ 0–2s 把 `end` 从 0 推到 1，即为"笔尖从左写到右"。
-    let curve_pts = sin_samples();
-    let curve_entity = scene.spawn((
-        Reveal::new(Path2D::from_polyline(&curve_pts, false)),
-        StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen),
-    ));
-    let curve_target = RevealRange {
-        id: xcal_scene::contract::object_id_of(curve_entity),
-    };
+    let curve_h = enc.spawn(vec![
+        Box::new(Reveal::new(Path2D::from_polyline(&sin_samples(), false))),
+        Box::new(StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen)),
+    ]);
 
-    // ── 分镜 6：公式 `y = sin x` 的书写动画对象（每个描边子轮廓一个）──
-    let formula_targets = spawn_formula_reveal(scene, engine);
+    // 分镜 6：公式 `y = sin x` 的书写动画对象（每个描边子轮廓一个）。
+    let formula_h = spawn_formula_reveal(&mut enc, engine);
 
     // ── 时间编排（顺序 + 段内并行）─────────────────────────────────────
-    let mut tl = Timeline::new();
     // 0–2s：曲线书写（`end` 在段内 0 → 1）
-    tl.play(ramp(2.0), curve_target, 2.0);
+    enc.animate::<RevealRange>(curve_h, ramp(2.0), 2.0);
     // 2–2.5s：停
-    tl.wait(0.5);
+    enc.wait(0.5);
     // 2.5–3.5s：镜头推进 —— `scale` 与 `center` 在**同一区间**并行驱动
-    let cam = Camera2DFraming { id: camera.0 };
-    tl.play(
+    enc.animate::<Camera2DFraming>(
+        camera_h,
         keyframes_scalar(1.0, CAMERA_START.scale, CAMERA_SCALE_PUSHED),
-        cam,
         1.0,
     )
-    .parallel(
-        keyframes_vec2(1.0, CAMERA_START.center, CAMERA_PEAK),
-        cam,
-    );
+    .parallel::<Camera2DFraming>(camera_h, keyframes_vec2(1.0, CAMERA_START.center, CAMERA_PEAK));
     // 3.5–4.5s：公式书写（**逐轮廓依次写出** —— 每个描边子轮廓占一段，顺序游标自动排期；
     // 共用 `parallel` 会让全部轮廓**同时**被写出，那不是"写字"）
-    if let Some((first, rest)) = formula_targets.split_first() {
+    if let Some((first, rest)) = formula_h.split_first() {
         // 把 1s 平摊给各轮廓：N 个轮廓 ⇒ 每段 `1/N`，段间严格首尾相接。
         let n = 1 + rest.len();
         let each = FORMULA_WRITE_SECONDS / n as f64;
         // 用 `Keyframes` 而非 `Phase{omega: N}`：端点值精确为 0 / 1（不受浮点除法影响）。
-        tl.play(keyframes_scalar(each, 0.0, 1.0), *first, each);
-        for target in rest {
-            tl.play(keyframes_scalar(each, 0.0, 1.0), *target, each);
+        enc.animate::<RevealRange>(*first, keyframes_scalar(each, 0.0, 1.0), each);
+        for h in rest {
+            enc.animate::<RevealRange>(*h, keyframes_scalar(each, 0.0, 1.0), each);
         }
     }
 
-    let mut forest = ClockForest::new();
-    let mut bindings = BindingTable::new();
-    tl.compile(&mut forest, &mut bindings);
+    // ── 提交到**已有 Scene**（不新建）：创建对象 + 编译时序一次完成 ─────────
+    let recipe = enc
+        .finish()
+        .commit(scene)
+        .expect("分镜脚本 commit 成功（组件均已登记）");
+    // 先解析句柄再搬运字段（`recipe.forest` / `bindings` 一旦被移出，`recipe` 即部分移动）。
+    let camera = Camera2DHandle(recipe.id(camera_h).expect("相机句柄已解析"));
 
     Storyboard {
-        forest,
-        bindings,
+        forest: recipe.forest,
+        bindings: recipe.bindings,
         camera,
     }
 }
@@ -197,7 +204,7 @@ fn order_by_reading_order(paths: &mut [formula::StrokePath]) {
     });
 }
 
-/// 公式 `y = \sin x` → **每个描边子轮廓**一个书写动画对象，返回其目标句柄
+/// 公式 `y = \sin x` → **每个描边子轮廓**一个书写动画对象，返回其**脚本句柄**
 /// （**已按阅读顺序** = 包围盒 `min_x` 升序）。
 ///
 /// 每个子轮廓独立成对象（而不是把整条公式塞进一个 `Reveal`）：`Reveal` 的弧长
@@ -210,7 +217,7 @@ fn order_by_reading_order(paths: &mut [formula::StrokePath]) {
 ///
 /// 编译失败（占位引擎也会给方块轮廓）时返回空 —— 调用方据此跳过第 6 条分镜
 /// （优雅降级，不 panic）。
-fn spawn_formula_reveal(scene: &mut Scene, engine: &InMemoryEngine) -> Vec<RevealRange> {
+fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<Handle> {
     // 字号 0.8 / 锚点 (1.0, 2.0)：镜头推进后仍完整落在可见范围内
     // （推进后可见 x ∈ [-2.14, 5.21]、y ∈ [-1.73, 3.73]）。
     let spec = formula::FormulaSpec::new("y = sin x", 0.8, glam::Vec2::new(1.0, 2.0));
@@ -219,28 +226,25 @@ fn spawn_formula_reveal(scene: &mut Scene, engine: &InMemoryEngine) -> Vec<Revea
         return Vec::new();
     };
 
-    // 编译产物 → **按阅读顺序排序** → spawn。排序在此处（而非 `compile_to_stroke_paths`
+    // 编译产物 → **按阅读顺序排序** → 录进脚本。排序在此处（而非 `compile_to_stroke_paths`
     // 内）：书写方向是动画语义，通用三角/路径工具不该知道它。
     let mut paths = formula::compile_to_stroke_paths(&ir, &spec);
     order_by_reading_order(&mut paths);
 
-    let mut targets = Vec::new();
+    let mut handles = Vec::new();
     for (path, color, width, space) in paths {
-        let entity = scene.spawn((
-            Reveal::new(path),
-            StrokeSolid::new_in(width, color, space),
-        ));
-        targets.push(RevealRange {
-            id: xcal_scene::contract::object_id_of(entity),
-        });
+        handles.push(enc.spawn(vec![
+            Box::new(Reveal::new(path)),
+            Box::new(StrokeSolid::new_in(width, color, space)),
+        ]));
     }
-    targets
+    handles
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_scene::animation::{Target, TargetKind};
+    use xcal_scene::animation::{Target, TargetKind, Timeline};
     use xcal_scene::contract::{ObjectId, SceneRead};
     use xc_prerender::placeholder_engine;
 
@@ -318,16 +322,22 @@ mod tests {
     /// ⇒ 本用例 RED；改回升序 ⇒ GREEN。
     #[test]
     fn formula_contours_are_ordered_left_to_right() {
-        let mut scene = Scene::new();
+        // B1/B2 后 `spawn_formula_reveal` 产出**脚本句柄**：先录进脚本，再 commit 到场景
+        // 取回 `ObjectId` 才能查询几何（声明期无 id —— 这正是脚本的语义）。
         let engine = placeholder_engine();
-        let ids = spawn_formula_reveal(&mut scene, &engine);
-        assert!(ids.len() >= 2, "公式至少两个轮廓，实际 {}", ids.len());
+        let mut enc = SceneEncoder::new();
+        let handles = spawn_formula_reveal(&mut enc, &engine);
+        assert!(handles.len() >= 2, "公式至少两个轮廓，实际 {}", handles.len());
 
-        let xs: Vec<f32> = ids
+        let mut scene = Scene::new();
+        let recipe = enc.finish().commit(&mut scene).expect("commit 成功");
+
+        let xs: Vec<f32> = handles
             .iter()
-            .map(|t| {
+            .map(|h| {
+                let id = recipe.id(*h).expect("句柄已解析");
                 scene
-                    .with::<Reveal, _>(t.id, |r| r.path.compute_bounds().map(|b| b.min.x))
+                    .with::<Reveal, _>(id, |r| r.path.compute_bounds().map(|b| b.min.x))
                     .expect("Reveal 对象在场景里")
                     .expect("轮廓应有包围盒")
             })

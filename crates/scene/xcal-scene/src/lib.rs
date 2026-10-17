@@ -10,10 +10,12 @@
 pub mod animation;
 pub mod camera_input;
 pub mod contract;
+pub mod deferred;
 pub mod director_state;
 pub mod domain;
 pub mod errors;
 pub mod scene;
+pub mod scene_script;
 pub mod transform;
 pub mod time_state;
 pub mod types;
@@ -21,6 +23,10 @@ pub mod utils;
 
 pub use errors::Error;
 pub use scene::{Scene, comp, components, primitives};
+pub use scene_script::{
+    Handle, HandleRange, SceneEncoder, SceneRecipe, SceneScript, ScriptError, handle_ref,
+};
+pub use deferred::{DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicObjects, ReplaySystem};
 pub use transform::{Transform2D, Transform2DInto};
 pub use time_state::TimeState;
 pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
