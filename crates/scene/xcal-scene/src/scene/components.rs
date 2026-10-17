@@ -8,7 +8,7 @@
 // 动画统一由 Binding 表 + xc-time::Curve 纯函数驱动。
 //
 // M1 T4：连续数学对象（FunctionX2Y / ParameterCurveT2XY / ParameterCurveT2XYZ /
-// Sampler1D / Sampler2D / Interpolator / SyncSendFn）已归位理念层 `xc-notion`
+// Sampler1D / Sampler2D / Interpolator / DynFn）已归位理念层 `xc-notion`
 // （func / curve / sample），此处**不再 re-export** —— 消费方直接改 import。
 //
 // M3-5：图元组件（Circle / Path / Line）已迁往**场景对象层** `xc-object`
@@ -55,7 +55,9 @@ pub use three_d::*;
 /// FunctionX2Y 相位滑动参数：`phase = t * omega`，
 /// 由 `SceneRecordSystem` 采样时取 `x + phase` 实现曲线水平平移。
 /// `omega` 为常量；`phase` 由 `BindingApplySystem` 每帧覆盖。
-#[derive(Debug, Clone, derive_builder::Builder, derive_new::new)]
+#[derive(
+    Debug, Clone, derive_builder::Builder, derive_new::new, serde::Serialize, serde::Deserialize,
+)]
 pub struct PhaseAnim {
     pub phase: f32,
     pub omega: f32,
@@ -67,7 +69,7 @@ pub struct PhaseAnim {
 /// 设计（S1 计划 §3.3）：**只写 `t`**（一个 f32），不每帧重建 `from`/`to` —— 为 S3
 /// 上 GPU 预留（from/to 上传一次，t 每帧一个 float）。描边样式（`StrokeSolid`）
 /// 由 xcal-render 提供，作为同一实体上的独立组件，本组件只管几何。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MorphShape {
     pub from: xc_notion::Path2D,
     pub to: xc_notion::Path2D,
@@ -89,7 +91,7 @@ impl MorphShape {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct ContentTextureItem;
 
 /// **书写动画（reveal）对象**：持有一条描边路径 + 可见区间 `[start, end]`（归一化弧长）。
@@ -106,7 +108,7 @@ pub struct ContentTextureItem;
 /// 本组件不在 `record_scene` 的组件组合枚举里 ⇒ 天然互斥。
 ///
 /// 默认 `start = 0` / `end = 1` = **完整可见**（与不带 reveal 的绘制等价）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Reveal {
     pub path: xc_notion::Path2D,
     /// 可见区间起点（归一化弧长 ∈ [0,1]），由 `RevealRange` 写入。

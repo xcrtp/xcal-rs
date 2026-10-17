@@ -32,7 +32,7 @@ use crate::zorder::ZOrder;
 pub const CONTENT_Z: i32 = 0;
 
 /// 一元函数图像对象：`y = f(x + phase)` 在 `sampler` 区间上的折线。
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionGraph {
     /// 被绘制的函数（理念层函数元语）。
     pub func: FunctionX2Y<f32, f32>,
@@ -54,7 +54,11 @@ impl FunctionGraph {
     pub fn sample_points(&self, phase: f32) -> Vec<Vec2> {
         let (start, end, step) = (self.sampler.start, self.sampler.end, self.sampler.step);
         let mut pts = Vec::new();
-        if !(step > 0.0) || !step.is_finite() || !start.is_finite() || !end.is_finite() || end < start
+        if !(step > 0.0)
+            || !step.is_finite()
+            || !start.is_finite()
+            || !end.is_finite()
+            || end < start
         {
             return pts;
         }

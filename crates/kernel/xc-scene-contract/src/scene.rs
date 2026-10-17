@@ -3,11 +3,67 @@
 // 目的（M3-7 / M3-8）：让渲染管线与宿主只认识 `Scene` trait，**不再认识 ECS**。
 // ECS 细节（hecs / archetype / 借用守卫）只出现在实现方（`xcal-scene`）。
 
+use std::any::Any;
+
 use crate::id::ObjectId;
 use crate::relation::Parent;
 
+/// 可放进 [`Components`] 的组件：`Send + Sync + Clone + 'static`。
+///
+/// 为什么需要独立 trait（而不是继续用 `dyn Any`）：`SceneScript` 要 **Clone**
+/// 才能"克隆后重新 commit"（`commit(self)` 签名不变），而 `Box<dyn Any>` 不可 Clone。
+/// 本 trait 把"可克隆"变成类型擦除集合的**编译期要求**。
+///
+/// `as_any` / `as_any_mut` 供动态创建（downcast）与句柄引用改写使用；
+/// `into_any` 供 `spawn_dyn` 的登记表按具体类型装箱。
+///
+/// ⚠️ **调用约定**：`Box<dyn Component>` 自身也满足本 trait 的 blanket impl。
+/// 从 `Box<dyn Component>` 取组件的 `Any` 时必须先解引用到 trait object：
+/// `(**b).as_any()`（`b: &Box<dyn Component>`）或 `(*b).as_any()`（按值位置），
+/// 否则拿到的是 **Box 本身** 的 `Any`。
+pub trait Component: Send + Sync + 'static {
+    /// 只读向下转型。
+    fn as_any(&self) -> &dyn Any;
+    /// 可变向下转型（句柄引用改写用）。
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    /// 取回类型擦除的 `Box`（`spawn_dyn` 的登记表消费）。
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send + Sync>;
+    /// 深克隆（`Box<dyn Component>` 的 Clone 落点）。
+    fn clone_box(&self) -> Box<dyn Component>;
+}
+
+impl<T: Clone + Send + Sync + 'static> Component for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any + Send + Sync> {
+        self
+    }
+
+    fn clone_box(&self) -> Box<dyn Component> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn Component> {
+    fn clone(&self) -> Self {
+        // 必须先解引用到 `dyn Component`（走 vtable 到具体类型的 `clone_box`）；
+        // 直接 `self.clone_box()` 会命中 blanket impl（`Box<dyn Component>` 自身
+        // 也满足 `Clone + Send + Sync`）⇒ 无限递归。
+        (**self).clone_box()
+    }
+}
+
 /// 动态组件集合：`spawn_dyn` 的载荷（每个 `Box` 是一个组件实例）。
-pub type Components = Vec<Box<dyn std::any::Any + Send + Sync>>;
+///
+/// 与旧版 `Vec<Box<dyn Any + Send + Sync>>` 的唯一区别：元素可 **Clone**
+/// （编译器强制组件实现 `Clone`）⇒ `SceneScript` 可 Clone / 可重放。
+pub type Components = Vec<Box<dyn Component>>;
 
 /// **只读**场景视图：查询与迭代。
 ///
@@ -79,11 +135,8 @@ pub trait SceneRead {
     /// `Ref<'_, T>`（生命周期绑在 `&World` 的借用上，守卫本身必须存活），
     /// 因此无法把 `&T` 直接交出去 —— 与 [`SceneRead::for_each`] 是**同一约束**，
     /// 不是为迁就实现而降低表达力（`with` 同样表达"按 id 读一个组件"）。
-    fn with<T: 'static + Send + Sync, R>(
-        &self,
-        id: ObjectId,
-        f: impl FnOnce(&T) -> R,
-    ) -> Option<R>;
+    fn with<T: 'static + Send + Sync, R>(&self, id: ObjectId, f: impl FnOnce(&T) -> R)
+    -> Option<R>;
 }
 
 /// **读写**场景：在 [`SceneRead`] 之上补创建 / 销毁 / 写入。
@@ -117,5 +170,5 @@ pub trait Scene: SceneRead {
     /// `Axes2D::refresh` 之类的装配对象无法走 `Scene` trait。
     ///
     /// 返回 `false` = 对象不存在（句柄无效）。
-    fn set<T: 'static + Send + Sync>(&mut self, id: ObjectId, component: T) -> bool;
+    fn set<T: Component>(&mut self, id: ObjectId, component: T) -> bool;
 }

@@ -53,7 +53,9 @@ use crate::animation::timeline::Timeline;
 ///
 /// 与 wgpu 的录制期句柄同构：它只在**一段录制**内有意义，不可跨 Encoder 混用
 /// （合并时由 [`SceneScript::append`] 的整体偏移负责对齐）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct Handle(pub usize);
 
 /// 声明期"引用另一个 Encoder 句柄"的占位 [`ObjectId`]。
@@ -75,7 +77,9 @@ fn is_handle_ref(id: ObjectId) -> bool {
 /// 新增"携带句柄引用的组件"时**只改这里**（一次遍历，不散落）。
 fn resolve_component_refs(components: &mut Components, resolve: impl Fn(ObjectId) -> ObjectId) {
     for c in components.iter_mut() {
-        if let Some(v) = c.downcast_mut::<Visibility>() {
+        // 显式到 `dyn Component`（`Box<dyn Component>` 也满足 blanket impl，
+        // 直接 `c.as_any_mut()` 会拿到 Box 的 Any）。
+        if let Some(v) = (**c).as_any_mut().downcast_mut::<Visibility>() {
             for tag in &mut v.tags {
                 if let VisibilityTag::Camera(id) = tag {
                     if is_handle_ref(*id) {
@@ -83,7 +87,7 @@ fn resolve_component_refs(components: &mut Components, resolve: impl Fn(ObjectId
                     }
                 }
             }
-        } else if let Some(p) = c.downcast_mut::<Parent>() {
+        } else if let Some(p) = (**c).as_any_mut().downcast_mut::<Parent>() {
             if is_handle_ref(p.0) {
                 p.0 = resolve(p.0);
             }
@@ -94,7 +98,7 @@ fn resolve_component_refs(components: &mut Components, resolve: impl Fn(ObjectId
 /// **句柄改写唯一落点（偏移）**：合并（[`SceneScript::append`]）时把占位引用整体 `+ base`。
 fn shift_component_refs(components: &mut Components, base: usize) {
     for c in components.iter_mut() {
-        if let Some(v) = c.downcast_mut::<Visibility>() {
+        if let Some(v) = (**c).as_any_mut().downcast_mut::<Visibility>() {
             for tag in &mut v.tags {
                 if let VisibilityTag::Camera(id) = tag {
                     if is_handle_ref(*id) {
@@ -102,7 +106,7 @@ fn shift_component_refs(components: &mut Components, base: usize) {
                     }
                 }
             }
-        } else if let Some(p) = c.downcast_mut::<Parent>() {
+        } else if let Some(p) = (**c).as_any_mut().downcast_mut::<Parent>() {
             if is_handle_ref(p.0) {
                 p.0.index += base as u32;
             }
@@ -225,18 +229,90 @@ impl std::error::Error for ScriptError {}
 
 /// 不可变的命令序列（wgpu 的 `CommandBuffer`）。
 ///
-/// - **不可变** ⇒ 可跨线程传递、可合并（[`SceneScript::append`]）；
+/// - **不可变且可 Clone** ⇒ 可跨线程传递、可合并、可**克隆后重新 commit**；
 /// - `commit(&mut scene)` ⇒ **提交到已有 Scene，不新建**；可多次提交到同一场景。
 ///
-/// # 为什么 `commit` 消耗 `self`（`Components` 不可 Clone）
+/// # `commit` 为什么仍消耗 `self`
 ///
-/// 创建载荷是契约层既有的 `Vec<Box<dyn Any + Send + Sync>>`（**不可 Clone**），
-/// `Scene::spawn_dyn` 又按值接收 ⇒ 提交必须**移交**创建载荷。要重复提交同一份脚本，
-/// 请用"脚本工厂"（每次调用产出**新的** `SceneEncoder` + `finish`），见 `ReplaySystem`。
+/// `Scene::spawn_dyn` 按值接收 `Components`。复用同一份脚本靠 **Clone**
+/// （`Components` 现在可 Clone），而不是把 `commit` 改成 `&self`——
+/// 后者会迫使 `spawn_dyn` 也改成借用，波及既有全部调用点。
+#[derive(Clone)]
 pub struct SceneScript {
     creates: Vec<Components>,
     despawns: Vec<Handle>,
     timeline: Timeline,
+}
+
+impl serde::Serialize for SceneScript {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(serde::Serialize)]
+        struct Repr<'a> {
+            creates: Vec<Vec<crate::persist::TaggedComponent>>,
+            despawns: &'a [Handle],
+            timeline: &'a Timeline,
+        }
+
+        let creates = self
+            .creates
+            .iter()
+            .map(|components| {
+                crate::persist::serialize_components(components).map_err(serde::ser::Error::custom)
+            })
+            .collect::<Result<Vec<_>, S::Error>>()?;
+
+        Repr {
+            creates,
+            despawns: &self.despawns,
+            timeline: &self.timeline,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SceneScript {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Repr {
+            creates: Vec<Vec<crate::persist::TaggedComponent>>,
+            despawns: Vec<Handle>,
+            timeline: Timeline,
+        }
+
+        let repr = <Repr as serde::Deserialize>::deserialize(deserializer)?;
+        let mut creates = Vec::with_capacity(repr.creates.len());
+        for tagged in repr.creates {
+            creates.push(
+                crate::persist::deserialize_components(tagged).map_err(serde::de::Error::custom)?,
+            );
+        }
+        Ok(Self {
+            creates,
+            despawns: repr.despawns,
+            timeline: repr.timeline,
+        })
+    }
+}
+
+impl SceneScript {
+    /// 序列化为 JSON 文本（持久化入口）。
+    pub fn to_json(&self) -> Result<String, crate::persist::PersistError> {
+        serde_json::to_string(self).map_err(|e| crate::persist::PersistError::Json(e.to_string()))
+    }
+
+    /// 从 JSON 文本反序列化。
+    ///
+    /// 函数类组件（`FunctionGraph`）得到的是**只有名字的壳**，调用前必须按名字
+    /// 重新绑定（`xc-notion` 的 `FunctionX2Y::name`）。
+    pub fn from_json(text: &str) -> Result<Self, crate::persist::PersistError> {
+        serde_json::from_str(text).map_err(|e| crate::persist::PersistError::Json(e.to_string()))
+    }
 }
 
 impl SceneScript {
@@ -299,7 +375,10 @@ impl SceneScript {
         for (i, mut components) in self.creates.into_iter().enumerate() {
             // 声明期占位引用在此解析（引用**先前**创建的对象；未解析的落 `DANGLING`）。
             resolve_component_refs(&mut components, |refid| {
-                handles.get(refid.index as usize).copied().unwrap_or(ObjectId::DANGLING)
+                handles
+                    .get(refid.index as usize)
+                    .copied()
+                    .unwrap_or(ObjectId::DANGLING)
             });
             match scene.spawn_dyn(components) {
                 Some(id) => {
@@ -325,12 +404,11 @@ impl SceneScript {
 
         let mut forest = ClockForest::new();
         let mut bindings = BindingTable::new();
-        self.timeline
-            .compile_with(
-                &|idx| handles.get(idx).copied().unwrap_or(ObjectId::DANGLING),
-                &mut forest,
-                &mut bindings,
-            );
+        self.timeline.compile_with(
+            &|idx| handles.get(idx).copied().unwrap_or(ObjectId::DANGLING),
+            &mut forest,
+            &mut bindings,
+        );
 
         Ok(SceneRecipe {
             forest,
@@ -349,6 +427,7 @@ impl From<SceneEncoder> for SceneScript {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Interp;
     use crate::animation::target::{OpacityValue, Target};
     use crate::contract::SceneRead;
     use crate::scene::Scene as SceneStruct;
@@ -356,7 +435,6 @@ mod tests {
     use xc_object::Circle;
     use xc_scene_contract::Name;
     use xc_time::AnimValue;
-    use crate::Interp;
 
     /// **编译期断言**（§7.2.6）：`SceneScript` 必须是 `Send + Sync`。
     ///
@@ -585,6 +663,7 @@ mod tests {
     /// **§7.1.7 失败语义**：未登记组件 ⇒ commit 返回 `Err`，且不继续造对象。
     #[test]
     fn commit_aborts_on_unregistered_component() {
+        #[derive(Clone)]
         struct NotRegistered;
         let mut enc = SceneEncoder::new();
         enc.spawn(circle_components(0.0));
@@ -627,11 +706,13 @@ mod tests {
         assert_ne!(ids[0], ids[1]);
         assert_eq!(recipe.bindings.bindings.len(), 2);
         // 两个目标都是 OpacityValue（T0-② 按 `name()` 判类别，无集中清单）。
-        assert!(recipe
-            .bindings
-            .bindings
-            .iter()
-            .all(|b| b.target.name() == "OpacityValue"));
+        assert!(
+            recipe
+                .bindings
+                .bindings
+                .iter()
+                .all(|b| b.target.name() == "OpacityValue")
+        );
     }
 
     /// 段内从 0 线性到 1 的曲线（供脚本测试构造"名义"动画）。
@@ -645,10 +726,7 @@ mod tests {
     /// 段内把标量从 `from` 插到 `to`（供等价性对照）。
     fn keyframes(dur: f64, from: f32, to: f32) -> Curve {
         Curve::Keyframes {
-            keys: vec![
-                (0.0, AnimValue::Scalar(from)),
-                (dur, AnimValue::Scalar(to)),
-            ],
+            keys: vec![(0.0, AnimValue::Scalar(from)), (dur, AnimValue::Scalar(to))],
             interpolation: Interp::Linear,
         }
     }
@@ -697,7 +775,10 @@ mod tests {
         for (enc_b, h_b) in recipe.bindings.bindings.iter().zip(&h_bindings.bindings) {
             let e_node = recipe.forest.get(enc_b.clock).expect("节点在");
             let h_node = h_forest.get(h_b.clock).expect("节点在");
-            assert_eq!(e_node.local_offset, h_node.local_offset, "段起始（offset）必须一致");
+            assert_eq!(
+                e_node.local_offset, h_node.local_offset,
+                "段起始（offset）必须一致"
+            );
             assert_eq!(e_node.span, h_node.span, "段区间（span）必须一致");
             assert_eq!(e_node.mode, h_node.mode);
             // `Curve` 未实现 `PartialEq` ⇒ 用 `Debug` 结构相等比对（同一构造 ⇒ 同一 Debug）。

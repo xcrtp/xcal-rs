@@ -14,28 +14,32 @@ pub mod deferred;
 pub mod director_state;
 pub mod domain;
 pub mod errors;
+pub mod persist;
 pub mod scene;
 pub mod scene_script;
-pub mod transform;
 pub mod time_state;
+pub mod transform;
 pub mod types;
 pub mod utils;
 
-pub use errors::Error;
-pub use scene::{Scene, comp, components, primitives};
-pub use scene_script::{
-    Handle, HandleRange, SceneEncoder, SceneRecipe, SceneScript, ScriptError, handle_ref,
-};
-pub use deferred::{DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicObjects, ReplaySystem};
-pub use transform::{Transform2D, Transform2DInto};
-pub use time_state::TimeState;
-pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
 pub use animation::{Binding, BindingTable, SeekKind, Target, Timeline, TransformValue};
 pub use camera_input::{
     CameraInputSystem, apply_command_2d, apply_command_3d, apply_fps, apply_orbit, apply_pan_zoom,
 };
+pub use deferred::{
+    DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicObjects, ReplaySystem,
+};
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
+pub use errors::Error;
+pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};
+pub use scene::{Scene, comp, components, primitives};
+pub use scene_script::{
+    Handle, HandleRange, SceneEncoder, SceneRecipe, SceneScript, ScriptError, handle_ref,
+};
+pub use time_state::TimeState;
+pub use transform::{Transform2D, Transform2DInto};
 pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
+pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
 // 相机（M3-2）与摆放组件（M3-4）归场景对象层 `xc-object`：本层**不转发**，
 // 消费方直接 `use xc_object::{Camera2D, Camera3D, Projection, Transform}`。
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），

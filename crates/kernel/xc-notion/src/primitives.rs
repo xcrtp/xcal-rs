@@ -20,6 +20,7 @@ use crate::transform::Transform2D;
 use crate::vec::{Vec2, Vec3};
 
 /// 3D 点图元：位置 + 颜色。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Point3D {
     pub position: Vec3,
@@ -33,6 +34,7 @@ impl Point3D {
 }
 
 /// 3D 线段图元：两个端点 + 颜色。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Line3D {
     pub start: Vec3,
@@ -57,6 +59,7 @@ impl Line3D {
 }
 
 /// 2D 三角形（三角化输出的基本单位）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Triangle2D {
     pub a: Vec2,
@@ -111,6 +114,7 @@ impl Triangle2D {
 // 每个类型只配**理念层该有的代数**：不含样式、不含渲染知识。
 
 /// 2D 圆：中心 + 半径。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Circle2D {
     pub center: Vec2,
@@ -179,6 +183,7 @@ impl Circle2D {
 /// [`Polygon2D`] 后变换（精度由采样点数决定，不影响理念层精确性）。
 /// 若将来确需精确表示（含旋转字段），须连带改 IR 变体与三角化 —— 属范围扩张，
 /// 需单独立项。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Ellipse2D {
     pub center: Vec2,
@@ -219,6 +224,7 @@ impl Ellipse2D {
 }
 
 /// 2D 线段：两个端点。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Line2D {
     pub a: Vec2,
@@ -288,6 +294,7 @@ pub const ARROW_SHAFT_WIDTH_RATIO: f32 = 0.5;
 /// （本轮不做）。
 ///
 /// 头部样式本轮**只做实心三角**（参数里不放样式枚举，将来要扩展时再加字段）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Arrow2D {
     /// 箭尾（起点）。
@@ -347,12 +354,17 @@ impl Arrow2D {
             head_base + n * half_shaft,
             self.from + n * half_shaft,
         ]);
-        let head = Polygon2D::new(vec![head_base - n * half_head, self.to, head_base + n * half_head]);
+        let head = Polygon2D::new(vec![
+            head_base - n * half_head,
+            self.to,
+            head_base + n * half_head,
+        ]);
         (shaft, head)
     }
 }
 
 /// 2D 折线：开放或闭合的顶点序列（顶点即精确表示，非采样产物）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polyline2D {
     pub points: Vec<Vec2>,
@@ -399,6 +411,7 @@ impl Polyline2D {
 }
 
 /// 2D 多边形：顶点序列隐式闭合（`points` 不含重复的尾点）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Polygon2D {
     pub points: Vec<Vec2>,
@@ -589,7 +602,8 @@ mod tests {
         assert!((pts[0] - first).length() < 1e-5);
         // 步长 = TAU / n。
         let step = std::f32::consts::TAU / n as f32;
-        let second = center + Vec2::new((start_angle + step).cos(), (start_angle + step).sin()) * radius;
+        let second =
+            center + Vec2::new((start_angle + step).cos(), (start_angle + step).sin()) * radius;
         assert!((pts[1] - second).length() < 1e-5);
         // 首尾不重复：末点与首点的弦长 = 2r·sin(π/n)（≠ 0 ⇒ 点数恰为 n，
         // 闭合语义由调用方的 `closed` 表达，不由重复端点表达）。

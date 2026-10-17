@@ -5744,6 +5744,7 @@ version = "0.1.0"
 dependencies = [
  "derive-new",
  "derive_builder",
+ "serde",
  "xc-macro",
  "xc-notion",
  "xc-render-ir",
@@ -5769,6 +5770,7 @@ dependencies = [
 name = "xc-render-ir"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "xc-notion",
 ]
 
@@ -5780,6 +5782,7 @@ version = "0.1.0"
 name = "xc-scene-contract"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "xc-notion",
  "xc-render-ir",
 ]
@@ -5953,6 +5956,8 @@ dependencies = [
  "derive_more",
  "glam",
  "hecs",
+ "serde",
+ "serde_json",
  "smart-default",
  "thiserror 2.0.20",
  "xc-macro",

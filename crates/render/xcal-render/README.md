@@ -122,7 +122,7 @@ position/attrib0/attrib1/attrib2）：
 
 | 模块 | 说明 |
 |------|------|
-| `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, SyncSendFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
+| `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`xc-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, DynFn`）、`xc-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`xc-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`xcal-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
 | `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + **record_scene_tagged（N5）** + push_morph_item + push_reveal_item + **visible_for / opacity_of / apply_opacity（N5）**`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`，可见性读对象上的 `Visibility`） |
 | `record_systems` | P4 从 `xcal-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle` + **N5 的 `GroupVisibility`**，不读 UI 类型）。**N5**：三个 2D 录制 System 都消费对象级 `Visibility` / `Opacity`（相机 tag 取自 `Camera2DHandle`）；`ContentTextureRecordSystem` 是纹理源、**本轮不参与过滤**（记账） |
 | `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |

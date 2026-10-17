@@ -13,18 +13,17 @@
 // 本模块即可整体移除，但那是一次独立的下游 churn（不属于任何单点重构的范围）。
 //
 // M1 T4：连续数学对象（FunctionX2Y / ParameterCurve* / Sampler* / Interpolator /
-// SyncSendFn）已归位理念层 `xc-notion`，本 facade 直接从理念层转发。
+// DynFn）已归位理念层 `xc-notion`，本 facade 直接从理念层转发。
 //
 // M2：样式组件（StrokeSolid / FillSolid / FillStyle / StrokeStyle）的定义已下沉
 // 渲染 IR 层 `xc-render-ir`（纯数据 + 唯一换算点），此处转发以保持
 // `xcal_render::components::*` 路径不变。
 
+pub use xc_notion::{
+    DynFn, FunctionX2Y, Interpolator, ParameterCurveT2XY, ParameterCurveT2XYZ, Sampler1D, Sampler2D,
+};
 pub use xcal_scene::scene::components::{
     CPUDevice, PathMesh, PhaseAnim, QuadMesh, TriangleMesh, WGPUDevice, marker, mesh,
-};
-pub use xc_notion::{
-    FunctionX2Y, Interpolator, ParameterCurveT2XY, ParameterCurveT2XYZ, Sampler1D, Sampler2D,
-    SyncSendFn,
 };
 // 图元对象与摆放组件（M3-4/M3-5：定义在场景对象层 `xc-object`，此处转发）。
 pub use xc_object::{Arrow, Circle, Line, Path, Rect, Transform};

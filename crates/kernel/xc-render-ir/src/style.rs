@@ -19,7 +19,7 @@ use crate::shape::Style2D;
 /// `space` 声明宽度的空间归属（默认 [`MeasureSpace::Screen`]）；
 /// **唯一换算点**是 [`ResolveStyle::resolve_style`]（由 `record_scene` 结合
 /// 相机 scale 调用）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StrokeSolid {
     pub width: f32,
     pub color: Color32,
@@ -47,7 +47,7 @@ impl StrokeSolid {
 }
 
 /// 填充样式组件：单一颜色。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FillSolid {
     pub color: Color32,
 }
@@ -88,7 +88,7 @@ impl FillSolid {
 ///
 /// 与 `ZOrder` 的"缺席即默认"惯例一致，但中性值不是 0 而是 1.0 ——
 /// 故**不 derive** `Default`，显式实现以免得到 `0.0`（全透明）这种危险缺省。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Opacity(pub f32);
 
 impl Opacity {

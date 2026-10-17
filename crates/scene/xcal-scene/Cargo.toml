@@ -25,6 +25,9 @@ smart-default.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
 hecs.workspace = true
+# 组件持久化：组件 serde + `Components` 的 tagged JSON 编码。
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 glam.workspace = true

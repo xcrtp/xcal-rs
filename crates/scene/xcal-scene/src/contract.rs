@@ -42,7 +42,6 @@ use xc_object::{
     Path, Projection, Rect, Transform, ZOrder,
 };
 use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
-use xc_scene_contract::Parent;
 
 /// 契约层的**只读 / 读写**能力在此处对外转发：
 /// 消费方（UI 层 / 装配层 / App）只需 `xcal_scene::contract::*` 一个入口，
@@ -56,8 +55,8 @@ use xc_scene_contract::Parent;
 /// [`Scene`]（`spawn_dyn` 的宿主）与载荷类型 [`Components`] **没有对外路径**
 /// ⇒ 装配层无法走"经 `add_known` 登记表"的动态创建入口。二者在此补发。
 pub use xc_scene_contract::{
-    Components, Group, GroupId, GroupVisibility, Name, ObjectId, Scene, SceneRead, Visibility,
-    VisibilityTag,
+    Component, Components, Group, GroupId, GroupVisibility, Name, ObjectId, Parent, Scene,
+    SceneRead, Visibility, VisibilityTag,
 };
 
 use crate::domain::CameraMode;
@@ -226,19 +225,18 @@ impl SceneRead for WorldScene<'_> {
     }
 }
 
-/// **组件登记表（唯一来源）**：正向 downcast、类型名反查、克隆三件事共用这一份。
+/// **组件登记表（唯一来源）**：正向 downcast、类型名反查、克隆、serde 共用这一份。
 ///
-/// # 为什么是"一张表 + 三个展开器"
+/// # 为什么是"一张表 + 多个展开器"
 ///
 /// 核心约束是"新增一个已登记类型只写一处"。故 [`add_known`] / [`known_type_name`] /
-/// [`clone_known`] 全部由本表展开，各自只需一个极薄的 `macro_rules!` 臂。
+/// [`clone_known`] / [`serialize_component`] / [`deserialize_component`]
+/// 全部由本表展开，各自只需一个极薄的 `macro_rules!` 臂。
 ///
-/// # `clone:` 与 `manual:` 两段
+/// # `clone:` 段
 ///
-/// - `clone:`：已 `derive(Clone)` 的类型（26 个）；
-/// - `manual:`：**未 derive `Clone`** 的登记类型（1 个：`AxesLine`）。
-///   按本轮约束**不为凑齐而改它的定义**，故在此显式给出克隆表达式
-///   （它只有一个 `ObjectId` 字段，`ObjectId` 是 `Copy`）。
+/// 所有登记类型都必须 `Clone`（`Components` 的元素要求）—— 这是
+/// `SceneScript: Clone` 的直接前提。`AxesLine` 本轮也补上了 `Clone`。
 macro_rules! known_component_table {
     ($mac:ident) => {
         $mac! {
@@ -246,9 +244,9 @@ macro_rules! known_component_table {
                    Name, Group, Visibility, Opacity,
                    Camera2D, Camera3D, Projection, Framing2D, CameraMode, FpsView,
                    StrokeSolid, FillSolid,
-                   Axes2D, FunctionGraph,
+                   Axes2D, AxesLine, FunctionGraph,
                    PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent;
-            manual: AxesLine => |v: &AxesLine| AxesLine { owner: v.owner }
+            manual:
         }
     };
 }
@@ -262,7 +260,7 @@ pub fn known_type_name<T: 'static>() -> Option<&'static str> {
     // 宏定义在函数体内：宏体里的 `T` 才能解析到本函数的泛型参数
     // （与 `add_known` 的 `arm!` 同法 —— 本地变量 / 泛型参数是**定义点卫生**的）。
     macro_rules! name_arms {
-        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
             $(
                 if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$c>() {
                     return Some(stringify!($c));
@@ -272,7 +270,7 @@ pub fn known_type_name<T: 'static>() -> Option<&'static str> {
                 if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$m>() {
                     return Some(stringify!($m));
                 }
-            )+
+            )*
         }};
     }
     known_component_table!(name_arms);
@@ -289,7 +287,7 @@ pub fn clone_known(
     c: &(dyn std::any::Any + Send + Sync),
 ) -> Option<Box<dyn std::any::Any + Send + Sync>> {
     macro_rules! clone_arms {
-        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
             $(
                 if let Some(v) = c.downcast_ref::<$t>() {
                     return Some(Box::new(v.clone()));
@@ -300,26 +298,24 @@ pub fn clone_known(
                     let make = $ctor;
                     return Some(Box::new(make(v)));
                 }
-            )+
+            )*
         }};
     }
     known_component_table!(clone_arms);
     None
 }
 
-/// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `Err(原组件)`。
-fn add_known(
-    builder: &mut EntityBuilder,
-    mut c: Box<dyn std::any::Any + Send + Sync>,
-) -> Result<(), Box<dyn std::any::Any + Send + Sync>> {
-    // 与 `known_type_name` / `clone_known` **同一张表**（`known_component_table!`）。
+/// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `false`。
+fn add_known(builder: &mut EntityBuilder, c: Box<dyn Component>) -> bool {
+    let mut c: Box<dyn std::any::Any + Send + Sync> = c.into_any();
+    // 与 `known_type_name` / `clone_known` / serde **同一张表**（`known_component_table!`）。
     macro_rules! add_arms {
-        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),+ $(,)?) => {{
+        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
             $(
                 match c.downcast::<$c>() {
                     Ok(v) => {
                         builder.add(*v);
-                        return Ok(());
+                        return true;
                     }
                     Err(b) => c = b,
                 }
@@ -328,23 +324,101 @@ fn add_known(
                 match c.downcast::<$m>() {
                     Ok(v) => {
                         builder.add(*v);
-                        return Ok(());
+                        return true;
                     }
                     Err(b) => c = b,
                 }
-            )+
+            )*
         }};
     }
     known_component_table!(add_arms);
 
-    Err(c)
+    // 未命中时 `c` 是最后一次 `Err(b) => c = b` 的结果；显式消费以表明
+    // "丢弃的是未登记组件"（返回值已不需要它，见上方 `bool` 语义）。
+    let _unregistered = c;
+    false
+}
+
+/// **组件持久化（编码）**：按登记表把组件写成 `(稳定类型名, JSON 值)`。
+///
+/// 未登记类型 / 序列化失败（如匿名函数）⇒ **明确错误**，不静默丢组件。
+pub fn serialize_component(
+    c: &dyn std::any::Any,
+) -> Result<(&'static str, serde_json::Value), crate::persist::PersistError> {
+    macro_rules! ser_arms {
+        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
+            $(
+                if let Some(v) = c.downcast_ref::<$t>() {
+                    return serde_json::to_value(v)
+                        .map(|data| (stringify!($t), data))
+                        .map_err(|e| crate::persist::PersistError::SerializeComponent {
+                            type_name: stringify!($t),
+                            message: e.to_string(),
+                        });
+                }
+            )+
+            $(
+                if let Some(v) = c.downcast_ref::<$m>() {
+                    return serde_json::to_value(v)
+                        .map(|data| (stringify!($m), data))
+                        .map_err(|e| crate::persist::PersistError::SerializeComponent {
+                            type_name: stringify!($m),
+                            message: e.to_string(),
+                        });
+                }
+            )*
+        }};
+    }
+    known_component_table!(ser_arms);
+
+    Err(crate::persist::PersistError::UnregisteredComponent(
+        std::any::type_name_of_val(c).to_string(),
+    ))
+}
+
+/// **组件持久化（解码）**：按稳定类型名重建组件。
+///
+/// 类型名未知 / 数据不合法 ⇒ **明确错误**（不降级成 `None` 组件）。
+pub fn deserialize_component(
+    type_name: &str,
+    data: serde_json::Value,
+) -> Result<Box<dyn Component>, crate::persist::PersistError> {
+    macro_rules! de_arms {
+        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
+            $(
+                if type_name == stringify!($t) {
+                    return serde_json::from_value::<$t>(data)
+                        .map(|v| Box::new(v) as Box<dyn Component>)
+                        .map_err(|e| crate::persist::PersistError::DeserializeComponent {
+                            type_name: type_name.to_string(),
+                            message: e.to_string(),
+                        });
+                }
+            )+
+            $(
+                if type_name == stringify!($m) {
+                    return serde_json::from_value::<$m>(data)
+                        .map(|v| Box::new(v) as Box<dyn Component>)
+                        .map_err(|e| crate::persist::PersistError::DeserializeComponent {
+                            type_name: type_name.to_string(),
+                            message: e.to_string(),
+                        });
+                }
+            )*
+        }};
+    }
+    known_component_table!(de_arms);
+
+    Err(crate::persist::PersistError::UnknownComponentType(
+        type_name.to_string(),
+    ))
 }
 
 impl Scene for WorldScene<'_> {
     fn spawn_dyn(&mut self, components: Components) -> Option<ObjectId> {
         let mut builder = EntityBuilder::new();
         for c in components {
-            if add_known(&mut builder, c).is_err() {
+            if !add_known(&mut builder, c) {
                 // 未登记的类型：整个创建失败（不造半成品对象）。
                 return None;
             }
@@ -368,7 +442,7 @@ impl Scene for WorldScene<'_> {
         self.world.query_one_mut::<&mut T>(e).ok()
     }
 
-    fn set<T: 'static + Send + Sync>(&mut self, id: ObjectId, component: T) -> bool {
+    fn set<T: Component>(&mut self, id: ObjectId, component: T) -> bool {
         let Some(e) = entity_of(id) else {
             return false;
         };
@@ -436,7 +510,7 @@ impl Scene for crate::scene::Scene {
         self.world_mut().query_one_mut::<&mut T>(e).ok()
     }
 
-    fn set<T: 'static + Send + Sync>(&mut self, id: ObjectId, component: T) -> bool {
+    fn set<T: Component>(&mut self, id: ObjectId, component: T) -> bool {
         let Some(e) = entity_of(id) else {
             return false;
         };
@@ -495,6 +569,7 @@ mod tests {
     /// 登记表：未登记类型 ⇒ `spawn_dyn` 返回 `None`（不造半成品对象）。
     #[test]
     fn spawn_dyn_rejects_unregistered_component() {
+        #[derive(Clone)]
         struct NotRegistered;
         let mut world = World::new();
         let mut ws = WorldScene::new(&mut world);
@@ -541,6 +616,7 @@ mod tests {
         assert_eq!(known_type_name::<Reveal>(), Some("Reveal"));
         assert_eq!(known_type_name::<Parent>(), Some("Parent"));
 
+        #[derive(Clone)]
         struct NotRegistered;
         assert_eq!(
             known_type_name::<NotRegistered>(),
@@ -570,10 +646,7 @@ mod tests {
             Box::new(Camera2D::new(
                 xc_notion::Vec2::ZERO,
                 40.0,
-                xc_notion::Rect2D::new(
-                    xc_notion::Vec2::ZERO,
-                    xc_notion::Vec2::new(800.0, 600.0),
-                ),
+                xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(800.0, 600.0)),
             )),
             Box::new(Camera3D::new(
                 xc_notion::Vec3::ZERO,
@@ -607,8 +680,8 @@ mod tests {
         assert_eq!(samples.len(), 27, "登记表当前应为 27 个类型");
 
         for (i, c) in samples.iter().enumerate() {
-            let cloned = clone_known(c.as_ref())
-                .unwrap_or_else(|| panic!("第 {i} 个已登记类型必须可克隆"));
+            let cloned =
+                clone_known(c.as_ref()).unwrap_or_else(|| panic!("第 {i} 个已登记类型必须可克隆"));
             assert_eq!(
                 cloned.as_ref().type_id(),
                 c.as_ref().type_id(),
@@ -620,6 +693,7 @@ mod tests {
     /// 未登记类型 ⇒ `clone_known` 返回 `None`（不 panic）。
     #[test]
     fn clone_known_rejects_unregistered_type() {
+        #[derive(Clone)]
         struct NotRegistered;
         assert!(clone_known(&NotRegistered).is_none());
     }
@@ -724,7 +798,13 @@ mod tests {
             }
         }
         // 相位 1.0 加在自变量上：x = {0,1} ⇒ y = {1,2}。
-        assert_eq!(pts, vec![xc_notion::Vec2::new(0.0, 1.0), xc_notion::Vec2::new(1.0, 2.0)]);
+        assert_eq!(
+            pts,
+            vec![
+                xc_notion::Vec2::new(0.0, 1.0),
+                xc_notion::Vec2::new(1.0, 2.0)
+            ]
+        );
 
         // 句柄失效 ⇒ 写入失败（不 panic）。
         assert!(!graph.refresh(&mut scene, ObjectId::DANGLING, 0.0));

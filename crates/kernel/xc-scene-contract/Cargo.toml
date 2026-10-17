@@ -17,3 +17,5 @@ license.workspace = true
 [dependencies]
 xc-notion = { path = "../xc-notion" }
 xc-render-ir = { path = "../xc-render-ir" }
+# 组件持久化：`Components` 的标签化序列化需要组件可 serde。
+serde.workspace = true

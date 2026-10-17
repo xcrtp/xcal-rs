@@ -28,7 +28,7 @@ use xc_notion::{Vec2, Vec3};
 ///
 /// **模式是相机对象的组件**（K0）：支持多相机各自不同模式；未挂该组件时取
 /// [`Default`] = `PanZoom`（不 panic）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum CameraMode {
     /// 2D 平移/缩放（默认）。

@@ -37,7 +37,7 @@ use crate::id::ObjectId;
 ///
 /// 缺席 = 匿名。**不强制唯一**：查找返回第一个命中（场景规模为几十个对象，
 /// O(n) 遍历足够；引入全局注册表不划算）。查重是装配层策略，不是契约的职责。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Name(pub String);
 
 impl Name {
@@ -57,7 +57,9 @@ impl Name {
 /// **为什么不是 `ObjectId`**：本轮**不建组实体**（[`crate::Parent`] 那套父子关系
 /// 牵扯"父子变换累乘"这个未接线项，组刻意绕开它）。没有实体就没有生命周期，
 /// 因而不需要 generation 失效检测 —— `u32` 正是这一事实的诚实表达。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct GroupId(pub u32);
 
 impl GroupId {
@@ -72,7 +74,7 @@ impl GroupId {
 /// 变换累乘，只是"一批对象"的标签，用于整体查询与批量控制。
 ///
 /// 缺席 = 不属于任何组。**不支持嵌套**（组里不能再含组）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Group(pub GroupId);
 
 impl Group {
@@ -88,7 +90,7 @@ impl Group {
 // ─── N3：Visibility ───────────────────────────────────────────────────────
 
 /// 可见性 tag：一个"对谁可见"的条件。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum VisibilityTag {
     /// 全局可见（等价于"不挂组件"）。
     Global,
@@ -115,7 +117,7 @@ pub enum VisibilityTag {
 /// （"什么都不命中 ⇒ 永不可见"或"没声明 ⇒ 全局可见"），而后者与缺席一致、
 /// 不与任何调用点冲突。**空集 = 缺席 = 全局可见**（单一口径，避免
 /// "挂了组件反而隐形的"这种反直觉陷阱）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Visibility {
     pub tags: Vec<VisibilityTag>,
 }
@@ -266,8 +268,14 @@ mod tests {
             v.visible_for(Some(id(5)), &groups),
             "相机 tag 命中 ⇒ 可见（不因组关闭而消失）"
         );
-        assert!(!v.visible_for(Some(id(6)), &groups), "两个 tag 都不命中 ⇒ 不可见");
-        assert!(v.visible_for(Some(id(6)), &GroupVisibility::new()), "组打开时组 tag 命中");
+        assert!(
+            !v.visible_for(Some(id(6)), &groups),
+            "两个 tag 都不命中 ⇒ 不可见"
+        );
+        assert!(
+            v.visible_for(Some(id(6)), &GroupVisibility::new()),
+            "组打开时组 tag 命中"
+        );
     }
 
     /// `Name` / `Group` 是纯数据载体（构造与取值）。

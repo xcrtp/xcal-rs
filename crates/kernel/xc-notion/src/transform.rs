@@ -7,6 +7,7 @@ use crate::mat::{Mat3, Mat4};
 use crate::vec::{Vec2, Vec3};
 
 /// 2D 仿射变换（3x3 齐次矩阵）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform2D {
     pub matrix: Mat3,
@@ -57,6 +58,7 @@ impl Transform2D {
 }
 
 /// 3D 仿射变换（4x4 齐次矩阵）。
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transform3D {
     pub matrix: Mat4,

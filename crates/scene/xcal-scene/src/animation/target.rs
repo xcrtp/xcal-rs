@@ -135,6 +135,27 @@ impl TargetCtor for TransformValue {
     }
 }
 
+/// **反序列化用**：按 target 名字取构造器（名字 ↔ 构造器唯一映射）。
+///
+/// 这是持久化引入的一处**集中表**（必要性：`serde::Deserialize` 拿不到外部
+/// registry）。新增 target 时除了 `impl TargetCtor` 还要在这里加一行 ——
+/// 与既有"新增 target 无需集中清单"的口径不同，故明确记账。
+///
+/// 返回值同时给出 `&'static str`，供反序列化构造 `ActionTarget::Pending.name`。
+pub fn target_ctor_by_name(name: &str) -> Option<(fn(ObjectId) -> Arc<dyn Target>, &'static str)> {
+    match name {
+        "CircleRadius" => Some((CircleRadius::make, "CircleRadius")),
+        "Phase" => Some((Phase::make, "Phase")),
+        "CameraEye" => Some((CameraEye::make, "CameraEye")),
+        "MorphT" => Some((MorphT::make, "MorphT")),
+        "Camera2DFraming" => Some((Camera2DFraming::make, "Camera2DFraming")),
+        "RevealRange" => Some((RevealRange::make, "RevealRange")),
+        "OpacityValue" => Some((OpacityValue::make, "OpacityValue")),
+        "TransformValue" => Some((TransformValue::make, "TransformValue")),
+        _ => None,
+    }
+}
+
 /// 取 `id` 对象上的组件 `T` 并就地修改；对象 / 组件不存在时**静默跳过**（不 panic）。
 ///
 /// 八个实现里"取组件 + 类型匹配 + 赋值"的公共骨架只此一份。
@@ -380,7 +401,7 @@ mod tests {
     use crate::scene::Scene as SceneStruct;
 
     /// 用契约层 `spawn_dyn` 创建单组件对象（同时验证该组件已登记）。
-    fn spawn_one(scene: &mut SceneStruct, c: impl Send + Sync + 'static) -> ObjectId {
+    fn spawn_one(scene: &mut SceneStruct, c: impl crate::contract::Component) -> ObjectId {
         scene
             .spawn_dyn(vec![Box::new(c)])
             .expect("组件已在登记表中")
@@ -534,9 +555,8 @@ mod tests {
         let mut scene = SceneStruct::new();
         let id = spawn_one(&mut scene, Transform::default());
         let t = TransformValue { id };
-        let read_tr = |scene: &SceneStruct| {
-            read::<Transform, _>(scene, id, |tr| (tr.position, tr.scale))
-        };
+        let read_tr =
+            |scene: &SceneStruct| read::<Transform, _>(scene, id, |tr| (tr.position, tr.scale));
 
         // 只动 xy，z 保持。
         apply_once(&t, &mut scene, AnimValue::Vec2(Vec2::new(2.0, -3.0)));

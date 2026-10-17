@@ -36,7 +36,7 @@ pub const AXIS_Z: i32 = -90;
 ///
 /// 「步长自适应」的语义方法在这里（纯函数）：世界单位步长 = `scale.max(min_px) / scale`
 /// —— 即屏幕间距不小于 `min_px` 像素，缩放时自动切换量级。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TickSpec {
     /// 屏幕空间最小刻度间距（像素）。
     pub min_px: f32,
@@ -67,13 +67,14 @@ impl Default for TickSpec {
 /// `refresh` 靠它"清旧建新"（只清自己的线段，不误伤别的坐标系）；
 /// 也因此**不需要**在容器上维护 `Vec<ObjectId>` 这类镜像状态
 /// （镜像状态会与场景事实脱钩，是"两处真相"）。
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AxesLine {
     /// 生成它的 [`Axes2D`] 容器对象。
     pub owner: ObjectId,
 }
 
 /// 轴对齐的坐标网格对象（网格线 + 坐标轴）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Axes2D {
     /// x 方向定义域（世界单位）；`refresh` 会与相机可见范围取交。
     pub x_range: (f32, f32),
@@ -125,13 +126,19 @@ impl Axes2D {
     /// 当前可见的 x 范围（相机裁剪 ∘ 定义域）。
     pub fn visible_x(&self, camera: &Camera2D) -> (f32, f32) {
         let half = camera.rect.size().x * 0.5 / camera.scale;
-        intersect((camera.center.x - half, camera.center.x + half), self.x_range)
+        intersect(
+            (camera.center.x - half, camera.center.x + half),
+            self.x_range,
+        )
     }
 
     /// 当前可见的 y 范围（相机裁剪 ∘ 定义域）。
     pub fn visible_y(&self, camera: &Camera2D) -> (f32, f32) {
         let half = camera.rect.size().y * 0.5 / camera.scale;
-        intersect((camera.center.y - half, camera.center.y + half), self.y_range)
+        intersect(
+            (camera.center.y - half, camera.center.y + half),
+            self.y_range,
+        )
     }
 
     /// 当前世界单位步长（自适应）。
@@ -167,7 +174,10 @@ impl Axes2D {
     pub fn axis_lines(&self, camera: &Camera2D) -> Vec<Line> {
         let (x0, x1) = self.visible_x(camera);
         let (y0, y1) = self.visible_y(camera);
-        vec![Line::new((x0, 0.0), (x1, 0.0)), Line::new((0.0, y0), (0.0, y1))]
+        vec![
+            Line::new((x0, 0.0), (x1, 0.0)),
+            Line::new((0.0, y0), (0.0, y1)),
+        ]
     }
 
     // ─── 装配（不纯：依赖契约层 Scene）────────────────────────────────
@@ -264,11 +274,7 @@ mod tests {
     use xc_notion::Rect2D;
 
     fn camera(scale: f32, size: Vec2) -> Camera2D {
-        Camera2D::new(
-            Vec2::ZERO,
-            scale,
-            Rect2D::new(Vec2::ZERO, size),
-        )
+        Camera2D::new(Vec2::ZERO, scale, Rect2D::new(Vec2::ZERO, size))
     }
 
     /// 步长自适应（迁移前 `unit = scale.max(10) / scale` 的语义）。
@@ -316,7 +322,10 @@ mod tests {
         let axes = Axes2D::unbounded();
         let cam = camera(40.0, Vec2::new(800.0, 600.0));
         let lines = axes.grid_lines(&cam);
-        assert_eq!(lines.len(), axes.x_ticks(&cam).len() + axes.y_ticks(&cam).len());
+        assert_eq!(
+            lines.len(),
+            axes.x_ticks(&cam).len() + axes.y_ticks(&cam).len()
+        );
         // 第一根竖线：端点落在可见 y 范围两端。
         assert_eq!(lines[0].a(), Vec2::new(-10.0, -7.5));
         assert_eq!(lines[0].b(), Vec2::new(-10.0, 7.5));

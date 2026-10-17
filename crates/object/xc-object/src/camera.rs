@@ -29,7 +29,7 @@ const FIT_MIN_EXTENT: f32 = 1e-3;
 /// 方向**相反**——薄壳层（Camera2D = Camera3D + Orthographic）负责两者换算。
 /// 屏幕 Y-down ↔ 世界 Y-up 的翻转只在 [`Camera2D::to_transform2d`] 的矩阵里
 /// 存在一份，其它地方不得再写翻转。
-#[derive(Debug, Clone, Copy, derive_new::new)]
+#[derive(Debug, Clone, Copy, derive_new::new, serde::Serialize, serde::Deserialize)]
 pub struct Camera2D {
     /// 逻辑坐标系中相机中心位置
     pub center: Vec2,
@@ -140,7 +140,7 @@ impl Camera2D {
 /// 矩形）⇒ "同一个相机渲染到 800×600 与 1920×1080"会变成"改相机"，句柄就不是纯引用。
 /// 取景（`center` / `scale`）属于**场景对象**，视口矩形属于**渲染目标**：
 /// 前者进 scene（可被 handle 引用、可被动画驱动），后者在录制时由渲染层绑定。
-#[derive(Debug, Clone, Copy, PartialEq, derive_new::new)]
+#[derive(Debug, Clone, Copy, PartialEq, derive_new::new, serde::Serialize, serde::Deserialize)]
 pub struct Framing2D {
     /// 逻辑坐标系中的取景中心。
     pub center: Vec2,
@@ -203,7 +203,7 @@ pub fn spawn_camera2d<S: Scene>(scene: &mut S, framing: Framing2D) -> Option<Cam
 ///
 /// 与 [`Camera3D`] 的分工：本组件是"朝向的权威来源"，`Camera3D.eye/target` 是它的
 /// 派生产物（控制器每次改完朝向就重写 `target = eye + forward`）。
-#[derive(Debug, Clone, Copy, PartialEq, derive_new::new)]
+#[derive(Debug, Clone, Copy, PartialEq, derive_new::new, serde::Serialize, serde::Deserialize)]
 pub struct FpsView {
     /// 绕世界 Y 轴的偏航角（弧度）。
     pub yaw: f32,
@@ -251,9 +251,7 @@ pub struct Camera3DHandle(pub ObjectId);
 ///
 /// 可选挂 [`FpsView`]（FPS 模式的朝向状态）与 `CameraMode`（由调用方另行写入组件）。
 pub fn spawn_camera3d<S: Scene>(scene: &mut S, camera: Camera3D) -> Option<Camera3DHandle> {
-    scene
-        .spawn_dyn(vec![Box::new(camera)])
-        .map(Camera3DHandle)
+    scene.spawn_dyn(vec![Box::new(camera)]).map(Camera3DHandle)
 }
 
 // ─── Projection / Camera3D ────────────────────────────────────────────────
@@ -265,7 +263,7 @@ pub fn spawn_camera3d<S: Scene>(scene: &mut S, camera: Camera3D) -> Option<Camer
 /// [`Projection::matrix_with_aspect`] 覆盖。
 ///
 /// 矩阵使用右手系、wgpu/D3D NDC 约定（深度 [0, 1]、Y-up）。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Projection {
     /// 透视投影。
     Perspective {
@@ -357,7 +355,7 @@ impl Projection {
 }
 
 /// 3D 相机：视点位置、注视目标、上方向 + 投影参数。
-#[derive(Debug, Clone, Copy, derive_new::new)]
+#[derive(Debug, Clone, Copy, derive_new::new, serde::Serialize, serde::Deserialize)]
 pub struct Camera3D {
     /// 相机位置（世界空间）。
     pub eye: Vec3,
@@ -404,11 +402,7 @@ mod tests {
     #[test]
     fn screen_world_roundtrip() {
         let camera = cam2d();
-        for wp in [
-            Vec2::ZERO,
-            Vec2::new(-100.0, 42.0),
-            Vec2::new(3.7, -9.9),
-        ] {
+        for wp in [Vec2::ZERO, Vec2::new(-100.0, 42.0), Vec2::new(3.7, -9.9)] {
             let sp = camera.world_to_screen(wp);
             let back = camera.screen_to_world(sp);
             assert!(
@@ -449,7 +443,11 @@ mod tests {
         let bbox = Rect2D::new(Vec2::new(10.0, 20.0), Vec2::new(110.0, 60.0));
         let cam = base.fit_bounds(bbox, 0.8);
 
-        assert!((cam.scale - 512.0 * 0.8 / 100.0).abs() < 1e-5, "scale = {}", cam.scale);
+        assert!(
+            (cam.scale - 512.0 * 0.8 / 100.0).abs() < 1e-5,
+            "scale = {}",
+            cam.scale
+        );
         assert!((cam.center.x - 60.0).abs() < 1e-5 && (cam.center.y - 40.0).abs() < 1e-5);
         // 视口沿用基底相机的 rect。
         assert_eq!(cam.rect, viewport);
@@ -467,9 +465,9 @@ mod tests {
         let viewport = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
         let base = Camera2D::new(Vec2::ZERO, 40.0, viewport);
         for bbox in [
-            Rect2D::default(),                                                   // 空盒
-            Rect2D::new(Vec2::new(1.0, 1.0), Vec2::new(1.0, 5.0)),               // 零宽
-            Rect2D::new(Vec2::new(0.0, 0.0), Vec2::new(f32::INFINITY, 1.0)),     // 非有限
+            Rect2D::default(),                                               // 空盒
+            Rect2D::new(Vec2::new(1.0, 1.0), Vec2::new(1.0, 5.0)),           // 零宽
+            Rect2D::new(Vec2::new(0.0, 0.0), Vec2::new(f32::INFINITY, 1.0)), // 非有限
         ] {
             let cam = base.fit_bounds(bbox, 0.8);
             assert_eq!(cam.scale, 40.0, "退化盒应保持基底 scale：{bbox:?}");

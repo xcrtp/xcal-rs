@@ -16,7 +16,7 @@
 //   lerp             Lerp（f32 / Vec2 / Vec3 / Color32 / Path2D）
 //   func / curve / sample
 //                    FunctionX2Y / ParameterCurveT2XY / ParameterCurveT2XYZ
-//                    / Sampler1D / Sampler2D / Interpolator / SurfaceFn / SyncSendFn
+//                    / Sampler1D / Sampler2D / Interpolator / SurfaceFn / DynFn
 //   proj             camera 投影（directx::perspective / orthographic、look_at_mat4）
 //   —— 以下两项暂留，注明原因 ——
 //   stroke           Stroke2D（被 xc-content 依赖，属 kernel，进不了 render-ir）
@@ -48,7 +48,7 @@ pub mod vec;
 
 pub use color::Color32;
 pub use curve::{ParameterCurveT2XY, ParameterCurveT2XYZ};
-pub use func::{FunctionX2Y, SurfaceFn, SyncSendFn};
+pub use func::{DynFn, FunctionX2Y, SurfaceFn, builtin_f32};
 pub use lerp::Lerp;
 pub use mat::{Mat3, Mat4, Quat};
 pub use path::{DEFAULT_MORPH_SAMPLES, MORPH_TOLERANCE, Path2D, Path3D, PathCommand};

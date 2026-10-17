@@ -45,7 +45,7 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 | `path` | `Path2D` / `PathCommand` / `Path3D` | 2D 路径（MoveTo/LineTo/QuadTo/CubicTo/Arc/Close）与 de Casteljau 折线采样；弧长重采样 / 形变 / 变换；`Path3D` 为 M1 新增的 3D 折线承载类型 |
 | `primitives` | `Point3D` / `Line3D` / `Triangle2D` / `Circle2D` / `Ellipse2D` / `Line2D` / `Polyline2D` / `Polygon2D` | 基础图元数据结构 + 纯数学代数（包围盒 / 面积 / 长度 / 包含 / 仿射变换）；2D 值类型为 M1 补齐 |
 | `transform` | `Transform2D` / `Transform3D` | 仿射变换包装（数学值），可与 `Mat3`/`Mat4` 互转 |
-| `func` | `FunctionX2Y` / `SurfaceFn` / `SyncSendFn` | 一元实函数 `y = f(x)`；参数曲面函数 `z = f(x, y)` + 参数域（纯数学，不含采样步数） |
+| `func` | `FunctionX2Y` / `SurfaceFn` / `DynFn` | 一元实函数 `y = f(x)`；参数曲面函数 `z = f(x, y)` + 参数域（纯数学，不含采样步数） |
 | `curve` | `ParameterCurveT2XY` / `ParameterCurveT2XYZ` | 参数曲线 `t ↦ 点`（采样动作归场景对象层，不在本 crate） |
 | `sample` | `Sampler1D` / `Sampler2D` / `Interpolator` | 采样规格（区间 + 步长）与插值函数包装 |
 | `proj` | `directx::perspective` / `orthographic` / `look_at_mat4` | 相机投影 / 视图矩阵构造（右手系 + wgpu/D3D NDC） |

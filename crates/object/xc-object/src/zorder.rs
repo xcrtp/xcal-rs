@@ -13,5 +13,15 @@
 ///
 /// 与迁移前网格构建 System 直写队列的 z 值语义完全一致
 /// （见 [`crate::axes::GRID_Z`] / [`crate::axes::AXIS_Z`]）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, derive_new::new)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    derive_new::new,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ZOrder(pub i32);

@@ -17,7 +17,7 @@ use xc_notion::{Mat4, Quat, Transform2D, Vec3};
 /// - `position.xy` ⇒ 2D 位移，`position.z` 在 2D 下**忽略**；
 /// - `rotation` 在 2D 下**只取绕 Z 轴的分量**（其余忽略）；
 /// - `scale.xy` ⇒ 2D 缩放，`scale.z` 忽略。
-#[derive(Debug, Clone, derive_builder::Builder)]
+#[derive(Debug, Clone, derive_builder::Builder, serde::Serialize, serde::Deserialize)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,

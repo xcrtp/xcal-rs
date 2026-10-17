@@ -5,22 +5,81 @@
 //
 // 采样（把曲线离散成折线）属**动作归属**问题：类型在理念层，采样动作在
 // 场景对象层 / 装配层 —— 因此本模块只定义曲线本身，不提供 `sample()`。
+//
+// 本轮：函数持有者统一为 `Arc<dyn DynFn>`（深克隆 + Any），并带可选 `name`
+// （持久化只写名字）。
 
 use std::sync::Arc;
 
-use crate::func::SyncSendFn;
+use crate::func::DynFn;
 
 /// 参数曲线 `t ↦ (x, y)`（默认 `f32 → (f32, f32)`），共享持有。
-#[derive(Clone)]
 pub struct ParameterCurveT2XY<T = f32, XY = (f32, f32)> {
-    pub f: Arc<dyn SyncSendFn<T, XY>>,
+    pub f: Arc<dyn DynFn<T, XY>>,
+    /// `Some` = 具名（可序列化）；`None` = 匿名（序列化时明确报错）。
+    pub name: Option<String>,
 }
 
-impl<T, XY> ParameterCurveT2XY<T, XY> {
-    pub fn new(f: impl SyncSendFn<T, XY> + 'static) -> Self {
+impl<T: 'static, XY: 'static> ParameterCurveT2XY<T, XY> {
+    /// 匿名参数曲线。
+    pub fn new(f: impl Fn(T) -> XY + Send + Sync + Clone + 'static) -> Self {
         Self {
-            f: Arc::new(f) as Arc<dyn SyncSendFn<T, XY>>,
+            f: Arc::new(f),
+            name: None,
         }
+    }
+
+    /// 具名参数曲线（可持久化）。
+    pub fn named(
+        name: impl Into<String>,
+        f: impl Fn(T) -> XY + Send + Sync + Clone + 'static,
+    ) -> Self {
+        Self {
+            f: Arc::new(f),
+            name: Some(name.into()),
+        }
+    }
+}
+
+impl<T: 'static, XY: 'static> Clone for ParameterCurveT2XY<T, XY> {
+    fn clone(&self) -> Self {
+        Self {
+            f: self.f.clone_dyn(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T, XY> serde::Serialize for ParameterCurveT2XY<T, XY> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.name {
+            Some(name) => serializer.serialize_str(name),
+            None => Err(serde::ser::Error::custom(
+                "匿名 ParameterCurveT2XY 不可序列化：请用 named(...)",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T, XY> serde::Deserialize<'de> for ParameterCurveT2XY<T, XY>
+where
+    T: 'static,
+    XY: 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self {
+            f: crate::func::unbound(),
+            name: Some(name),
+        })
     }
 }
 
@@ -28,16 +87,72 @@ impl<T, XY> ParameterCurveT2XY<T, XY> {
 ///
 /// 参数曲线采样后曾直接吐 `Vec<Vec3>`，没有 3D 曲线类型承载 —— M1 补
 /// [`Path3D`](crate::path::Path3D) 作为承载类型。
-#[derive(Clone)]
 pub struct ParameterCurveT2XYZ<T, XYZ = (f32, f32, f32)> {
-    pub f: Arc<dyn SyncSendFn<T, XYZ>>,
+    pub f: Arc<dyn DynFn<T, XYZ>>,
+    /// `Some` = 具名（可序列化）；`None` = 匿名（序列化时明确报错）。
+    pub name: Option<String>,
 }
 
-impl<T, XYZ> ParameterCurveT2XYZ<T, XYZ> {
-    pub fn new(f: impl SyncSendFn<T, XYZ> + 'static) -> Self {
+impl<T: 'static, XYZ: 'static> ParameterCurveT2XYZ<T, XYZ> {
+    /// 匿名参数曲线。
+    pub fn new(f: impl Fn(T) -> XYZ + Send + Sync + Clone + 'static) -> Self {
         Self {
-            f: Arc::new(f) as Arc<dyn SyncSendFn<T, XYZ>>,
+            f: Arc::new(f),
+            name: None,
         }
+    }
+
+    /// 具名参数曲线（可持久化）。
+    pub fn named(
+        name: impl Into<String>,
+        f: impl Fn(T) -> XYZ + Send + Sync + Clone + 'static,
+    ) -> Self {
+        Self {
+            f: Arc::new(f),
+            name: Some(name.into()),
+        }
+    }
+}
+
+impl<T: 'static, XYZ: 'static> Clone for ParameterCurveT2XYZ<T, XYZ> {
+    fn clone(&self) -> Self {
+        Self {
+            f: self.f.clone_dyn(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T, XYZ> serde::Serialize for ParameterCurveT2XYZ<T, XYZ> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.name {
+            Some(name) => serializer.serialize_str(name),
+            None => Err(serde::ser::Error::custom(
+                "匿名 ParameterCurveT2XYZ 不可序列化：请用 named(...)",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T, XYZ> serde::Deserialize<'de> for ParameterCurveT2XYZ<T, XYZ>
+where
+    T: 'static,
+    XYZ: 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self {
+            f: crate::func::unbound(),
+            name: Some(name),
+        })
     }
 }
 
@@ -57,7 +172,7 @@ mod tests {
         assert_eq!((c.f)(2.0), (2.0, 4.0, 8.0));
     }
 
-    /// 统一到 `SyncSendFn` 后可作 ECS 组件（hecs 要求 `Send + Sync`）。
+    /// 统一到 `DynFn` 后可作 ECS 组件（hecs 要求 `Send + Sync`）。
     #[test]
     fn test_parameter_curves_are_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}

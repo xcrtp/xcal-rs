@@ -153,8 +153,7 @@ mod tests {
 
     #[test]
     fn test_normals_are_unit_length() {
-        let mesh =
-            parametric_surface(SurfaceFn::new((-1.0, 1.0), (-1.0, 1.0), |x, y| x * y), 8, 8);
+        let mesh = parametric_surface(SurfaceFn::new((-1.0, 1.0), (-1.0, 1.0), |x, y| x * y), 8, 8);
         let normals = mesh.normals.as_ref().expect("参数曲面必须带法线");
         assert_eq!(normals.len(), mesh.positions.len());
         for n in normals {
@@ -171,7 +170,7 @@ mod tests {
     #[test]
     fn test_steps_only_change_density_not_domain() {
         let surface = SurfaceFn::new((-2.0, 1.0), (-1.0, 3.0), |x, y| x * x + y);
-        let coarse = parametric_surface(surface, 2, 2);
+        let coarse = parametric_surface(surface.clone(), 2, 2);
         let fine = parametric_surface(surface, 16, 16);
 
         assert_ne!(coarse.positions.len(), fine.positions.len());

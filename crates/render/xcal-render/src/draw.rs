@@ -692,7 +692,7 @@ mod tests {
     use xcal_scene::scene::components::*;
     use std::any::Any;
     use xc_notion::{MeasureSpace, Path2D};
-    use xc_scene_contract::{Components, ObjectId, Parent, Scene, SceneRead};
+    use xc_scene_contract::{Component, Components, ObjectId, Parent, Scene, SceneRead};
 
     // ─── 非 ECS 的测试 Scene（M3-7 判据：`record_scene` 不依赖 hecs）──────────
     //
@@ -712,6 +712,7 @@ mod tests {
     macro_rules! impl_into_components {
         ($($name:ident),+) => {
             impl<$($name: Send + Sync + 'static),+> IntoComponents for ($($name,)+) {
+                #[allow(non_snake_case)]
                 fn into_components(self) -> Vec<Box<dyn Any + Send + Sync>> {
                     let ($($name,)+) = self;
                     vec![$(Box::new($name)),+]
@@ -798,7 +799,12 @@ mod tests {
     impl Scene for TestScene {
         fn spawn_dyn(&mut self, components: Components) -> Option<ObjectId> {
             let id = ObjectId::new(self.items.len() as u32, 1);
-            self.items.push((id, components));
+            // 测试场景内部仍用 `Any` 存储（它能装任意测试类型）；这里把
+            // `Component` 重新擦除回 `Any`（`into_any`）。
+            self.items.push((
+                id,
+                components.into_iter().map(|c| c.into_any()).collect(),
+            ));
             Some(id)
         }
 
@@ -821,7 +827,7 @@ mod tests {
                 .find_map(|c| c.downcast_mut::<T>())
         }
 
-        fn set<T: 'static + Send + Sync>(&mut self, id: ObjectId, component: T) -> bool {
+        fn set<T: Component>(&mut self, id: ObjectId, component: T) -> bool {
             let Some(slot) = self.items.iter_mut().find(|(i, _)| *i == id) else {
                 return false;
             };

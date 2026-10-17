@@ -35,4 +35,4 @@ pub use descriptor::{
 pub use id::ObjectId;
 pub use organize::{Group, GroupId, GroupVisibility, Name, Visibility, VisibilityTag};
 pub use relation::{Children, Parent};
-pub use scene::{Components, Scene, SceneRead};
+pub use scene::{Component, Components, Scene, SceneRead};

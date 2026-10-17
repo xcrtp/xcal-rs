@@ -24,7 +24,16 @@ use crate::affine::{map_path_affine, uniform_scale};
 // ─── Circle ───────────────────────────────────────────────────────────────
 
 /// 圆图元对象（可持有描边 / 填充样式）。
-#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Default,
+    xc_macro::Describable,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[describable(Stroke, Fill)]
 pub struct Circle(pub Circle2D);
 
@@ -59,7 +68,9 @@ impl ToShape2D for Circle {
 // ─── Path ─────────────────────────────────────────────────────────────────
 
 /// 2D 路径图元对象（直接持有理念层 [`Path2D`]，自带闭合语义；可描边 / 填充）。
-#[derive(Debug, Clone, PartialEq, Default, xc_macro::Describable)]
+#[derive(
+    Debug, Clone, PartialEq, Default, xc_macro::Describable, serde::Serialize, serde::Deserialize,
+)]
 #[describable(Stroke, Fill)]
 pub struct Path(pub Path2D);
 
@@ -91,7 +102,16 @@ impl ToShape2D for Path {
 ///
 /// ⚠️ **只有描边槽位**：线段没有面积，"填色"在本类型的 `Descriptors` 里
 /// 连槽位都不存在（编译期挡住，不是运行时忽略）。
-#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Default,
+    xc_macro::Describable,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[describable(Stroke)]
 pub struct Line(pub Line2D);
 
@@ -144,7 +164,16 @@ impl ToShape2D for Line {
 /// 已知局限（记账）：描边模式下细杆轮廓在极小宽度下观感欠佳，**推荐箭头用 `FillSolid`**。
 ///
 /// ⚠️ 箭头的书写动画（`Reveal` 持 `Path2D`）与曲线箭头本轮**不做**（见计划 §3.3）。
-#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Default,
+    xc_macro::Describable,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[describable(Stroke, Fill)]
 pub struct Arrow(pub Arrow2D);
 
@@ -194,7 +223,16 @@ impl ToShape2D for Arrow {
 ///
 /// 保留 `min()` / `max()` 访问器方法（内层 [`Rect2D`] 是 `min` / `max` **字段**）——
 /// 既有调用点 `rect.min()` 因此无需改动。
-#[derive(Debug, Clone, Copy, PartialEq, Default, xc_macro::Describable)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Default,
+    xc_macro::Describable,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[describable(Stroke, Fill)]
 pub struct Rect(pub Rect2D);
 
@@ -252,8 +290,8 @@ impl ToShape2D for Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_scene_contract::{Describable, FillDesc, StrokeDesc};
     use xc_notion::{Color32, Mat3, Vec3};
+    use xc_scene_contract::{Describable, FillDesc, StrokeDesc};
 
     /// 相机降级矩阵：`diag(s, -s)` + 平移。
     fn camera_like(s: f32, tx: f32, ty: f32) -> Transform2D {
@@ -300,7 +338,8 @@ mod tests {
     fn describable_circle_fill_and_stroke_slots() {
         let c = Circle::new((0.0, 0.0), 1.0);
 
-        let only_fill: <Circle as Describable>::Descriptors = (None, Some(FillDesc::new(Color32::GREEN)));
+        let only_fill: <Circle as Describable>::Descriptors =
+            (None, Some(FillDesc::new(Color32::GREEN)));
         let s = c.apply(&only_fill);
         assert_eq!(s.fill, Some(Color32::GREEN));
         assert_eq!(s.stroke, None, "未给描边 ⇒ 保持主题默认（无描边）");
@@ -356,7 +395,10 @@ mod tests {
     fn rect_degrades_to_polygon_under_rotation() {
         let r = Rect::new((0.0, 0.0), (1.0, 1.0));
         assert!(
-            matches!(r.to_shape2d(&camera_like(2.0, 10.0, 20.0)), Shape2D::Rect(_)),
+            matches!(
+                r.to_shape2d(&camera_like(2.0, 10.0, 20.0)),
+                Shape2D::Rect(_)
+            ),
             "无旋转 ⇒ 仍用 Rect 变体"
         );
         match r.to_shape2d(&Transform2D::rotate(std::f32::consts::FRAC_PI_4)) {
@@ -383,7 +425,10 @@ mod tests {
                 // 杆起点是矩形角点 (0, -0.125) → 屏幕 (100, 51.25)；
                 // 头顶点 (2, 0) → 屏幕 (120, 50)（头宽 0.5 ⇒ 半个杆宽 0.125）。
                 assert_eq!(shaft[0], Vec2::new(100.0, 51.25));
-                assert!(head.iter().any(|p| *p == Vec2::new(120.0, 50.0)), "头顶点 = to");
+                assert!(
+                    head.iter().any(|p| *p == Vec2::new(120.0, 50.0)),
+                    "头顶点 = to"
+                );
             }
             other => panic!("expected Group, got {other:?}"),
         }

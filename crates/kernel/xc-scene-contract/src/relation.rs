@@ -11,7 +11,7 @@
 use crate::id::ObjectId;
 
 /// 父对象引用（组件形态：挂在**子**对象上）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Parent(pub ObjectId);
 
 impl Parent {

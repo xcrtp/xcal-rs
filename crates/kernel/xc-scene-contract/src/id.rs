@@ -9,7 +9,9 @@
 ///
 /// - `index` 在对象销毁后可被复用；
 /// - 每次复用 `generation` 递增 ⇒ 旧句柄不会"意外指向新对象"。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct ObjectId {
     /// 槽位下标（可复用）。
     pub index: u32,

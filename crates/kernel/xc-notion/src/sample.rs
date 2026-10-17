@@ -8,10 +8,11 @@
 
 use std::sync::Arc;
 
-use crate::func::SyncSendFn;
+use crate::func::DynFn;
 
 /// 一维采样规格：区间 `[start, end]` + 步长 `step`。
-#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sampler1D<T = f32> {
     pub start: T,
     pub end: T,
@@ -25,7 +26,8 @@ impl<T> Sampler1D<T> {
 }
 
 /// 二维采样规格：u / v 两个方向的区间与步长。
-#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Sampler2D<T = f32> {
     pub u_start: T,
     pub u_end: T,
@@ -49,16 +51,71 @@ impl<T> Sampler2D<T> {
 }
 
 /// 插值函数包装 `T ↦ T`（如重映射 / 缓动）。
-#[derive(Clone)]
 pub struct Interpolator<T = f32> {
-    pub f: Arc<dyn SyncSendFn<T, T>>,
+    pub f: Arc<dyn DynFn<T, T>>,
+    /// `Some` = 具名（可序列化）；`None` = 匿名（序列化时明确报错）。
+    pub name: Option<String>,
 }
 
-impl<T> Interpolator<T> {
-    pub fn new(f: impl SyncSendFn<T, T> + 'static) -> Self {
+impl<T: 'static> Interpolator<T> {
+    /// 匿名插值器。
+    pub fn new(f: impl Fn(T) -> T + Send + Sync + Clone + 'static) -> Self {
         Self {
-            f: Arc::new(f) as Arc<dyn SyncSendFn<T, T>>,
+            f: Arc::new(f),
+            name: None,
         }
+    }
+
+    /// 具名插值器（可持久化）。
+    pub fn named(
+        name: impl Into<String>,
+        f: impl Fn(T) -> T + Send + Sync + Clone + 'static,
+    ) -> Self {
+        Self {
+            f: Arc::new(f),
+            name: Some(name.into()),
+        }
+    }
+}
+
+impl<T: 'static> Clone for Interpolator<T> {
+    fn clone(&self) -> Self {
+        Self {
+            f: self.f.clone_dyn(),
+            name: self.name.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<T> serde::Serialize for Interpolator<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.name {
+            Some(name) => serializer.serialize_str(name),
+            None => Err(serde::ser::Error::custom(
+                "匿名 Interpolator 不可序列化：请用 named(...)",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T> serde::Deserialize<'de> for Interpolator<T>
+where
+    T: 'static,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self {
+            f: crate::func::unbound(),
+            name: Some(name),
+        })
     }
 }
 

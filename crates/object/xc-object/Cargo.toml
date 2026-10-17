@@ -28,3 +28,5 @@ xc-macro = { path = "../../kernel/xc-macro" }
 derive_builder.workspace = true
 # Camera2D / Camera3D 的 `new` 派生。
 derive-new.workspace = true
+# 组件持久化：全部登记组件的 serde。
+serde.workspace = true

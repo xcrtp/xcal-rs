@@ -60,35 +60,103 @@ impl Segment {
 enum ActionTarget {
     Ready(Arc<dyn Target>),
     /// `make` 是 `TargetCtor::make` 的**函数指针**（不捕获任何环境 ⇒ 天然 `Send + Sync`）；
+    /// `name` 是 target 的稳定语义名（持久化替身，序列化只写它）；
     /// `handle` 是**本段脚本内**的句柄下标（`append` 时整体偏移）。
     Pending {
         make: fn(ObjectId) -> Arc<dyn Target>,
+        name: &'static str,
         handle: usize,
     },
 }
 
+/// 持久化形态：只允许 `Pending`（`Ready` 是已解析的 trait object，不可序列化）。
+impl serde::Serialize for ActionTarget {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        match self {
+            ActionTarget::Pending { name, handle, .. } => {
+                let mut state = serializer.serialize_struct("Target", 3)?;
+                state.serialize_field("kind", "pending")?;
+                state.serialize_field("ctor", name)?;
+                state.serialize_field("handle", handle)?;
+                state.end()
+            }
+            ActionTarget::Ready(target) => Err(serde::ser::Error::custom(
+                crate::persist::PersistError::UnsupportedTarget(target.name().to_string())
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ActionTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Repr {
+            Pending { ctor: String, handle: usize },
+        }
+
+        let repr = <Repr as serde::Deserialize>::deserialize(deserializer)?;
+        match repr {
+            Repr::Pending { ctor, handle } => {
+                let (make, name) = crate::animation::target::target_ctor_by_name(&ctor)
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(
+                            crate::persist::PersistError::UnknownTarget(ctor.clone()).to_string(),
+                        )
+                    })?;
+                Ok(ActionTarget::Pending { make, name, handle })
+            }
+        }
+    }
+}
+
 /// 段内的一个动作：一条 `曲线 → 目标` 绑定。
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Action {
     curve: Curve,
     target: ActionTarget,
 }
 
 /// 编排步骤：`Wait` 只推进游标；`Play` 产出一个时间区间（区间内可含多个**并行**动作）。
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 enum Step {
     Wait(f64),
-    Play {
-        duration: f64,
-        actions: Vec<Action>,
-    },
+    Play { duration: f64, actions: Vec<Action> },
 }
 
 /// 顺序编排器：声明"先…再…"，编译成 `ClockNode + Binding`。
 ///
 /// 目标/曲线以 `Arc`（曲线 `Clone`）持有，`compile` 可反复调用（不同森林/绑定表）。
+#[derive(Clone)]
 pub struct Timeline {
     steps: Vec<Step>,
+}
+
+impl serde::Serialize for Timeline {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.steps, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Timeline {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let steps = <Vec<Step> as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self { steps })
+    }
 }
 
 impl Default for Timeline {
@@ -130,7 +198,9 @@ impl Timeline {
         handle: usize,
         dur: f64,
     ) -> &mut Self {
-        self.play_action(curve, ActionTarget::Pending { make, handle }, dur)
+        // 语义名由 target 自带（`Target::name()`），声明期取一次即可（装配期开销）。
+        let name = make(ObjectId::DANGLING).name();
+        self.play_action(curve, ActionTarget::Pending { make, name, handle }, dur)
     }
 
     fn play_action(&mut self, curve: Curve, target: ActionTarget, dur: f64) -> &mut Self {
@@ -156,7 +226,8 @@ impl Timeline {
         make: fn(ObjectId) -> Arc<dyn Target>,
         handle: usize,
     ) -> &mut Self {
-        self.parallel_action(curve, ActionTarget::Pending { make, handle })
+        let name = make(ObjectId::DANGLING).name();
+        self.parallel_action(curve, ActionTarget::Pending { make, name, handle })
     }
 
     fn parallel_action(&mut self, curve: Curve, target: ActionTarget) -> &mut Self {
@@ -235,7 +306,9 @@ impl Timeline {
                         for action in actions {
                             let target: Arc<dyn Target> = match &action.target {
                                 ActionTarget::Ready(t) => Arc::clone(t),
-                                ActionTarget::Pending { make, handle } => make(resolve(*handle)),
+                                ActionTarget::Pending { make, handle, .. } => {
+                                    make(resolve(*handle))
+                                }
                             };
                             bindings.bind_arc(id, action.curve.clone(), target);
                         }
@@ -275,10 +348,13 @@ impl Timeline {
                             curve: a.curve.clone(),
                             target: match &a.target {
                                 ActionTarget::Ready(t) => ActionTarget::Ready(Arc::clone(t)),
-                                ActionTarget::Pending { make, handle } => ActionTarget::Pending {
-                                    make: *make,
-                                    handle: handle + base,
-                                },
+                                ActionTarget::Pending { make, name, handle } => {
+                                    ActionTarget::Pending {
+                                        make: *make,
+                                        name,
+                                        handle: handle + base,
+                                    }
+                                }
                             },
                         })
                         .collect();
@@ -310,7 +386,13 @@ mod tests {
         let mut tl = Timeline::new();
         tl.play(Curve::Phase { omega: 0.5 }, target(), 2.0);
         tl.wait(0.5);
-        tl.play(Curve::Phase { omega: 1.0 }, PhaseTarget { id: ObjectId::DANGLING }, 1.0);
+        tl.play(
+            Curve::Phase { omega: 1.0 },
+            PhaseTarget {
+                id: ObjectId::DANGLING,
+            },
+            1.0,
+        );
         tl
     }
 
@@ -359,7 +441,11 @@ mod tests {
         let mut bindings = BindingTable::new();
         tl.compile(&mut forest, &mut bindings);
 
-        assert_eq!(bindings.bindings.len(), 2, "两段 play ⇒ 两条绑定（wait 不产生）");
+        assert_eq!(
+            bindings.bindings.len(),
+            2,
+            "两段 play ⇒ 两条绑定（wait 不产生）"
+        );
 
         // 第一段：offset 0、span (0,2)、Hold —— 段外钳两端。
         let n0 = bindings.bindings[0].clock;
@@ -390,7 +476,11 @@ mod tests {
         assert_eq!(forest.eval_local(n0, 100.0), 2.0, "段后钳终态");
 
         let n1 = bindings.bindings[1].clock;
-        assert_eq!(forest.eval_local(n1, 0.0), 0.0, "第二段尚未开始 ⇒ 0，不是负时间");
+        assert_eq!(
+            forest.eval_local(n1, 0.0),
+            0.0,
+            "第二段尚未开始 ⇒ 0，不是负时间"
+        );
         assert!((forest.eval_local(n1, 3.0) - 0.5).abs() < 1e-9);
         assert_eq!(forest.eval_local(n1, 9.0), 1.0);
     }
@@ -422,7 +512,12 @@ mod tests {
     fn parallel_actions_share_one_interval_without_advancing_cursor() {
         let mut tl = Timeline::new();
         tl.play(Curve::Phase { omega: 1.0 }, target(), 1.0)
-            .parallel(Curve::Phase { omega: 1.0 }, PhaseTarget { id: ObjectId::DANGLING })
+            .parallel(
+                Curve::Phase { omega: 1.0 },
+                PhaseTarget {
+                    id: ObjectId::DANGLING,
+                },
+            )
             .parallel(Curve::Phase { omega: 1.0 }, target());
         tl.wait(0.5);
         tl.play(Curve::Phase { omega: 1.0 }, target(), 1.0);

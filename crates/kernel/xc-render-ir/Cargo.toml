@@ -17,3 +17,5 @@ license.workspace = true
 # 三角化（lyon）不在此层：它是「IR → 顶点」的后端侧动作，留在 xcal-render。
 [dependencies]
 xc-notion = { path = "../xc-notion" }
+# 组件持久化：样式组件（StrokeSolid / FillSolid / Opacity）可 serde。
+serde.workspace = true
