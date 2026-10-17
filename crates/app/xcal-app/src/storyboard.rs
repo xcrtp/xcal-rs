@@ -28,15 +28,15 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use xcal_render::{FillSolid, MeasureSpace, StrokeSolid};
-use xcal_scene::animation::{Camera2DFraming, RevealRange};
-use xcal_scene::scene::components::Reveal;
-use xcal_scene::scene::Scene;
-use xcal_scene::scene_script::{Handle, SceneEncoder};
-use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 use xc_notion::Path2D;
 use xc_object::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
 use xc_prerender::InMemoryEngine;
+use xcal_render::{FillSolid, MeasureSpace, StrokeSolid};
+use xcal_scene::animation::{Camera2DFraming, RevealRange};
+use xcal_scene::scene::Scene;
+use xcal_scene::scene::components::Reveal;
+use xcal_scene::scene_script::{Handle, SceneEncoder};
+use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 
 use crate::formula;
 
@@ -104,7 +104,11 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Storyboard {
     // ⇒ 0–2s 把 `end` 从 0 推到 1，即为"笔尖从左写到右"。
     let curve_h = enc.spawn(vec![
         Box::new(Reveal::new(Path2D::from_polyline(&sin_samples(), false))),
-        Box::new(StrokeSolid::new_in(2.0, (0, 200, 200, 255), MeasureSpace::Screen)),
+        Box::new(StrokeSolid::new_in(
+            2.0,
+            (0, 200, 200, 255),
+            MeasureSpace::Screen,
+        )),
     ]);
 
     // 分镜 6：公式 `y = sin x` 的书写动画对象（每个描边子轮廓一个）。
@@ -137,7 +141,10 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Storyboard {
         keyframes_scalar(1.0, CAMERA_START.scale, CAMERA_SCALE_PUSHED),
         1.0,
     )
-    .parallel::<Camera2DFraming>(camera_h, keyframes_vec2(1.0, CAMERA_START.center, CAMERA_PEAK));
+    .parallel::<Camera2DFraming>(
+        camera_h,
+        keyframes_vec2(1.0, CAMERA_START.center, CAMERA_PEAK),
+    );
     // 3.5–4.5s：公式书写（**逐轮廓依次写出** —— 每个描边子轮廓占一段，顺序游标自动排期；
     // 共用 `parallel` 会让全部轮廓**同时**被写出，那不是"写字"）
     if let Some((first, rest)) = formula_h.split_first() {
@@ -181,7 +188,9 @@ fn sin_samples() -> Vec<glam::Vec2> {
 
 /// 段内从 0 线性到 1 的曲线（`Phase{omega: 1/dur}`）。
 fn ramp(dur: f64) -> Curve {
-    Curve::Phase { omega: (1.0 / dur) as f32 }
+    Curve::Phase {
+        omega: (1.0 / dur) as f32,
+    }
 }
 
 /// 段内把标量从 `from` 插值到 `to`（`Keyframes`，定义域是**段内局部时间**）。
@@ -294,9 +303,9 @@ fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xc_prerender::placeholder_engine;
     use xcal_scene::animation::{Target, Timeline};
     use xcal_scene::contract::{ObjectId, SceneRead};
-    use xc_prerender::placeholder_engine;
 
     /// §11.1：六条分镜能被**声明**出来 —— 场景对象齐备且**时序正确**。
     #[test]
@@ -378,7 +387,11 @@ mod tests {
         let engine = placeholder_engine();
         let mut enc = SceneEncoder::new();
         let handles = spawn_formula_reveal(&mut enc, &engine);
-        assert!(handles.len() >= 2, "公式至少两个轮廓，实际 {}", handles.len());
+        assert!(
+            handles.len() >= 2,
+            "公式至少两个轮廓，实际 {}",
+            handles.len()
+        );
 
         let mut scene = Scene::new();
         let recipe = enc.finish().commit(&mut scene).expect("commit 成功");
@@ -504,14 +517,28 @@ mod tests {
     fn later_shots_follow_first_duration_change() {
         let mut tl = Timeline::new();
         // 与 `build` 相同的编排（此处只关心时间，不需要场景对象）。
-        tl.play(ramp(2.0), RevealRange { id: ObjectId::DANGLING }, 2.0);
+        tl.play(
+            ramp(2.0),
+            RevealRange {
+                id: ObjectId::DANGLING,
+            },
+            2.0,
+        );
         tl.wait(0.5);
         tl.play(
             keyframes_scalar(1.0, 40.0, 110.0),
-            Camera2DFraming { id: ObjectId::DANGLING },
+            Camera2DFraming {
+                id: ObjectId::DANGLING,
+            },
             1.0,
         );
-        tl.play(ramp(1.0), RevealRange { id: ObjectId::DANGLING }, 1.0);
+        tl.play(
+            ramp(1.0),
+            RevealRange {
+                id: ObjectId::DANGLING,
+            },
+            1.0,
+        );
 
         assert_eq!(tl.schedule()[2].start, 3.5);
         tl.set_duration(0, 3.0);
@@ -526,9 +553,11 @@ mod tests {
     fn storyboard_produces_draw_output_over_time() {
         use xcal_egui::resources::UiConfig;
         use xcal_egui::systems::AxesRefreshSystem;
-        use xcal_render::{DrawQueue, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect};
-        use xcal_scene::animation::BindingApplySystem;
+        use xcal_render::{
+            DrawQueue, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect,
+        };
         use xcal_scene::TimeState;
+        use xcal_scene::animation::BindingApplySystem;
         use xcal_schedule::resource::Resources;
         use xcal_schedule::scheduler::{Phase, Scheduler};
 
@@ -557,14 +586,25 @@ mod tests {
         sched.init_resources();
 
         // ── t = 1s：网格已建；曲线写到一半（其余公式尚未开始） ──
-        sched.resources_mut().get_mut::<TimeState>().unwrap().elapsed = 1.0;
+        sched
+            .resources_mut()
+            .get_mut::<TimeState>()
+            .unwrap()
+            .elapsed = 1.0;
         sched.run_frame(0.0);
 
         let grid = sched.resources().get::<DrawQueue>().unwrap().len();
-        assert!(grid > 0, "网格/坐标轴线段应已录进 2D 队列（t=1s），实际 {grid}");
+        assert!(
+            grid > 0,
+            "网格/坐标轴线段应已录进 2D 队列（t=1s），实际 {grid}"
+        );
 
         let reveals = sched.resources().get::<RevealQueue>().unwrap().0.clone();
-        assert!(reveals.len() >= 2, "曲线 + 公式应有书写项，实际 {}", reveals.len());
+        assert!(
+            reveals.len() >= 2,
+            "曲线 + 公式应有书写项，实际 {}",
+            reveals.len()
+        );
         let max_end = reveals.iter().map(|r| r.end).fold(f32::MIN, f32::max);
         assert!(
             (max_end - 0.5).abs() < 1e-3,
@@ -574,17 +614,27 @@ mod tests {
         assert!(reveals.iter().all(|r| r.start == 0.0), "start 应恒为 0");
 
         // ── t = 4s：曲线写满（end=1）；公式**写到一半（逐轮廓在途）**；相机到峰值 ──
-        sched.resources_mut().get_mut::<TimeState>().unwrap().elapsed = 4.0;
+        sched
+            .resources_mut()
+            .get_mut::<TimeState>()
+            .unwrap()
+            .elapsed = 4.0;
         sched.run_frame(0.0);
 
         let reveals = sched.resources().get::<RevealQueue>().unwrap().0.clone();
         let max_end = reveals.iter().map(|r| r.end).fold(f32::MIN, f32::max);
-        assert!((max_end - 1.0).abs() < 1e-3, "曲线应写满（end=1），实际 {max_end}");
+        assert!(
+            (max_end - 1.0).abs() < 1e-3,
+            "曲线应写满（end=1），实际 {max_end}"
+        );
         // **逐轮廓依次书写**的判据：窗口过半时，前面的轮廓已写完、后面的**还没开始**。
         // 若各轮廓共享同一区间（并行动作），此刻它们会**全部**是 0.5
         // ⇒ `pending == 0`，本断言即失败。
         let pending = reveals.iter().filter(|r| r.end == 0.0).count();
-        let done = reveals.iter().filter(|r| (r.end - 1.0).abs() < 1e-6).count();
+        let done = reveals
+            .iter()
+            .filter(|r| (r.end - 1.0).abs() < 1e-6)
+            .count();
         assert!(
             pending >= 1,
             "t=4s（公式窗口过半）应仍有未开始的轮廓（依次书写），实际 pending={pending}、\
@@ -602,7 +652,10 @@ mod tests {
             "相机应推进到 scale={CAMERA_SCALE_PUSHED}，实际 {}",
             view.scale
         );
-        assert!((view.center - CAMERA_PEAK).length() < 1e-3, "相机中心应到峰值");
+        assert!(
+            (view.center - CAMERA_PEAK).length() < 1e-3,
+            "相机中心应到峰值"
+        );
     }
 
     /// 从编译产物反推每个 `play` 的时间区间（`(offset, span_hi - span_lo)`）。

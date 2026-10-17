@@ -10,11 +10,11 @@
 
 use std::sync::Arc;
 
-use xcal_schedule::context::ExecutorContext;
-use xcal_scene::scene::components::{Material3D, MeshGeometry};
 use xc_object::Transform;
-use xcal_schedule::system::System;
 use xcal_render::DrawQueue3D;
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
+use xcal_schedule::context::ExecutorContext;
+use xcal_schedule::system::System;
 
 /// 每帧清空 [`DrawQueue3D`]，把世界中的全部 [`MeshGeometry`]（带可选
 /// [`Material3D`] 与可选 [`Transform`]）录制进队列。

@@ -1,0 +1,10 @@
+[package]
+name = "xc-vm-binding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "语言无关的 VM 绑定驱动：能力计划 / 调用编排 / JSON 文档"
+
+[dependencies]
+# 零额外依赖：绑定驱动只认识 `xc-vm` 的 schema 与值模型。
+xc-vm = { path = "../xc-vm" }

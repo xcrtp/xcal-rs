@@ -191,12 +191,7 @@ pub fn to_rgba(ctx: &RenderContext, pixels: &[u8]) -> Vec<u8> {
 }
 
 /// 写一张 RGBA8 PNG。
-pub fn write_png(
-    path: &Path,
-    width: u32,
-    height: u32,
-    rgba: &[u8],
-) -> Result<(), ExportError> {
+pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), ExportError> {
     let file = std::fs::File::create(path).map_err(|e| ExportError::Io {
         path: path.to_path_buf(),
         message: e.to_string(),
@@ -221,14 +216,13 @@ pub fn write_png(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xc_notion::{Rect2D, Vec2};
+    use xc_object::Camera2D;
     use xcal_render::{
-        DrawQueue, DrawQueue3D, PostFilterChain, StrokeSolid, ZIndex,
-        components::Line,
+        DrawQueue, DrawQueue3D, PostFilterChain, StrokeSolid, ZIndex, components::Line,
     };
     use xcal_render_backends::Compositor;
     use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-    use xc_object::Camera2D;
-    use xc_notion::{Rect2D, Vec2};
 
     const W: u32 = 32;
     const H: u32 = 24;
@@ -293,9 +287,7 @@ mod tests {
         let dir = temp_dir("roundtrip");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("one.png");
-        let rgba = vec![
-            255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 10, 20, 30, 40,
-        ];
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 10, 20, 30, 40];
         write_png(&path, 2, 2, &rgba).expect("编码");
         let (w, h, decoded) = decode_png(&path);
         assert_eq!((w, h), (2, 2));
@@ -317,8 +309,8 @@ mod tests {
         spec.fps = 10.0;
         spec.clear = clear();
 
-        let report = export_sequence(&ctx, &spec, |i| callback(4.0 + i as f32 * 4.0))
-            .expect("导出成功");
+        let report =
+            export_sequence(&ctx, &spec, |i| callback(4.0 + i as f32 * 4.0)).expect("导出成功");
 
         assert_eq!(report.files.len(), 6);
         for (i, path) in report.files.iter().enumerate() {
@@ -329,14 +321,11 @@ mod tests {
             );
         }
 
-        let frames: Vec<Vec<u8>> = report
-            .files
-            .iter()
-            .map(|p| decode_png(p).2)
-            .collect();
+        let frames: Vec<Vec<u8>> = report.files.iter().map(|p| decode_png(p).2).collect();
         for i in 1..frames.len() {
             assert_ne!(
-                frames[i], frames[i - 1],
+                frames[i],
+                frames[i - 1],
                 "第 {i} 帧与上一帧完全相同 —— 导出没有在推进画面"
             );
         }
@@ -428,10 +417,7 @@ mod tests {
         ctx.submit(enc.finish());
         let px_egui = ctx.read_texture(&target, (W, H));
 
-        let diff = px_headless
-            .iter()
-            .zip(&px_egui)
-            .position(|(a, b)| a != b);
+        let diff = px_headless.iter().zip(&px_egui).position(|(a, b)| a != b);
         assert!(
             diff.is_none(),
             "导出帧与 egui 路径必须逐字节一致（首个不同字节：{diff:?}）"

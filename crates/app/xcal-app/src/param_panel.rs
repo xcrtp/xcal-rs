@@ -14,11 +14,11 @@
 // 这是节点编辑器的简化版，后续替换为完整节点图（xc-node-schema + xcal-node-egui）
 // 时上层逻辑不动。
 
-use xcal_schedule::context::ExecutorContext;
-use xcal_schedule::system::System;
 use xcal_scene::Curve;
 use xcal_scene::animation::BindingTable;
 use xcal_scene::domain::{InputEvents, SceneEvent, WidgetId, ids};
+use xcal_schedule::context::ExecutorContext;
+use xcal_schedule::system::System;
 
 pub struct ParamPanelSystem;
 impl System for ParamPanelSystem {
@@ -55,7 +55,9 @@ impl System for ParamPanelSystem {
                     (ids::PHASE_OMEGA, Curve::Phase { omega }) => *omega = *value,
                     (ids::ORBIT_RADIUS, Curve::Orbit { radius, .. }) => *radius = *value,
                     (ids::ORBIT_SPEED, Curve::Orbit { speed, .. }) => *speed = *value,
-                    (ids::ORBIT_ANGLE, Curve::Orbit { initial_angle, .. }) => *initial_angle = *value,
+                    (ids::ORBIT_ANGLE, Curve::Orbit { initial_angle, .. }) => {
+                        *initial_angle = *value
+                    }
                     _ => {}
                 }
             }
@@ -72,11 +74,11 @@ impl System for ParamPanelSystem {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use xcal_scene::ClockId;
+    use xcal_scene::animation::{Binding, CameraEye, CircleRadius, SeekKind};
+    use xcal_scene::contract::ObjectId;
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xcal_scene::ClockId;
-    use xcal_scene::animation::{Binding, CircleRadius, CameraEye, SeekKind};
-    use xcal_scene::contract::ObjectId;
 
     /// headless：Slider 事件按 WidgetId 精确写入对应绑定字段，顺序无关。
     #[test]

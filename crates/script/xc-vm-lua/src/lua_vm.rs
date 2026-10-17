@@ -15,37 +15,42 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mlua::{Lua, Table, Value};
-use xcal_scene::scene_script::SceneScript;
-use xc_prerender::InMemoryEngine;
-use xc_vm::{
-    Capability, FunctionId, Injector, MissingRequirements, QualifiedName, Service,
-    ServiceRequirement, Vm, VmError, VmId, negotiate_dyn, validate_requirements,
-};
-
-use crate::api::{ContentApi, SceneApi};
-use crate::content::{CONTENT_SERVICE_NAME, ContentServiceVm, PathStore};
-use crate::service::{FINISH_PATH, RESET_PATH, SERVICE_NAME, SceneServiceVm};
+use xc_vm::{Capability, FunctionId, QualifiedName, ServiceRequirement, Vm, VmError, VmId};
 
 /// `Injector` 的两个函数（与 `xc_vm::Injector::signatures()` 逐字一致）。
 pub const REQUIREMENTS_PATH: &str = "xc_vm::injector::requirements";
 pub const INJECT_PATH: &str = "xc_vm::injector::inject";
 /// 宿主 → 脚本的唯一入口（erased）。
 pub const RUN_PATH: &str = "xcal.script::run";
+/// `run` 的完整函数名（含参数 / 返回类型；`Broker::run_with` 用）。
+pub const RUN_ENTRY: &str = "xcal.script::run(String) -> Any";
+/// 入口 Service 的约定名（解释器与"场景录制器"之间的协议，不是 crate 依赖）。
+pub const ENTRY_SERVICE: &str = "scene";
+/// 入口 Service 的内部交接函数（不是脚本可见 API）。
+pub const RESET_PATH: &str = "xcal.scene::__reset";
+pub const FINISH_PATH: &str = "xcal.scene::__finish";
 
 type RequirementsFn = fn(&dyn Vm) -> Vec<ServiceRequirement>;
 type InjectFn = fn(&dyn Vm, String, Arc<dyn Vm>) -> Result<(), VmError>;
-type RunFn = fn(&dyn Vm, String) -> Result<SceneScript, VmError>;
+type RunFn = fn(&dyn Vm, String) -> Result<Box<dyn Any>, VmError>;
 
 /// VM 的可变状态（`Vm` 只有 `&self`，故用内部可变性）。
 struct ScriptState {
     lua: Lua,
-    /// 场景装配 Service。
+    /// 场景装配 Service（`run` 的内部交接需要它）。
     scene: Option<Arc<dyn Vm>>,
-    /// 内容编译 Service（公式 / 文字）。
-    content: Option<Arc<dyn Vm>>,
+}
+
+/// 一个已注册能力的注入端点。
+struct BinderEntry {
+    /// 协商 + 建语言侧表。
+    bind: fn(&Lua, &str, Arc<dyn Vm>) -> Result<(), VmError>,
+    /// 自述需求（`required` 由注册时决定）。
+    requirements: Vec<ServiceRequirement>,
 }
 
 /// Lua 脚本 VM。
@@ -53,6 +58,8 @@ pub struct LuaVm {
     id: VmId,
     names: Vec<QualifiedName>,
     state: RefCell<ScriptState>,
+    /// Service 名 → 能力绑定器（**不写死任何 domain 类型**）。
+    binders: RefCell<BTreeMap<String, BinderEntry>>,
     requirements_fn: RequirementsFn,
     inject_fn: InjectFn,
     run_fn: RunFn,
@@ -74,7 +81,7 @@ impl LuaVm {
                 vec!["ServiceName".to_string(), "ServiceVm".to_string()],
                 "InjectResult",
             ),
-            QualifiedName::from_path(RUN_PATH, vec!["String".to_string()], "SceneScript"),
+            QualifiedName::from_path(RUN_PATH, vec!["String".to_string()], "Any"),
         ];
         Self {
             id: VmId::next(),
@@ -82,12 +89,30 @@ impl LuaVm {
             state: RefCell::new(ScriptState {
                 lua: Lua::new(),
                 scene: None,
-                content: None,
             }),
+            binders: RefCell::new(BTreeMap::new()),
             requirements_fn: requirements_impl,
             inject_fn: inject_impl,
             run_fn: run_impl,
         }
+    }
+
+    /// 注册一个能力的绑定器（必须在 Broker 装配前调用）。
+    ///
+    /// `required = false` ⇒ 该 Service 是 **optional**：没有提供者也能装配，
+    /// 只是 Lua 全局表中不会出现对应的表（B4 的 `python` 走这条路径）。
+    pub fn register_capability<C: Capability<'static>>(&self, service: &str, required: bool) {
+        let requirements = C::signatures()
+            .iter()
+            .map(|sig| ServiceRequirement::new(service, &sig.qualified().to_string(), required))
+            .collect();
+        self.binders.borrow_mut().insert(
+            service.to_string(),
+            BinderEntry {
+                bind: bind_capability::<C>,
+                requirements,
+            },
+        );
     }
 
     /// 当前 Lua 全局表 `scene` 注册的函数名（排序后）。
@@ -100,6 +125,11 @@ impl LuaVm {
     /// 当前 Lua 全局表 `content` 注册的函数名（排序后）。
     pub fn registered_content_names(&self) -> Vec<String> {
         self.registered_names("content")
+    }
+
+    /// 任意全局表注册的函数名（排序后；表不存在 ⇒ 空）。
+    pub fn registered_global_names(&self, global: &str) -> Vec<String> {
+        self.registered_names(global)
     }
 
     fn registered_names(&self, global: &str) -> Vec<String> {
@@ -116,21 +146,24 @@ impl LuaVm {
         names
     }
 
-    /// 宿主 → 脚本：执行一段 Lua 源码并取回 `SceneScript`。
-    pub fn run(&self, source: &str) -> Result<SceneScript, VmError> {
+    /// 宿主 → 脚本：执行一段 Lua 源码，取回入口 Service 的产物 `T`。
+    ///
+    /// 解释器不知道 `T` 是什么（`SceneScript` / 任意录制结果），
+    /// 因此这里对 `T` 完全泛型 —— 这是 Lua 适配器能保持"纯"的关键。
+    pub fn run<T: 'static>(&self, source: &str) -> Result<T, VmError> {
         let id = self
             .function_id(&QualifiedName::from_path(
                 RUN_PATH,
                 vec!["String".to_string()],
-                "SceneScript",
+                "Any",
             ))
             .ok_or_else(|| VmError::UnknownFunction(RUN_PATH.to_string()))?;
         let owned = source.to_string();
         let arg: &dyn Any = &owned;
         let out = self.call(id, &[arg])?;
-        out.downcast::<SceneScript>()
-            .map(|b| *b)
-            .map_err(|_| VmError::CallFailed("run 没有返回 SceneScript".to_string()))
+        out.downcast::<T>().map(|boxed| *boxed).map_err(|_| {
+            VmError::CallFailed(format!("run 的返回值不是 `{}`", std::any::type_name::<T>()))
+        })
     }
 }
 
@@ -170,7 +203,7 @@ impl Vm for LuaVm {
             }
             2 => {
                 let source = arg::<String>(args, 0)?.clone();
-                Ok(Box::new((self.run_fn)(self, source)?))
+                (self.run_fn)(self, source)
             }
             _ => Err(VmError::UnknownFunction(format!("函数编号 {id}"))),
         }
@@ -195,62 +228,59 @@ fn lua_err(e: mlua::Error) -> VmError {
 
 // ─── Injector：VM 自述需求 + 接收注入 ───────────────────────────────────
 
-fn requirements_impl(_vm: &dyn Vm) -> Vec<ServiceRequirement> {
-    let scene = SceneApi::signatures()
+/// 一个能力的语言侧绑定器（泛型在注册时单态化，运行时只留 fn 指针）。
+fn bind_capability<C: Capability<'static>>(
+    lua: &Lua,
+    global: &str,
+    vm: Arc<dyn Vm>,
+) -> Result<(), VmError> {
+    // Broker 已在装配期做函数级校验；这里保留手动注入的最后一道闸。
+    let missing: Vec<&str> = C::signatures()
         .iter()
-        .map(|sig| ServiceRequirement::required(SERVICE_NAME, &sig.qualified().to_string()));
-    let content = ContentApi::signatures()
-        .iter()
-        .map(|sig| ServiceRequirement::required(CONTENT_SERVICE_NAME, &sig.qualified().to_string()));
-    scene.chain(content).collect()
+        .filter(|sig| !vm.functions().contains(&sig.qualified()))
+        .map(|sig| sig.name)
+        .collect();
+    if !missing.is_empty() {
+        return Err(VmError::CallFailed(format!(
+            "`{global}` 缺少函数：{}",
+            missing.join(", ")
+        )));
+    }
+    crate::binding::bind::<C>(lua, global, vm).map_err(lua_err)
+}
+
+fn requirements_impl(vm: &dyn Vm) -> Vec<ServiceRequirement> {
+    let this = lua_vm(vm);
+    this.binders
+        .borrow()
+        .values()
+        .flat_map(|entry| entry.requirements.iter().cloned())
+        .collect()
 }
 
 fn inject_impl(vm: &dyn Vm, service: String, service_vm: Arc<dyn Vm>) -> Result<(), VmError> {
     let this = lua_vm(vm);
+    let binder = this.binders.borrow().get(&service).map(|entry| entry.bind);
+    let Some(binder) = binder else {
+        return Err(VmError::CallFailed(format!(
+            "未知 Service `{service}`（能力未注册；先调用 `LuaVm::register_capability`）"
+        )));
+    };
     let mut state = this.state.borrow_mut();
-    match service.as_str() {
-        SERVICE_NAME => {
-            let api: SceneApi<'_> = negotiate_dyn(&*service_vm).ok_or_else(|| {
-                VmError::CallFailed("scene 服务未提供完整的 SceneApi（协商失败）".to_string())
-            })?;
-            drop(api);
-            crate::binding::bind::<SceneApi<'static>>(
-                &state.lua,
-                SERVICE_NAME,
-                Arc::clone(&service_vm),
-            )
-            .map_err(lua_err)?;
-            state.scene = Some(service_vm);
-        }
-        CONTENT_SERVICE_NAME => {
-            let api: ContentApi<'_> = negotiate_dyn(&*service_vm).ok_or_else(|| {
-                VmError::CallFailed("content 服务未提供完整的 ContentApi（协商失败）".to_string())
-            })?;
-            drop(api);
-            crate::binding::bind::<ContentApi<'static>>(
-                &state.lua,
-                CONTENT_SERVICE_NAME,
-                Arc::clone(&service_vm),
-            )
-            .map_err(lua_err)?;
-            state.content = Some(service_vm);
-        }
-        other => {
-            return Err(VmError::CallFailed(format!(
-                "未知 Service `{other}`（脚本 VM 只接受 `{SERVICE_NAME}` / `{CONTENT_SERVICE_NAME}`）"
-            )));
-        }
+    binder(&state.lua, &service, Arc::clone(&service_vm))?;
+    if service == ENTRY_SERVICE {
+        state.scene = Some(service_vm);
     }
     Ok(())
 }
 
 // ─── 宿主 → 脚本：run ──────────────────────────────────────────────────
 
-fn run_impl(vm: &dyn Vm, source: String) -> Result<SceneScript, VmError> {
+fn run_impl(vm: &dyn Vm, source: String) -> Result<Box<dyn Any>, VmError> {
     let this = lua_vm(vm);
     let state = this.state.borrow();
     let scene = state.scene.as_ref().ok_or_else(|| {
-        VmError::CallFailed("脚本 VM 尚未注入 scene 服务（先经 Injector 注入）".to_string())
+        VmError::CallFailed("脚本 VM 尚未注入入口服务（先经 Injector 注入 scene）".to_string())
     })?;
 
     scene.call(function_id(scene, RESET_PATH, "()")?, &[])?;
@@ -261,14 +291,18 @@ fn run_impl(vm: &dyn Vm, source: String) -> Result<SceneScript, VmError> {
         .exec()
         .map_err(|e| VmError::CallFailed(format!("Lua 执行失败：{e}")))?;
 
-    let out = scene.call(function_id(scene, FINISH_PATH, "Result<SceneScript, String>")?, &[])?;
-    match out.downcast::<Result<SceneScript, String>>() {
+    // 入口服务把产物装箱返回：`Result<Box<dyn Any>, String>`。
+    let out = scene.call(
+        function_id(scene, FINISH_PATH, "Result<Box<dyn Any>, String>")?,
+        &[],
+    )?;
+    match out.downcast::<Result<Box<dyn Any>, String>>() {
         Ok(result) => match *result {
-            Ok(script) => Ok(script),
+            Ok(value) => Ok(value),
             Err(message) => Err(VmError::CallFailed(message)),
         },
         Err(_) => Err(VmError::CallFailed(
-            "scene 服务没有返回 SceneScript".to_string(),
+            "入口服务没有返回 Result<Box<dyn Any>, String>".to_string(),
         )),
     }
 }
@@ -276,52 +310,4 @@ fn run_impl(vm: &dyn Vm, source: String) -> Result<SceneScript, VmError> {
 fn function_id(vm: &Arc<dyn Vm>, path: &str, ret: &str) -> Result<FunctionId, VmError> {
     vm.function_id(&QualifiedName::from_path(path, vec![], ret))
         .ok_or_else(|| VmError::UnknownFunction(path.to_string()))
-}
-
-// ─── 宿主侧装配入口（双向各一条）────────────────────────────────────────
-
-/// 装配好的脚本宿主：Lua VM + 注入进去的两个 Service。
-pub struct ScriptHost {
-    pub lua: Arc<LuaVm>,
-    pub scene: Arc<SceneServiceVm>,
-    pub content: Arc<ContentServiceVm>,
-}
-
-impl ScriptHost {
-    /// 装配（内容服务用 placeholder 引擎；无排版依赖的环境 / 测试）。
-    pub fn new() -> Result<Self, VmError> {
-        Self::with_engine(Arc::new(xc_prerender::placeholder_engine()))
-    }
-
-    /// 装配：`engine` 由宿主（App）建一次并传入 —— 不在这里创建排版引擎。
-    pub fn with_engine(engine: Arc<InMemoryEngine>) -> Result<Self, VmError> {
-        let paths = PathStore::new();
-        let lua = Arc::new(LuaVm::new());
-        let scene = Arc::new(SceneServiceVm::with_paths(paths.clone()));
-        let content = Arc::new(ContentServiceVm::new(engine, paths));
-
-        let injector: Injector = negotiate_dyn(&*lua).ok_or_else(|| {
-            VmError::CallFailed("LuaVm 未暴露 Injector（默认拒绝）".to_string())
-        })?;
-        let services = [
-            Service::new(SERVICE_NAME, Arc::clone(&scene) as Arc<dyn Vm>),
-            Service::new(
-                CONTENT_SERVICE_NAME,
-                Arc::clone(&content) as Arc<dyn Vm>,
-            ),
-        ];
-        validate_requirements(&injector.requirements(), &services)
-            .map_err(|missing: MissingRequirements| VmError::CallFailed(missing.to_string()))?;
-        for service in &services {
-            injector
-                .inject_service(service)
-                .map_err(|e| VmError::CallFailed(format!("注入失败：{e}")))?;
-        }
-        Ok(Self { lua, scene, content })
-    }
-
-    /// 宿主 → 脚本（erased 入口）。
-    pub fn run(&self, source: &str) -> Result<SceneScript, VmError> {
-        self.lua.run(source)
-    }
 }

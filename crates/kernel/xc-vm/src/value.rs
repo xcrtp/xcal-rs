@@ -37,11 +37,7 @@ pub enum ScalarValue {
 pub enum VmValue {
     Scalar(ScalarValue),
     Struct(&'static str, Vec<(&'static str, VmValue)>),
-    Enum(
-        &'static str,
-        &'static str,
-        Vec<(&'static str, VmValue)>,
-    ),
+    Enum(&'static str, &'static str, Vec<(&'static str, VmValue)>),
     Array(Vec<VmValue>),
     Opaque(Handle),
 }

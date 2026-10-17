@@ -11,11 +11,11 @@
 //
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 
-use xcal_scene::types::Color32;
-use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
 use xc_content::ContentIR;
 use xc_notion::Path2D;
 use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
+use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
+use xcal_scene::types::Color32;
 
 /// 曲线展平容差（pt，相对 **标称字号** 尺度）。
 ///
@@ -178,8 +178,14 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
                 continue;
             }
             let closed = is_closed(&sub);
-            let world: Vec<glam::Vec2> = sub.iter().map(|p| cmd.transform.apply_point(*p)).collect();
-            out.push((Path2D::from_polyline(&world, closed), color, width, cmd.style.space));
+            let world: Vec<glam::Vec2> =
+                sub.iter().map(|p| cmd.transform.apply_point(*p)).collect();
+            out.push((
+                Path2D::from_polyline(&world, closed),
+                color,
+                width,
+                cmd.style.space,
+            ));
         }
     }
     out
@@ -279,9 +285,7 @@ mod tests {
         path.commands
             .iter()
             .filter_map(|c| match c {
-                xc_notion::PathCommand::MoveTo(p) | xc_notion::PathCommand::LineTo(p) => {
-                    Some(*p)
-                }
+                xc_notion::PathCommand::MoveTo(p) | xc_notion::PathCommand::LineTo(p) => Some(*p),
                 _ => None,
             })
             .collect()
@@ -353,8 +357,14 @@ mod tests {
         let spec2 = FormulaSpec::new("abc", 24.0, glam::Vec2::ZERO);
         let (w1, h1) = bounds_of(&compile_to_stroke_paths(&ir, &spec1));
         let (w2, h2) = bounds_of(&compile_to_stroke_paths(&ir, &spec2));
-        assert!((w2 - 2.0 * w1).abs() < 1e-3, "宽度未按 2 倍缩放: {w1} -> {w2}");
-        assert!((h2 - 2.0 * h1).abs() < 1e-3, "高度未按 2 倍缩放: {h1} -> {h2}");
+        assert!(
+            (w2 - 2.0 * w1).abs() < 1e-3,
+            "宽度未按 2 倍缩放: {w1} -> {w2}"
+        );
+        assert!(
+            (h2 - 2.0 * h1).abs() < 1e-3,
+            "高度未按 2 倍缩放: {h1} -> {h2}"
+        );
     }
 
     /// nominal 只影响曲线提取精度，不影响最终显示尺寸：
@@ -456,7 +466,10 @@ mod tests {
         assert_eq!(paths[0].1, Color32::from_rgb(0x00FF00));
         assert!((paths[0].2 - 2.5).abs() < 1e-6);
         assert!(
-            !matches!(paths[0].0.commands.last(), Some(xc_notion::PathCommand::Close)),
+            !matches!(
+                paths[0].0.commands.last(),
+                Some(xc_notion::PathCommand::Close)
+            ),
             "开放折线不应标记为闭合"
         );
     }
@@ -513,10 +526,10 @@ mod tests {
     /// T3 验收 4：文字路径经 `record_scene` 受 **`Transform` 摆放** + **`Opacity` 淡入**。
     #[test]
     fn text_paths_honor_transform_and_opacity() {
+        use xc_object::{Camera2D, Transform};
         use xcal_render::components::Path;
         use xcal_render::{DrawQueue, Opacity, StrokeSolid, record_scene};
         use xcal_scene::contract::WorldView;
-        use xc_object::{Camera2D, Transform};
 
         let engine = xc_prerender::placeholder_engine();
         let text = TextSpec::new("hi", 1.0, glam::Vec2::ZERO);
@@ -526,10 +539,8 @@ mod tests {
         assert!(!paths.is_empty());
         let (path, color, width, space) = paths[0].clone();
 
-        let rect = xc_notion::Rect2D::new(
-            xc_notion::Vec2::ZERO,
-            xc_notion::Vec2::new(800.0, 600.0),
-        );
+        let rect =
+            xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(800.0, 600.0));
         let camera = Camera2D::new(xc_notion::Vec2::ZERO, 40.0, rect);
 
         let mut scene = xcal_scene::scene::Scene::new();
@@ -597,10 +608,7 @@ mod tests {
         let mut res = xcal_schedule::resource::Resources::new();
         res.insert(cam);
         res.insert(ViewRect {
-            rect: xc_notion::Rect2D::new(
-                xc_notion::Vec2::ZERO,
-                xc_notion::Vec2::new(800.0, 600.0),
-            ),
+            rect: xc_notion::Rect2D::new(xc_notion::Vec2::ZERO, xc_notion::Vec2::new(800.0, 600.0)),
         });
         res.insert(RevealQueue::default());
 
@@ -614,7 +622,11 @@ mod tests {
 
         let items = &sched.resources().get::<RevealQueue>().unwrap().0;
         assert_eq!(items.len(), 1, "文本路径应录进书写队列");
-        assert_eq!((items[0].start, items[0].end), (0.0, 1.0), "沿用 Reveal 区间");
+        assert_eq!(
+            (items[0].start, items[0].end),
+            (0.0, 1.0),
+            "沿用 Reveal 区间"
+        );
         assert!(!items[0].path.commands.is_empty(), "书写项应带真实几何");
     }
 }

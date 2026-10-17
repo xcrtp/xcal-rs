@@ -18,6 +18,7 @@ pub mod math_vm;
 pub mod persist;
 pub mod scene;
 pub mod scene_script;
+pub mod vm;
 pub mod time_state;
 pub mod transform;
 pub mod types;

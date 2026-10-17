@@ -441,7 +441,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
-| 非原生 VM 的 `FunctionX2Y` 适配器 | `xcal-scene::math_vm` | **C3 已消费（2026-10-17）**：第一个非原生 VM（Lua / `xcal-script`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xcal-script` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
+| 非原生 VM 的 `FunctionX2Y` 适配器 | `xcal-scene::math_vm` | **C3 已消费（2026-10-17）**：第一个非原生 VM（Lua / `xc-vm-lua`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xc-vm-lua` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
 > （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
@@ -470,15 +470,15 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 函数侧走的是另一套（两步走：序列化写 name，反序列化由 VM / registry 反查），
 > 两套口径的差异是真实取舍，记账于此。
 >
-> **脚本 VM（2026-10-17，C3 消费）**：新增 scene 层 crate `xcal-script`（Lua / mlua），
+> **脚本 VM（2026-10-17，C3 消费；D 线后归位到 `crates/script/xc-vm-lua`）**：
 > 它是 `xc-vm` 的第一个**非原生 VM** 生产消费方 —— 方向是**脚本在装配期产出
 > `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
 > 经 erased `Vm::call("xcal.script::run")`），**不参与每帧采样**。
-> 依赖图 / FanIn-FanOut 表**尚未包含** `xc-vm` / `xc-vm-macro` / `xcal-script`
-> （`cargo-workspace-analyzer` 仍不可用；按既有纪律不手改自动产物）。
-> 实际边（`cargo metadata` 口径）：`xcal-scene → xc-vm`（`math_vm`）、
-> `xcal-script → xc-vm / xc-vm-macro / xcal-scene / xc-object / xc-notion /
-> xc-render-ir / xc-scene-contract`；工具恢复后一并重算。
+> 依赖图 / FanIn-FanOut 表**尚未包含** `xc-vm` / `xc-vm-macro` / `xc-vm-binding` /
+> `xc-vm-lua` / `xc-vm-py`（`cargo-workspace-analyzer` 仍不可用；按既有纪律不手改自动产物）。
+> 实际边（`cargo metadata` 口径，D 线后）：`xcal-scene → xc-vm`（`math_vm`）、
+> `xc-vm-lua → xc-vm / xc-vm-binding / mlua`、`xc-vm-py → xc-vm / xc-vm-binding /
+> xc-vm-macro / pyo3`；**两条语言边都不含 `xcal-*`**。工具恢复后一并重算。
 >
 > **VM 类型系统与绑定生成（2026-10-17，V 线）**：`xc-vm` 从"字符串签名"升级为
 > **类型描述 IDL**：
@@ -506,6 +506,56 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   是否删除由用户决定；
 > - **W4**：删除 `spawn` 的 `ComponentList` 字符串 override（`Vec<Handle>` 自带 schema 名
 >   `Array<xc_vm.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
+>
+> **VM 解耦与 Broker（2026-10-17，B 线）**：
+> - **B1 语言无关绑定层**：新增 kernel crate `xc-vm-binding`（只依赖 `xc-vm`，可进 wasm gate）。
+>   它持有 `BindingPlan` / `ValueCodec` / `invoke` / JSON 文档；Lua 适配器只实现 `LuaCodec`。
+>   `xc-vm-binding` 中不出现任何语言运行时类型；
+> - **B2 domain 与解释器分居**：`SceneApi` / `ContentApi` / 类型词汇 / `SceneServiceVm` /
+>   `ContentServiceVm` / `PathStore` 全部搬到 `xcal-scene::script`（**D 线后改名
+>   `xcal-scene::vm`**）；Lua 适配器只留 Lua codec（**D 线后 `xcal-script` 整个删除**）。
+>   `grep SceneServiceVm crates/script/xc-vm-lua/src/` = 0；
+> - **B3 Broker**：`xc-vm::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
+>   依赖边 = `requires.service → provides`；`A → B → A` 在注入前即报 `BrokerError::Cycle`
+>   （含参与链），不会构造 `Arc` 互持。每次装配打印一次报告（顺序 / 边 / 注入 / optional 缺失）；
+> - **B4 Python（feature 门控）**：`xcal-py` 用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
+>   Python 侧经注入的 `scene.*` 建对象（通用绑定驱动 + `PyCodec`）；Lua 侧 `python.*` 表由
+>   同一套绑定生成。feature 关闭时 `cargo test --workspace` 不引入 pyo3；
+> - **optional 首次有消费方**：`python` 能力以 optional 需求注册 —— 无 Python 时装配通过、
+>   `python` 表不存在；有提供者时自动接线。
+>
+> **VM 层彻底解耦（2026-10-17，D 线）**：
+> - **`xcal-script` 删除**：`ScriptHost` 整个消失（`grep -r ScriptHost crates/` = 0）；
+>   语言适配器拆为 `crates/script/xc-vm-lua` 与 `crates/script/xc-vm-py`，
+>   两者**互不依赖**，生产边**不含任何 `xcal-*`**（`cargo tree -p ...` 实测）；
+> - **domain 归位**：`xcal-scene::script` → **`xcal-scene::vm`**。内容服务带来的
+>   `xcal-scene → xc-prerender` 依赖仍在（记账：若将来 scene 要进 wasm，这条会先挡路）；
+> - **Broker 补 `run` / `run_with`**：在已装配的图上取节点 → `Vm::call` → downcast，
+>   承担原 `ScriptHost::run` 的职责；错误通道为 `UnknownNode` / `BadEntry` /
+>   `UnknownEntry` / `Run` / `BadOutput`；
+> - **D3 描述层 / 执行层分离**：`xc-vm::AssemblyPlan` / `NodeSpec` 是**纯数据**
+>   （拓扑 / 环 / optional 缺失可在不建 VM 时单测）；App 的 `src/assembly.rs`
+>   声明静态插件清单，Broker 消费它完成校验 / 排序 / 注入，并在 debug 下断言
+>   "描述层 == 执行层"；
+> - **资产归 App**：`storyboard.lua` 在 `crates/app/xcal-app/scripts/`，
+>   `export_scene_api` example 在 `crates/app/xcal-app/examples/`；
+> - **测试归属**：`xc-vm-lua` 用 dev-dependency 自建 mini domain VM 验双向；
+>   完整 6 镜头等价性仍在 `xcal-app`（Lua / Python 两版各一条）。
+>   两个语言适配器**不进 wasm gate**（mlua 需 C 工具链、pyo3 需系统 Python）。
+>
+> **Python 脚本与文档（2026-10-17，D+ 线）**：
+> - `xc-vm-py` 补 `run` 入口（`xcal.python::run(String) -> Any`），协议与 Lua 版同形
+>   （入口服务 `__reset` / `__finish`）：Python 脚本在注入后的模块 globals 里执行；
+> - App 新增 `scripts/storyboard.py` 与 `--python`（`SceneChoice::PythonStoryboard`），
+>   与硬编码分镜逐对象 / 逐绑定等价（25 对象 / 9 绑定）；
+> - **Python VM 默认开启**：`xcal-app` 的 `default` features 含 `python`
+>   （需要系统 Python；关闭后 Lua 路径仍可用）；
+> - 文档导出新增按 capability 命名空间落盘的 `.pyi`
+>   （`xcal/__init__.pyi` / `xcal/scene.pyi` / `xcal/content.pyi` / `xcal/python.pyi`）；
+>   `xc-vm-py` 同时把 capability 注册为真实的 `xcal.*` 模块并安装到 `sys.modules`，
+>   脚本可 `import xcal.scene` / `from xcal import scene, Circle`；
+> - 多 `PyVm` 实例使用**唯一模块名**（`PyImport_ExecCodeModuleEx` 会复用同名模块，
+>   否则实例间会共享 globals），并对 `sys.modules` 的安装 + 执行加锁串行化。
 
 ### cargo-archtest 适配状态
 

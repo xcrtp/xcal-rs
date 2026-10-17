@@ -52,6 +52,7 @@
 // `#[capability]` 宏在独立的 `xc-vm-macro`（proc-macro 必须独立 crate）。
 #![forbid(unsafe_code)]
 
+mod broker;
 mod capability;
 mod error;
 mod handle;
@@ -64,6 +65,7 @@ mod typespec;
 mod value;
 mod vm;
 
+pub use broker::{AssemblyPlan, AssemblyReport, Broker, BrokerError, NodeSpec, VmNode};
 pub use capability::{Capability, CapabilityMeta, FnDoc, FnSig, Resolved};
 pub use error::VmError;
 pub use handle::{Handle, HandleTable, VmId};

@@ -46,18 +46,18 @@
 // - 场景只有**一台** 2D 相机 ⇒ 相机过滤只能验证"命中 ⇒ 可见 / 不命中 ⇒ 不可见"，
 //   双相机切换本轮不做（记账）。
 
+use xc_notion::Path2D;
+use xc_object::{Camera2DHandle, Framing2D};
 use xcal_render::components::Path;
 use xcal_render::{MeasureSpace, Opacity, StrokeSolid};
 use xcal_scene::animation::OpacityValue;
 use xcal_scene::contract::{
-    find_by_name, Group, GroupId, GroupVisibility, Name, ObjectId, Visibility,
+    Group, GroupId, GroupVisibility, Name, ObjectId, Visibility, find_by_name,
 };
 use xcal_scene::handle_ref;
 use xcal_scene::scene::Scene;
 use xcal_scene::scene_script::SceneEncoder;
 use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
-use xc_notion::Path2D;
-use xc_object::{Camera2DHandle, Framing2D};
 
 /// 主 2D 相机的初始取景（世界原点居中、45 px/世界单位）。
 const CAMERA_SCALE: f32 = 45.0;
@@ -126,7 +126,10 @@ pub fn build(scene: &mut Scene) -> CapabilityDemo {
     let mut enc = SceneEncoder::new();
 
     // ── 相机（**必须先建**：`Visibility::for_camera` 需要引用它的句柄）──────
-    let camera_h = enc.spawn(vec![Box::new(Framing2D::new(glam::Vec2::ZERO, CAMERA_SCALE))]);
+    let camera_h = enc.spawn(vec![Box::new(Framing2D::new(
+        glam::Vec2::ZERO,
+        CAMERA_SCALE,
+    ))]);
 
     // ── N1 + N2 + N3：两条曲线 + 一个对照组 ────────────────────────────────
     // 三条对象各挂 `Name`（N1）；**不接住** `spawn` 的返回值也可以，但这里接住
@@ -158,7 +161,11 @@ pub fn build(scene: &mut Scene) -> CapabilityDemo {
     // 对照组：只对**另一台**相机可见 ⇒ 本相机下永不进队列（N3 的反向判据）。
     enc.spawn(vec![
         Box::new(Path::new(Path2D::from_polyline(&control_samples(), false))),
-        Box::new(StrokeSolid::new_in(3.0, COLOR_CONTROL, MeasureSpace::Screen)),
+        Box::new(StrokeSolid::new_in(
+            3.0,
+            COLOR_CONTROL,
+            MeasureSpace::Screen,
+        )),
         Box::new(Name::new(NAME_CONTROL)),
         Box::new(Visibility::for_camera(OTHER_CAMERA)),
     ]);
@@ -216,10 +223,7 @@ fn control_samples() -> Vec<glam::Vec2> {
 /// 段内把标量从 1.0 线性插到 0.0（`Keyframes`，定义域是**段内局部时间**）。
 fn fade_out(dur: f64) -> Curve {
     Curve::Keyframes {
-        keys: vec![
-            (0.0, AnimValue::Scalar(1.0)),
-            (dur, AnimValue::Scalar(0.0)),
-        ],
+        keys: vec![(0.0, AnimValue::Scalar(1.0)), (dur, AnimValue::Scalar(0.0))],
         interpolation: Interp::Linear,
     }
 }
@@ -229,18 +233,21 @@ fn fade_out(dur: f64) -> Curve {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xc_object::Camera2D;
     use xcal_render::{DrawQueue, SceneRecordSystem, ViewRect, record_scene_tagged};
+    use xcal_scene::TimeState;
     use xcal_scene::animation::BindingApplySystem;
     use xcal_scene::contract::{SceneRead, WorldView, entity_of};
     use xcal_scene::types::Rect2D;
-    use xcal_scene::TimeState;
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xc_object::Camera2D;
 
     /// 录制测试用视口（`800×600`，与 `ViewRect::default` 无关，显式给出以免依赖缺省值）。
     fn view_rect() -> Rect2D {
-        Rect2D::new(xcal_scene::types::Vec2::ZERO, xcal_scene::types::Vec2::new(800.0, 600.0))
+        Rect2D::new(
+            xcal_scene::types::Vec2::ZERO,
+            xcal_scene::types::Vec2::new(800.0, 600.0),
+        )
     }
 
     /// 把 demo 场景灌进真实 System 链路（`SceneRecordSystem`）跑一帧，返回队列里的描边色。
@@ -293,10 +300,20 @@ mod tests {
         assert_eq!(name_of(sin).as_deref(), Some(NAME_SIN));
         assert_eq!(name_of(cos).as_deref(), Some(NAME_COS));
         assert_eq!(name_of(ctl).as_deref(), Some(NAME_CONTROL));
-        assert!(scene.with::<Path, _>(sin, |_| ()).is_some(), "curve_sin 应有 Path");
-        assert!(scene.with::<Path, _>(cos, |_| ()).is_some(), "curve_cos 应有 Path");
+        assert!(
+            scene.with::<Path, _>(sin, |_| ()).is_some(),
+            "curve_sin 应有 Path"
+        );
+        assert!(
+            scene.with::<Path, _>(cos, |_| ()).is_some(),
+            "curve_cos 应有 Path"
+        );
 
-        assert_eq!(find_by_name(&scene, "不存在的名字"), None, "未知名字 ⇒ None");
+        assert_eq!(
+            find_by_name(&scene, "不存在的名字"),
+            None,
+            "未知名字 ⇒ None"
+        );
     }
 
     /// **N3**：`Visibility::for_camera` 精确匹配 —— 相机 tag 命中才进队列。
@@ -305,9 +322,16 @@ mod tests {
     #[test]
     fn camera_tag_is_matched_exactly() {
         let colors = recorded_stroke_colors(|_| {});
-        assert_eq!(colors.len(), 2, "只有 sin + cos 可见（对照组被相机 tag 滤掉）：{colors:?}");
+        assert_eq!(
+            colors.len(),
+            2,
+            "只有 sin + cos 可见（对照组被相机 tag 滤掉）：{colors:?}"
+        );
         assert!(colors.contains(&COLOR_SIN), "curve_sin 命中本相机 ⇒ 可见");
-        assert!(colors.contains(&COLOR_COS), "curve_cos 无 Visibility ⇒ 全局可见");
+        assert!(
+            colors.contains(&COLOR_COS),
+            "curve_cos 无 Visibility ⇒ 全局可见"
+        );
         assert!(
             !colors.contains(&COLOR_CONTROL),
             "对照组只对不存在的相机可见 ⇒ 永不进队列"
@@ -352,13 +376,20 @@ mod tests {
         sched.init_resources();
 
         let opacity_at = |sched: &mut Scheduler, t: f32| -> f32 {
-            sched.resources_mut().get_mut::<TimeState>().unwrap().elapsed = t;
+            sched
+                .resources_mut()
+                .get_mut::<TimeState>()
+                .unwrap()
+                .elapsed = t;
             sched.run_frame(0.0);
             sched.world().get::<&Opacity>(cos_entity).unwrap().0
         };
 
         // t = 0 / 1（段中）/ 2（段末）。
-        assert!((opacity_at(&mut sched, 0.0) - 1.0).abs() < 1e-6, "起始应为 1.0");
+        assert!(
+            (opacity_at(&mut sched, 0.0) - 1.0).abs() < 1e-6,
+            "起始应为 1.0"
+        );
         let mid = opacity_at(&mut sched, 1.0);
         assert!((mid - 0.5).abs() < 1e-3, "t=1s（段中）应为 0.5，实测 {mid}");
         let end = opacity_at(&mut sched, FADE_SECONDS as f32);
@@ -410,9 +441,9 @@ mod tests {
         groups: &GroupVisibility,
         tweak: impl FnOnce(&mut hecs::World),
     ) -> Vec<u8> {
+        use xc_notion::Transform2D;
         use xcal_render_backends::{RenderContext, WgpuBackend2D};
         use xcal_scene::domain::LayerId;
-        use xc_notion::Transform2D;
 
         let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
             .expect("headless GPU 上下文");
@@ -512,9 +543,7 @@ mod tests {
             count_orange(&hidden),
             count_magenta(&hidden),
         );
-        eprintln!(
-            "[capability-demo] 组全开：sin(青)={sin_a} cos(橙)={cos_a} 对照组(品红)={ctl_a}",
-        );
+        eprintln!("[capability-demo] 组全开：sin(青)={sin_a} cos(橙)={cos_a} 对照组(品红)={ctl_a}",);
         eprintln!(
             "[capability-demo] 隐藏 GROUP_COS：sin(青)={sin_b} cos(橙)={cos_b} 对照组(品红)={ctl_b}",
         );
@@ -542,7 +571,10 @@ mod tests {
         let transparent = render_demo_tweaked(&GroupVisibility::new(), |world| {
             // 等价于 Timeline 走到段末（`Opacity` → 0.0）。
             let cos_id = find_by_name(&WorldView::new(world), NAME_COS).expect("curve_cos");
-            world.get::<&mut Opacity>(entity_of(cos_id).unwrap()).unwrap().0 = 0.0;
+            world
+                .get::<&mut Opacity>(entity_of(cos_id).unwrap())
+                .unwrap()
+                .0 = 0.0;
         });
 
         let (sin_a, cos_a) = (count_cyan(&opaque), count_orange(&opaque));

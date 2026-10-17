@@ -11,10 +11,10 @@
 use std::any::Any;
 use std::cell::RefCell;
 
-use xcal_scene::animation::TargetKind;
-use xcal_scene::scene::components::Reveal as NativeReveal;
-use xcal_scene::scene_script::{Handle as ScriptHandle, SceneEncoder, SceneScript};
-use xcal_scene::Curve as NativeCurve;
+use crate::Curve as NativeCurve;
+use crate::animation::TargetKind;
+use crate::scene::components::Reveal as NativeReveal;
+use crate::scene_script::{Handle as ScriptHandle, SceneEncoder, SceneScript};
 use xc_notion::{Color32, Vec2 as NotionVec2, Vec3 as NotionVec3};
 use xc_object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Circle as NativeCircle, Framing2D,
@@ -24,8 +24,8 @@ use xc_render_ir::{FillSolid, MeasureSpace, StrokeSolid};
 use xc_scene_contract::Components;
 use xc_vm::{FunctionId, Handle, HandleTable, QualifiedName, RegistryVm, Vm, VmError, VmId};
 
-use crate::content::PathStore;
-use crate::types::{
+use crate::vm::content_service::PathStore;
+use crate::vm::types::{
     Arrow, Axes2D, Camera2D, Circle, Curve, Fill, LineStyle, Path, PathShape, Reveal, RevealPath,
     Stroke, Transform,
 };
@@ -183,8 +183,12 @@ impl SceneServiceVm {
         registry.register_fn1::<f64, ()>("xcal.scene::wait", scene_wait);
 
         // ── 内部交接（不是脚本可见 API；走 erased / `Vm::call`）────────────
-        registry.register_erased(FINISH_PATH, &[], "Result<SceneScript, String>", |vm, _| {
-            Ok(Box::new(service(vm).finish()))
+        registry.register_erased(FINISH_PATH, &[], "Result<Box<dyn Any>, String>", |vm, _| {
+            Ok(Box::new(
+                service(vm)
+                    .finish()
+                    .map(|script| Box::new(script) as Box<dyn Any>),
+            ))
         });
         registry.register_erased(RESET_PATH, &[], "()", |vm, _| {
             service(vm).reset();
@@ -247,7 +251,9 @@ impl Vm for SceneServiceVm {
             .get(id.get() as usize)
             .ok_or_else(|| VmError::UnknownFunction(format!("函数编号 {id}")))?;
         match name.name() {
-            "__finish" => Ok(Box::new(self.finish())),
+            "__finish" => Ok(Box::new(
+                self.finish().map(|script| Box::new(script) as Box<dyn Any>),
+            )),
             "__reset" => {
                 self.reset();
                 Ok(Box::new(()))
@@ -265,7 +271,7 @@ fn service(vm: &dyn Vm) -> &SceneServiceVm {
         .expect("SceneApi 的调用者必须是 SceneServiceVm")
 }
 
-fn color32(color: crate::types::Color) -> Color32 {
+fn color32(color: crate::vm::types::Color) -> Color32 {
     Color32::new(color.r, color.g, color.b, color.a)
 }
 
@@ -291,13 +297,15 @@ fn scene_circle(vm: &dyn Vm, shape: Circle) -> Handle {
 }
 
 fn scene_stroke(vm: &dyn Vm, style: Stroke) -> Handle {
-    service(vm).rec.borrow_mut().components.insert(vec![Box::new(
-        StrokeSolid::new_in(
+    service(vm)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(StrokeSolid::new_in(
             style.width,
             color32(style.color),
             MeasureSpace::Screen,
-        ),
-    )])
+        ))])
 }
 
 fn scene_camera2d(vm: &dyn Vm, camera: Camera2D) -> Handle {
@@ -457,8 +465,7 @@ fn scene_parallel(vm: &dyn Vm, object: Handle, clip: Handle) {
     let (Some(object), Some((target, curve))) = (object, clip) else {
         return;
     };
-    rec.encoder
-        .parallel_named(object, target.name(), curve);
+    rec.encoder.parallel_named(object, target.name(), curve);
 }
 
 fn scene_wait(vm: &dyn Vm, seconds: f64) {

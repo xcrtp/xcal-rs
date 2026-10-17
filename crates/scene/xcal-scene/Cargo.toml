@@ -21,6 +21,9 @@ xc-render-ir = { path = "../../kernel/xc-render-ir" }
 # 从而渲染管线与装配对象不再认识 hecs。
 xc-scene-contract = { path = "../../kernel/xc-scene-contract" }
 xc-time = { path = "../../kernel/xc-time" }
+# 脚本 VM 的 domain 侧（B2）：内容编译能力经 Injector 提供，不再住在解释器里。
+xc-content = { path = "../../kernel/xc-content" }
+xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 
 glam.workspace = true

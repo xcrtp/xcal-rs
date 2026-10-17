@@ -28,13 +28,13 @@
 // `BindingTable` 写者**（3D 让位最初就是踩这个坑崩的，见 ARCHITECTURE「K 线实测坑」）。
 // 两个相机要让位的是同一张表 ⇒ 必须由**一个** System 原子地完成两台相机的让位判定。
 
+use xc_object::{Camera2DHandle, Camera3DHandle};
 use xcal_egui::resources::{UiConfig, ViewportCamera};
-use xcal_schedule::context::ExecutorContext;
-use xcal_schedule::system::System;
 use xcal_scene::animation::{Binding, BindingTable};
 use xcal_scene::contract::{ObjectId, entity_of};
 use xcal_scene::domain::CameraMode;
-use xc_object::{Camera2DHandle, Camera3DHandle};
+use xcal_schedule::context::ExecutorContext;
+use xcal_schedule::system::System;
 
 /// 按 `UiConfig` 决定两台相机"由分镜驱动还是由交互驱动"，并做绑定让位/复位。
 pub struct CameraDriveSystem {
@@ -142,11 +142,11 @@ fn write_mode(ctx: &mut ExecutorContext<'_>, id: ObjectId, mode: CameraMode) {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use xcal_schedule::resource::Resources;
-    use xcal_schedule::scheduler::{Phase, Scheduler};
+    use xc_object::{Camera3D, Framing2D, Projection};
     use xcal_scene::animation::{Camera2DFraming, CameraEye, SeekKind};
     use xcal_scene::{ClockForest, ClockId, ClockNode, Curve};
-    use xc_object::{Camera3D, Framing2D, Projection};
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     /// 测试脚手架：1 台 2D 相机 + 1 台 3D 相机 + 分镜 2D 绑定×2 + 自动轨道×1。
     struct Fixture {
@@ -230,10 +230,7 @@ mod tests {
             res.insert(table);
 
             let mut sched = Scheduler::new(world, res);
-            sched.add_system(
-                Phase::Input,
-                CameraDriveSystem::new(cam2d_bindings, orbit),
-            );
+            sched.add_system(Phase::Input, CameraDriveSystem::new(cam2d_bindings, orbit));
             sched.init_resources();
             Self {
                 sched,
@@ -285,7 +282,11 @@ mod tests {
         f.set_cfg(|c| c.free_2d_camera = true);
         f.run();
         assert_eq!(f.binding_count(), 1, "只应剩自动轨道绑定");
-        assert_eq!(f.mode2d(), CameraMode::PAN_ZOOM, "自由态下 2D 交互必须被接受");
+        assert_eq!(
+            f.mode2d(),
+            CameraMode::PAN_ZOOM,
+            "自由态下 2D 交互必须被接受"
+        );
         assert_eq!(f.mode3d(), CameraMode::Path);
     }
 
@@ -374,6 +375,14 @@ mod tests {
         sched.add_system(Phase::Input, CameraDriveSystem::new(Vec::new(), orbit));
         sched.init_resources();
         sched.run_frame(0.016);
-        assert_eq!(sched.resources().get::<BindingTable>().unwrap().bindings.len(), 1);
+        assert_eq!(
+            sched
+                .resources()
+                .get::<BindingTable>()
+                .unwrap()
+                .bindings
+                .len(),
+            1
+        );
     }
 }

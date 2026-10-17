@@ -3,3 +3,5 @@
 /.VSCodeCounter
 # 序列帧导出产物（生成物，不入库）
 /export
+/.vscode
+/.venv

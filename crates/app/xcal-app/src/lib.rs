@@ -12,7 +12,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use xcal_scene::Result;
+use xc_notion::{Rect2D, SurfaceFn};
+use xc_object::{
+    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
+    Camera3D, Camera3DHandle, Framing2D, Projection, Transform,
+};
 use xcal_egui::resources::UiConfig;
 use xcal_egui::systems::{AxesRefreshSystem, FunctionGraphRefreshSystem};
 use xcal_egui::{EguiSceneHost, TimeControlSystem};
@@ -22,6 +26,7 @@ use xcal_render::{
     MorphRecordSystem, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect, scene::Scene,
 };
 use xcal_render_backends::RenderContext;
+pub use xcal_scene::Result;
 use xcal_scene::animation::CameraEye;
 use xcal_scene::animation::{Binding, BindingApplySystem};
 use xcal_scene::camera_input::CameraInputSystem;
@@ -31,22 +36,18 @@ use xcal_scene::domain::{CameraMode, ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
 use xcal_scene::scene::components::{ContentTextureItem, Material3D, TextureHandle};
 use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
+use xcal_scene::types::Color32;
 use xcal_scene::{
-    ClockNode, Curve, DeferredApplySystem, DeferredCommands, DynamicObjects, ReplaySystem, SeekKind,
-    TimeState,
+    ClockNode, Curve, DeferredApplySystem, DeferredCommands, DynamicObjects, ReplaySystem,
+    SeekKind, TimeState,
 };
 use xcal_schedule::resource::Resources;
 use xcal_schedule::scheduler::{Phase, Scheduler};
-use xcal_scene::types::Color32;
-use xc_notion::{Rect2D, SurfaceFn};
-use xc_object::{
-    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
-    Camera3D, Camera3DHandle, Framing2D, Projection, Transform,
-};
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
 // `xc_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT}`。
 
+mod assembly;
 mod camera_drive;
 mod capability_demo;
 pub mod export;
@@ -70,13 +71,16 @@ use systems_3d::SceneRecord3DSystem;
 /// - `SceneChoice::CapabilityDemo`：N 线能力测试 demo（`capability_demo.rs`）——
 ///   最小场景，四项能力（Name/Group/Visibility/Opacity）各落一处；
 /// - `SceneChoice::ScriptStoryboard`：`--script` —— 镜头 2–5 由 **Lua 脚本**编排
-///   （`xcal-script`，装配期产出 `SceneScript`），与手写版等价。
+///   （`xc-vm-lua`，装配期产出 `SceneScript`），与手写版等价；
+/// - `SceneChoice::PythonStoryboard`：`--python` —— 同一分镜由 **Python 脚本**编排
+///   （`xc-vm-py`，默认装配的一部分），与手写版 / Lua 版等价。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SceneChoice {
     #[default]
     Storyboard,
     CapabilityDemo,
     ScriptStoryboard,
+    PythonStoryboard,
 }
 
 pub struct App {
@@ -94,13 +98,9 @@ pub struct App {
 fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
     let mut cameras = Vec::new();
     scene.for_each::<Framing2D>(|id, _| cameras.push(id));
-    cameras
-        .first()
-        .copied()
-        .map(Camera2DHandle)
-        .ok_or_else(|| {
-            Error::InitializationError("场景没有 2D 相机对象（缺少 Framing2D）".to_string())
-        })
+    cameras.first().copied().map(Camera2DHandle).ok_or_else(|| {
+        Error::InitializationError("场景没有 2D 相机对象（缺少 Framing2D）".to_string())
+    })
 }
 
 /// **唯一的 System 注册点**（`App::new` 与回归测试共用）。
@@ -323,32 +323,74 @@ impl App {
                 // N 线能力测试 demo：最小场景（两条曲线 + 一个对照组）。
                 // 默认**不隐藏任何组**（全可见）⇒ 看得见 `cos` 淡出（N4）；
                 // 组控制（N2）由 `capability_demo` 的测试与 GPU 用例证明。
-                eprintln!("[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）");
+                eprintln!(
+                    "[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）"
+                );
                 let d = capability_demo::build(&mut scene);
                 (d.forest, d.bindings, d.camera, d.group_visibility)
             }
             SceneChoice::ScriptStoryboard => {
-                // 全部 6 个镜头由 **Lua 脚本**编排（装配期一次），宿主只负责
-                // "注入 scene / content 两个 Service → 调 run → commit"。
+                // 全部 6 个镜头由 **Lua 脚本**编排（装配期一次）。App 显式声明
+                // 节点（scene / content / lua），Broker 负责校验、排序与注入。
                 // 与硬编码版的等价性由 `xcal-app` 的 `script_storyboard_matches_hardcoded` 锁定。
-                let host =
-                    xcal_script::ScriptHost::with_engine(Arc::clone(&engine)).map_err(|e| {
-                        Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
-                    })?;
-                let script = host.run(xcal_script::STORYBOARD_LUA).map_err(|e| {
-                    Error::InitializationError(format!("Lua 分镜执行失败：{e}"))
-                })?;
+                let assembly = assembly::assemble(Arc::clone(&engine))
+                    .map_err(|e| Error::InitializationError(format!("脚本 VM 装配失败：{e}")))?;
+                let script = assembly
+                    .run_script(assembly::STORYBOARD_LUA)
+                    .map_err(|e| Error::InitializationError(format!("Lua 分镜执行失败：{e}")))?;
                 eprintln!(
                     "[xcal-app] 场景 = Lua 脚本分镜（{} 个对象，{}s）",
                     script.len(),
                     script.duration()
                 );
-                let recipe = script.commit(&mut scene).map_err(|e| {
-                    Error::InitializationError(format!("脚本 commit 失败：{e}"))
-                })?;
+                let recipe = script
+                    .commit(&mut scene)
+                    .map_err(|e| Error::InitializationError(format!("脚本 commit 失败：{e}")))?;
                 // **不能假设第 0 个句柄是相机**：脚本先建坐标轴容器。
                 let camera = find_camera2d(&scene)?;
-                (recipe.forest, recipe.bindings, camera, GroupVisibility::default())
+                (
+                    recipe.forest,
+                    recipe.bindings,
+                    camera,
+                    GroupVisibility::default(),
+                )
+            }
+            SceneChoice::PythonStoryboard => {
+                #[cfg(not(feature = "python"))]
+                {
+                    return Err(Error::InitializationError(
+                        "Python 适配器未启用（编译时关闭了 python feature）".to_string(),
+                    ));
+                }
+                #[cfg(feature = "python")]
+                {
+                    // 同一分镜由 **Python 脚本**编排。与硬编码版的等价性由
+                    // `python_storyboard_matches_hardcoded` 锁定。
+                    let assembly = assembly::assemble(Arc::clone(&engine)).map_err(|e| {
+                        Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
+                    })?;
+                    let script = assembly
+                        .run_python_script(assembly::STORYBOARD_PY)
+                        .map_err(|e| {
+                            Error::InitializationError(format!("Python 分镜执行失败：{e}"))
+                        })?;
+                    eprintln!(
+                        "[xcal-app] 场景 = Python 脚本分镜（{} 个对象，{}s）",
+                        script.len(),
+                        script.duration()
+                    );
+                    let recipe = script.commit(&mut scene).map_err(|e| {
+                        Error::InitializationError(format!("脚本 commit 失败：{e}"))
+                    })?;
+                    // 与 Lua 版相同：不能假设第 0 个句柄是相机。
+                    let camera = find_camera2d(&scene)?;
+                    (
+                        recipe.forest,
+                        recipe.bindings,
+                        camera,
+                        GroupVisibility::default(),
+                    )
+                }
             }
         };
 
@@ -528,12 +570,12 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xc_object::{Camera2DHandle, Framing2D};
+    use xcal_scene::ClockForest;
     use xcal_scene::animation::{BindingTable, Camera2DFraming, CameraEye, SeekKind};
     use xcal_scene::contract::object_id_of;
     use xcal_scene::domain::CameraMode;
-    use xcal_scene::ClockForest;
     use xcal_scene::{AnimValue, Interp};
-    use xc_object::{Camera2DHandle, Framing2D};
 
     /// **回归（实测踩过）**：整张 System 图的**注册 + 运行一帧**都不得冲突。
     ///
@@ -672,13 +714,13 @@ mod tests {
     /// 之前（破坏相位顺序），帧 N 就会有像素 ⇒ 本用例 RED。
     #[test]
     fn deferred_spawn_pixels_appear_next_frame() {
+        use xc_notion::Transform2D;
+        use xc_object::{Circle, Framing2D, spawn_camera2d};
         use xcal_render::{DrawQueue, MeasureSpace, SceneRecordSystem};
         use xcal_render_backends::{RenderContext, WgpuBackend2D};
         use xcal_scene::contract::WorldScene;
         use xcal_scene::types::Rect2D;
         use xcal_scene::{DeferredApplySystem, DeferredCommands, DynamicObjects};
-        use xc_notion::Transform2D;
-        use xc_object::{Circle, Framing2D, spawn_camera2d};
 
         let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
             .expect("headless GPU 上下文");
@@ -688,7 +730,8 @@ mod tests {
         let mut world = hecs::World::new();
         let camera = {
             let mut ws = WorldScene::new(&mut world);
-            spawn_camera2d(&mut ws, Framing2D::new(glam::Vec2::ZERO, 25.0)).expect("Framing2D 已登记")
+            spawn_camera2d(&mut ws, Framing2D::new(glam::Vec2::ZERO, 25.0))
+                .expect("Framing2D 已登记")
         };
 
         let view_rect = Rect2D::new(
@@ -716,12 +759,7 @@ mod tests {
             let queue = sched.resources().get::<DrawQueue>().expect("DrawQueue");
             backend.begin_frame_at(*g);
             for cmd in queue.commands() {
-                backend.push(
-                    &cmd.shape,
-                    &Transform2D::identity(),
-                    &cmd.style,
-                    cmd.z.0,
-                );
+                backend.push(&cmd.shape, &Transform2D::identity(), &cmd.style, cmd.z.0);
             }
             let mut enc = ctx
                 .device()
@@ -791,7 +829,10 @@ mod tests {
         clear_queue(&mut sched);
         sched.run_frame(0.0);
         let lit_after_enqueue = count_lit(&render(&sched, &mut backend, &ctx, &g));
-        assert!(lit_after_enqueue > 0, "延迟 despawn 本帧仍可见（FrameEnd 才删）");
+        assert!(
+            lit_after_enqueue > 0,
+            "延迟 despawn 本帧仍可见（FrameEnd 才删）"
+        );
         clear_queue(&mut sched);
         sched.run_frame(0.0);
         let lit_gone = count_lit(&render(&sched, &mut backend, &ctx, &g));
@@ -835,10 +876,10 @@ mod tests {
 
     /// 逐组件指纹（类型 + 值；浮点量化）。
     fn object_fingerprint(scene: &Scene, id: xcal_scene::contract::ObjectId) -> String {
+        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
+        use xcal_render::{FillSolid, StrokeSolid};
         use xcal_scene::contract::SceneRead;
         use xcal_scene::scene::components::Reveal;
-        use xcal_render::{FillSolid, StrokeSolid};
-        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
 
         let mut parts: Vec<String> = Vec::new();
         if let Some(text) = scene.with::<Axes2D, _>(id, |a| {
@@ -858,18 +899,23 @@ mod tests {
             parts.push(text);
         }
         if let Some(text) = scene.with::<Framing2D, _>(id, |f| {
-            format!("frame({},{},{})", qf(f.center.x), qf(f.center.y), qf(f.scale))
+            format!(
+                "frame({},{},{})",
+                qf(f.center.x),
+                qf(f.center.y),
+                qf(f.scale)
+            )
         }) {
             parts.push(text);
         }
-        if let Some(text) = scene.with::<Reveal, _>(id, |r| {
-            format!("reveal({})", path_bounds(&r.path))
-        }) {
+        if let Some(text) =
+            scene.with::<Reveal, _>(id, |r| format!("reveal({})", path_bounds(&r.path)))
+        {
             parts.push(text);
         }
-        if let Some(text) = scene.with::<ObjectPath, _>(id, |p| {
-            format!("path({})", path_bounds(&p.0))
-        }) {
+        if let Some(text) =
+            scene.with::<ObjectPath, _>(id, |p| format!("path({})", path_bounds(&p.0)))
+        {
             parts.push(text);
         }
         if let Some(text) = scene.with::<Arrow, _>(id, |a| {
@@ -885,8 +931,7 @@ mod tests {
         }) {
             parts.push(text);
         }
-        if let Some(text) = scene.with::<FillSolid, _>(id, |f| format!("fill({})", rgba(f.color)))
-        {
+        if let Some(text) = scene.with::<FillSolid, _>(id, |f| format!("fill({})", rgba(f.color))) {
             parts.push(text);
         }
         if let Some(text) = scene.with::<StrokeSolid, _>(id, |s| {
@@ -909,9 +954,9 @@ mod tests {
 
     /// 故事板对象（创建顺序 = `ObjectId.index` 升序；无 despawn）。
     fn storyboard_ids(scene: &Scene) -> Vec<xcal_scene::contract::ObjectId> {
+        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
         use xcal_scene::contract::{ObjectId, SceneRead};
         use xcal_scene::scene::components::Reveal;
-        use xc_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
 
         let mut ids: Vec<ObjectId> = Vec::new();
         scene.for_each::<Axes2D>(|id, _| ids.push(id));
@@ -964,11 +1009,10 @@ mod tests {
         let sb = crate::storyboard::build(&mut scene_a, &engine_a);
 
         // 脚本版：同一个 placeholder 引擎（App 侧真实路径用 Typst 引擎）。
-        let host =
-            xcal_script::ScriptHost::with_engine(std::sync::Arc::new(placeholder_engine()))
-                .expect("脚本宿主装配成功（scene + content）");
-        let script = host
-            .run(xcal_script::STORYBOARD_LUA)
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 VM 装配成功（scene + content + lua）");
+        let script = assembly
+            .run_script(crate::assembly::STORYBOARD_LUA)
             .expect("Lua 分镜执行成功");
         let mut scene_b = Scene::new();
         let recipe = script.commit(&mut scene_b).expect("commit");
@@ -986,10 +1030,7 @@ mod tests {
             .iter()
             .map(|id| object_fingerprint(&scene_b, *id))
             .collect();
-        assert_eq!(
-            fingerprints_a, fingerprints_b,
-            "组件类型与值必须逐对象相等"
-        );
+        assert_eq!(fingerprints_a, fingerprints_b, "组件类型与值必须逐对象相等");
 
         let rows_a = binding_rows(&sb.forest, &sb.bindings, &ids_a);
         let rows_b = binding_rows(&recipe.forest, &recipe.bindings, &ids_b);
@@ -1003,19 +1044,95 @@ mod tests {
         );
     }
 
+    /// **D 线验收**：Python 版分镜与硬编码版逐对象、逐绑定相等。
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_storyboard_matches_hardcoded() {
+        use xc_prerender::placeholder_engine;
+
+        // 硬编码参考实现。
+        let mut scene_a = Scene::new();
+        let engine_a = placeholder_engine();
+        let sb = crate::storyboard::build(&mut scene_a, &engine_a);
+
+        // Python 版：同一个 placeholder 引擎。
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("VM 装配成功（含 Python）");
+        let script = assembly
+            .run_python_script(crate::assembly::STORYBOARD_PY)
+            .expect("Python 分镜执行成功");
+        let mut scene_b = Scene::new();
+        let recipe = script.commit(&mut scene_b).expect("commit");
+
+        let ids_a = storyboard_ids(&scene_a);
+        let ids_b = storyboard_ids(&scene_b);
+        assert_eq!(ids_a.len(), ids_b.len(), "对象数必须一致");
+        assert_eq!(recipe.handles.len(), ids_b.len(), "句柄数 = 对象数");
+
+        let fingerprints_a: Vec<String> = ids_a
+            .iter()
+            .map(|id| object_fingerprint(&scene_a, *id))
+            .collect();
+        let fingerprints_b: Vec<String> = ids_b
+            .iter()
+            .map(|id| object_fingerprint(&scene_b, *id))
+            .collect();
+        assert_eq!(fingerprints_a, fingerprints_b, "组件类型与值必须逐对象相等");
+
+        let rows_a = binding_rows(&sb.forest, &sb.bindings, &ids_a);
+        let rows_b = binding_rows(&recipe.forest, &recipe.bindings, &ids_b);
+        assert_eq!(rows_a, rows_b, "时序 / 曲线 / target 必须全等");
+
+        eprintln!(
+            "[D-PY] 对象 {} / 绑定 {}",
+            fingerprints_a.len(),
+            rows_a.len()
+        );
+    }
+
+    /// **D+ 验收**：capability 是普通 Python 模块 —— `import xcal.scene` 可用。
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_script_can_import_xcal_modules() {
+        use xc_prerender::placeholder_engine;
+
+        let assembly =
+            crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+                .expect("装配成功");
+        let script = assembly
+            .run_python_script(
+                r#"
+import xcal
+import xcal.scene as scene2
+from xcal import Circle, scene
+from xcal.scene import spawn
+
+assert xcal.scene is scene2
+assert scene.spawn is spawn
+
+scene.spawn([Circle(x=0.0, y=0.0, r=1.0)])
+scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
+"#,
+            )
+            .expect("Python import 脚本成功");
+
+        let mut scene = Scene::new();
+        let recipe = script.commit(&mut scene).expect("commit");
+        assert_eq!(recipe.handles.len(), 2);
+    }
+
     /// 回归（本次踩过）：**相机不能按"第 0 个句柄"取** —— 脚本先建坐标轴。
     ///
     /// 判据：按 `Framing2D` 组件找到唯一的 2D 相机，且它不是第 0 个对象。
     #[test]
     fn script_camera_is_found_by_framing_component() {
-        use xcal_scene::contract::SceneRead;
         use xc_prerender::placeholder_engine;
+        use xcal_scene::contract::SceneRead;
 
-        let host =
-            xcal_script::ScriptHost::with_engine(std::sync::Arc::new(placeholder_engine()))
-                .expect("装配成功");
-        let script = host
-            .run(xcal_script::STORYBOARD_LUA)
+        let assembly =
+            crate::assembly::assemble(std::sync::Arc::new(placeholder_engine())).expect("装配成功");
+        let script = assembly
+            .run_script(crate::assembly::STORYBOARD_LUA)
             .expect("Lua 分镜执行成功");
         let mut scene = Scene::new();
         let recipe = script.commit(&mut scene).expect("commit");
@@ -1031,6 +1148,87 @@ mod tests {
             "找到的必须是初始取景的 2D 相机"
         );
     }
+
+    // ─── B4：Python 双向对称性 ────────────────────────────────────────
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_lua_symmetry() {
+        use std::sync::Arc;
+        use xc_object::Circle as NativeCircle;
+        use xc_prerender::placeholder_engine;
+        use xcal_scene::contract::SceneRead;
+        use xcal_scene::scene::components::Reveal;
+
+        let assembly = crate::assembly::assemble(Arc::new(placeholder_engine()))
+            .expect("Python + Lua 装配成功");
+        let report = assembly.broker.plan().validate().expect("装配图合法");
+        assert!(
+            report.order.iter().any(|name| name == "python"),
+            "python 节点必须参与装配"
+        );
+
+        let script = assembly
+            .run_script(
+                r#"
+                local data = python.linspace(-1.0, 1.0, 5)
+                local pts = {}
+                for i = 1, #data do
+                    pts[i] = Vec2 { x = (i - 1) * 0.5, y = data[i] }
+                end
+                scene.spawn({ Reveal { points = pts, closed = false } })
+                python.make_dot(2.0, 3.0, 0.5)
+                "#,
+            )
+            .expect("Lua 双向脚本成功");
+
+        let mut scene = Scene::new();
+        let recipe = script.commit(&mut scene).expect("commit");
+        assert_eq!(recipe.handles.len(), 2, "Lua 一个 + Python 一个");
+
+        // Lua 侧：Python 的 linspace 数据真的进了 Reveal（y 范围 [-1, 1]）。
+        let mut bounds = None;
+        scene.for_each::<Reveal>(|_, reveal| {
+            bounds = reveal.path.compute_bounds();
+        });
+        let bounds = bounds.expect("Reveal 有包围盒");
+        assert!((bounds.min.y + 1.0).abs() < 1e-4);
+        assert!((bounds.max.y - 1.0).abs() < 1e-4);
+
+        // Python 侧：经注入的 scene.* 建出的圆。
+        let mut circles = Vec::new();
+        scene.for_each::<NativeCircle>(|_, circle| {
+            circles.push(*circle);
+        });
+        assert_eq!(circles.len(), 1);
+        assert!((circles[0].0.center.x - 2.0).abs() < 1e-4);
+        assert!((circles[0].0.center.y - 3.0).abs() < 1e-4);
+        assert!((circles[0].0.radius - 0.5).abs() < 1e-4);
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_is_optional() {
+        use std::sync::Arc;
+        use xc_prerender::placeholder_engine;
+
+        // 描述层：未挂 python 节点时 optional 缺失只记账、不阻断。
+        let report = crate::assembly::plan(false)
+            .validate()
+            .expect("optional 缺失可装配");
+        assert!(
+            report
+                .optional_missing
+                .iter()
+                .all(|req| req.service == "python"),
+            "缺失项必须全部来自 python"
+        );
+        assert!(!report.optional_missing.is_empty());
+
+        // 默认装配（python 是默认 feature）包含 python 节点，Lua 侧能看到 python 表。
+        let assembly = crate::assembly::assemble(Arc::new(placeholder_engine())).expect("装配成功");
+        assert!(!assembly.lua.registered_global_names("python").is_empty());
+    }
 }
 
 /// **T1 / T2 / T3 的 GPU 像素级验收**（计划 §2.4 / §3.4 / §4.4）。
@@ -1039,13 +1237,13 @@ mod tests {
 /// **不得只靠 System / 队列链路断言**。
 #[cfg(test)]
 mod t_capabilities_gpu {
+    use xc_notion::{Rect2D, Transform2D, Vec2};
+    use xc_object::{Camera2D, Transform};
     use xcal_render::components::{Arrow, Circle, Rect};
     use xcal_render::{DrawQueue, FillSolid, Opacity, StrokeSolid, record_scene_tagged};
     use xcal_render_backends::{Frame2DGeometry, RenderContext, WgpuBackend2D};
     use xcal_scene::contract::{GroupId, GroupVisibility, Visibility, WorldView};
     use xcal_scene::domain::LayerId;
-    use xc_notion::{Rect2D, Transform2D, Vec2};
-    use xc_object::{Camera2D, Transform};
 
     /// 离屏尺寸（紧凑像素，行距 = `W * 4`；目标格式字节序，默认 BGRA）。
     const W: u32 = 160;
@@ -1184,7 +1382,10 @@ mod t_capabilities_gpu {
         let (a, b) = (render_visible(&base), render_visible(&moved));
         let (ca, cb) = (centroid_x(&a), centroid_x(&b));
         eprintln!("[T1-GPU] 位移：重心 x {ca:.2} → {cb:.2}（期望 +{SCALE}）");
-        assert!((ca - 80.0).abs() < 2.0, "基准圆心应在屏幕中心 80，实际 {ca}");
+        assert!(
+            (ca - 80.0).abs() < 2.0,
+            "基准圆心应在屏幕中心 80，实际 {ca}"
+        );
         assert!(
             (cb - ca - SCALE).abs() < 2.0,
             "右移 1 世界单位应位移 {SCALE}px，实际 {}",
@@ -1213,10 +1414,7 @@ mod t_capabilities_gpu {
         );
         eprintln!("[T1-GPU] 缩放：亮像素 {n0} → {n1}（期望约 ×4）");
         assert!(n0 > 0, "基准圆必须有像素");
-        assert!(
-            n1 > n0 * 2,
-            "scale = 2 ⇒ 覆盖面积应显著增大（{n0} → {n1}）"
-        );
+        assert!(n1 > n0 * 2, "scale = 2 ⇒ 覆盖面积应显著增大（{n0} → {n1}）");
     }
 
     /// **T1-4**：绕 Z 旋转 45° ⇒ 包围盒变化正确（矩形从 40×10px 变成约 35×35px）。
@@ -1277,7 +1475,10 @@ mod t_capabilities_gpu {
         assert!(n_fill > 0, "实心箭头必须有像素");
         assert!(n_stroke > 0, "空心箭头必须有像素");
         assert!(at(&px_fill, 75, 60), "实心箭头的杆内部必须是实心");
-        assert!(!at(&px_stroke, 75, 60), "空心箭头的杆内部必须是空的（只有轮廓）");
+        assert!(
+            !at(&px_stroke, 75, 60),
+            "空心箭头的杆内部必须是空的（只有轮廓）"
+        );
     }
 
     /// **T2-3**：方向可证伪 —— 头底（最宽列）落在 `to` 一侧。
@@ -1317,11 +1518,7 @@ mod t_capabilities_gpu {
 
         // 组开关隐藏 ⇒ 完全消失。
         let mut grouped = hecs::World::new();
-        grouped.spawn((
-            arrow,
-            white_fill(),
-            Visibility::of_group(g),
-        ));
+        grouped.spawn((arrow, white_fill(), Visibility::of_group(g)));
         let mut hidden = GroupVisibility::new();
         hidden.hide(g);
         let n_hidden = count_lit(&render(&grouped, &hidden));

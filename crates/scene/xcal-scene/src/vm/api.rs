@@ -9,14 +9,13 @@
 // `content.*` 表与 `Circle { ... }` / `Curve.Phase { ... }` 构造器由
 // `binding.rs` 按 `TypeSpec` **自动生成**。
 
-use xcal_scene::animation::TargetKind;
+use crate::animation::TargetKind;
+use crate::vm::types::{
+    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, Formula, PathList, PathShape, Reveal, RevealPath,
+    Stroke, Text, Transform,
+};
 use xc_vm::Handle;
 use xc_vm_macro::capability;
-
-use crate::types::{
-    Axes2D, Arrow, Camera2D, Circle, Curve, Fill, Formula, PathList, PathShape, Reveal,
-    RevealPath, Stroke, Text, Transform,
-};
 
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(

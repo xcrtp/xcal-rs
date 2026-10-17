@@ -5,7 +5,7 @@
 //   `TypeSpec` + 双向转换 + `IntoVmTypeName`；
 // - 宿主侧 Service 把它们的值转成场景原语（`xc_object` / `xc_time` …）。
 
-use xcal_scene::{AnimValue, Curve as NativeCurve, Interp};
+use crate::{AnimValue, Curve as NativeCurve, Interp};
 use xc_vm::Handle;
 use xc_vm_macro::VmType;
 
@@ -134,9 +134,7 @@ impl xc_vm::VmType for PathList {
         <Vec<Path> as xc_vm::VmType>::to_vm_value(&self.0)
     }
 
-    fn from_vm_value(
-        value: &xc_vm::VmValue,
-    ) -> Result<Self, xc_vm::VmValueError> {
+    fn from_vm_value(value: &xc_vm::VmValue) -> Result<Self, xc_vm::VmValueError> {
         <Vec<Path> as xc_vm::VmType>::from_vm_value(value).map(Self)
     }
 }

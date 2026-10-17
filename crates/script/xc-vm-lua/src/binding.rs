@@ -1,33 +1,24 @@
-// binding.rs — **由 `SceneApi::calls()` + `TypeSpec` 生成 Lua 绑定**（V2/V4）。
-//
-// 这里没有"每个函数一个手写闭包"：
+// binding.rs — **Lua 适配层**：通用驱动（`xc-vm-binding`）+ 只属于 Lua 的 codec。
 //
 // ```text
-// SceneApi::calls()  →  name + FnIo（形参名 / TypeSpec） + 类型擦除 call
-//        │
-//        ├─ 每个函数 → 一个**通用** Lua 闭包（按 TypeSpec 转换参数/返回值）
-//        └─ 每个命名类型 → 自动注册构造器：
-//              struct + 「单参数 + 返回句柄」的构造函数 ⇒ `Circle { ... }` 直接得句柄
-//              其它 struct                                  ⇒ `Color { ... }` 得值
-//              enum                                          ⇒ `Curve.Phase { ... }`
+// C::calls() ──► BindingPlan（语言无关）
+//                      │
+//                      ├─ 每个函数 → Lua 闭包 → invoke(&LuaCodec, ...)
+//                      └─ 每个类型 → Lua 构造器（组件 / 值 / 枚举）
 // ```
 //
-// 新增一个 capability 函数 ⇒ Lua 侧自动可用（无需改本文件）。
-// 新增一个类型 ⇒ 构造器自动出现（由 schema 驱动）。
+// 语言无关的部分（计划、类型收集、调用编排、JSON 文档）在 `xc-vm-binding`；
+// 本文件只保留 `lua_to_vm` / `vm_to_lua` 与 Lua 闭包创建。
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mlua::{AnyUserData, Lua, MultiValue, Table, UserData, Value};
-use xc_vm::{
-    Capability, ErasedFn, Field, Handle, ScalarKind, ScalarValue, TypeSpec, Vm, VmValue,
-};
+use xc_vm::{Capability, ErasedFn, Field, ScalarKind, ScalarValue, TypeSpec, Vm, VmValue};
+use xc_vm_binding::{BindingPlan, ValueCodec, short_name};
 
-// 绑定层不引用具体 capability 类型：泛型 `C: Capability` 由调用方指定。
-
-/// Lua 侧的**不透明句柄**令牌。
+/// Lua 侧的不透明句柄令牌。
 #[derive(Clone, Copy, Debug)]
-pub struct LuaHandle(pub Handle);
+pub struct LuaHandle(pub xc_vm::Handle);
 
 impl UserData for LuaHandle {}
 
@@ -37,22 +28,42 @@ pub struct LuaVmValue(pub VmValue);
 
 impl UserData for LuaVmValue {}
 
-/// 注册一个 capability 的全局表（`scene` / `content`）与全部类型构造器。
-///
-/// 完全由 `C::calls()` 驱动：新增 capability 函数 ⇒ 无需改本文件。
+/// 注册一个 capability 的全局表（`scene` / `content` / `python`）与类型构造器。
 pub(crate) fn bind<C: Capability<'static>>(
     lua: &Lua,
     global_name: &str,
     service: Arc<dyn Vm>,
 ) -> mlua::Result<()> {
-    let calls = C::calls();
+    let plan = BindingPlan::new(C::calls());
     let table = lua.create_table()?;
-    for item in calls {
+    for item in plan.calls {
         register_function(lua, &table, *item, Arc::clone(&service))?;
     }
     lua.globals().set(global_name, table)?;
-    register_types(lua, calls, service)?;
+    register_types(lua, &plan, service)?;
     Ok(())
+}
+
+/// Lua 值 ↔ `VmValue`（**本文件唯一的语言特定逻辑**）。
+struct LuaCodec<'a> {
+    lua: &'a Lua,
+}
+
+impl ValueCodec for LuaCodec<'_> {
+    type Value = Value;
+    type Error = mlua::Error;
+
+    fn to_vm(&self, value: &Value, spec: &'static TypeSpec) -> mlua::Result<VmValue> {
+        lua_to_vm(value, spec)
+    }
+
+    fn from_vm(&self, value: &VmValue) -> mlua::Result<Value> {
+        vm_to_lua(self.lua, value)
+    }
+
+    fn error(&self, message: String) -> mlua::Error {
+        mlua::Error::RuntimeError(message)
+    }
 }
 
 fn register_function(
@@ -62,59 +73,31 @@ fn register_function(
     service: Arc<dyn Vm>,
 ) -> mlua::Result<()> {
     let name = item.signature.name;
-    let io = item.io;
-    let call = item.call;
 
     let func = lua.create_function(move |lua, args: MultiValue| {
-        if args.len() != io.params.len() {
-            return Err(mlua::Error::RuntimeError(format!(
-                "`{name}` 需要 {} 个参数，实际 {}",
-                io.params.len(),
-                args.len()
-            )));
-        }
-        let mut values = Vec::with_capacity(args.len());
-        for (value, param) in args.iter().zip(io.params) {
-            values.push(lua_to_vm(value, param.ty)?);
-        }
-        let out = call(&*service, &values).map_err(mlua::Error::external)?;
-        vm_to_lua(lua, &out)
+        let values: Vec<Value> = args.into_iter().collect();
+        let codec = LuaCodec { lua };
+        xc_vm_binding::invoke(&codec, &service, item, &values)
     })?;
     table.set(name, func)
 }
 
-/// 自动注册所有**可达类型**的构造器（从 `calls()` 的形参 / 返回类型递归收集）。
-fn register_types(
-    lua: &Lua,
-    calls: &'static [ErasedFn],
-    service: Arc<dyn Vm>,
-) -> mlua::Result<()> {
-    let mut types: BTreeMap<&'static str, &'static TypeSpec> = BTreeMap::new();
-    for item in calls {
-        for param in item.io.params {
-            collect_types(param.ty, &mut types);
-        }
-        collect_types(item.io.ret, &mut types);
-    }
-
-    for (full_name, spec) in types {
-        if full_name == "()" {
-            continue;
-        }
+/// 自动注册所有可达类型的构造器（组件 / 值 / 枚举）。
+fn register_types(lua: &Lua, plan: &BindingPlan, service: Arc<dyn Vm>) -> mlua::Result<()> {
+    for (&full_name, &spec) in &plan.types {
         let lua_name = short_name(full_name);
         match spec {
             TypeSpec::Struct { name, fields } => {
                 let fields = *fields;
                 let type_name = *name;
-                match component_ctor(calls, type_name) {
+                match plan.component_ctor(type_name) {
                     // 组件：`Circle { ... }` ⇒ 调用宿主构造函数 ⇒ 句柄。
                     Some(ctor) => {
                         let call = ctor.call;
                         let svc = Arc::clone(&service);
                         let func = lua.create_function(move |lua, spec: Table| {
                             let value = table_to_vm(&spec, fields, type_name, None)?;
-                            let out =
-                                call(&*svc, &[value]).map_err(mlua::Error::external)?;
+                            let out = call(&*svc, &[value]).map_err(mlua::Error::external)?;
                             vm_to_lua(lua, &out)
                         })?;
                         lua.globals().set(lua_name, func)?;
@@ -135,7 +118,6 @@ fn register_types(
                     let variant_name = variant.name;
                     let fields = variant.fields;
                     if fields.is_empty() {
-                        // unit 变体是**值**（`Target.RevealRange`），不是函数。
                         table.set(
                             variant_name,
                             LuaVmValue(VmValue::Enum(type_name, variant_name, Vec::new())),
@@ -154,53 +136,6 @@ fn register_types(
         }
     }
     Ok(())
-}
-
-/// 「单参数是该结构体 + 返回不透明句柄」的 capability 视为组件构造器。
-pub(crate) fn component_ctor(
-    calls: &'static [ErasedFn],
-    type_name: &'static str,
-) -> Option<ErasedFn> {
-    calls.iter().copied().find(|item| {
-        item.io.params.len() == 1
-            && matches!(
-                item.io.params[0].ty,
-                TypeSpec::Struct { name, .. } if *name == type_name
-            )
-            && item.io.ret.is_opaque()
-    })
-}
-
-/// 递归收集命名类型（struct / enum）。
-pub(crate) fn collect_types(
-    spec: &'static TypeSpec,
-    out: &mut BTreeMap<&'static str, &'static TypeSpec>,
-) {
-    match spec {
-        TypeSpec::Struct { name, fields } => {
-            if *name != "()" {
-                out.insert(*name, spec);
-            }
-            for field in *fields {
-                collect_types(field.ty, out);
-            }
-        }
-        TypeSpec::Enum { name, variants } => {
-            out.insert(*name, spec);
-            for variant in *variants {
-                for field in variant.fields {
-                    collect_types(field.ty, out);
-                }
-            }
-        }
-        TypeSpec::Array { elem } => collect_types(elem, out),
-        TypeSpec::Scalar(_) | TypeSpec::Opaque(_) => {}
-    }
-}
-
-/// `"xcal.Color"` → `"Color"`（Lua 侧全局名用短名）。
-pub(crate) fn short_name(full: &'static str) -> &'static str {
-    full.rsplit(|c| c == '.' || c == ':').next().unwrap_or(full)
 }
 
 fn table_to_vm(
@@ -285,7 +220,7 @@ fn wrapped_value(value: &Value) -> Option<VmValue> {
         .map(|wrapped| wrapped.0.clone())
 }
 
-fn handle_of(value: &AnyUserData) -> mlua::Result<Handle> {
+fn handle_of(value: &AnyUserData) -> mlua::Result<xc_vm::Handle> {
     value
         .borrow::<LuaHandle>()
         .map(|handle| handle.0)
@@ -346,9 +281,7 @@ fn vm_to_lua(lua: &Lua, value: &VmValue) -> mlua::Result<Value> {
             ScalarValue::Bool(v) => Value::Boolean(*v),
             ScalarValue::String(v) => Value::String(lua.create_string(v)?),
         }),
-        VmValue::Opaque(handle) => {
-            Ok(Value::UserData(lua.create_userdata(LuaHandle(*handle))?))
-        }
+        VmValue::Opaque(handle) => Ok(Value::UserData(lua.create_userdata(LuaHandle(*handle))?)),
         VmValue::Struct("()", _) => Ok(Value::Nil),
         VmValue::Struct(..) | VmValue::Enum(..) => Ok(Value::UserData(
             lua.create_userdata(LuaVmValue(value.clone()))?,

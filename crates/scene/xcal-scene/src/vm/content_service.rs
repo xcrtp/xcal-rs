@@ -21,15 +21,11 @@ use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use xc_content::{ContentIR, StyledPath};
-use xc_notion::{
-    Color32 as NotionColor, Path2D, Transform2D, Vec2 as NotionVec2,
-};
+use xc_notion::{Color32 as NotionColor, Path2D, Transform2D, Vec2 as NotionVec2};
 use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
-use xc_vm::{
-    FunctionId, Handle, HandleTable, QualifiedName, RegistryVm, Vm, VmError, VmId,
-};
+use xc_vm::{FunctionId, Handle, HandleTable, QualifiedName, RegistryVm, Vm, VmError, VmId};
 
-use crate::types::{Color, Formula, Path, PathList, Text};
+use crate::vm::types::{Color, Formula, Path, PathList, Text};
 
 /// 注入时使用的 Service 名。
 pub const CONTENT_SERVICE_NAME: &str = "content";
@@ -200,8 +196,8 @@ fn convert(
     } else {
         1.0
     };
-    let transform = Transform2D::scale(NotionVec2::splat(scale))
-        .compose(Transform2D::translate(world_pos));
+    let transform =
+        Transform2D::scale(NotionVec2::splat(scale)).compose(Transform2D::translate(world_pos));
 
     let mut built: Vec<(Path2D, Color, f32)> = Vec::new();
     for item in &ir.items {
@@ -213,8 +209,7 @@ fn convert(
                 continue;
             }
             let closed = is_closed(&sub);
-            let world: Vec<NotionVec2> =
-                sub.iter().map(|p| transform.apply_point(*p)).collect();
+            let world: Vec<NotionVec2> = sub.iter().map(|p| transform.apply_point(*p)).collect();
             built.push((
                 Path2D::from_polyline(&world, closed),
                 to_color(color),
@@ -241,9 +236,7 @@ fn convert(
 fn stroke_style(item: &StyledPath, scale: f32) -> Option<(NotionColor, f32)> {
     let default_w = DEFAULT_STROKE_WIDTH_PT * scale;
     match (&item.stroke, item.fill) {
-        (Some(stroke), _) if stroke.width > 0.0 => {
-            Some((stroke.color, stroke.width * scale))
-        }
+        (Some(stroke), _) if stroke.width > 0.0 => Some((stroke.color, stroke.width * scale)),
         (Some(stroke), _) => Some((stroke.color, default_w)),
         (None, Some(fill)) => Some((fill, default_w)),
         (None, None) => None,

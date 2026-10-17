@@ -16,14 +16,14 @@ use std::sync::Arc;
 use xcal_schedule::resource::Resources;
 use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use xcal_scene::scene::components::{Material3D, MeshGeometry};
-use xcal_scene::TimeState;
+use xc_object::{Camera2DHandle, Camera3D, Framing2D};
 use xcal_egui::resources::UiConfig;
 use xcal_render::ViewRect;
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::RenderContext;
-use xc_object::{Camera2DHandle, Camera3D, Framing2D};
+use xcal_scene::TimeState;
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
 
 /// 环形缓冲保留的帧耗时样本数（约 4 秒 @60fps）。
 const HISTORY_LEN: usize = 240;
