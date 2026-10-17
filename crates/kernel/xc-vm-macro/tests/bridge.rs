@@ -92,7 +92,9 @@ impl Vm for PluginVm {
 
 #[capability(namespace = "plugin")]
 struct PluginApi<'a> {
+    /// 推进 `dt` 秒，返回当前时刻。
     tick: fn(&'a dyn Vm, f32) -> f64,
+    /// 上一次看到的时刻。
     last_seen: fn(&'a dyn Vm) -> f64,
 }
 

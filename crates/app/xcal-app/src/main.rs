@@ -1,12 +1,19 @@
 use eframe::egui;
 use xcal_app::{App, SceneChoice};
 
-/// 2D 场景选择：`--demo`（或 `--capability-demo`）/ 环境变量 `XCAL_DEMO=1` ⇒ 能力 demo。
+/// 2D 场景选择：`--demo`（或 `--capability-demo`）/ 环境变量 `XCAL_DEMO=1` ⇒ 能力 demo；
+/// `--script` ⇒ 用 Lua 脚本编排最小分镜。
 ///
 /// 默认走 §1.1 分镜。用启动参数而非 UI 开关的原因见 `SceneChoice` 的文档
 /// （场景在装配期一次性建好，运行态重建需要尚未具备的生命周期设施）。
 fn scene_choice() -> SceneChoice {
-    let by_arg = std::env::args().any(|a| a == "--demo" || a == "--capability-demo");
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--script") {
+        return SceneChoice::ScriptStoryboard;
+    }
+    let by_arg = args
+        .iter()
+        .any(|a| a == "--demo" || a == "--capability-demo");
     let by_env = std::env::var("XCAL_DEMO").map(|v| v == "1").unwrap_or(false);
     if by_arg || by_env {
         SceneChoice::CapabilityDemo

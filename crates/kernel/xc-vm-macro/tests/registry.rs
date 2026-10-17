@@ -41,7 +41,9 @@ impl Vm for CounterVm {
 
 #[capability(namespace = "counter")]
 struct Counter<'a> {
+    /// 把计数加 `n`，返回新值。
     bump: fn(&'a dyn Vm, u32) -> u32,
+    /// 读当前计数。
     get: fn(&'a dyn Vm) -> u32,
 }
 
@@ -113,6 +115,7 @@ fn erased_only_functions_degrade_to_slow_path() {
 
     #[capability(namespace = "erased")]
     struct ErasedOnly<'a> {
+        /// 只有慢路径的常量函数。
         seven: fn(&'a dyn Vm) -> u32,
     }
 

@@ -46,7 +46,7 @@ use xc_scene_contract::{
 use xc_time::{ClockForest, Curve};
 
 use crate::animation::binding::BindingTable;
-use crate::animation::target::TargetCtor;
+use crate::animation::target::{TargetCtor, target_ctor_by_name};
 use crate::animation::timeline::Timeline;
 
 /// **Encoder 内的局部句柄**：声明期索引，`commit` 时才映射到 [`ObjectId`]。
@@ -154,6 +154,27 @@ impl SceneEncoder {
     pub fn parallel<T: TargetCtor>(&mut self, handle: Handle, curve: Curve) -> &mut Self {
         self.timeline.parallel_pending(curve, T::make, handle.0);
         self
+    }
+
+    /// 按 target **名字**录一段动画（脚本层入口：target 在 Lua 侧是字符串）。
+    ///
+    /// 名字 → 构造器复用持久化路径的集中表 [`target_ctor_by_name`]（该表因此获得
+    /// 第二个真实消费方）。未知名字 ⇒ 返回 `false`，且**不录制任何东西**。
+    pub fn animate_named(&mut self, handle: Handle, target: &str, curve: Curve, dur: f64) -> bool {
+        let Some((make, _)) = target_ctor_by_name(target) else {
+            return false;
+        };
+        self.timeline.play_pending(curve, make, handle.0, dur);
+        true
+    }
+
+    /// [`SceneEncoder::animate_named`] 的"与上一段同区间"版本。
+    pub fn parallel_named(&mut self, handle: Handle, target: &str, curve: Curve) -> bool {
+        let Some((make, _)) = target_ctor_by_name(target) else {
+            return false;
+        };
+        self.timeline.parallel_pending(curve, make, handle.0);
+        true
     }
 
     /// 推进时序游标（不产生节点）。

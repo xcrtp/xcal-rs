@@ -1,0 +1,25 @@
+[package]
+name = "xcal-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "第一个非原生 VM：Lua 脚本在装配期产出 SceneScript"
+
+[dependencies]
+# 双向对接的两端：`xc-vm`（VM 抽象）+ `xcal-scene`（场景脚本产物）。
+xc-vm = { path = "../../kernel/xc-vm" }
+xc-vm-macro = { path = "../../kernel/xc-vm-macro" }
+xcal-scene = { path = "../xcal-scene" }
+# 组件词汇（Circle / Framing2D / StrokeSolid / Path2D / Component）。
+xc-object = { path = "../../object/xc-object" }
+xc-notion = { path = "../../kernel/xc-notion" }
+xc-render-ir = { path = "../../kernel/xc-render-ir" }
+xc-scene-contract = { path = "../../kernel/xc-scene-contract" }
+
+# Lua 5.4 解释器**编进二进制**（vendored）⇒ 部署零运行时依赖。
+# 不开 async / send / serde：本轮不需要（最小 feature 集）。
+mlua = { version = "0.12", default-features = false, features = [
+    "lua54",
+    "vendored",
+] }
+serde_json.workspace = true

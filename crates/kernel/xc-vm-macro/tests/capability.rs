@@ -9,18 +9,23 @@ use xc_vm_macro::capability;
 
 #[capability(namespace = "math")]
 struct MathVm<'a> {
+    /// `sin(x)`。
     sin: fn(&'a dyn Vm, f32) -> f32,
+    /// `a + b`。
     add: fn(&'a dyn Vm, f32, f32) -> f32,
 }
 
 #[capability(namespace = "math")]
 struct IncompleteVm<'a> {
+    /// `sin(x)`。
     sin: fn(&'a dyn Vm, f32) -> f32,
+    /// 故意缺失的实现。
     missing: fn(&'a dyn Vm, f32) -> f32,
 }
 
 #[capability]
 struct ZeroVm<'a> {
+    /// 零参函数的答案。
     answer: fn(&'a dyn Vm) -> u32,
 }
 
@@ -132,6 +137,7 @@ struct Big(u32);
 
 #[capability(namespace = "demo")]
 struct BigVm<'a> {
+    /// 取出大类型的内部值。
     #[vm_type(param0 = "demo.Big", ret = "u32")]
     unwrap_big: fn(&'a dyn Vm, Big) -> u32,
 }
@@ -157,6 +163,7 @@ fn explicit_vm_type_annotations_are_used() {
 
 #[capability(namespace = "demo")]
 struct OverrideVm<'a> {
+    /// 返回类型名被显式覆盖。
     #[vm_type(ret = "custom.float")]
     f: fn(&'a dyn Vm, f32) -> f32,
 }

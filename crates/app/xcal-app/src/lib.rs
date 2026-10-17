@@ -40,8 +40,8 @@ use xcal_schedule::scheduler::{Phase, Scheduler};
 use xcal_scene::types::Color32;
 use xc_notion::{Rect2D, SurfaceFn};
 use xc_object::{
-    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
-    Camera3DHandle, Projection, Transform,
+    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
+    Camera3D, Camera3DHandle, Projection, Transform,
 };
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
@@ -68,12 +68,15 @@ use systems_3d::SceneRecord3DSystem;
 ///
 /// - `SceneChoice::Storyboard`（默认）：§1.1 六条分镜（`storyboard.rs`）；
 /// - `SceneChoice::CapabilityDemo`：N 线能力测试 demo（`capability_demo.rs`）——
-///   最小场景，四项能力（Name/Group/Visibility/Opacity）各落一处。
+///   最小场景，四项能力（Name/Group/Visibility/Opacity）各落一处；
+/// - `SceneChoice::ScriptStoryboard`：`--script` —— 镜头 2–5 由 **Lua 脚本**编排
+///   （`xcal-script`，装配期产出 `SceneScript`），与手写版等价。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SceneChoice {
     #[default]
     Storyboard,
     CapabilityDemo,
+    ScriptStoryboard,
 }
 
 pub struct App {
@@ -307,6 +310,29 @@ impl App {
                 eprintln!("[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）");
                 let d = capability_demo::build(&mut scene);
                 (d.forest, d.bindings, d.camera, d.group_visibility)
+            }
+            SceneChoice::ScriptStoryboard => {
+                // L5：镜头 2–5 由 **Lua 脚本**编排（装配期一次），宿主只负责
+                // "注入 Service → 调 run → commit"。等价性由 `xcal-script` 的用例锁定。
+                let host = xcal_script::ScriptHost::new().map_err(|e| {
+                    Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
+                })?;
+                let script = host.run(xcal_script::STORYBOARD_LUA).map_err(|e| {
+                    Error::InitializationError(format!("Lua 分镜执行失败：{e}"))
+                })?;
+                eprintln!(
+                    "[xcal-app] 场景 = Lua 脚本分镜（{} 个对象，{}s）",
+                    script.len(),
+                    script.duration()
+                );
+                let recipe = script.commit(&mut scene).map_err(|e| {
+                    Error::InitializationError(format!("脚本 commit 失败：{e}"))
+                })?;
+                // 脚本第 0 个对象是 2D 相机（与 `storyboard.lua` 的约定一致）。
+                let camera = Camera2DHandle(*recipe.handles.first().ok_or_else(|| {
+                    Error::InitializationError("脚本没有创建相机对象".to_string())
+                })?);
+                (recipe.forest, recipe.bindings, camera, GroupVisibility::default())
             }
         };
 

@@ -69,10 +69,13 @@ fn store() -> StoreVm {
 
 #[capability(namespace = "store")]
 struct Store<'a> {
+    /// 读句柄里的值。
     #[vm_type(ret = "Result<f32, VmError>")]
     get: fn(&'a dyn Vm, Handle) -> Result<f32, VmError>,
+    /// 句柄里的值加 `d`，返回新值。
     #[vm_type(ret = "Result<f32, VmError>")]
     add: fn(&'a dyn Vm, Handle, f32) -> Result<f32, VmError>,
+    /// 平方。
     square: fn(&'a dyn Vm, f32) -> f32,
 }
 

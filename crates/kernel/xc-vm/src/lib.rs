@@ -62,7 +62,7 @@ mod registry;
 mod type_name;
 mod vm;
 
-pub use capability::{Capability, CapabilityMeta, FnSig, Resolved};
+pub use capability::{Capability, CapabilityMeta, FnDoc, FnSig, Resolved};
 pub use error::VmError;
 pub use handle::{Handle, HandleTable, VmId};
 pub use inject::{

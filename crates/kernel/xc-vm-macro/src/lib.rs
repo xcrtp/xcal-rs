@@ -55,6 +55,8 @@ struct MetaArgs {
 struct FieldSpec {
     ident: Ident,
     vis: Visibility,
+    /// 字段上的 `///` 文档（拼成一段自由文本；缺失时为空串）。
+    description: String,
     /// 保留的非 `#[vm_type]` 属性（文档等）。
     attrs: Vec<syn::Attribute>,
     /// 规范化后的裸 fn 指针类型（第一个 `&dyn Vm` 形参由宏补上）。
@@ -210,31 +212,11 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
         }
     });
 
-    // ── signatures()：声明逐条对应（const 数组，顺序 = 字段顺序）────────
+    // ── signatures() / docs()：声明逐条对应（两个并行数组，顺序 = 字段顺序）──
     let sig_entries = specs.iter().map(|s| {
         let fname = LitStr::new(&s.ident.to_string(), s.ident.span());
-        let param_exprs: Vec<TokenStream2> = s
-            .params
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| match s.param_names.get(&i) {
-                Some(n) => {
-                    let lit = LitStr::new(n, ty.span());
-                    quote!(#lit)
-                }
-                None => quote!(<#ty as ::xc_vm::IntoVmTypeName>::NAME),
-            })
-            .collect();
-        let ret_expr = match &s.ret_name {
-            Some(n) => {
-                let lit = LitStr::new(n, s.ret.span());
-                quote!(#lit)
-            }
-            None => {
-                let ret = &s.ret;
-                quote!(<#ret as ::xc_vm::IntoVmTypeName>::NAME)
-            }
-        };
+        let param_exprs = param_name_exprs(s);
+        let ret_expr = ret_name_expr(s);
         quote! {
             ::xc_vm::FnSig {
                 namespace: #namespace_lit,
@@ -244,6 +226,46 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
             }
         }
     });
+
+    // 文档条目：`description` 来自字段上的 `///`（已编译成 `#[doc]` 属性）。
+    let doc_entries = specs.iter().map(|s| {
+        let fname = LitStr::new(&s.ident.to_string(), s.ident.span());
+        let description = LitStr::new(&s.description, s.ident.span());
+        let param_exprs = param_name_exprs(s);
+        let ret_expr = ret_name_expr(s);
+        quote! {
+            ::xc_vm::FnDoc {
+                namespace: #namespace_lit,
+                name: #fname,
+                description: #description,
+                params: &[#(#param_exprs),*],
+                ret: #ret_expr,
+            }
+        }
+    });
+
+    // 缺文档告警：有参数但没写 `///` ⇒ 编译期 warning（`//` 在编译期已丢失）。
+    // stable 上 proc-macro 不能直接发 warning，这里用"使用一个 deprecated 常量"实现。
+    let missing_doc_warnings = specs.iter().filter_map(|s| {
+        if s.params.is_empty() || !s.description.is_empty() {
+            return None;
+        }
+        let ident = format_ident!("__XC_VM_MISSING_DOC_{}_{}", name, s.ident);
+        let msg = format!(
+            "capability 函数 `{}` 缺少 `///` 文档（只有 `///` 会在编译期保留）",
+            s.ident
+        );
+        Some(quote! {
+            #[deprecated(note = #msg)]
+            #[allow(non_upper_case_globals)]
+            const #ident: () = ();
+            const _: () = #ident;
+        })
+    });
+
+    // 并行数组的**编译期长度断言**：`docs()` 与 `signatures()` 必须逐条对应。
+    let sigs_const = format_ident!("__XC_VM_SIGS_{}", name);
+    let docs_const = format_ident!("__XC_VM_DOCS_{}", name);
 
     // ── from_negotiated()：按序取回裸 fn 指针并写入字段 ──────────────────
     let inits = specs.iter().enumerate().map(|(i, s)| {
@@ -261,6 +283,22 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
             #(#struct_fields),*
         }
 
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        const #sigs_const: &[::xc_vm::FnSig] = &[#(#sig_entries),*];
+        #[doc(hidden)]
+        #[allow(non_upper_case_globals)]
+        const #docs_const: &[::xc_vm::FnDoc] = &[#(#doc_entries),*];
+
+        // 编译期断言：`docs()` 与 `signatures()` 是两个并行数组，长度必须一致
+        // （错位在编译期炸，不等到运行时）。
+        const _: () = ::core::assert!(
+            #sigs_const.len() == #docs_const.len(),
+            "`docs()` 与 `signatures()` 必须逐条对应（长度不等）"
+        );
+
+        #(#missing_doc_warnings)*
+
         impl #impl_generics #name #ty_generics #where_clause {
             #(#methods)*
 
@@ -272,12 +310,15 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
 
         impl #impl_generics ::xc_vm::Capability<#lt> for #name #ty_generics #where_clause {
             fn signatures() -> &'static [::xc_vm::FnSig] {
-                const SIGS: &[::xc_vm::FnSig] = &[#(#sig_entries),*];
-                SIGS
+                #sigs_const
             }
 
             fn meta() -> ::xc_vm::CapabilityMeta {
                 ::xc_vm::CapabilityMeta::new(#version_expr, #description_expr)
+            }
+
+            fn docs() -> &'static [::xc_vm::FnDoc] {
+                #docs_const
             }
 
             fn from_negotiated(
@@ -291,6 +332,57 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
             }
         }
     })
+}
+
+/// 参数类型名的生成表达式（显式标注优先，否则走 `IntoVmTypeName::NAME`）。
+fn param_name_exprs(s: &FieldSpec) -> Vec<TokenStream2> {
+    s.params
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| match s.param_names.get(&i) {
+            Some(n) => {
+                let lit = LitStr::new(n, ty.span());
+                quote!(#lit)
+            }
+            None => quote!(<#ty as ::xc_vm::IntoVmTypeName>::NAME),
+        })
+        .collect()
+}
+
+/// 返回类型名的生成表达式（显式标注优先，否则走 `IntoVmTypeName::NAME`）。
+fn ret_name_expr(s: &FieldSpec) -> TokenStream2 {
+    match &s.ret_name {
+        Some(n) => {
+            let lit = LitStr::new(n, s.ret.span());
+            quote!(#lit)
+        }
+        None => {
+            let ret = &s.ret;
+            quote!(<#ret as ::xc_vm::IntoVmTypeName>::NAME)
+        }
+    }
+}
+
+/// 从字段属性里取 `///` 文档（多个 `#[doc]` 行拼成一段，逐行 trim）。
+///
+/// `//` 普通注释在编译期已丢失，只有 `///` / `//!` 会变成 `#[doc = "..."]`。
+fn doc_text(attrs: &[syn::Attribute]) -> String {
+    let mut lines = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &attr.meta {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+            {
+                lines.push(s.value().trim().to_string());
+            }
+        }
+    }
+    lines.join("\n").trim().to_string()
 }
 
 fn parse_field(field: &Field) -> syn::Result<FieldSpec> {
@@ -351,6 +443,7 @@ fn parse_field(field: &Field) -> syn::Result<FieldSpec> {
     Ok(FieldSpec {
         ident,
         vis: field.vis.clone(),
+        description: doc_text(&field.attrs),
         attrs,
         norm_ty,
         params,

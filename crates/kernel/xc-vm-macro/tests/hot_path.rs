@@ -15,6 +15,7 @@ use xc_vm_macro::capability;
 
 #[capability(namespace = "bench")]
 struct BenchVm<'a> {
+    /// `sin(x)`（热路径基准）。
     sin: fn(&'a dyn Vm, f32) -> f32,
 }
 

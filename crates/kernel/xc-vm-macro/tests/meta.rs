@@ -6,6 +6,7 @@ use xc_vm_macro::capability;
 
 #[capability(namespace = "meta", version = "1.0")]
 struct Version1<'a> {
+    /// 恒等函数（v1）。
     f: fn(&'a dyn Vm, f32) -> f32,
 }
 
@@ -15,11 +16,13 @@ struct Version1<'a> {
     description = "同一个函数的第二个版本"
 )]
 struct Version2<'a> {
+    /// 恒等函数（v2）。
     f: fn(&'a dyn Vm, f32) -> f32,
 }
 
 #[capability(namespace = "meta")]
 struct NoMeta<'a> {
+    /// 恒等函数（无 meta）。
     f: fn(&'a dyn Vm, f32) -> f32,
 }
 

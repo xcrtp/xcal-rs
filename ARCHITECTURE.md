@@ -441,7 +441,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
-| 非原生 VM 的 `FunctionX2Y` 适配器 | `xcal-scene::math_vm` | 现有 `function_from_vm` 只支持 **typed 快路径**（`resolve` 的裸 fn 指针）；Python / IPC 等**纯解释型 VM 只有 erased `call`**，需要另一个走慢路径的适配器 | 接入第一个非原生 VM 时（本轮不写：无消费方） |
+| 非原生 VM 的 `FunctionX2Y` 适配器 | `xcal-scene::math_vm` | **C3 已消费（2026-10-17）**：第一个非原生 VM（Lua / `xcal-script`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xcal-script` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
 > （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
@@ -469,6 +469,16 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > registry 的必要取舍）—— 新增 target 若要可持久化，必须同步那张表。
 > 函数侧走的是另一套（两步走：序列化写 name，反序列化由 VM / registry 反查），
 > 两套口径的差异是真实取舍，记账于此。
+>
+> **脚本 VM（2026-10-17，C3 消费）**：新增 scene 层 crate `xcal-script`（Lua / mlua），
+> 它是 `xc-vm` 的第一个**非原生 VM** 生产消费方 —— 方向是**脚本在装配期产出
+> `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
+> 经 erased `Vm::call("xcal.script::run")`），**不参与每帧采样**。
+> 依赖图 / FanIn-FanOut 表**尚未包含** `xc-vm` / `xc-vm-macro` / `xcal-script`
+> （`cargo-workspace-analyzer` 仍不可用；按既有纪律不手改自动产物）。
+> 实际边（`cargo metadata` 口径）：`xcal-scene → xc-vm`（`math_vm`）、
+> `xcal-script → xc-vm / xc-vm-macro / xcal-scene / xc-object / xc-notion /
+> xc-render-ir / xc-scene-contract`；工具恢复后一并重算。
 
 ### cargo-archtest 适配状态
 

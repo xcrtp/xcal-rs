@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene" }
+# 脚本 VM（Lua）：`--script` 用 Lua 编排最小分镜（装配期产出 SceneScript）。
+xcal-script = { path = "../../scene/xcal-script" }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }

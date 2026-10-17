@@ -91,6 +91,59 @@ impl FnSig {
     }
 }
 
+/// 一条函数的**文档**（编译期常量）。
+///
+/// 与 [`FnSig`] **按序对应**：`signatures()[i]` 与 `docs()[i]` 描述同一个函数。
+/// `description` 来自字段上的 `///`（proc-macro 可读的 `#[doc]` 属性），
+/// 因此收集它是**零运行时开销**（只是多几个 `'static` 常量）。
+///
+/// # 为什么不直接存 `QualifiedName`
+///
+/// `QualifiedName` 内部是 `String`，无法在 `const` 数组里构造。故这里保留
+/// 拆分字段，由 [`FnDoc::qualified`] 按需拼出（导出文档时一次调用，非热路径）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FnDoc {
+    /// namespace（与 [`FnSig::namespace`] 相同）。
+    pub namespace: &'static str,
+    /// 函数名（与 [`FnSig::name`] 相同）。
+    pub name: &'static str,
+    /// 自由文本说明（来自 `///`；缺失时为空串）。
+    pub description: &'static str,
+    /// 参数类型名（按声明顺序）。
+    pub params: &'static [VmTypeName],
+    /// 返回类型名。
+    pub ret: VmTypeName,
+}
+
+impl FnDoc {
+    /// 逐字段构造（`const`，便于宏生成）。
+    pub const fn new(
+        namespace: &'static str,
+        name: &'static str,
+        description: &'static str,
+        params: &'static [VmTypeName],
+        ret: VmTypeName,
+    ) -> Self {
+        Self {
+            namespace,
+            name,
+            description,
+            params,
+            ret,
+        }
+    }
+
+    /// 转成完整函数名（形态与 [`FnSig::qualified`] 一致）。
+    pub fn qualified(&self) -> QualifiedName {
+        QualifiedName::new(
+            self.namespace,
+            self.name,
+            self.params.iter().map(|s| (*s).to_string()).collect(),
+            self.ret,
+        )
+    }
+}
+
 /// 协商产物的一项：签名 + VM 提供的可调用对象。
 ///
 /// `callable` 的类型擦除载体里存的是**裸 fn 指针**（如
@@ -115,6 +168,14 @@ pub trait Capability<'a>: Sized {
     /// **不参与协商**：`version` 不同不会导致 `negotiate` 失败。
     fn meta() -> CapabilityMeta {
         CapabilityMeta::NONE
+    }
+
+    /// 函数文档（与 [`Self::signatures`] **按序对应**）。
+    ///
+    /// `#[capability]` 宏默认从字段上的 `///` 生成；手写实现可省略（默认空）。
+    /// 文档只用于导出（JSON / LuaLS / Markdown），**不参与协商**、无运行时开销。
+    fn docs() -> &'static [FnDoc] {
+        &[]
     }
 
     /// 协商成功 ⇒ 构造自身；任一缺失 ⇒ `None`（全有或全无）。
