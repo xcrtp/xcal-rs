@@ -71,9 +71,9 @@ use systems_3d::SceneRecord3DSystem;
 /// - `SceneChoice::CapabilityDemo`：N 线能力测试 demo（`capability_demo.rs`）——
 ///   最小场景，四项能力（Name/Group/Visibility/Opacity）各落一处；
 /// - `SceneChoice::ScriptStoryboard`：`--script` —— 镜头 2–5 由 **Lua 脚本**编排
-///   （`xc-vm-lua`，装配期产出 `SceneScript`），与手写版等价；
+///   （`xc-pod-lua`，装配期产出 `SceneScript`），与手写版等价；
 /// - `SceneChoice::PythonStoryboard`：`--python` —— 同一分镜由 **Python 脚本**编排
-///   （`xc-vm-py`，默认装配的一部分），与手写版 / Lua 版等价。
+///   （`xc-pod-py`，默认装配的一部分），与手写版 / Lua 版等价。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SceneChoice {
     #[default]
@@ -334,7 +334,7 @@ impl App {
                 // 节点（scene / content / lua），Broker 负责校验、排序与注入。
                 // 与硬编码版的等价性由 `xcal-app` 的 `script_storyboard_matches_hardcoded` 锁定。
                 let assembly = assembly::assemble(Arc::clone(&engine))
-                    .map_err(|e| Error::InitializationError(format!("脚本 VM 装配失败：{e}")))?;
+                    .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
                 let script = assembly
                     .run_script(assembly::STORYBOARD_LUA)
                     .map_err(|e| Error::InitializationError(format!("Lua 分镜执行失败：{e}")))?;
@@ -367,7 +367,7 @@ impl App {
                     // 同一分镜由 **Python 脚本**编排。与硬编码版的等价性由
                     // `python_storyboard_matches_hardcoded` 锁定。
                     let assembly = assembly::assemble(Arc::clone(&engine)).map_err(|e| {
-                        Error::InitializationError(format!("脚本 VM 装配失败：{e}"))
+                        Error::InitializationError(format!("脚本 Pod 装配失败：{e}"))
                     })?;
                     let script = assembly
                         .run_python_script(assembly::STORYBOARD_PY)
@@ -1010,7 +1010,7 @@ mod tests {
 
         // 脚本版：同一个 placeholder 引擎（App 侧真实路径用 Typst 引擎）。
         let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
-            .expect("脚本 VM 装配成功（scene + content + lua）");
+            .expect("脚本 Pod 装配成功（scene + content + lua）");
         let script = assembly
             .run_script(crate::assembly::STORYBOARD_LUA)
             .expect("Lua 分镜执行成功");
@@ -1057,7 +1057,7 @@ mod tests {
 
         // Python 版：同一个 placeholder 引擎。
         let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
-            .expect("VM 装配成功（含 Python）");
+            .expect("Pod 装配成功（含 Python）");
         let script = assembly
             .run_python_script(crate::assembly::STORYBOARD_PY)
             .expect("Python 分镜执行成功");
@@ -1097,8 +1097,7 @@ mod tests {
         use xc_prerender::placeholder_engine;
 
         let assembly =
-            crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
-                .expect("装配成功");
+            crate::assembly::assemble(std::sync::Arc::new(placeholder_engine())).expect("装配成功");
         let script = assembly
             .run_python_script(
                 r#"

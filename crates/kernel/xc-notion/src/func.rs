@@ -18,7 +18,7 @@
 //
 // - `Arc` 必须保留：`FunctionGraph` 在组件登记表中，`Box<dyn Fn>` 不可 Clone；
 // - 深 Clone：`clone_dyn()` 克隆**捕获的环境**（新 Arc，不是引用计数 +1）；
-// - `Any`：提供 downcast 能力（未来 VM / 插件可识别具体函数对象）。
+// - `Any`：提供 downcast 能力（未来 Pod / 插件可识别具体函数对象）。
 //
 // **对象安全性核查**：`Fn(X)->Y` 是单方法 trait，`Any` 是标记型 auto-trait，
 // 二者叠加仍 object-safe；`clone_dyn` 返回 `Arc<dyn DynFn<X,Y>>`（不是 `Self`），
@@ -56,7 +56,7 @@ where
     Y: 'static,
 {
     Arc::new(|_x: X| -> Y {
-        panic!("函数未绑定：反序列化后必须按 name 用 registry / VM 重新绑定才能调用")
+        panic!("函数未绑定：反序列化后必须按 name 用 registry / Pod 重新绑定才能调用")
     })
 }
 
@@ -100,7 +100,7 @@ impl<X: 'static, Y: 'static> FunctionX2Y<X, Y> {
 
     /// 函数体是否已绑定。
     ///
-    /// 反序列化只拿得到名字 ⇒ `false`；由 VM / 内置表按名反查后变 `true`。
+    /// 反序列化只拿得到名字 ⇒ `false`；由 Pod / 内置表按名反查后变 `true`。
     /// 未绑定时调用会 panic（明确失败）。
     pub fn is_bound(&self) -> bool {
         self.bound

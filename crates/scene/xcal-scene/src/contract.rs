@@ -279,7 +279,7 @@ pub fn known_type_name<T: 'static>() -> Option<&'static str> {
 
 /// 反向能力 ②：克隆一个**类型擦除**的已登记组件。
 ///
-/// 用途：外部来源（VM / dylib / 反序列化）拿到一个组件后要把它**复制**进
+/// 用途：外部来源（Pod / dylib / 反序列化）拿到一个组件后要把它**复制**进
 /// [`Components`] 交给 `spawn_dyn`，而 `Box<dyn Any>` 本身不可 `Clone`。
 ///
 /// 未登记类型 ⇒ `None`（与 `spawn_dyn` 同口径，不 panic）。

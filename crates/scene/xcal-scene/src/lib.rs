@@ -14,11 +14,11 @@ pub mod deferred;
 pub mod director_state;
 pub mod domain;
 pub mod errors;
-pub mod math_vm;
+pub mod math_pod;
 pub mod persist;
 pub mod scene;
 pub mod scene_script;
-pub mod vm;
+pub mod pod;
 pub mod time_state;
 pub mod transform;
 pub mod types;
@@ -35,7 +35,7 @@ pub use deferred::{
 };
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
 pub use errors::Error;
-pub use math_vm::{SharedVm, builtin_f32, function_from_vm, math_vm};
+pub use math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};
 pub use scene::{Scene, comp, components, primitives};
 pub use scene_script::{

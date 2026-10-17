@@ -5,7 +5,7 @@
 //!     --out export/frames --frames 60 --fps 30 --size 640x480
 //! ```
 //!
-//! 场景里的函数**来自 `xc-vm`**（`xcal_scene::builtin_f32`），这是 A 线的
+//! 场景里的函数**来自 `xc-pod`**（`xcal_scene::builtin_f32`），这是 A 线的
 //! 生产消费方；导出的每一帧都经 `render_frame_headless`（与实时画面同一份帧体）。
 //!
 //! 无 GPU 适配器时明确报错退出（导出无法在无 GPU 环境完成）。
@@ -60,7 +60,7 @@ fn main() {
         }
     };
 
-    // ── 场景：一条函数图像（来自 VM）+ 一个运动的圆 + 固定相机 ──────────
+    // ── 场景：一条函数图像（来自 Pod）+ 一个运动的圆 + 固定相机 ──────────
     let mut scene = Scene::new();
     let camera = Camera2D::new(
         Vec2::ZERO,
@@ -68,9 +68,9 @@ fn main() {
         Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
     );
 
-    // **A 线**：函数体由 `xc-vm` 提供（`xcal_scene::builtin_f32`），
-    // 不是 `xc-notion` 里那份"不依赖 VM"的静态兜底。
-    let func = xcal_scene::builtin_f32("xcal.math.sin").expect("内置函数已注册进 math VM");
+    // **A 线**：函数体由 `xc-pod` 提供（`xcal_scene::builtin_f32`），
+    // 不是 `xc-notion` 里那份"不依赖 Pod"的静态兜底。
+    let func = xcal_scene::builtin_f32("xcal.math.sin").expect("内置函数已注册进 math Pod");
     let graph = FunctionGraph::new(func, Sampler1D::new(-3.0f32, 3.0, 0.02));
     let graph_id = graph
         .build(&mut scene, StrokeSolid::new(2.0, (255, 255, 255, 255)))

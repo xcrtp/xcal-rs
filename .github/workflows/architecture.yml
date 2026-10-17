@@ -37,13 +37,14 @@ jobs:
       # kernel 层的 wasm 可编译性是分层的核心承诺之一（跑不上 wasm，分层就没意义）。
       # 此前一直手工验收，本步把它纳入 CI 自动化门禁。
       # 新增 kernel crate 必须加入下面的列表（M2 起含 xc-scene-contract / xc-render-ir）。
-      # 注意：语言适配器 `xc-vm-lua` / `xc-vm-py` **不在此列，勿加** ——
-      # mlua 需要 C 工具链、pyo3 需要系统 Python；它们属于 crates/script/，
-      # 名字里的 `xc-vm-` 只是前缀，不是 kernel 层。
+      # 注意：语言适配器 `xc-pod-lua` / `xc-pod-py` **不在此列，勿加** ——
+      # mlua 需要 C 工具链、pyo3 需要系统 Python；它们属于 crates/script/。
+      # 名字里的 `xc-pod-` 只是前缀：pod 系列同时含 kernel 层
+      # （xc-pod / xc-pod-binding / xc-pod-macro）与 script 层适配器。
       - name: Kernel wasm gate
         run: |
           rustup target add wasm32-unknown-unknown
-          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender xc-vm xc-vm-binding; do
+          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender xc-pod xc-pod-binding; do
             echo "== $c (wasm32-unknown-unknown) =="
             cargo check -p "$c" --target wasm32-unknown-unknown || exit 1
           done

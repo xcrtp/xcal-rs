@@ -5882,6 +5882,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "xc-pod"
+version = "0.1.0"
+
+[[package]]
+name = "xc-pod-binding"
+version = "0.1.0"
+dependencies = [
+ "xc-pod",
+]
+
+[[package]]
+name = "xc-pod-lua"
+version = "0.1.0"
+dependencies = [
+ "mlua",
+ "serde_json",
+ "xc-pod",
+ "xc-pod-binding",
+ "xc-pod-macro",
+]
+
+[[package]]
+name = "xc-pod-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "xc-pod",
+]
+
+[[package]]
+name = "xc-pod-py"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+ "xc-pod",
+ "xc-pod-binding",
+ "xc-pod-macro",
+]
+
+[[package]]
 name = "xc-prerender"
 version = "0.1.0"
 dependencies = [
@@ -5938,48 +5980,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "xc-vm"
-version = "0.1.0"
-
-[[package]]
-name = "xc-vm-binding"
-version = "0.1.0"
-dependencies = [
- "xc-vm",
-]
-
-[[package]]
-name = "xc-vm-lua"
-version = "0.1.0"
-dependencies = [
- "mlua",
- "serde_json",
- "xc-vm",
- "xc-vm-binding",
- "xc-vm-macro",
-]
-
-[[package]]
-name = "xc-vm-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "xc-vm",
-]
-
-[[package]]
-name = "xc-vm-py"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "xc-vm",
- "xc-vm-binding",
- "xc-vm-macro",
-]
-
-[[package]]
 name = "xcal-app"
 version = "0.1.0"
 dependencies = [
@@ -5997,11 +5997,11 @@ dependencies = [
  "xc-macro",
  "xc-notion",
  "xc-object",
+ "xc-pod",
+ "xc-pod-binding",
+ "xc-pod-lua",
+ "xc-pod-py",
  "xc-prerender",
- "xc-vm",
- "xc-vm-binding",
- "xc-vm-lua",
- "xc-vm-py",
  "xcal-egui",
  "xcal-render",
  "xcal-render-backends",
@@ -6128,12 +6128,12 @@ dependencies = [
  "xc-macro",
  "xc-notion",
  "xc-object",
+ "xc-pod",
+ "xc-pod-macro",
  "xc-prerender",
  "xc-render-ir",
  "xc-scene-contract",
  "xc-time",
- "xc-vm",
- "xc-vm-macro",
  "xcal-schedule",
 ]
 

@@ -11,13 +11,13 @@ path = "src/main.rs"
 
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene" }
-# VM 机制 + 静态插件装配（src/assembly.rs）。
-xc-vm = { path = "../../kernel/xc-vm" }
-xc-vm-binding = { path = "../../kernel/xc-vm-binding" }
+# Pod 机制 + 静态插件装配（src/assembly.rs）。
+xc-pod = { path = "../../kernel/xc-pod" }
+xc-pod-binding = { path = "../../kernel/xc-pod-binding" }
 # Lua 适配器（纯语言层）：`--script` 用 Lua 编排最小分镜。
-xc-vm-lua = { path = "../../script/xc-vm-lua" }
+xc-pod-lua = { path = "../../script/xc-pod-lua" }
 # Python 适配器：只在 feature = "python" 时引入，默认构建不受 pyo3 影响。
-xc-vm-py = { path = "../../script/xc-vm-py", optional = true }
+xc-pod-py = { path = "../../script/xc-pod-py", optional = true }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }
@@ -50,9 +50,9 @@ png.workspace = true
 [features]
 # typst 默认开：否则看不见真公式，demo 无意义。
 # 关闭时 xc-prerender 用 placeholder 引擎兜底（显示方块），链路照样跑通。
-# python 默认开：Python VM 是默认装配的一部分（`--python` 跑 Python 分镜）；
+# python 默认开：Python Pod 是默认装配的一部分（`--python` 跑 Python 分镜）；
 # 关闭后 `--script`（Lua）仍可用，只是没有 Python 节点。
 default = ["typst", "python"]
 typst = ["xc-prerender/typst"]
 # Python 双向对称性用例 + Python 分镜（需要系统 Python）。
-python = ["dep:xc-vm-py", "xc-vm-py/python"]
+python = ["dep:xc-pod-py", "xc-pod-py/python"]

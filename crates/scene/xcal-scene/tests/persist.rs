@@ -135,8 +135,8 @@ fn anonymous_function_is_an_explicit_error() {
     );
 }
 
-/// **两步走（非内置名字）**：反序列化得到"只有名字的壳"；该名字不在 VM 表里
-/// ⇒ 调用方按名字自行绑定后才能采样（与 `math_vm` 的自动绑定对照）。
+/// **两步走（非内置名字）**：反序列化得到"只有名字的壳"；该名字不在 Pod 表里
+/// ⇒ 调用方按名字自行绑定后才能采样（与 `math_pod` 的自动绑定对照）。
 #[test]
 fn deserialized_unknown_function_can_be_rebound_manually() {
     let components: Components = vec![Box::new(FunctionGraph::new(
@@ -152,10 +152,10 @@ fn deserialized_unknown_function_can_be_rebound_manually() {
     assert_eq!(shell.func.name.as_deref(), Some("test::identity"));
     assert!(
         !shell.func.is_bound(),
-        "未知名字不应被默认 VM 自动绑定（仍是名字壳）"
+        "未知名字不应被默认 Pod 自动绑定（仍是名字壳）"
     );
 
-    // 调用方自己提供函数体（真实场景里来自 VM / 插件 registry）。
+    // 调用方自己提供函数体（真实场景里来自 Pod / 插件 registry）。
     let rebound = FunctionX2Y::named("test::identity", |x: f32| x);
     let graph = FunctionGraph::new(rebound, shell.sampler.clone());
 

@@ -103,7 +103,7 @@ pub fn serialize_components(components: &Components) -> Result<Vec<TaggedCompone
 
 /// 把 tagged 列表解码为 `Components`（任一失败 ⇒ 整个失败，不静默丢组件）。
 ///
-/// **默认绑定**：函数类组件的"名字壳"由 [`crate::math_vm::math_vm`] 按名反查
+/// **默认绑定**：函数类组件的"名字壳"由 [`crate::math_pod::math_pod`] 按名反查
 /// （内置数学函数无需调用方再手动绑定）。未知名字保持未绑定。
 pub fn deserialize_components(
     tagged: Vec<TaggedComponent>,
@@ -112,6 +112,6 @@ pub fn deserialize_components(
         .into_iter()
         .map(|t| crate::contract::deserialize_component(&t.type_name, t.data))
         .collect::<Result<_, _>>()?;
-    crate::math_vm::rebind_components(&mut components);
+    crate::math_pod::rebind_components(&mut components);
     Ok(components)
 }

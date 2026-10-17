@@ -1,0 +1,22 @@
+[package]
+name = "xc-pod-lua"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "纯 Lua 适配器（mlua）：能力注入 + 宿主→脚本入口"
+
+[dependencies]
+# 只依赖机制层：**生产边不含任何 `xcal-*`**。
+xc-pod = { path = "../../kernel/xc-pod" }
+xc-pod-binding = { path = "../../kernel/xc-pod-binding" }
+
+# Lua 5.4 解释器**编进二进制**（vendored）⇒ 部署零运行时依赖。
+mlua = { version = "0.12", default-features = false, features = [
+    "lua54",
+    "vendored",
+] }
+
+[dev-dependencies]
+# 测试自建 mini domain Pod（dev 边不计入生产依赖图）。
+xc-pod-macro = { path = "../../kernel/xc-pod-macro" }
+serde_json.workspace = true

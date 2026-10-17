@@ -24,7 +24,7 @@
 
 use std::sync::Arc;
 use xc_notion::Vec3;
-use xc_vm_macro::VmType;
+use xc_pod_macro::PodType;
 use xc_object::{Camera3D, Circle, Framing2D, Transform};
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
@@ -143,8 +143,8 @@ impl TargetCtor for TransformValue {
 /// 穷尽 match（不存在第三张字符串表）。
 ///
 /// 注意：它不能叫 `Target` —— 同名 trait 已存在（本枚举是"目标种类"）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, VmType)]
-#[vm_type(name = "xcal.Target")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "xcal.Target")]
 pub enum TargetKind {
     CircleRadius,
     Phase,
