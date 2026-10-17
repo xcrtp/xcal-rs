@@ -174,8 +174,34 @@ fn lua_storyboard_matches_handwritten_encoder() {
     assert!((b_script.min.x - b_hand.min.x).abs() < 1e-4);
     assert!((b_script.max.y - b_hand.max.y).abs() < 1e-4);
 
+    // **组件值**（不只是类型名）逐项相等：相机取景 + 描边宽度 / 颜色。
+    let (cam_script, stroke_script) = key_values(&script_scene);
+    let (cam_hand, stroke_hand) = key_values(&hand_scene);
+    assert_eq!(cam_script, cam_hand, "相机组件值必须相等");
+    assert_eq!(stroke_script, stroke_hand, "描边组件值必须相等");
+    eprintln!("[L5] 相机 = {cam_script:?}；描边 = {stroke_script:?}");
+
     assert_eq!(script_scene.len(), 2);
     assert_eq!(hand_scene.len(), 2);
+}
+
+/// 场景里的关键组件值 `(Framing2D, StrokeSolid 的宽度 + rgba)`。
+fn key_values(scene: &SceneStruct) -> ((f32, f32, f32), (f32, u8, u8, u8, u8)) {
+    let mut camera = None;
+    scene.for_each::<Framing2D>(|_, f| {
+        camera = Some((f.center.x, f.center.y, f.scale));
+    });
+    let mut stroke = None;
+    scene.for_each::<StrokeSolid>(|_, s| {
+        stroke = Some((
+            s.width,
+            s.color.r(),
+            s.color.g(),
+            s.color.b(),
+            s.color.a(),
+        ));
+    });
+    (camera.expect("相机对象在场景里"), stroke.expect("描边对象在场景里"))
 }
 
 /// **验收 #6**：脚本真的在跑（真读 Lua 源、真产出对象）。
@@ -185,9 +211,12 @@ fn host_calls_script_and_gets_objects() {
     let script = host
         .run(
             r#"
-            local cam = scene.spawn({ scene.camera2d(0.0, 0.0, 40.0) })
-            local dot = scene.spawn({ scene.circle(1.0, 2.0, 0.5), scene.stroke(1.0, 255, 0, 0, 255) })
-            scene.animate(dot, scene.clip("CircleRadius", scene.constant(0.5)), 1.0)
+            local cam = scene.spawn({ Camera2D { center = Vec2 { x = 0.0, y = 0.0 }, scale = 40.0 } })
+            local dot = scene.spawn({
+                Circle { x = 1.0, y = 2.0, r = 0.5 },
+                Stroke { width = 1.0, color = Color { r = 255, g = 0, b = 0, a = 255 } },
+            })
+            scene.animate(dot, scene.clip("CircleRadius", Curve.Const { value = 0.5 }), 1.0)
             scene.despawn(cam)
             "#,
         )
@@ -245,16 +274,13 @@ fn scene_api_docs_are_complete() {
     }
 }
 
-/// **验收 #3（导出侧）**：JSON 与 LuaLS 都从 `docs()` 生成，且含全部函数。
+/// **V5 验收（导出侧）**：形参名 / 结构体 / 枚举都进了 JSON 与 LuaLS。
 #[test]
-fn exported_docs_contain_every_function() {
+fn exported_docs_are_structural() {
     let json_text = xcal_script::scene_api_json();
     let json: serde_json::Value = serde_json::from_str(&json_text).expect("合法 JSON");
     let functions = json["functions"].as_array().expect("functions 数组");
     assert_eq!(functions.len(), SceneApi::signatures().len());
-    assert_eq!(functions[0]["name"], "circle");
-    assert_eq!(functions[0]["params"][0]["lua"], "number");
-    assert_eq!(functions[0]["returns"]["lua"], "Handle");
     assert!(
         functions
             .iter()
@@ -262,18 +288,76 @@ fn exported_docs_contain_every_function() {
         "每个函数都要有 description"
     );
 
+    let by_name = |name: &str| {
+        functions
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("缺函数 {name}"))
+    };
+
+    // 形参名不再是 p1（来自 schema）。
+    let circle = by_name("circle");
+    assert_eq!(circle["params"][0]["name"], "shape");
+    assert_eq!(circle["params"][0]["type"]["kind"], "struct");
+    assert_eq!(circle["params"][0]["type"]["name"], "xcal.Circle");
+    assert_eq!(circle["returns"]["kind"], "opaque");
+
+    // stroke 的颜色是结构体（不是 u32）。
+    let stroke = by_name("stroke");
+    assert_eq!(stroke["params"][0]["name"], "style");
+    assert_eq!(stroke["params"][0]["type"]["name"], "xcal.Stroke");
+
+    let types = json["types"].as_array().expect("types 数组");
+    let type_named = |name: &str| {
+        types
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("缺类型 {name}"))
+    };
+    let stroke_ty = type_named("xcal.Stroke");
+    let color_field = stroke_ty["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "color")
+        .expect("Stroke.color");
+    assert_eq!(color_field["type"]["kind"], "struct");
+    assert_eq!(color_field["type"]["name"], "xcal.Color");
+
+    // 曲线是同一枚举的五个变体。
+    let curve_ty = type_named("xcal.Curve");
+    assert_eq!(curve_ty["kind"], "enum");
+    let variants: Vec<&str> = curve_ty["variants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(variants, vec!["Const", "Sin", "Phase", "Ramp", "Ramp2"]);
+
     let lua_text = xcal_script::scene_api_lua();
     for sig in SceneApi::signatures() {
+        let item = SceneApi::calls()
+            .iter()
+            .find(|c| c.signature.name == sig.name)
+            .expect("calls 与 signatures 逐条对应");
+        let names: Vec<&str> = item.io.params.iter().map(|p| p.name).collect();
         assert!(
-            lua_text.contains(&format!("function scene.{}(p1", sig.name)),
+            lua_text.contains(&format!(
+                "function scene.{}({}) end",
+                sig.name,
+                names.join(", ")
+            )),
             "LuaLS 注解缺 `scene.{}`:\n{lua_text}",
             sig.name
         );
     }
-    assert!(lua_text.contains("---@class Handle"));
+    assert!(lua_text.contains("---@class Color"));
+    assert!(lua_text.contains("---@field r integer"));
+    assert!(lua_text.contains("function Curve.Phase(spec) end"));
 }
 
-/// **默认拒绝 + 明确错误**：未注入时 `run` 报错；未知 target 名报错。
+/// **默认拒绝 + 明确错误**：未注入时 `run` 报错；类型不符报错；未知 target 静默不排期。
 #[test]
 fn errors_are_explicit() {
     let bare = xcal_script::LuaVm::new();
@@ -282,8 +366,21 @@ fn errors_are_explicit() {
 
     let host = ScriptHost::new().expect("装配成功");
     let err = host
-        .run("scene.clip('NoSuchTarget', scene.phase(1.0))")
+        .run("scene.wait('一秒')")
         .err()
-        .expect("未知 target ⇒ 必须失败");
-    assert!(err.to_string().contains("未知动画目标"), "实际：{err}");
+        .expect("类型不符 ⇒ 必须失败");
+    assert!(err.to_string().contains("期望 number"), "实际：{err}");
+
+    // 未知 target：集中表里没有 ⇒ `animate_named` 不排期（结构化接口下没有错误通道）。
+    let script = host
+        .run(
+            r#"
+            local dot = scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
+            scene.animate(dot, scene.clip("NoSuchTarget", Curve.Const { value = 1.0 }), 1.0)
+            "#,
+        )
+        .expect("脚本本身合法");
+    let mut scene = SceneStruct::new();
+    let recipe = script.commit(&mut scene).expect("commit");
+    assert_eq!(recipe.bindings.bindings.len(), 0, "未知 target 不产生绑定");
 }

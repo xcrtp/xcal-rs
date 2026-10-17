@@ -60,6 +60,8 @@ mod lifecycle;
 mod qualified;
 mod registry;
 mod type_name;
+mod typespec;
+mod value;
 mod vm;
 
 pub use capability::{Capability, CapabilityMeta, FnDoc, FnSig, Resolved};
@@ -73,4 +75,10 @@ pub use lifecycle::{LIFECYCLE_NAMESPACE, Lifecycle};
 pub use qualified::QualifiedName;
 pub use registry::{ErasedCall, RegistryVm};
 pub use type_name::{IntoVmTypeName, VmTypeName};
+pub use typespec::{
+    ErasedFn, Field, FnIo, HANDLE_SPEC, ParamSpec, ScalarKind, TypeSpec, UNIT_SPEC, Variant,
+};
+pub use value::{
+    ScalarValue, VmType, VmValue, VmValueError, describe, expect_enum, expect_struct, field,
+};
 pub use vm::{FunctionId, Vm, negotiate_dyn};

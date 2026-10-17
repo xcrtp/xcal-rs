@@ -479,6 +479,19 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 实际边（`cargo metadata` 口径）：`xcal-scene → xc-vm`（`math_vm`）、
 > `xcal-script → xc-vm / xc-vm-macro / xcal-scene / xc-object / xc-notion /
 > xc-render-ir / xc-scene-contract`；工具恢复后一并重算。
+>
+> **VM 类型系统与绑定生成（2026-10-17，V 线）**：`xc-vm` 从"字符串签名"升级为
+> **类型描述 IDL**：
+> - `typespec.rs`：`TypeSpec`（Scalar / Struct / Enum / Array / Opaque）+ `ParamSpec`
+>   （**形参名进 schema**）+ `ErasedFn`（绑定入口）；仍然零依赖、过 wasm gate；
+> - `value.rs`：`VmValue` / `VmType` 只用于**跨语言边界**；`FunctionX2Y` 热路径
+>   不引用（`math_vm` / `xc-time` 中 `VmValue|TypeSpec` 命中数为 0）；
+> - `#[derive(VmType)]`：一处定义生成 schema + 双向转换 + `IntoVmTypeName`；
+> - `#[capability(bindings)]`：生成 `FnIo` + 类型擦除 trampoline（`calls()`）；
+> - `xcal-script`：Lua 绑定与文档由 `calls()` + `TypeSpec` **自动生成**
+>   （`Circle { ... }` / `Curve.Phase { ... }` 构造器），手写胶水只剩宿主落点转换；
+> - `SceneApi` 升至 v2：4 个曲线函数 → `Curve` 枚举、`rgba:u32` → `Color` 结构体，
+>   共 10 个函数。**未开启 `bindings` 的 capability 不受影响**（`calls()` 默认空）。
 
 ### cargo-archtest 适配状态
 

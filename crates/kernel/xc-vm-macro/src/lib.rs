@@ -39,7 +39,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::spanned::Spanned;
-use syn::{Field, Fields, Ident, ItemStruct, Lifetime, LitStr, ReturnType, Type, Visibility};
+use syn::{
+    Data, DeriveInput, Field, Fields, Ident, ItemStruct, Lifetime, LitStr, ReturnType, Type,
+    Visibility,
+};
 
 /// capability 的 VM 借用字段名（带 `__` 前缀，避免与用户字段冲突）。
 const VM_FIELD: &str = "__vm";
@@ -50,6 +53,9 @@ struct MetaArgs {
     namespace: String,
     version: Option<String>,
     description: Option<String>,
+    /// 生成 `calls()`（类型擦除绑定入口）。默认关闭：
+    /// 并非每个 capability 的字段类型都实现 `VmType`（既有测试就有 `Big`）。
+    bindings: bool,
 }
 
 struct FieldSpec {
@@ -63,6 +69,8 @@ struct FieldSpec {
     norm_ty: TokenStream2,
     /// 用户声明的形参（已剥掉第一个 `&dyn Vm`）。
     params: Vec<Type>,
+    /// 形参名（裸 fn 类型里可以写 `x: f32`）；缺失时绑定层回退到 `pN`。
+    param_idents: Vec<Option<String>>,
     /// 返回类型（缺省为 `()`）。
     ret: Type,
     /// `#[vm_type(paramN = "...")]` 的显式类型名覆盖。
@@ -89,8 +97,13 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let lit: LitStr = meta.value()?.parse()?;
                 args.description = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("bindings") {
+                args.bindings = true;
+                Ok(())
             } else {
-                Err(meta.error("未知参数（支持 namespace / version / description = \"...\"）"))
+                Err(meta.error(
+                    "未知参数（支持 namespace / version / description = \"...\" / bindings）",
+                ))
             }
         });
         if let Err(e) = parser.parse(attr) {
@@ -276,6 +289,114 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
         }
     });
 
+    // ── 绑定生成（`bindings`）：FnIo + 类型擦除调用 + `calls()` ─────────
+    let io_const = format_ident!("__XC_VM_IO_{}", name);
+    let calls_const = format_ident!("__XC_VM_CALLS_{}", name);
+    let (binding_defs, binding_impl) = if args.bindings {
+        let io_entries = specs.iter().map(|s| {
+            let params = s.params.iter().enumerate().map(|(i, ty)| {
+                let pname = match s.param_idents.get(i).and_then(|n| n.as_deref()) {
+                    Some(n) => LitStr::new(n, ty.span()),
+                    None => LitStr::new(&format!("p{}", i + 1), ty.span()),
+                };
+                quote! {
+                    ::xc_vm::ParamSpec {
+                        name: #pname,
+                        ty: <#ty as ::xc_vm::VmType>::SPEC,
+                    }
+                }
+            });
+            let ret = &s.ret;
+            quote! {
+                ::xc_vm::FnIo {
+                    params: &[#(#params),*],
+                    ret: <#ret as ::xc_vm::VmType>::SPEC,
+                }
+            }
+        });
+
+        let call_fns = specs.iter().enumerate().map(|(idx, s)| {
+            let fn_ident = format_ident!("__xc_vm_call_{}_{}", name, s.ident);
+            let norm_ty = &s.norm_ty;
+            let ret = &s.ret;
+            let n = s.params.len();
+            let arg_inits = s.params.iter().enumerate().map(|(i, ty)| {
+                let arg_ident = format_ident!("__arg{}", i);
+                quote! {
+                    let #arg_ident = <#ty as ::xc_vm::VmType>::from_vm_value(
+                        args.get(#i).ok_or_else(|| ::xc_vm::VmError::CallFailed(
+                            ::std::format!("参数个数不足：需要 {} 个，实际 {}", #n, args.len())
+                        ))?
+                    ).map_err(|e| ::xc_vm::VmError::CallFailed(e.to_string()))?;
+                }
+            });
+            let arg_idents: Vec<Ident> =
+                (0..n).map(|i| format_ident!("__arg{}", i)).collect();
+            let call = if arg_idents.is_empty() {
+                quote!(__f(vm))
+            } else {
+                quote!(__f(vm, #(#arg_idents),*))
+            };
+            quote! {
+                #[allow(non_snake_case)]
+                fn #fn_ident(
+                    vm: &dyn ::xc_vm::Vm,
+                    args: &[::xc_vm::VmValue],
+                ) -> ::core::result::Result<::xc_vm::VmValue, ::xc_vm::VmError> {
+                    let __name = #sigs_const[#idx].qualified();
+                    let __callable = vm.resolve(&__name).ok_or_else(|| {
+                        ::xc_vm::VmError::UnknownFunction(__name.to_string())
+                    })?;
+                    let __f = *__callable.downcast_ref::<#norm_ty>().ok_or_else(|| {
+                        ::xc_vm::VmError::CallFailed(::std::format!(
+                            "`{}` 的 typed 签名不匹配", __name
+                        ))
+                    })?;
+                    #(#arg_inits)*
+                    ::core::result::Result::Ok(
+                        <#ret as ::xc_vm::VmType>::to_vm_value(&#call)
+                    )
+                }
+            }
+        });
+        let call_idents: Vec<Ident> = specs
+            .iter()
+            .map(|s| format_ident!("__xc_vm_call_{}_{}", name, s.ident))
+            .collect();
+        let calls_entries = call_idents.iter().enumerate().map(|(idx, f)| {
+            quote! {
+                ::xc_vm::ErasedFn {
+                    signature: #sigs_const[#idx],
+                    io: #io_const[#idx],
+                    call: #f,
+                }
+            }
+        });
+
+        (
+            quote! {
+                #(#call_fns)*
+
+                #[doc(hidden)]
+                #[allow(non_upper_case_globals)]
+                const #io_const: &[::xc_vm::FnIo] = &[#(#io_entries),*];
+                #[doc(hidden)]
+                #[allow(non_upper_case_globals)]
+                const #calls_const: &[::xc_vm::ErasedFn] = &[#(#calls_entries),*];
+
+                const _: () = ::core::assert!(#io_const.len() == #sigs_const.len());
+                const _: () = ::core::assert!(#calls_const.len() == #sigs_const.len());
+            },
+            quote! {
+                fn calls() -> &'static [::xc_vm::ErasedFn] {
+                    #calls_const
+                }
+            },
+        )
+    } else {
+        (quote! {}, quote! {})
+    };
+
     Ok(quote! {
         #(#input_attrs)*
         #vis struct #name #generics #where_clause {
@@ -299,6 +420,8 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
 
         #(#missing_doc_warnings)*
 
+        #binding_defs
+
         impl #impl_generics #name #ty_generics #where_clause {
             #(#methods)*
 
@@ -320,6 +443,8 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
             fn docs() -> &'static [::xc_vm::FnDoc] {
                 #docs_const
             }
+
+            #binding_impl
 
             fn from_negotiated(
                 vm: &#lt dyn ::xc_vm::Vm,
@@ -412,7 +537,13 @@ fn parse_field(field: &Field) -> syn::Result<FieldSpec> {
         ));
     }
 
-    let params: Vec<Type> = inputs.map(|a| a.ty.clone()).collect();
+    // 形参名（`fn(&'a dyn Vm, x: f32)` 里的 `x`）进 schema，文档才不是 p1..pN。
+    let mut params = Vec::new();
+    let mut param_idents = Vec::new();
+    for arg in inputs {
+        params.push(arg.ty.clone());
+        param_idents.push(arg.name.as_ref().map(|(ident, _)| ident.to_string()));
+    }
     let ret = match &bare_fn.output {
         ReturnType::Type(_, ty) => (**ty).clone(),
         ReturnType::Default => syn::parse_quote!(()),
@@ -447,6 +578,7 @@ fn parse_field(field: &Field) -> syn::Result<FieldSpec> {
         attrs,
         norm_ty,
         params,
+        param_idents,
         ret,
         param_names,
         ret_name,
@@ -528,4 +660,247 @@ fn is_handle_type(ty: &Type) -> bool {
         }
         _ => false,
     }
+}
+
+// ─── #[derive(VmType)]：类型定义 → TypeSpec（一处定义，不手写第二份）──────
+
+/// 从 struct / enum 定义生成 `VmType`（`SPEC` + 双向转换）与 `IntoVmTypeName`。
+///
+/// 支持：具名结构体、枚举（unit 变体 / 具名字段变体）。
+/// 不支持泛型 / 元组风格字段（场景无消费方，计划 §8）。
+#[proc_macro_derive(VmType, attributes(vm_type))]
+pub fn derive_vm_type(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as DeriveInput);
+    match expand_vm_type(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// 具名字段：`(标识符, 类型, 字段名字面量)`。
+type NamedField = (Ident, Type, LitStr);
+
+fn expand_vm_type(input: &DeriveInput) -> syn::Result<TokenStream2> {
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new(
+            input.ident.span(),
+            "VmType 不支持泛型参数（场景无消费方）",
+        ));
+    }
+    let name = &input.ident;
+    let type_name = vm_type_name(&input.attrs, name)?;
+    let type_name_lit = LitStr::new(&type_name, name.span());
+
+    let (spec_body, to_body, from_body) = match &input.data {
+        Data::Struct(data) => {
+            let Fields::Named(named) = &data.fields else {
+                return Err(syn::Error::new(
+                    ident_span_or(name.span(), &data.fields),
+                    "VmType 只支持具名结构体（字段名要进 schema）",
+                ));
+            };
+            let fields = named_fields(&named.named)?;
+            let field_defs = fields.iter().map(|(_, ty, fname)| {
+                quote! { ::xc_vm::Field { name: #fname, ty: <#ty as ::xc_vm::VmType>::SPEC } }
+            });
+            let to_fields = fields.iter().map(|(ident, _, fname)| {
+                quote! { (#fname, ::xc_vm::VmType::to_vm_value(&self.#ident)) }
+            });
+            let from_fields = fields.iter().map(|(ident, ty, fname)| {
+                quote! {
+                    #ident: <#ty as ::xc_vm::VmType>::from_vm_value(
+                        ::xc_vm::field(__fields, #fname)?
+                    )?
+                }
+            });
+            (
+                quote! {
+                    &::xc_vm::TypeSpec::Struct {
+                        name: #type_name_lit,
+                        fields: &[#(#field_defs),*],
+                    }
+                },
+                quote! {
+                    ::xc_vm::VmValue::Struct(
+                        #type_name_lit,
+                        ::std::vec![#(#to_fields),*],
+                    )
+                },
+                quote! {
+                    let __fields = ::xc_vm::expect_struct(__value, #type_name_lit)?;
+                    ::core::result::Result::Ok(Self {
+                        #(#from_fields),*
+                    })
+                },
+            )
+        }
+        Data::Enum(data) => {
+            let variants = named_variants(data)?;
+            let variant_defs = variants.iter().map(|(_, vname, fields)| {
+                let field_defs = fields.iter().map(|(_, ty, fname)| {
+                    quote! { ::xc_vm::Field { name: #fname, ty: <#ty as ::xc_vm::VmType>::SPEC } }
+                });
+                quote! {
+                    ::xc_vm::Variant {
+                        name: #vname,
+                        fields: &[#(#field_defs),*],
+                    }
+                }
+            });
+            let to_arms = variants.iter().map(|(vid, vname, fields)| {
+                if fields.is_empty() {
+                    quote! {
+                        Self::#vid => ::xc_vm::VmValue::Enum(
+                            #type_name_lit,
+                            #vname,
+                            ::std::vec![],
+                        )
+                    }
+                } else {
+                    let idents: Vec<&Ident> = fields.iter().map(|(i, _, _)| i).collect();
+                    let pairs = fields.iter().map(|(ident, _, fname)| {
+                        quote! { (#fname, ::xc_vm::VmType::to_vm_value(#ident)) }
+                    });
+                    quote! {
+                        Self::#vid { #(#idents),* } => ::xc_vm::VmValue::Enum(
+                            #type_name_lit,
+                            #vname,
+                            ::std::vec![#(#pairs),*],
+                        )
+                    }
+                }
+            });
+            let from_arms = variants.iter().map(|(vid, vname, fields)| {
+                if fields.is_empty() {
+                    quote! { #vname => ::core::result::Result::Ok(Self::#vid) }
+                } else {
+                    let inits = fields.iter().map(|(ident, ty, fname)| {
+                        quote! {
+                            #ident: <#ty as ::xc_vm::VmType>::from_vm_value(
+                                ::xc_vm::field(__fields, #fname)?
+                            )?
+                        }
+                    });
+                    quote! {
+                        #vname => ::core::result::Result::Ok(Self::#vid {
+                            #(#inits),*
+                        })
+                    }
+                }
+            });
+            (
+                quote! {
+                    &::xc_vm::TypeSpec::Enum {
+                        name: #type_name_lit,
+                        variants: &[#(#variant_defs),*],
+                    }
+                },
+                quote! {
+                    match self {
+                        #(#to_arms),*
+                    }
+                },
+                quote! {
+                    let (__variant, __fields) = ::xc_vm::expect_enum(__value, #type_name_lit)?;
+                    match __variant {
+                        #(#from_arms,)*
+                        __other => ::core::result::Result::Err(
+                            ::xc_vm::VmValueError::new(::std::format!(
+                                "未知变体 `{__other}`（{}）", #type_name_lit
+                            ))
+                        ),
+                    }
+                },
+            )
+        }
+        Data::Union(_) => {
+            return Err(syn::Error::new(
+                name.span(),
+                "VmType 不支持 union",
+            ));
+        }
+    };
+
+    Ok(quote! {
+        impl ::xc_vm::VmType for #name {
+            const SPEC: &'static ::xc_vm::TypeSpec = #spec_body;
+
+            fn to_vm_value(&self) -> ::xc_vm::VmValue {
+                #to_body
+            }
+
+            fn from_vm_value(
+                __value: &::xc_vm::VmValue,
+            ) -> ::core::result::Result<Self, ::xc_vm::VmValueError> {
+                #from_body
+            }
+        }
+
+        impl ::xc_vm::IntoVmTypeName for #name {
+            const NAME: ::xc_vm::VmTypeName = #type_name_lit;
+        }
+    })
+}
+
+fn ident_span_or(fallback: proc_macro2::Span, fields: &Fields) -> proc_macro2::Span {
+    fields.span().resolved_at(fallback)
+}
+
+fn vm_type_name(attrs: &[syn::Attribute], ident: &Ident) -> syn::Result<String> {
+    for attr in attrs {
+        if !attr.path().is_ident("vm_type") {
+            continue;
+        }
+        let mut found = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                let lit: LitStr = meta.value()?.parse()?;
+                found = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error("VmType 的 `#[vm_type(...)]` 只支持 name = \"...\""))
+            }
+        })?;
+        if let Some(name) = found {
+            return Ok(name);
+        }
+    }
+    Ok(ident.to_string())
+}
+
+fn named_fields(fields: &syn::punctuated::Punctuated<Field, syn::Token![,]>) -> syn::Result<Vec<NamedField>> {
+    fields
+        .iter()
+        .map(|field| {
+            let ident = field
+                .ident
+                .clone()
+                .ok_or_else(|| syn::Error::new(field.span(), "VmType 只支持具名字段"))?;
+            let fname = LitStr::new(&ident.to_string(), ident.span());
+            Ok((ident, field.ty.clone(), fname))
+        })
+        .collect()
+}
+
+fn named_variants(
+    data: &syn::DataEnum,
+) -> syn::Result<Vec<(Ident, LitStr, Vec<NamedField>)>> {
+    data.variants
+        .iter()
+        .map(|variant| {
+            let vname = LitStr::new(&variant.ident.to_string(), variant.ident.span());
+            match &variant.fields {
+                Fields::Named(named) => Ok((
+                    variant.ident.clone(),
+                    vname,
+                    named_fields(&named.named)?,
+                )),
+                Fields::Unit => Ok((variant.ident.clone(), vname, Vec::new())),
+                Fields::Unnamed(_) => Err(syn::Error::new(
+                    variant.span(),
+                    "VmType 的枚举变体只支持 unit 或具名字段（元组变体的字段没有名字）",
+                )),
+            }
+        })
+        .collect()
 }

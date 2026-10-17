@@ -13,21 +13,32 @@
 // 宿主 → 脚本：`LuaVm::run` / `Vm::call("xcal.script::run")`（erased）。
 // ```
 //
-// # 文档（L2/L3）
+// # 类型系统与绑定生成（V0–V4）
 //
-// 文档真源 = [`SceneApi`] 的 `#[capability]` 声明（字段名 + 类型 + `///`）；
-// [`export_scene_api`] 产出 JSON（唯一真源）与 LuaLS 注解。
+// ```text
+// types.rs（#[derive(VmType)]，一处定义）
+//    └─ TypeSpec（struct / enum / array / opaque） + 双向转换
+//         └─ SceneApi::calls()（#[capability(bindings)] 生成）
+//              ├─ binding.rs：按 TypeSpec 生成 Lua 函数与 `Circle { ... }` 构造器
+//              └─ export.rs ：JSON（唯一真源） + LuaLS（形参名 / @class / @field）
+// ```
+//
+// 手写胶水只剩"宿主侧落点转换"（结构化值 → 场景原语），不再逐函数重复。
 #![forbid(unsafe_code)]
 
 pub mod api;
+pub mod binding;
 pub mod export;
 pub mod lua_vm;
 pub mod service;
+pub mod types;
 
 pub use api::SceneApi;
-pub use export::{export_scene_api, lua_type_name, scene_api_json, scene_api_lua};
+pub use binding::{LuaHandle, LuaVmValue};
+pub use export::{export_scene_api, scene_api_json, scene_api_lua};
 pub use lua_vm::{INJECT_PATH, LuaVm, REQUIREMENTS_PATH, RUN_PATH, ScriptHost};
 pub use service::{FINISH_PATH, RESET_PATH, SERVICE_NAME, SceneServiceVm};
+pub use types::{Camera2D, Circle, Color, Curve, Reveal, Stroke, Vec2};
 
 /// L5 的脚本输入：现有分镜中**可被最小接口表达**的那一段（镜头 2–5）。
 ///

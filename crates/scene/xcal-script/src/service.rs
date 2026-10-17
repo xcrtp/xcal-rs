@@ -1,27 +1,23 @@
 // service.rs — 宿主侧 **Scene Service VM**（原生 Rust，注册 typed 函数）。
 //
-// # 它在双向对接里的位置
+// 函数签名由**结构化类型**构成（`Circle` / `Stroke` / `Curve` …）：
+// 绑定层按 `TypeSpec` 转换参数，这里只做"结构化值 → 场景原语"的落点转换。
 //
-// ```text
-// 脚本 ──(Lua 全局表 scene.*)──> SceneApi 的 typed fn 指针 ──> 本 VM 的状态
-// 宿主 ──Vm::call("xcal.script::run")──> LuaVm ──执行脚本──> 回调本 VM ──> SceneScript
-// ```
-//
-// 本 VM **只被脚本在装配期调用**（不在每帧），故走 typed 快路径只是顺带收益；
-// `SceneApi::signatures()` 与这里注册的完整函数名必须逐字一致（见一致性护栏用例）。
+// `SceneApi::signatures()` 与这里注册的完整函数名必须逐字一致（一致性护栏用例）。
 
 use std::any::Any;
 use std::cell::RefCell;
 
-use xcal_scene::animation::target::target_ctor_by_name;
-use xcal_scene::scene::components::Reveal;
+use xcal_scene::scene::components::Reveal as NativeReveal;
 use xcal_scene::scene_script::{Handle as ScriptHandle, SceneEncoder, SceneScript};
-use xcal_scene::{AnimValue, Curve, Interp};
-use xc_notion::{Color32, Path2D, Vec2};
-use xc_object::{Circle, Framing2D};
+use xcal_scene::Curve as NativeCurve;
+use xc_notion::{Color32, Path2D, Vec2 as NotionVec2};
+use xc_object::{Circle as NativeCircle, Framing2D};
 use xc_render_ir::{MeasureSpace, StrokeSolid};
 use xc_scene_contract::{Component, Components};
 use xc_vm::{FunctionId, Handle, HandleTable, QualifiedName, RegistryVm, Vm, VmError, VmId};
+
+use crate::types::{Camera2D, Circle, Curve, Reveal, Stroke};
 
 /// 注入时使用的 Service 名（与 `LuaVm::requirements()` 对应）。
 pub const SERVICE_NAME: &str = "scene";
@@ -31,18 +27,17 @@ pub const FINISH_PATH: &str = "xcal.scene::__finish";
 /// 内部交接函数：丢弃上一轮录制状态（每次 `run` 前调用）。
 pub const RESET_PATH: &str = "xcal.scene::__reset";
 
-/// 一个"动画动作"：target 名字 + 曲线（`clip` 的产物）。
+/// 一个"动画动作"：target 名字 + 已转换的曲线。
 #[derive(Clone)]
 struct Clip {
     target: String,
-    curve: Curve,
+    curve: NativeCurve,
 }
 
 /// Service 的全部可变状态（`Vm` 只有 `&self` ⇒ 内部可变性）。
 struct Recording {
     owner: VmId,
     components: HandleTable<Box<dyn Component>>,
-    curves: HandleTable<Curve>,
     clips: HandleTable<Clip>,
     objects: HandleTable<ScriptHandle>,
     encoder: SceneEncoder,
@@ -53,7 +48,6 @@ impl Recording {
         Self {
             owner,
             components: HandleTable::new(owner),
-            curves: HandleTable::new(owner),
             clips: HandleTable::new(owner),
             objects: HandleTable::new(owner),
             encoder: SceneEncoder::new(),
@@ -62,8 +56,6 @@ impl Recording {
 }
 
 /// 宿主侧场景能力 VM。
-///
-/// 状态归 VM 自己管（`RefCell`）；typed 函数从 `&dyn Vm` 上取回 `Self`。
 pub struct SceneServiceVm {
     id: VmId,
     registry: RegistryVm,
@@ -82,34 +74,28 @@ impl SceneServiceVm {
         let id = VmId::next();
         let mut registry = RegistryVm::new();
 
-        // ── 组件构造（每个组件一个函数；新增组件只加一个构造函数）──────────
-        registry.register_fn3_named::<f32, f32, f32, Handle>(
+        // ── 组件构造：参数是**结构化组件描述** ────────────────────────────
+        registry.register_fn1_named::<Circle, Handle>(
             "xcal.scene::circle",
-            "f32",
-            "f32",
-            "f32",
+            "xcal.Circle",
             "xc_vm.Handle",
             scene_circle,
         );
-        registry.register_fn2_named::<f32, u32, Handle>(
+        registry.register_fn1_named::<Stroke, Handle>(
             "xcal.scene::stroke",
-            "f32",
-            "u32",
+            "xcal.Stroke",
             "xc_vm.Handle",
             scene_stroke,
         );
-        registry.register_fn3_named::<f32, f32, f32, Handle>(
+        registry.register_fn1_named::<Camera2D, Handle>(
             "xcal.scene::camera2d",
-            "f32",
-            "f32",
-            "f32",
+            "xcal.Camera2D",
             "xc_vm.Handle",
             scene_camera2d,
         );
-        registry.register_fn2_named::<Vec<f32>, bool, Handle>(
+        registry.register_fn1_named::<Reveal, Handle>(
             "xcal.scene::reveal",
-            "FloatList",
-            "bool",
+            "xcal.Reveal",
             "xc_vm.Handle",
             scene_reveal,
         );
@@ -123,8 +109,8 @@ impl SceneServiceVm {
         );
         registry.register_fn1::<Handle, ()>("xcal.scene::despawn", scene_despawn);
 
-        // ── 动画（target 走字符串名，复用持久化集中表）────────────────────
-        registry.register_fn2::<String, Handle, Handle>("xcal.scene::clip", scene_clip);
+        // ── 动画：target 字符串 + 曲线枚举 ──────────────────────────────
+        registry.register_fn2::<String, Curve, Handle>("xcal.scene::clip", scene_clip);
         registry.register_fn3_named::<Handle, Handle, f64, ()>(
             "xcal.scene::animate",
             "xc_vm.Handle",
@@ -135,33 +121,6 @@ impl SceneServiceVm {
         );
         registry.register_fn2::<Handle, Handle, ()>("xcal.scene::parallel", scene_parallel);
         registry.register_fn1::<f64, ()>("xcal.scene::wait", scene_wait);
-
-        // ── 曲线 ────────────────────────────────────────────────────────
-        registry.register_fn3_named::<f32, f32, f32, Handle>(
-            "xcal.scene::sin",
-            "f32",
-            "f32",
-            "f32",
-            "xc_vm.Handle",
-            scene_sin,
-        );
-        registry.register_fn1::<f32, Handle>("xcal.scene::phase", scene_phase);
-        registry.register_fn1::<f32, Handle>("xcal.scene::constant", scene_constant);
-        registry.register_fn3_named::<f32, f32, f32, Handle>(
-            "xcal.scene::ramp",
-            "f32",
-            "f32",
-            "f32",
-            "xc_vm.Handle",
-            scene_ramp,
-        );
-        registry.register_fn2_named::<Vec<f32>, f32, Handle>(
-            "xcal.scene::ramp2",
-            "FloatList",
-            "f32",
-            "xc_vm.Handle",
-            scene_ramp2,
-        );
 
         // ── 内部交接（不是脚本可见 API；走 erased / `Vm::call`）────────────
         registry.register_erased(FINISH_PATH, &[], "SceneScript", |vm, _| {
@@ -179,12 +138,11 @@ impl SceneServiceVm {
         }
     }
 
-    /// 取走本轮的 `SceneScript`，并重置状态（下一轮从空开始）。
+    /// 取走本轮的 `SceneScript`，并重置状态。
     fn finish(&self) -> SceneScript {
         let mut rec = self.rec.borrow_mut();
         let encoder = std::mem::replace(&mut rec.encoder, SceneEncoder::new());
         let script = encoder.finish();
-        // 句柄表同步清空：上一轮的组件 / 曲线 / 动作句柄不得跨 run 复用。
         let owner = rec.owner;
         *rec = Recording::new(owner);
         script
@@ -244,46 +202,49 @@ fn service(vm: &dyn Vm) -> &SceneServiceVm {
         .expect("SceneApi 的调用者必须是 SceneServiceVm")
 }
 
-// ─── typed 函数实现 ──────────────────────────────────────────────────────
+// ─── typed 函数实现：结构化值 → 场景原语 ─────────────────────────────────
 
-fn scene_circle(vm: &dyn Vm, x: f32, y: f32, r: f32) -> Handle {
-    service(vm).with_rec(|rec| rec.components.insert(Box::new(Circle::new((x, y), r))))
+fn scene_circle(vm: &dyn Vm, shape: Circle) -> Handle {
+    service(vm).with_rec(|rec| {
+        rec.components
+            .insert(Box::new(NativeCircle::new((shape.x, shape.y), shape.r)))
+    })
 }
 
-fn scene_stroke(vm: &dyn Vm, width: f32, rgba: u32) -> Handle {
-    let color = Color32::new(
-        ((rgba >> 24) & 0xff) as u8,
-        ((rgba >> 16) & 0xff) as u8,
-        ((rgba >> 8) & 0xff) as u8,
-        (rgba & 0xff) as u8,
-    );
+fn scene_stroke(vm: &dyn Vm, style: Stroke) -> Handle {
+    let color = Color32::new(style.color.r, style.color.g, style.color.b, style.color.a);
     service(vm).with_rec(|rec| {
         rec.components.insert(Box::new(StrokeSolid::new_in(
-            width,
+            style.width,
             color,
             MeasureSpace::Screen,
         )))
     })
 }
 
-fn scene_camera2d(vm: &dyn Vm, cx: f32, cy: f32, scale: f32) -> Handle {
+fn scene_camera2d(vm: &dyn Vm, camera: Camera2D) -> Handle {
     service(vm).with_rec(|rec| {
-        rec.components
-            .insert(Box::new(Framing2D::new(Vec2::new(cx, cy), scale)))
+        rec.components.insert(Box::new(Framing2D::new(
+            NotionVec2::new(camera.center.x, camera.center.y),
+            camera.scale,
+        )))
     })
 }
 
-fn scene_reveal(vm: &dyn Vm, flat: Vec<f32>, closed: bool) -> Handle {
-    let points = points_of(&flat);
-    let path = Path2D::from_polyline(&points, closed);
-    service(vm).with_rec(|rec| rec.components.insert(Box::new(Reveal::new(path))))
+fn scene_reveal(vm: &dyn Vm, reveal: Reveal) -> Handle {
+    let points: Vec<NotionVec2> = reveal
+        .points
+        .iter()
+        .map(|p| NotionVec2::new(p.x, p.y))
+        .collect();
+    let path = Path2D::from_polyline(&points, reveal.closed);
+    service(vm).with_rec(|rec| rec.components.insert(Box::new(NativeReveal::new(path))))
 }
 
 fn scene_spawn(vm: &dyn Vm, handles: Vec<Handle>) -> Handle {
     service(vm).with_rec(|rec| {
         let mut components: Components = Vec::with_capacity(handles.len());
         for h in handles {
-            // 句柄只能由本 VM 产出；取不到说明装配/复用出错 —— 跳过而不是 panic。
             if let Ok(c) = rec.components.get(&h) {
                 components.push(c.clone());
             }
@@ -301,23 +262,23 @@ fn scene_despawn(vm: &dyn Vm, object: Handle) {
     });
 }
 
-fn scene_clip(vm: &dyn Vm, target: String, curve: Handle) -> Handle {
+fn scene_clip(vm: &dyn Vm, target: String, curve: Curve) -> Handle {
     service(vm).with_rec(|rec| {
-        // 句柄只能由本 VM 产出；取不到时退化为常量曲线（动作仍能被记录）。
-        let curve = rec
-            .curves
-            .get(&curve)
-            .ok()
-            .cloned()
-            .unwrap_or(Curve::Const(AnimValue::Scalar(0.0)));
-        rec.clips.insert(Clip { target, curve })
+        rec.clips.insert(Clip {
+            target,
+            curve: curve.to_native(),
+        })
     })
 }
 
 fn scene_animate(vm: &dyn Vm, object: Handle, clip: Handle, duration: f64) {
     service(vm).with_rec(|rec| {
         let object = rec.objects.get(&object).copied().ok();
-        let clip = rec.clips.get(&clip).ok().map(|c| (c.target.clone(), c.curve.clone()));
+        let clip = rec
+            .clips
+            .get(&clip)
+            .ok()
+            .map(|c| (c.target.clone(), c.curve.clone()));
         let (Some(object), Some((target, curve))) = (object, clip) else {
             return;
         };
@@ -328,7 +289,11 @@ fn scene_animate(vm: &dyn Vm, object: Handle, clip: Handle, duration: f64) {
 fn scene_parallel(vm: &dyn Vm, object: Handle, clip: Handle) {
     service(vm).with_rec(|rec| {
         let object = rec.objects.get(&object).copied().ok();
-        let clip = rec.clips.get(&clip).ok().map(|c| (c.target.clone(), c.curve.clone()));
+        let clip = rec
+            .clips
+            .get(&clip)
+            .ok()
+            .map(|c| (c.target.clone(), c.curve.clone()));
         let (Some(object), Some((target, curve))) = (object, clip) else {
             return;
         };
@@ -336,59 +301,8 @@ fn scene_parallel(vm: &dyn Vm, object: Handle, clip: Handle) {
     });
 }
 
-fn scene_wait(vm: &dyn Vm, d: f64) {
+fn scene_wait(vm: &dyn Vm, seconds: f64) {
     service(vm).with_rec(|rec| {
-        rec.encoder.wait(d);
+        rec.encoder.wait(seconds);
     });
-}
-
-fn scene_sin(vm: &dyn Vm, base: f32, amp: f32, omega: f32) -> Handle {
-    service(vm).with_rec(|rec| rec.curves.insert(Curve::Sin { base, amp, omega }))
-}
-
-fn scene_phase(vm: &dyn Vm, omega: f32) -> Handle {
-    service(vm).with_rec(|rec| rec.curves.insert(Curve::Phase { omega }))
-}
-
-fn scene_constant(vm: &dyn Vm, value: f32) -> Handle {
-    service(vm).with_rec(|rec| {
-        rec.curves
-            .insert(Curve::Const(AnimValue::Scalar(value)))
-    })
-}
-
-fn scene_ramp(vm: &dyn Vm, from: f32, to: f32, dur: f32) -> Handle {
-    let curve = Curve::Keyframes {
-        keys: vec![
-            (0.0, AnimValue::Scalar(from)),
-            (dur as f64, AnimValue::Scalar(to)),
-        ],
-        interpolation: Interp::Linear,
-    };
-    service(vm).with_rec(|rec| rec.curves.insert(curve))
-}
-
-fn scene_ramp2(vm: &dyn Vm, flat: Vec<f32>, dur: f32) -> Handle {
-    let from = Vec2::new(flat.first().copied().unwrap_or(0.0), flat.get(1).copied().unwrap_or(0.0));
-    let to = Vec2::new(flat.get(2).copied().unwrap_or(0.0), flat.get(3).copied().unwrap_or(0.0));
-    let curve = Curve::Keyframes {
-        keys: vec![
-            (0.0, AnimValue::Vec2(from)),
-            (dur as f64, AnimValue::Vec2(to)),
-        ],
-        interpolation: Interp::Linear,
-    };
-    service(vm).with_rec(|rec| rec.curves.insert(curve))
-}
-
-/// 扁平点表 → `Vec2` 表（奇数尾巴被忽略；胶水层已做奇偶校验）。
-fn points_of(flat: &[f32]) -> Vec<Vec2> {
-    flat.chunks_exact(2)
-        .map(|p| Vec2::new(p[0], p[1]))
-        .collect()
-}
-
-/// 校验 target 名字是否存在（供胶水层在 `clip` 之前给出明确错误）。
-pub fn target_exists(name: &str) -> bool {
-    target_ctor_by_name(name).is_some()
 }

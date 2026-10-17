@@ -12,6 +12,7 @@ use std::any::Any;
 
 use crate::qualified::QualifiedName;
 use crate::type_name::VmTypeName;
+use crate::typespec::ErasedFn;
 use crate::vm::Vm;
 
 /// capability 的自述元数据（全部可选，缺省为"无"）。
@@ -175,6 +176,14 @@ pub trait Capability<'a>: Sized {
     /// `#[capability]` 宏默认从字段上的 `///` 生成；手写实现可省略（默认空）。
     /// 文档只用于导出（JSON / LuaLS / Markdown），**不参与协商**、无运行时开销。
     fn docs() -> &'static [FnDoc] {
+        &[]
+    }
+
+    /// **绑定入口**：每条函数的类型擦除调用（参数 / 返回值是 [`crate::VmValue`]）。
+    ///
+    /// 由 `#[capability(bindings)]` 生成；未开启时为空。
+    /// 与 [`Self::signatures`] **按序对应**，供语言绑定层自动生成胶水。
+    fn calls() -> &'static [ErasedFn] {
         &[]
     }
 
