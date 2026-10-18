@@ -146,14 +146,18 @@ graph TD
     xcal_render --> xcal_schedule
     xcal_render --> xc_scene_contract
     xcal_render_backends --> xc_notion
-    xcal_render_backends --> xcal_scene
+    xcal_render_backends --> xc_render_ir
     xcal_render_backends --> xcal_render
     xcal_render_backends --> xc_object
+
+    %% XSB 装配产物 → scene（不含任何语言适配器）
+    xcal_scene_bundle --> xcal_scene
 
     %% ui → kernel + graph + render + schedule
     xcal_egui --> xc_notion
     xcal_egui --> xc_macro
     xcal_egui --> xc_object
+    xcal_egui --> xc_pod
     xcal_egui --> xcal_scene
     xcal_egui --> xcal_schedule
     xcal_egui --> xcal_render
@@ -166,11 +170,19 @@ graph TD
     xcal_node_egui_ui --> xc_node_schema
     xcal_node_egui_ui --> xcal_node_egui
 
-    %% app → everything
+    %% GUI 壳 → app + ui（S0：UI 不再由 app 依赖）
+    xcal_gui --> xc_pod
+    xcal_gui --> xcal_app
+    xcal_gui --> xcal_egui
+    xcal_gui --> xcal_render_backends
+    xcal_gui --> xcal_scene
+    xcal_gui --> xcal_schedule
+
+    %% app → everything（**不依赖 xcal-egui**）
     xcal_app --> xcal_scene
+    xcal_app --> xcal_scene_bundle
     xcal_app --> xcal_schedule
     xcal_app --> xc_macro
-    xcal_app --> xcal_egui
     xcal_app --> xcal_render
     xcal_app --> xcal_render_backends
     xcal_app --> xc_content
@@ -181,6 +193,10 @@ graph TD
     xcal_app --> xc_pod_binding
     xcal_app --> xc_pod_lua
     xcal_app --> xc_pod_py
+
+    %% 独立编译器 → app + bundle
+    xcal_compile --> xcal_app
+    xcal_compile --> xcal_scene_bundle
 ```
 
 ## 合规校验
@@ -195,42 +211,45 @@ graph TD
 
 **依赖分析（2026-10-18 按 `cargo metadata` 等价重算，仅生产依赖、dev-deps 不计；见文末说明）：**
 
-> 本次复核把脚本层与 `xc-pod` 家族一并纳入：mermaid **73 条 ⇔ Cargo.toml 73 条**，
-> 零缺零余；FanIn/FanOut 由 24 行扩为 **29 行**。
+> 本次复核把脚本层、`xc-pod` 家族与 XSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
+> 零缺零余；FanIn/FanOut 共 **33 行**。
 > 此前的 W2 复核（8 条漏边修复）仍有效，本表是在其基础上的全量重算。
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xcal-app | 0 | 14 | 1.00 |
-| xc-pod-tests | 0 | 5 | 1.00 |
-| xcal-node-egui-ui | 0 | 3 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
-| xcal-egui | 1 | 7 | 0.88 |
+| xc-pod-tests | 0 | 5 | 1.00 |
+| xcal-compile | 0 | 2 | 1.00 |
+| xcal-gui | 0 | 6 | 1.00 |
+| xcal-node-egui-ui | 0 | 3 | 1.00 |
+| xcal-egui | 1 | 8 | 0.89 |
+| xcal-app | 2 | 14 | 0.88 |
 | xcal-render | 3 | 9 | 0.75 |
-| xc-pod-py | 2 | 3 | 0.60 |
-| xcal-scene | 4 | 11 | 0.73 |
-| xcal-render-backends | 2 | 4 | 0.67 |
+| xcal-scene | 5 | 11 | 0.69 |
 | xc-node-schema | 1 | 2 | 0.67 |
-| xc-pod-lua | 2 | 2 | 0.50 |
 | xcal-node-editor | 1 | 2 | 0.67 |
 | xcal-node-egui | 1 | 2 | 0.67 |
-| xc-prerender | 2 | 2 | 0.50 |
+| xc-pod-py | 2 | 3 | 0.60 |
+| xcal-render-backends | 3 | 4 | 0.57 |
 | xc-graph-algo | 1 | 1 | 0.50 |
+| xc-pod-lua | 2 | 2 | 0.50 |
+| xc-prerender | 2 | 2 | 0.50 |
 | xc-time | 1 | 1 | 0.50 |
 | xc-object | 5 | 4 | 0.44 |
 | xc-scene-contract | 3 | 2 | 0.40 |
-| xc-pod-binding | 4 | 1 | 0.20 |
+| xcal-scene-bundle | 2 | 1 | 0.33 |
 | xc-content | 4 | 1 | 0.20 |
-| xc-render-ir | 4 | 1 | 0.20 |
+| xc-pod-binding | 4 | 1 | 0.20 |
+| xc-render-ir | 5 | 1 | 0.17 |
 | xc-macro | 4 | 0 | 0.00 |
 | xc-node | 6 | 0 | 0.00 |
 | xc-node-schema-macros | 1 | 0 | 0.00 |
 | xc-notion | 11 | 0 | 0.00 |
-| xc-pod | 6 | 0 | 0.00 |
+| xc-pod | 8 | 0 | 0.00 |
 | xc-pod-macro | 3 | 0 | 0.00 |
 | xc-resource | 1 | 0 | 0.00 |
 | xc-vertex | 1 | 0 | 0.00 |
-| xcal-schedule | 4 | 0 | 0.00 |
+| xcal-schedule | 5 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -245,13 +264,13 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 ```
 App / xcal-render ──submit(Advance { dt })──► DriverPod（持有 Scheduler + 相机）
                                                   │
-                                                  ├─ Broadcast<DriverEvent>
+                                                  ├─ publish_topic("xcal.driver.events")
                                                   │    FrameFinished / Advanced / Error
-                                                  │        └─ typed 调用 EventSink<E>::on_event
+                                                  │        └─ 按 PodId 升序 typed 调用 EventSink<E>::on_event
                                                   └─ 每帧 run_frame(dt)
 ```
 
-| | 命令队列 `CommandQueue<C>` | 事件总线 `Broadcast<E>` |
+| | 命令队列 `CommandQueue<C>` | 事件 topic（`publish_topic`） |
 |---|---|---|
 | 方向 | 控制 | 通知 |
 | 语义 | FIFO、顺序确定 | 异步、可丢 |
@@ -344,7 +363,7 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
   故显示尺寸缩小不会放大折线误差。
 - **空心字口径（当前）**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，
   因此公式暂走 Stroke（轮廓）路径；实心填充待 S3 引入三角化后接管
-  （挂在 `CustomShapeData::to_triangles`）。
+  （挂在 `CustomSpec::to_triangles`；图元只带 `SpecId`，函数指针在具名规格表里）。
 - feature：`xcal-app` 默认 `typst`；`--no-default-features` 时回退 `placeholder` 引擎
   （显示方块，链路仍可跑通）。
 

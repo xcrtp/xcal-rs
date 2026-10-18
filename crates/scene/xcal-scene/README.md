@@ -32,7 +32,8 @@
 
 - `xcal-scene` → `xcal-schedule`：本 crate 的 System 实现的是
   `xcal_schedule::system::System`，上下文是 `xcal_schedule::context::ExecutorContext`；
-  但「谁注册、谁按什么 Phase 跑」由上游（`xcal-app` / `xcal-egui`）决定。
+  Phase 归属由本 crate 的 `register` 声明，`xcal-app` 只负责调用它；UI 层**不再注册**
+  任何场景 System。
 - `xcal-render` / `xcal-egui` → `xcal-scene`：渲染与 UI 消费场景数据与契约。
 - 反向依赖不存在：`xcal-schedule` 不认识任何场景/渲染概念。
 

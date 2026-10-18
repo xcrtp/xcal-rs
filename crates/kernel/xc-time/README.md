@@ -33,7 +33,7 @@ seek（跳转）、倒放（负 rate/speed）、循环回绕因此**免费且必
 | 模块 | 关键类型 | 说明 |
 |------|----------|------|
 | `clock` | `ClockForest` / `ClockNode` / `ClockId` / `PlayMode` | 多根时钟森林；`eval_local` 纯函数求值；`set_parent` 构造期环检测 |
-| `curve` | `Curve` / `AnimValue` / `Interp` | 动画曲线（Const/Sin/Orbit/Phase/Sampled/Morph/PathMorph/Keyframes），`sample(t)` 纯函数 |
+| `curve` | `Curve` / `AnimValue` / `Interp` | 动画曲线（Const/Sin/Orbit/Orbit2D/Phase/Sampled/Morph/PathMorph/Keyframes），`sample(t)` 纯函数 |
 | `easing` | `Easing` | 时间重映射 `f(t)→t'`（Linear/EaseIn/EaseOut/EaseInOut/Cubic/Step） |
 | `director` | `Director` | 唯一时间源：`global_t` + `speed` + `playing` |
 | `error` | `TimeError` | `ClockNotFound` / `CycleDetected` / `ReverseNotSeekable` |
@@ -97,6 +97,7 @@ let v = eye.try_vec3().unwrap();           // 类型安全取值：不匹配返�
 | `Const(v)` | 常量 | 静态绑定 |
 | `Sin { base, amp, omega }` | `Scalar` | `base + amp·sin(ωt)` |
 | `Orbit { radius, axis, speed, initial_angle }` | `Vec3` | 3D 轨道相机偏移（Rodrigues 轴角旋转） |
+| `Orbit2D { radius, speed, initial_angle }` | `Vec3` | **2D 公转**：`(r·cosθ, r·sinθ, 0)`，`θ = speed·t + initial_angle`（XY 平面固定；3D `Orbit` 的基向量是 +Z，投影会退化） |
 | `Phase { omega }` | `Scalar` | 线性相位 `ωt`（供 FunctionX2Y 水平滑动 / 形变参数 t） |
 | `Sampled { points, interpolation }` | 任意 | 兜底采样点数组（**外部数据**），`Linear`/`Step` 插值 |
 | `Morph { from, to, span, easing }` | 任意 | 两条曲线按 `span` 归一化时间经 `easing` 混合（span 外取端点） |

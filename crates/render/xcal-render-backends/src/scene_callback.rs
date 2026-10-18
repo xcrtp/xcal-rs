@@ -315,6 +315,7 @@ impl SceneCompositorCallback {
         // （清屏透明），再由 `paint` 经滤镜链 blit 进主 pass；**空链走直通**（不建中间
         // 纹理、不多一次全屏 pass ⇒ 画面逐位不变）。
         let Some(compositor) = store.compositor() else {
+            Self::report_soft_failures();
             return SceneCompositorFrame {
                 frame: CompositeFrame::default(),
                 post_blit: None,
@@ -337,10 +338,24 @@ impl SceneCompositorCallback {
             None
         };
 
+        Self::report_soft_failures();
         SceneCompositorFrame {
             frame,
             post_blit,
             _keep_alive: keep_alive,
+        }
+    }
+
+    /// 帧末汇报"软失败"（三角化失败而跳过的绘制数）。
+    ///
+    /// 口径见 [`crate::diagnostics`]：**软失败被接受**（不中断渲染、不改退出码），
+    /// 但必须能事后发现 —— 每帧一行汇总，进程退出前另有累计值。
+    fn report_soft_failures() {
+        let skipped = crate::diagnostics::take_frame_skipped();
+        if skipped > 0 {
+            eprintln!(
+                "[xcal-render] 本帧 {skipped} 个绘制被跳过（三角化失败；已命名原因，见上方日志）"
+            );
         }
     }
 

@@ -827,6 +827,7 @@ impl WgpuBackend2D {
                 Ok(items) => items,
                 // XSB D1：Custom 解析失败是**显式错误**并记录，不再静默产空几何。
                 Err(error) => {
+                    crate::diagnostics::record_skipped_draw();
                     eprintln!("[xcal-render] 三角化失败，已跳过该绘制：{error}");
                     continue;
                 }
@@ -971,6 +972,7 @@ impl WgpuBackend2D {
             let from_tess = match tessellate(&Shape2D::Path(from_path.clone()), local, &style, tolerance) {
                 Ok(items) => items,
                 Err(error) => {
+                    crate::diagnostics::record_skipped_draw();
                     eprintln!("[xcal-render] 形变 from 三角化失败，已跳过：{error}");
                     continue;
                 }
@@ -978,6 +980,7 @@ impl WgpuBackend2D {
             let to_tess = match tessellate(&Shape2D::Path(to_path.clone()), local, &style, tolerance) {
                 Ok(items) => items,
                 Err(error) => {
+                    crate::diagnostics::record_skipped_draw();
                     eprintln!("[xcal-render] 形变 to 三角化失败，已跳过：{error}");
                     continue;
                 }

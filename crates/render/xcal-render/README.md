@@ -77,8 +77,10 @@ position/attrib0/attrib1/attrib2）：
   实测最大推进量）。`lyon` 在子路径起点沿用上一条的推进量 ⇒ **跨子路径累加**，
   故书写顺序是"轮廓依次写出"（`reveal_advance_accumulates_across_subpaths` 锁死）
 - `Tessellation2D { vertices, indices, layout, kind: Fill | Stroke }`
-- `tessellate(shape, transform, style, tolerance) -> Vec<Tessellation2D>`
-  （`Group` 递归展开；`Empty` 返回**空 Vec**）
+- `tessellate(shape, transform, style, tolerance) -> Result<Vec<Tessellation2D>, TessellateError>`
+  （`Group` 递归展开；`Empty` 返回 `Ok(空 Vec)`；`Custom` 未注册规格 / 规格无几何 ⇒ `Err`）
+- `tessellate_with(shape, transform, style, tolerance, &CustomSpecs) -> Result<…>`
+  （带**具名规格表**的版本；`Custom` 的 `SpecId` 按名字精确查找）
 - `tessellate_reveal(path, transform, style, tolerance, step) -> Option<Tessellation2D>`
   （**R0**：进 lyon 之前按 `step`（`REVEAL_STEP_PX = 2.0` 输出空间 px）**预细分** ——
   lyon 不细分直线段，不补点则切口精度 = 顶点间距；只做描边，填充无 `advancement`）
@@ -127,10 +129,10 @@ position/attrib0/attrib1/attrib2）：
 | `record_systems` | P4 从 `xcal-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle` + **N5 的 `GroupVisibility`**，不读 UI 类型）。**N5**：三个 2D 录制 System 都消费对象级 `Visibility` / `Opacity`（相机 tag 取自 `Camera2DHandle`）；`ContentTextureRecordSystem` 是纹理源、**本轮不参与过滤**（记账） |
 | `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |
 | `filters` | **C 线（纯数据）**：`PostFilterChain`（Resource；顺序即应用顺序、最多 `MAX_FILTER_SLOTS = 4` 个）+ `FilterSlot` + `FilterKind`（`code()` 与 WGSL 常量表一一对应）+ 160 B uniform 编码；**空链 ⇒ 渲染层走直通、画面逐位不变** |
-| `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / **`tessellate_reveal`（R0 书写动画）** / `REVEAL_STEP_PX` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
+| `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tessellate_with` / `TessellateError` / **`tessellate_reveal`（R0 书写动画）** / `REVEAL_STEP_PX` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_3d` | 3D 双列表队列（`DrawQueue3D` / `MeshDraw` / `LineDraw`）|
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
-| `shape` | `Shape2D` + `Style2D` + `CustomShapeData/CustomTypeId` 自定义图元钩子 |
+| `shape` | `Shape2D` + `Style2D` + `CustomShapeData`/`SpecId`/`CustomSpec`/`CustomSpecs`（自定义图元按**具名规格**解析） |
 | `viewport` | `Viewport`（纯数据） |
 | `render_backend` | 重导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源，始终可用）+ `RenderBackend / RenderBackend3D` (`wgpu`) |
 | `render_layer` (`wgpu`) | `RenderLayer`（framebuffer + 清屏描述 + 视口） |
@@ -175,7 +177,8 @@ use xc_notion::{Color32, Rect2D, Transform2D, Vec2};
 let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(100.0, 50.0)));
 let style = Style2D { fill: Some(Color32::GREEN), stroke: None, ..Default::default() };
 
-let items = tessellate(&shape, &Transform2D::identity(), &style, tolerance_for_scale(40.0));
+let items = tessellate(&shape, &Transform2D::identity(), &style, tolerance_for_scale(40.0))
+    .expect("内置图元不会失败");
 assert!(items.iter().all(|t| t.layout == xcal_render::tessellation_layout()));
 ```
 
@@ -199,6 +202,26 @@ assert_eq!(q3.mesh_count() + q3.line_count(), 2);
 
 ---
 
+## 软失败口径（三角化）
+
+**结论：软失败被接受，但必须可观测。**
+
+| 情形 | 行为 |
+|---|---|
+| 内置图元三角化失败 | 不适用（不会失败） |
+| `Custom` 的 `SpecId` 未注册 / 规格无几何 | `tessellate*` 返回 `Err(TessellateError)` |
+| 后端收到 `Err` | **记录命名原因 → 跳过该绘制 → 继续渲染**；不中断整帧、不改变退出码 |
+| 事后发现 | 每帧末打印 `本帧 N 个绘制被跳过`；`xcal-render` 退出前打印累计值 |
+
+口径写死的理由：单个绘制失败不应让整段导出失败（尤其离线批量），但旧行为
+"静默空几何"不可接受。计数与命名原因让失败**可枚举**。
+
+`Bundle::check_restorable` 是 **bundle 路径的前置硬闸**；`--script` 路径没有这道闸，
+靠上述计数发现。**本轮不改硬失败**；若将来要改，收敛点是
+`xcal_render_backends::diagnostics::record_skipped_draw` 的调用处。
+
+---
+
 ## 测试
 
 ```bash
@@ -214,10 +237,10 @@ cargo doc  -p xcal-render --no-deps --all-features
 - `Shape2D`（rect / circle / path / line）端点一致性 + `record_scene` 经契约层 `SceneRead`
   （测试用**非 ECS 的 `TestScene`** 驱动，证明"可替换"不是纸面承诺）+ `ZOrder` 层级优先；
   闭合路径以 `PathCommand::Close` 结尾（M0 方案 b）
-- `tessellate`：`Vertex2D` size == 20 布局契约、`side ∈ {±1}`、
+- `tessellate`：`Vertex2D` size == 24 布局契约、`side ∈ {±1}`、
   填充面积 / 描边环面积、Group 展开、
   圆近似误差 ≤ tolerance、`tolerance_for_scale` 随 scale 下降并钳制、
-  Custom 钩子（`to_triangles` / `to_path` / 无钩子）
+  Custom 具名规格（`to_triangles` / `to_path`）、**未注册 / 无几何 ⇒ 显式 `TessellateError`**
 - 描边几何参数化（R1）门卫：`stroke_geometry_is_independent_of_width`
   （同路径宽度 2/8 → 顶点数 / index 表 / `position` / `side` 相同，`normal` 只差
   f32 末位）、`fill_vertices_are_unaffected_by_offset`（任意宽度下偏移恒 0）、

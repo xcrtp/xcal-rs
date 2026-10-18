@@ -53,6 +53,17 @@ jobs:
           done
         shell: bash
 
+      # XSB 装配产物门禁（**单列一组**，不混进 kernel 组）：
+      # - `xcal-scene-bundle` 依赖 `xcal-scene`（非 kernel 层），但浏览器方案要求
+      #   "浏览器只读 bundle"，因此它必须能编到 wasm32 —— 这里独立验证；
+      # - `xcal-compile` **不在**此列：它是 Native 侧编译器，依赖 `xcal-app`
+      #   → `xc-pod-lua`（mlua），按既定口径不属于 wasm 目标。
+      - name: XSB bundle wasm gate
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p xcal-scene-bundle --target wasm32-unknown-unknown
+        shell: bash
+
       # 结构性判据：`crates/pod/` 下任一 crate 的**生产依赖边**中不得出现任何 `xcal-*`。
       # 这把「领域无关、可独立演进」从口号变成 CI 会拦的规则（覆盖全部 5 个 pod crate，
       # 含两个语言适配器）。dev 边（测试用 mini domain pod）不计入。

@@ -33,7 +33,7 @@ xcal-render        渲染管线    三角化（lyon）/ 合批 / DrawQueue
 |------|------|------|
 | `shape` | `Shape2D` | 逻辑图元枚举（`Empty` / `Line` / `Polyline` / `Path` / `Circle` / `Ellipse` / `Rect` / `Polygon` / `Group` / `Custom`）+ `bounds()` |
 | `shape` | `Style2D` | 绘制样式：`fill` / `stroke` / `stroke_width` / `space: MeasureSpace` |
-| `shape` | `CustomShapeData` / `CustomTypeId` | 宿主自定义图元的开放扩展点（`to_path` / `to_triangles` 函数指针 + `bounds`）|
+| `shape` | `CustomShapeData` / `SpecId` / `CustomSpec` / `CustomSpecs` | 自定义图元：`CustomShapeData = SpecId + bounds`（可序列化）；几何函数在**具名规格表** `CustomSpecs` 里按名字查 |
 | `style` | `StrokeSolid` / `FillSolid` | **样式组件**（放进场景的载荷：颜色 + 宽度 + 宽度所属空间）|
 | `style` | `StrokeStyle` / `FillStyle` | 样式枚举（当前只有 `Solid`）|
 | `style` | `ResolveStyle` | **唯一换算点**：`resolve_style(scale) -> Style2D` |
@@ -82,19 +82,33 @@ StrokeSolid::new(2.0, RED).resolve_style(10.0).stroke_width == 2.0;   // 默认 
 再乘除 `scale` —— 否则会出现"某些描边乘过、某些没乘"的不一致。
 `fill_style` / `stroke_style_raw` 是给"已经是屏幕空间量"的队列便捷方法，**不换算**。
 
-### `Shape2D` — 变体形态**冻结**
+### `Shape2D` — 变体形态**冻结**，且**全部可序列化**
 
 `Circle { center, radius }` 这类**扁平字段形态**是后端（`wgpu_2d` / `tessellate`）
 **源级依赖**的契约：改名 / 改形会连带改后端源码，**禁止**。
 新增能力走 `#[non_exhaustive]` 之外的路径：要么加**新变体**（后端 `_ =>` 落到兜底），
-要么用 `Shape2D::Custom(CustomShapeData)`（宿主自带 `to_path` / `to_triangles` 降级函数，
-render 层无需为每个宿主图元加变体）。
+要么用 `Shape2D::Custom(CustomShapeData)`。
+
+`Shape2D` 是 XSB 装配产物的硬前提：**所有变体都 `Serialize + Deserialize`**。
+`Custom` 不再携带函数指针，只带**可寻址的规格名**：
 
 ```rust
-let data = CustomShapeData::new(TypeId::of::<MyGlyph>(), bounds)
-    .with_to_path(|d, t| /* 展开为 Path2D（已应用 t） */);
+// 函数指针只住在具名规格表里（编译期常量）：
+static SPECS: &[CustomSpec] = &[
+    CustomSpec::new("my.glyph").with_path(my_glyph_path),
+];
+let specs = CustomSpecs::new(SPECS);
+
+// 图元只记名字 + 包围盒（可跨进程 / 跨运行时）：
+let data = CustomShapeData::new(SpecId::new("my.glyph"), bounds);
 let shape = Shape2D::Custom(data);
+
+// 三角化：按名字查表；未注册 ⇒ 显式 `TessellateError`（不是静默空几何）
+let items = tessellate_with(&shape, &t, &style, tolerance, &specs)?;
 ```
+
+> **为什么不是注册序号**：编译器与回放端是两个独立二进制；序号一旦错位，
+> 同一个 ID 会指向不同函数 ⇒ 画面错乱且不报错。名字是唯一稳定身份。
 
 ### 与 `Describable`（契约层）的分工
 
@@ -115,7 +129,8 @@ cargo check -p xc-render-ir --target wasm32-unknown-unknown     # kernel 门禁
 ```
 
 覆盖：`Shape2D::bounds`（线 / 圆 / 空图元 / 分组取并 / 自定义图元的声明 bounds）、
-`CustomShapeData` 的 `Debug` 与 `with_to_path`、`StrokeSolid` 两参构造默认 `Screen`、
+`Shape2D` 全变体的 serde 往返与 `Custom` 只写规格名、`CustomSpecs` 的精确名字查找、
+`StrokeSolid` 两参构造默认 `Screen`、
 `ResolveStyle` 的"World 按 scale 放大 / Screen 不变"（唯一换算点）、`FillSolid` 解析后无描边。
 
 ---

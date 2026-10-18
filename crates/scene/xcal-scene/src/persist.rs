@@ -113,3 +113,48 @@ pub fn deserialize_components(tagged: Vec<TaggedComponent>) -> Result<Components
     crate::math_pod::rebind_components(&mut components);
     Ok(components)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xc_object::Axes2D;
+
+    /// **无界定义域（±∞）必须能存 / 读往返**。
+    ///
+    /// 这个 bug 在 XSB 之前就存在：`Axes2D` 用 `±∞` 表示无界，`serde_json` 会写成
+    /// `null`，反序列化即失败。`Axes2D` 现在有显式 serde 表示（每端 `Option<f32>`，
+    /// `None` = 无界）；本用例把存档/读档这条路径也锁住。
+    #[test]
+    fn unbounded_axes_survive_persist_roundtrip() {
+        let components: Components = vec![Box::new(Axes2D::unbounded())];
+
+        let tagged = serialize_components(&components).expect("序列化无界 Axes2D");
+        let json = serde_json::to_string(&tagged).expect("tagged JSON");
+        assert!(
+            !json.contains("inf") && !json.contains("Infinity"),
+            "存档 JSON 不得含非有限浮点：{json}"
+        );
+
+        let restored = deserialize_components(tagged).expect("反序列化无界 Axes2D");
+        let axes = restored
+            .iter()
+            .find_map(|c| (**c).as_any().downcast_ref::<Axes2D>())
+            .expect("Axes2D 必须被还原");
+        assert_eq!(axes.x_range, (f32::NEG_INFINITY, f32::INFINITY));
+        assert_eq!(axes.y_range, (f32::NEG_INFINITY, f32::INFINITY));
+    }
+
+    /// 有限定义域逐位往返（对照组）。
+    #[test]
+    fn bounded_axes_survive_persist_roundtrip() {
+        let components: Components = vec![Box::new(Axes2D::new((-3.0, 7.0), (-1.0, 1.0)))];
+        let tagged = serialize_components(&components).expect("序列化");
+        let restored = deserialize_components(tagged).expect("反序列化");
+        let axes = restored
+            .iter()
+            .find_map(|c| (**c).as_any().downcast_ref::<Axes2D>())
+            .expect("Axes2D 必须被还原");
+        assert_eq!(axes.x_range, (-3.0, 7.0));
+        assert_eq!(axes.y_range, (-1.0, 1.0));
+    }
+}

@@ -1,13 +1,13 @@
 # xcal-egui
 
 > **UI 适配层**：`EguiSceneHost` 是 egui 与场景之间的**唯一**适配层——把每帧 egui
-> 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容；
-> 另有 2 个符合 xcal-scene 六阶段调度约定的场景侧 `System`（坐标轴刷新、函数图像
-> 刷新），只依赖纯数据 Resource，可 headless 测试。
+> 输入翻译为 `SceneEvent`、绘制面板 chrome、写 `ViewRect`、提交 2D/3D 内容。
+> 本 crate **不再注册任何场景 System**（坐标轴 / 函数图刷新、时间与参数面板事件消费
+> 已归 `xcal-scene`，见"已迁出"）。
 >
-> **P1 / P4 归位**：相机状态搬进场景（本层不再持 `AppCamera`）、三个录制 System
-> 搬到 `xcal-render`（R0 起该模块共**四个**：P4 三个 + 书写动画录制 `RevealRecordSystem`）、
-> `ViewRect` 随之下沉 —— 详见下方"已迁出"。
+> **归位历史**：相机状态搬进场景（本层不再持 `AppCamera`）、录制 System 搬到
+> `xcal-render`、`ViewRect` 下沉至 `xcal-scene::domain`（`xcal-render` 转发）、
+> 帧体构造搬到 `xcal-render::frame` / `xcal-render-backends::frame`。
 
 ```
 xcal-scene (场景组件 + 场景 System + domain 契约)
@@ -21,7 +21,7 @@ xc-macro (Transform2DInto 派生)
 xcal-egui  ← 本 crate
       │
       ▼
-xcal-app (装配 + ParamPanelSystem)
+xcal-gui（GUI 可执行壳；`xcal-app` **不依赖本层**）
 ```
 
 ---
@@ -35,10 +35,10 @@ xcal-app (装配 + ParamPanelSystem)
 |----------|------|------|
 | `UiConfig { show_grid, show_field, show_2d, show_3d, viewport_camera, free_2d_camera, flip_layer_order, …(滤镜四参) }` | 本 crate | 面板显示开关（`show_2d` / `show_3d` = 图层开关，默认都开）+ K3 视口操作目标（默认 `TwoD`）+ **`free_2d_camera`：2D 相机由交互还是分镜驱动（默认 `false` = 分镜）** + S3-2 图层顺序翻转（默认 `false`）|
 | `TimeState` | 再导出自 xcal-scene | 每帧累计时钟（由 `DirectorAdvanceSystem` 推进）|
-| `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `TimeControlSystem` 消费事件修改）|
+| `DirectorState` | xcal-scene | 时间轴 / 播放 / 速度（由 `xcal-scene::input::TimeControlSystem` 消费事件修改）|
 | `InputEvents`（`Vec<SceneEvent>`）| xcal-scene::domain | 帧首由 host 整帧替换写入；各阶段 System 只读 |
 | `Camera2DHandle`（来自 xc-object）| — | 主 2D 相机的**引用型句柄**（P2）：指向场景里的相机对象（持 `Framing2D`）。相机状态本身**不是 Resource**（P1-1）|
-| `ViewRect`（来自 xcal-render）| — | 本帧渲染目标矩形（P4 下沉）。由 `EguiSceneHost::update_view_rect` 写入；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑）|
+| `ViewRect`（定义在 `xcal-scene::domain`，`xcal-render` 转发）| — | 本帧渲染目标矩形。由 `EguiSceneHost::update_view_rect` 写入；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑）|
 | `DrawQueue` / `DrawQueue3D` / `ContentTextureQueue` / `MorphQueue` / `RevealQueue`（来自 xcal-render）| — | 各渲染队列；由 `xcal-render::record_systems` 的四个录制 System 与 app 的 3D 录制写入（`RevealQueue` = R0 书写动画）|
 
 > `AppCamera` **已删除**（P1-1）：相机状态是**场景对象**（`xc_object::Framing2D`），
@@ -49,37 +49,27 @@ xcal-app (装配 + ParamPanelSystem)
 
 ---
 
-## System（按 Phase 分配）
+## System
 
-本 crate 只保留**场景侧** System（不含任何 egui 类型）；纯 UI chrome
-（控制面板 / 时间面板 / 参数面板）与内容提交都在 `EguiSceneHost`。
+**本 crate 不再持有任何 System。** 全部场景侧 System 已按"谁的状态谁负责"归位：
 
-| Phase | System | 读写 | 功能 |
-|-------|--------|------|------|
-| LogicUpdate | `TimeControlSystem` | R=`InputEvents`; W=`DirectorState` | 消费 `Button(PLAY_PAUSE)` / `Slider(SPEED)` / `Slider(SEEK)` |
-| Prepare | `AxesRefreshSystem`（M4）| R=`ViewRect`, `Camera2DHandle`, `UiConfig`; W=— | 取本帧相机 → 调对象层 `Axes2D::refresh`（几何在 `xc-object`，本层只接线）|
-| Prepare | `FunctionGraphRefreshSystem`（M4）| R=—; W=— | 取实体相位（`PhaseAnim`）→ 调对象层 `FunctionGraph::refresh`（写路径 = 契约层 `Scene::set`）|
-
-### 已迁出（P1 / P4）
-
-| System | 新家 | 理由 |
+| System | 新家 | 阶段 |
 |---|---|---|
-| `CameraInputSystem` | `xcal-scene::camera_input` | 相机状态归**场景对象**；控制器纯函数 `apply_pan_zoom` 一并搬走 |
-| `SceneRecordSystem` | `xcal-render::record_systems` | 渲染动作住渲染层；不再读 UI 的 `ViewRect`（已下沉） |
-| `MorphRecordSystem` | 同上 | 同上 |
-| `ContentTextureRecordSystem` | 同上 | 同上；其**内联 hecs 查询**一并改为契约层 `for_each*`（"换场景实现要整体重写"→"只需换适配器"） |
-
-其他阶段由别的 crate 提供：Input 的 `DirectorAdvance` / `CameraInput`、SceneSync 的
-`BindingApply`（xcal-scene），LogicUpdate 的 `ParamPanel`（xcal-app）。
-`Phase::FrameEnd` 目前为空。
+| `CameraInputSystem` | `xcal-scene::camera_input` | Input |
+| `TimeControlSystem` | `xcal-scene::input` | LogicUpdate |
+| `ParamPanelSystem` | `xcal-scene::input` | LogicUpdate |
+| `AxesRefreshSystem` | `xcal-scene::geometry` | Prepare |
+| `FunctionGraphRefreshSystem` | `xcal-scene::geometry` | Prepare |
+| `SceneRecordSystem` | `xcal-render::record_systems` | RenderCommit |
+| `MorphRecordSystem` | 同上 | RenderCommit |
+| `ContentTextureRecordSystem` | 同上 | RenderCommit |
+| `RevealRecordSystem` | 同上 | RenderCommit |
+| `TransformHierarchySystem` | `xcal-scene::transform_hierarchy` | Prepare |
 
 > **M4：UI 层不含几何计算。** 原网格构建 System（相机裁剪 / 步长自适应 / 刻度线 /
 > 坐标轴，279 行）已退役，四段逻辑整体归 `xc_object::Axes2D`；函数采样归
 > `xc_object::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
 > 世界↔屏幕换算（换算只在 `xcal-render` 的唯一换算点）。
->
-> P1：`AxesRefreshSystem` 的相机来自**场景对象**（经 `Camera2DHandle` 指认 + `ViewRect`
-> 绑定视口）；只读世界解析相机、再取世界可变借用写线段，一读一写不重叠。
 
 ---
 
@@ -100,7 +90,7 @@ xcal-app (装配 + ParamPanelSystem)
   **`翻转图层顺序` 复选框**（S3-2 验收开关，默认关）、相机 center/scale 读数
   （值取自本帧 `SceneView` 的 2D 图层 —— UI 不再持有相机状态）。
 - **时间面板（左）**：播放/暂停按钮、**`⟲ 重新播放` 按钮**（拨回 `t = 0` 并恢复播放 →
-  `Button(REPLAY)` → `TimeControlSystem`）、速度滑块、时间轴 seek 滑块。
+  `Button(REPLAY)` → `xcal-scene::input::TimeControlSystem`）、速度滑块、时间轴 seek 滑块。
 - **参数面板（右）**：**按曲线类型**展示绑定滑块——圆半径 `base/amp/omega`、
   函数相位 `omega`、3D 轨道相机 `radius/speed/angle`（标签取 `Target::name()`，
   可选中文映射缺失时回退原名；写回由场景侧按 `WidgetId` 完成）。
@@ -111,9 +101,9 @@ xcal-app (装配 + ParamPanelSystem)
 
 ## `EguiSceneHost`：唯一 egui 触点
 
-- `build_scene_view(world, res) -> SceneView`：场景 → UI，纯数据（2D 图层取
-  `Camera2DHandle` 指向的场景相机对象 + `ViewRect` 绑定，3D 图层取 World 中第一个
-  `Camera3D`）。
+- `build_scene_view(world, res) -> SceneView`：转发到 `xcal_render::frame::build_scene_view`
+  （场景 → UI 的纯数据声明；2D 图层取 `Camera2DHandle` 指向的场景相机对象 + `ViewRect`
+  绑定，3D 图层取 World 中第一个 `Camera3D`；本层只负责把 `UiConfig` 翻成 `FrameOptions`）。
 - `begin_frame(ui, view, res)`：收集视口输入（滚轮 → `Zoom`、右键/中键拖拽 → `Pan`，
   位移在 host 内换算为**世界坐标**并做 Y 翻转）+ 三面板 chrome，整帧替换写入
   `InputEvents`；随后 `update_view_rect` 写 `ViewRect`（必须在 `run_frame` 之前，

@@ -143,9 +143,16 @@ pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<Compiled
     let assembly = assembly::assemble(engine)
         .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
     let script = run_script_source(&assembly, source, language)?;
+
+    // **最小集**（不是"编译器注册的全部"）：只记录脚本实际用到的 capability。
+    // - scene：出现了对象或时间线（`wait` 也算使用）；
+    // - content：`content.formula` / `content.text` 被实际调用过。
+    let scene_used = script.len() > 0 || script.duration() > 0.0;
+    let content_used = assembly.content_used();
+
     Ok(CompiledScript {
         script,
-        capabilities: runtime_capabilities(),
+        capabilities: used_capabilities(scene_used, content_used),
         pods: runtime_pods(),
         source_sha256: xcal_scene_bundle::sha256::hex(&xcal_scene_bundle::sha256::sha256(
             source.as_bytes(),
@@ -153,25 +160,39 @@ pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<Compiled
     })
 }
 
-/// 参与装配的能力版本（从 capability 的 `meta()` 读取，**不是手写常量**）。
-fn runtime_capabilities() -> Vec<xcal_scene_bundle::Capability> {
-    use xc_pod::Capability;
+/// 单个 capability 的版本声明（名字取自签名，唯一真源）。
+fn capability_of<C: xc_pod::Capability<'static>>() -> xcal_scene_bundle::Capability {
+    let meta = C::meta();
+    let name = C::signatures()
+        .first()
+        .map(|signature| signature.namespace)
+        .unwrap_or("");
+    xcal_scene_bundle::Capability::new(name, meta.version)
+}
 
-    let scene_meta = <xcal_scene::pod::SceneApi<'static> as Capability>::meta();
-    let content_meta = <xcal_scene::pod::ContentApi<'static> as Capability>::meta();
-    // 名字取自能力签名（唯一真源），不另写字符串常量。
-    let scene_name = <xcal_scene::pod::SceneApi<'static> as Capability>::signatures()
-        .first()
-        .map(|s| s.namespace)
-        .unwrap_or("");
-    let content_name = <xcal_scene::pod::ContentApi<'static> as Capability>::signatures()
-        .first()
-        .map(|s| s.namespace)
-        .unwrap_or("");
-    vec![
-        xcal_scene_bundle::Capability::new(scene_name, scene_meta.version),
-        xcal_scene_bundle::Capability::new(content_name, content_meta.version),
-    ]
+fn scene_capability() -> xcal_scene_bundle::Capability {
+    capability_of::<xcal_scene::pod::SceneApi<'static>>()
+}
+
+fn content_capability() -> xcal_scene_bundle::Capability {
+    capability_of::<xcal_scene::pod::ContentApi<'static>>()
+}
+
+/// 脚本**实际用到的最小 capability 集**（XSB Meta 口径）。
+fn used_capabilities(scene_used: bool, content_used: bool) -> Vec<xcal_scene_bundle::Capability> {
+    let mut out = Vec::new();
+    if scene_used {
+        out.push(scene_capability());
+    }
+    if content_used {
+        out.push(content_capability());
+    }
+    out
+}
+
+/// 当前运行时注册的**全部** capability（可还原性检查的"可用集"）。
+fn runtime_capabilities() -> Vec<xcal_scene_bundle::Capability> {
+    vec![scene_capability(), content_capability()]
 }
 
 /// 参与装配的 Pod 版本（Service 常量）。
@@ -1224,6 +1245,37 @@ mod tests {
             fingerprints_lua.len(),
             rows_lua.len()
         );
+    }
+
+    /// **步骤 2 验收**：`CompiledScript.capabilities` 是**脚本实际用到的最小集**，
+    /// 不是"编译器注册的全部 capability"（否则回放端会被要求具备用不到的 cap）。
+    #[test]
+    fn compiled_capabilities_are_the_minimal_used_set() {
+        // 只用 scene：没有任何 content.formula / content.text 调用。
+        let scene_only = r#"
+scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
+"#;
+        let compiled = compile_script(scene_only, ScriptLanguage::Lua).expect("编译 scene-only 脚本");
+        let names: Vec<&str> = compiled
+            .capabilities
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["xcal.scene"], "只用到 scene，不得含 content");
+
+        // fourier 用 content.text 生成标题 ⇒ scene + content。
+        let compiled = compile_script(
+            include_str!("../scripts/fourier.lua"),
+            ScriptLanguage::Lua,
+        )
+        .expect("编译 fourier");
+        let names: Vec<&str> = compiled
+            .capabilities
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert!(names.contains(&"xcal.scene"), "names = {names:?}");
+        assert!(names.contains(&"xcal.content"), "names = {names:?}");
     }
 
     /// **XSB 三路径同构**：`script` → `.xsb` → 还原，产物与直接脚本逐对象 / 逐绑定相等。

@@ -103,9 +103,16 @@ pub struct PodAssembly {
     // 保留：默认构建无读取点，但 python feature 的测试会用到；属"排查句柄"而非漏接线。
     #[allow(dead_code)]
     pub lua: Arc<LuaPod>,
+    /// 内容 Service 句柄：`compile_script` 用它读"内容能力是否被实际使用"。
+    pub(crate) content: Arc<pod::ContentServicePod>,
 }
 
 impl PodAssembly {
+    /// `content` 能力是否被脚本实际调用过（XSB Meta 的最小集口径）。
+    pub fn content_used(&self) -> bool {
+        self.content.used()
+    }
+
     /// 宿主 → Lua：执行分镜脚本，取回 `SceneScript`。
     pub fn run_script(&self, source: &str) -> Result<SceneScript, BrokerError> {
         let owned = source.to_string();
@@ -126,7 +133,7 @@ impl PodAssembly {
 pub fn assemble(engine: Arc<InMemoryEngine>) -> Result<PodAssembly, AssemblyError> {
     // `nodes` 只在开启 python feature 时需要追加节点。
     #[cfg_attr(not(feature = "python"), allow(unused_mut))]
-    let (lua, mut nodes) = base_nodes(engine);
+    let (lua, content, mut nodes) = base_nodes(engine);
 
     #[cfg(feature = "python")]
     {
@@ -137,11 +144,17 @@ pub fn assemble(engine: Arc<InMemoryEngine>) -> Result<PodAssembly, AssemblyErro
         nodes.push(PodNode::new_sync("python", python, &["python"]));
     }
 
-    run_broker(lua, nodes)
+    run_broker(lua, content, nodes)
 }
 
 /// 三个内置节点 + Lua 的能力注册。
-fn base_nodes(engine: Arc<InMemoryEngine>) -> (Arc<LuaPod>, Vec<PodNode>) {
+fn base_nodes(
+    engine: Arc<InMemoryEngine>,
+) -> (
+    Arc<LuaPod>,
+    Arc<pod::ContentServicePod>,
+    Vec<PodNode>,
+) {
     let paths = PathStore::new();
     let scene = pod::scene_service(paths.clone());
     let content = pod::content_service(engine, paths);
@@ -155,14 +168,18 @@ fn base_nodes(engine: Arc<InMemoryEngine>) -> (Arc<LuaPod>, Vec<PodNode>) {
     let nodes = vec![
         // scene / content 只含装配期状态（内部用锁），登记 SyncPod 徽章供 Python 闭包捕获。
         PodNode::new_sync("scene", scene, &["scene"]),
-        PodNode::new_sync("content", content, &["content"]),
+        PodNode::new_sync("content", Arc::clone(&content), &["content"]),
         // LuaPod 持有 mlua 解释器（非 Send + Sync）⇒ 不登记徽章。
         PodNode::new("lua", Arc::clone(&lua) as Arc<dyn Pod>, &["script"]),
     ];
-    (lua, nodes)
+    (lua, content, nodes)
 }
 
-fn run_broker(lua: Arc<LuaPod>, nodes: Vec<PodNode>) -> Result<PodAssembly, AssemblyError> {
+fn run_broker(
+    lua: Arc<LuaPod>,
+    content: Arc<pod::ContentServicePod>,
+    nodes: Vec<PodNode>,
+) -> Result<PodAssembly, AssemblyError> {
     // 描述层先校验（不建 Pod 也能跑）；再与 Broker 从真实 Pod 推导的图对齐。
     let declared = plan(nodes.iter().any(|node| node.name == "python"));
     let declared_report = declared.validate()?;
@@ -183,7 +200,11 @@ fn run_broker(lua: Arc<LuaPod>, nodes: Vec<PodNode>) -> Result<PodAssembly, Asse
     );
 
     eprintln!("[xcal-app] Pod 装配：\n{report}");
-    Ok(PodAssembly { broker, lua })
+    Ok(PodAssembly {
+        broker,
+        lua,
+        content,
+    })
 }
 
 #[cfg(test)]

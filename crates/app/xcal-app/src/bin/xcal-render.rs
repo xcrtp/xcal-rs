@@ -245,6 +245,14 @@ fn run() -> Result<(), String> {
     }
 
     sink.finish()?;
+
+    // 软失败汇总：三角化失败只跳过该绘制，不中断导出、不改退出码。
+    let skipped = xcal_render_backends::diagnostics::total_skipped();
+    if skipped > 0 {
+        eprintln!(
+            "[xcal-render] 三角化失败累计跳过 {skipped} 个绘制（软失败：输出仍已产出；原因见上方命名日志）"
+        );
+    }
     Ok(())
 }
 

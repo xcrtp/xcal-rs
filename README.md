@@ -46,26 +46,30 @@ crates/
 │   └── xcal-schedule       Resource / System trait / 六阶段 Scheduler + Telemetry（依赖仅 hecs）
 │
 ├── scene/           # 场景层
-│   └── xcal-scene          ECS 场景数据 + 场景 System + domain 契约 + Pod domain（SceneApi / ContentApi）
+│   ├── xcal-scene          ECS 场景数据 + 场景 System + domain 契约 + Pod domain（SceneApi / ContentApi）
+│   └── xcal-scene-bundle   XSB 装配产物（格式 / payload 哈希 / 可还原性检查；无脚本依赖）
 │
 ├── render/          # 渲染抽象与具体后端
 │   ├── xcal-render         2D/3D 渲染抽象（Painter / DrawQueue / Shape2D / RenderLayer）
 │   └── xcal-render-backends  wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor）
 │
 ├── ui/              # UI 与编辑器层
-│   ├── xcal-egui           egui UI overlay System（控制面板 / 网格 / 相机）
+│   ├── xcal-egui           egui 适配层（输入翻译 / 面板 chrome / 内容提交；不含场景 System）
 │   ├── xcal-node-editor    纯逻辑节点编辑器状态机（Command / Undo / HitTestPolicy）
 │   ├── xcal-node-egui      egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸）
 │   └── xcal-node-egui-ui   属性→egui 控件映射（PropertyNodeView / draw_property）
 │
-└── app/             # 应用组装层
-    └── xcal-app          eframe 入口（Scheduler 构建 / Resource 注入 / System 注册 / Pod 装配）
+└── app/             # 应用外壳层
+    ├── xcal-app          组装（无 UI）：Runtime / Pod 装配 / Resource 注入 / System 注册
+    ├── xcal-gui          GUI 可执行壳（eframe::App）
+    └── xcal-compile      XSB 独立编译器（脚本 → .xsb）
 ```
 
 依赖铁律：
 - `xc-*` crate 不得依赖任何 `xcal-*` crate 或 egui/wgpu
 - `xcal-*` crate 可依赖 `xc-*`，但不得依赖 `xcal-app`
-- `xcal-app` 可依赖一切，是唯一组装入口
+- `xcal-app` 是唯一组装入口；`xcal-gui` / `xcal-compile` 只是调用它的壳
+  （**`xcal-app` 不依赖 `xcal-egui`**）
 - 语言适配器（`xc-pod-lua` / `xc-pod-py`）属于 `crates/pod/` 的语言适配器组，**生产依赖不含任何 `xcal-*`**；
   domain 能力由 App 通过 `register_capability::<SceneApi>(..)` 注入
 - `crates/pod/` 的核心组（`xc-pod` / `xc-pod-binding` / `xc-pod-macro`）平台无关，必须过 wasm gate；
@@ -94,17 +98,20 @@ crates/
 | `xc-node-schema` | graph | 属性模型（Property / NodeSpec / DynamicObject / NodeRegistry），不依赖 egui |
 | `xc-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
 | `xcal-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs |
-| `xcal-scene` | scene | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply）+ domain 契约 + Pod domain（`SceneApi` / `ContentApi`）；依赖 `xcal-schedule` |
+| `xcal-scene` | scene | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply / Axes / FunctionGraph / 输入事件 / 父子变换）+ domain 契约 + Pod domain（`SceneApi` / `ContentApi`）；依赖 `xcal-schedule` |
+| `xcal-scene-bundle` | scene | XSB 装配产物：容器 / payload SHA-256 / Meta（cap+pod 版本）/ 可还原性检查；**无脚本依赖** |
 | `xc-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `xcal-*` |
 | `xc-pod-py` | pod（语言适配器组） | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |
 | `xc-pod-tests` | pod（测试组） | 集成测试 + 基准（`publish = false`）：mini pod、topic 扇出、逻辑时序、flush、Lua/Python 对称性 |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape2D / RenderLayer / Viewport）+ 录制 System |
 | `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback） |
-| `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
+| `xcal-egui` | ui | egui 适配层：输入翻译 / 面板 chrome / 写 `ViewRect` / 内容提交（**不含任何场景 System**） |
 | `xcal-node-editor` | ui | 纯逻辑节点编辑器状态机（Command / Undo / 可插拔 HitTestPolicy） |
 | `xcal-node-egui` | ui | egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸） |
 | `xcal-node-egui-ui` | ui | 属性→egui 控件映射（PropertyNodeView / draw_property / spawn_menu） |
-| `xcal-app` | app | 应用组装：Scheduler 构建 / Resource 注入 / System 注册 / Pod 装配 / eframe 入口 |
+| `xcal-app` | app | 组装（无 UI）：Runtime 构建 / Resource 注入 / System 注册 / Pod 装配 |
+| `xcal-gui` | app | GUI 可执行壳：`eframe::App` + 窗口参数（依赖 `xcal-app` + `xcal-egui`） |
+| `xcal-compile` | app | XSB 独立编译器：脚本 → `.xsb`（复用 `xcal_app::compile_script`） |
 
 
 ## 动画架构（Director 唯一时间源）

@@ -30,6 +30,8 @@ pub mod wgpu_2d;
 // S3-2/C4：图层合成器（N 张图层纹理按声明顺序混合进主 pass）。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod compositor;
+// 渲染期软失败计数（三角化失败跳过数：每帧 / 累计）。
+pub mod diagnostics;
 
 #[cfg(feature = "egui-wgpu")]
 pub mod eframe_backend;

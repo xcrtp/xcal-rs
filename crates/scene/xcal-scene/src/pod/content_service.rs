@@ -18,6 +18,7 @@
 // （那会让 scene 层反向依赖 render 层）。
 
 use std::any::Any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use xc_content::StrokeOutline;
@@ -87,6 +88,12 @@ pub struct ContentServicePod {
     registry: RegistryPod,
     engine: Arc<InMemoryEngine>,
     paths: PathStore,
+    /// 本 Service 是否**被脚本实际调用过**（`formula` / `text`）。
+    ///
+    /// 用途：XSB Meta 记录"脚本实际用到的最小 capability 集"，
+    /// 而不是"编译器注册的全部 capability"（后者会让回放端被要求
+    /// 具备它根本用不到的 cap，`check_restorable` 误报）。
+    used: AtomicBool,
 }
 
 impl ContentServicePod {
@@ -101,7 +108,13 @@ impl ContentServicePod {
             registry,
             engine,
             paths,
+            used: AtomicBool::new(false),
         }
+    }
+
+    /// 本 Service 是否被调用过（编译期元信息用）。
+    pub fn used(&self) -> bool {
+        self.used.load(Ordering::Relaxed)
     }
 }
 
@@ -155,6 +168,8 @@ fn compile(
     sort_reading_order: bool,
 ) -> PathList {
     let this = service(pod);
+    // 记录"内容能力被实际使用"（供 XSB Meta 取最小 capability 集）。
+    this.used.store(true, Ordering::Relaxed);
     let outlines = crate::content::compile(
         &this.engine,
         source,
