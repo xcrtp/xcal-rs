@@ -19,10 +19,10 @@ use xc_node::{
     EvalError, EvalErrorPolicy, EvalStrategy, ExecContext, InputSocketId, Node, NodeExecutor,
     NodeId, OutputSocketId, SimpleGraph,
 };
+use xc_node_schema::{NodeRegistry, Property};
 use xcal_node_editor::{BezierGeometry, Command, Editor, EditorEvent, FreeLayout};
 use xcal_node_egui::{BezierRenderer, NodeGraphApp};
 use xcal_node_egui_ui::{PropertyNodeView, spawn_menu};
-use xc_node_schema::{NodeRegistry, Property};
 
 // ----------------------------------------------------------------------------
 // Derived nodes — zero hand-written Node/NodeSpec boilerplate.
@@ -448,6 +448,10 @@ impl eframe::App for DemoApp {
 // (appended at the end of each family: Latin still uses the default fonts,
 // CJK falls through to this one). Silently keeps the defaults when no
 // candidate font exists.
+//
+// The `C:\Windows\Fonts\...` entries only exist on Windows; on Linux / macOS
+// they are skipped by the `std::fs::read` existence filter below, so this list
+// is intentionally platform-agnostic (it is a candidate list, not a config).
 // ----------------------------------------------------------------------------
 
 const CJK_FONT_CANDIDATES: &[&str] = &[

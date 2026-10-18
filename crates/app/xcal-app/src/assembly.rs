@@ -14,13 +14,14 @@
 
 use std::sync::Arc;
 
-use xc_prerender::InMemoryEngine;
 use xc_pod::{
-    AssemblyPlan, Broker, BrokerError, Capability, FnSig, NodeSpec, ServiceRequirement, Pod, PodNode,
+    AssemblyPlan, Broker, BrokerError, Capability, FnSig, NodeSpec, Pod, PodNode,
+    ServiceRequirement,
 };
 use xc_pod_lua::LuaPod;
-use xcal_scene::scene_script::SceneScript;
+use xc_prerender::InMemoryEngine;
 use xcal_scene::pod::{self, ContentApi, PathStore, SceneApi};
+use xcal_scene::scene_script::SceneScript;
 
 /// 本 App 的分镜脚本（**App 自己的资产**，不属于语言适配器）。
 pub const STORYBOARD_LUA: &str = include_str!("../scripts/storyboard.lua");
@@ -99,6 +100,7 @@ impl From<BrokerError> for AssemblyError {
 pub struct PodAssembly {
     pub broker: Broker,
     /// Lua Pod 句柄：只用于测试 / 排查（`registered_global_names`）。
+    // 保留：默认构建无读取点，但 python feature 的测试会用到；属"排查句柄"而非漏接线。
     #[allow(dead_code)]
     pub lua: Arc<LuaPod>,
 }

@@ -33,17 +33,17 @@ use std::mem;
 use glam::Mat4;
 use wgpu::util::DeviceExt as _;
 
+use xc_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 use xcal_render::resource_cache::{ResourceCache, ResourceKey};
 use xcal_render::{
     AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, REVEAL_STEP_PX,
-    RevealItem, Shape2D, Style2D, TessKind, Tessellation2D, Vertex2D, VertexInputDesc, VertexLayout,
-    hash_bytes, tessellate, tessellate_reveal, tolerance_for_scale,
+    RevealItem, Shape2D, Style2D, TessKind, Tessellation2D, Vertex2D, VertexInputDesc,
+    VertexLayout, hash_bytes, tessellate, tessellate_reveal, tolerance_for_scale,
 };
 use xcal_scene::domain::LayerId;
-use xc_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 
+use crate::gpu_util::{UniformArena, bytes_of};
 use crate::vertex_layout::{to_wgpu, to_wgpu_buffers};
-use crate::wgpu_3d::UniformArena;
 
 /// MSAA 采样数（验收项：`multisample.count == 4`）。
 pub const MSAA_SAMPLES: u32 = 4;
@@ -200,11 +200,6 @@ struct BatchBuffers {
     index_count: u32,
 }
 
-// Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（与 wgpu_3d.rs 的
-// CachedMeshBuffers 同口径）。
-unsafe impl Send for BatchBuffers {}
-unsafe impl Sync for BatchBuffers {}
-
 /// `ResourceKey` 类型标签：2D 三角化几何（CPU 侧，免重复三角化）。
 struct Geometry2DTag;
 
@@ -222,10 +217,6 @@ struct MorphBuffers {
     index_count: u32,
 }
 
-// Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（同 [`BatchBuffers`]）。
-unsafe impl Send for MorphBuffers {}
-unsafe impl Sync for MorphBuffers {}
-
 /// `ResourceKey` 类型标签：形变（from/to 双侧）GPU 缓冲。
 struct Morph2DTag;
 
@@ -238,10 +229,6 @@ struct RevealBuffers {
     index_buffer: wgpu::Buffer,
     index_count: u32,
 }
-
-// Safety: wgpu 资源句柄是内部引用计数的线程安全句柄（同 [`BatchBuffers`]）。
-unsafe impl Send for RevealBuffers {}
-unsafe impl Sync for RevealBuffers {}
 
 /// `ResourceKey` 类型标签：书写动画（reveal）GPU 缓冲。
 struct Reveal2DTag;
@@ -690,293 +677,17 @@ impl WgpuBackend2D {
 
         // ── 趟 1：三角化（带缓存）→ 收集本帧几何请求 ──
         // 请求按绘制顺序记录：`(几何内容哈希, 颜色, 描边宽度)`。
-        // 本趟不做任何 GPU 上传：几何条目只存 CPU 侧三角化结果（免重复三角化），
-        // 顶点/索引的 GPU 缓冲由趟 2 的合批统一持有。
-        let mut geoms: Vec<(u64, Color32, f32)> = Vec::new();
         let mut stats = FrameCacheStats::default();
-        for draw in &draws {
-            // GPU 2D 后端只接受屏幕空间样式（`record_scene` 的输出恒为此）；
-            // 世界度量需要相机 scale，不在本后端的职责内。
-            debug_assert!(
-                draw.style.space == MeasureSpace::Screen,
-                "GPU 2D 后端只接受 MeasureSpace::Screen 样式，收到 {:?}",
-                draw.style.space
-            );
-            let style = Style2D {
-                space: MeasureSpace::Screen,
-                ..draw.style
-            };
-            for tess in tessellate(&draw.shape, &local, &style, tolerance) {
-                if tess.vertices.is_empty() || tess.indices.is_empty() {
-                    continue;
-                }
-                let hash = hash_tessellation(&tess);
-                let key = ResourceKey::content::<Geometry2DTag>(hash);
-                stats.geom_requests += 1;
-                // ⚠️ 命中必须 `mark_used`：`ResourceCache::get` 不刷新 `last_used_frame`，
-                // 只用 `get` 的话帧末 `evict_unused(0)` 会把稳态内容一并驱逐
-                // （缓存跨帧永不生效，`geom_misses` 永远等于请求数）。
-                if !self.geom_cache.mark_used(&key) {
-                    stats.geom_misses += 1;
-                    self.geom_cache.insert_handle(
-                        key,
-                        (),
-                        GpuHandle::new(CachedGeometry {
-                            vertices: tess.vertices,
-                            indices: tess.indices,
-                        }),
-                    );
-                }
-                let color = match tess.kind {
-                    TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
-                    TessKind::Stroke => style.stroke.unwrap_or(Color32::BLACK),
-                };
-                geoms.push((hash, color, style.stroke_width));
-            }
-        }
+        let geoms = self.tessellate_pass(&draws, &local, tolerance, &mut stats);
 
         // ── 趟 2：按 `(color, stroke_width)` 合批 → 每批**一次** draw call ──
-        // 分组保序（首次出现的组按首个成员在绘制序中的位置排列），使同 z 下的
-        // 覆盖关系与合批前逐条绘制一致。
-        let mut groups: Vec<(Color32, f32, Vec<u64>)> = Vec::new();
-        for (hash, color, width) in &geoms {
-            match groups
-                .iter_mut()
-                .find(|(c, w, _)| c == color && w == width)
-            {
-                Some((_, _, keys)) => keys.push(*hash),
-                None => groups.push((*color, *width, vec![*hash])),
-            }
-        }
-
-        let mut prepared: Vec<Prepared2D> = Vec::with_capacity(groups.len());
-        for (color, width, keys) in &groups {
-            let bkey = ResourceKey::content::<Batch2DTag>(hash_batch(*color, *width, keys));
-            if !self.batch_cache.mark_used(&bkey) {
-                // 装配：成员顶点按序拼接，成员索引按各自顶点基址**重排**（rebase）。
-                let mut vertices: Vec<Vertex2D> = Vec::new();
-                let mut indices: Vec<u32> = Vec::new();
-                for &h in keys {
-                    let Some(handle) =
-                        self.geom_cache.get(ResourceKey::content::<Geometry2DTag>(h))
-                    else {
-                        continue;
-                    };
-                    let geom = handle
-                        .downcast_ref::<CachedGeometry>()
-                        .expect("2D 几何缓存条目必须是 CachedGeometry");
-                    let base = vertices.len() as u32;
-                    vertices.extend_from_slice(&geom.vertices);
-                    indices.extend(geom.indices.iter().map(|i| i + base));
-                }
-                if indices.is_empty() {
-                    continue;
-                }
-                let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-batch-vertices"),
-                    contents: bytes_of(&vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-batch-indices"),
-                    contents: bytes_of(&indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                self.batch_cache.insert_handle(
-                    bkey,
-                    (),
-                    GpuHandle::new(BatchBuffers {
-                        vertex_buffer: vb,
-                        index_buffer: ib,
-                        index_count: indices.len() as u32,
-                    }),
-                );
-            }
-            let batch = self
-                .batch_cache
-                .get(bkey)
-                .and_then(|h| h.downcast_ref::<BatchBuffers>())
-                .expect("合批条目必须存在（刚插入或已命中）");
-            // 同批共享一个 uniform：颜色与描边宽度是分组键，clip 是帧级常量。
-            let block = self.arena.push(&uniform_bytes(clip, *color, *width));
-            prepared.push(Prepared2D {
-                vertex_buffer: batch.vertex_buffer.clone(),
-                index_buffer: batch.index_buffer.clone(),
-                index_count: batch.index_count,
-                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
-            });
-        }
+        let prepared = self.batch_pass(&geoms, clip);
 
         // ── 趟 3（S4.3）：形变项 ──
-        // 两端几何（等点重采样后）与 `t` 无关 ⇒ 缓存键**不含 `t`**，稳态零上传；
-        // 逐帧只多写一个 `t` uniform。每个形变项一次 `draw_indexed`（`t` 逐项不同，
-        // 不做跨项合批）。
-        //
-        // 顺序：形变项排在全部 `DrawQueue` 几何**之后**。二者同为 z = 0 的内容，
-        // 网格 / 轴线（z < 0）不受影响；形变与其它 z = 0 内容的重叠次序因此
-        // 变为"形变在上"（详见 `MorphQueue` 的 doc）。
-        let mut prepared_morph: Vec<Prepared2DMorph> =
-            Vec::with_capacity(self.morph_recorder.len());
-        for item in mem::take(&mut self.morph_recorder) {
-            stats.morph_requests += 1;
-            let (from_path, to_path) = item.sampled_endpoints();
-            if from_path.commands.is_empty() || to_path.commands.is_empty() {
-                continue;
-            }
-            let style = Style2D {
-                space: MeasureSpace::Screen,
-                ..item.style
-            };
-            let from_tess = tessellate(&Shape2D::Path(from_path.clone()), &local, &style, tolerance);
-            let to_tess = tessellate(&Shape2D::Path(to_path.clone()), &local, &style, tolerance);
-            // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
-            //
-            // ⚠️ **退化一侧的合成**（P5 实测修）：`from` 是"退化点"（全部点重合）时
-            // lyon 不产出任何几何（实测 `t_len = 0`），若直接跳过，整条形变项就消失
-            // ——表现为"画面空白，而队列层（`MorphQueue`）看不出任何异常"。
-            // 故用**可三角化的一侧**的拓扑合成退化侧：顶点位置塌到该侧路径的点、
-            // 法线归零 ⇒ `t = 0` 时三角形退化（不可见），随 `t` 平滑长出，
-            // 且索引/顶点数**按构造相等**（拓扑一致是逐点插值的前提）。
-            let (from_tess, to_tess) = match (from_tess.into_iter().next(), to_tess.into_iter().next())
-            {
-                (Some(f), Some(t)) => (f, t),
-                (None, Some(t)) => (collapsed_like(&t, &from_path), t),
-                (Some(f), None) => {
-                    let c = collapsed_like(&f, &to_path);
-                    (f, c)
-                }
-                // 两侧都没有几何（空路径已在上方挡掉）⇒ 无从合成。
-                (None, None) => continue,
-            };
-            let (from_tess, to_tess) = (&from_tess, &to_tess);
-            if from_tess.indices.len() != to_tess.indices.len()
-                || from_tess.vertices.len() != to_tess.vertices.len()
-            {
-                // 拓扑不一致 ⇒ 逐点插值无意义。等点重采样后理论上不会发生；
-                // 真发生则跳过（宁可少画，不可画出错位形变）。
-                debug_assert!(
-                    false,
-                    "形变两端拓扑不一致：顶点 {} vs {}、索引 {} vs {}",
-                    from_tess.vertices.len(),
-                    to_tess.vertices.len(),
-                    from_tess.indices.len(),
-                    to_tess.indices.len()
-                );
-                continue;
-            }
-            let mkey = ResourceKey::content::<Morph2DTag>(hash_morph(from_tess, to_tess));
-            if !self.morph_cache.mark_used(&mkey) {
-                stats.morph_misses += 1;
-                let fvb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-morph-from-vertices"),
-                    contents: bytes_of(&from_tess.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                let tvb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-morph-to-vertices"),
-                    contents: bytes_of(&to_tess.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                // 两侧拓扑一致 ⇒ 共用 from 的索引表。
-                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-morph-indices"),
-                    contents: bytes_of(&from_tess.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                self.morph_cache.insert_handle(
-                    mkey,
-                    (),
-                    GpuHandle::new(MorphBuffers {
-                        from_vertex_buffer: fvb,
-                        to_vertex_buffer: tvb,
-                        index_buffer: ib,
-                        index_count: from_tess.indices.len() as u32,
-                    }),
-                );
-            }
-            let morph = self
-                .morph_cache
-                .get(mkey)
-                .and_then(|h| h.downcast_ref::<MorphBuffers>())
-                .expect("形变条目必须存在（刚插入或已命中）");
-            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
-            let block = self
-                .arena
-                .push(&uniform_bytes_morph(clip, color, style.stroke_width, item.t));
-            prepared_morph.push(Prepared2DMorph {
-                from_vertex_buffer: morph.from_vertex_buffer.clone(),
-                to_vertex_buffer: morph.to_vertex_buffer.clone(),
-                index_buffer: morph.index_buffer.clone(),
-                index_count: morph.index_count,
-                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
-            });
-        }
+        let prepared_morph = self.morph_pass(&local, tolerance, clip, &mut stats);
 
         // ── 趟 4（R0）：书写动画项 ──
-        // 几何 = 路径按 `REVEAL_STEP_PX` 预细分 + 每顶点归一化弧长 `s`；逐帧变的只有
-        // 区间 `[a,b]`（走 uniform）⇒ **缓存键不含区间**，稳态零上传。
-        // 区间逐项不同 ⇒ 同批只能共享一个区间 ⇒ **不进合批**，每项一次 `draw_indexed`
-        // （与形变同一口径）。用的是**同一个** `pipeline_2d`（`shape_2d.wgsl` 内分支），
-        // 即"新增书写动画不改 shader 之外的渲染结构"。
-        let mut prepared_reveal: Vec<Prepared2DReveal> =
-            Vec::with_capacity(self.reveal_recorder.len());
-        for item in mem::take(&mut self.reveal_recorder) {
-            stats.reveal_requests += 1;
-            let style = Style2D {
-                space: MeasureSpace::Screen,
-                ..item.style
-            };
-            let Some(tess) =
-                tessellate_reveal(&item.path, &local, &style, tolerance, REVEAL_STEP_PX)
-            else {
-                continue;
-            };
-            if tess.vertices.is_empty() || tess.indices.is_empty() {
-                continue;
-            }
-            let rkey = ResourceKey::content::<Reveal2DTag>(hash_tessellation(&tess));
-            if !self.reveal_cache.mark_used(&rkey) {
-                stats.reveal_misses += 1;
-                let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-reveal-vertices"),
-                    contents: bytes_of(&tess.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                let ib = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("xcal-2d-reveal-indices"),
-                    contents: bytes_of(&tess.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-                self.reveal_cache.insert_handle(
-                    rkey,
-                    (),
-                    GpuHandle::new(RevealBuffers {
-                        vertex_buffer: vb,
-                        index_buffer: ib,
-                        index_count: tess.indices.len() as u32,
-                    }),
-                );
-            }
-            let reveal = self
-                .reveal_cache
-                .get(rkey)
-                .and_then(|h| h.downcast_ref::<RevealBuffers>())
-                .expect("书写动画条目必须存在（刚插入或已命中）");
-            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
-            let block = self.arena.push(&uniform_bytes_reveal(
-                clip,
-                color,
-                style.stroke_width,
-                item.start,
-                item.end,
-            ));
-            prepared_reveal.push(Prepared2DReveal {
-                vertex_buffer: reveal.vertex_buffer.clone(),
-                index_buffer: reveal.index_buffer.clone(),
-                index_count: reveal.index_count,
-                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
-            });
-        }
+        let prepared_reveal = self.reveal_pass(&local, tolerance, clip, &mut stats);
 
         // 帧末驱逐：未被本帧用到的条目投入 deferred destroyer
         // （graveyard 3 次 submit 后才真正 drop），保证动画内容下缓存与显存有界。
@@ -1086,6 +797,344 @@ impl WgpuBackend2D {
             _arena_buffer: arena_buffer,
         }
     }
+
+    /// 趟 1：三角化（带缓存）→ 收集本帧几何请求。
+    ///
+    /// 请求按绘制顺序记录：`(几何内容哈希, 颜色, 描边宽度)`。
+    /// 本趟不做任何 GPU 上传：几何条目只存 CPU 侧三角化结果（免重复三角化），
+    /// 顶点/索引的 GPU 缓冲由趟 2 的合批统一持有。
+    fn tessellate_pass(
+        &mut self,
+        draws: &[Recorded2D],
+        local: &Transform2D,
+        tolerance: f32,
+        stats: &mut FrameCacheStats,
+    ) -> Vec<(u64, Color32, f32)> {
+        let mut geoms: Vec<(u64, Color32, f32)> = Vec::new();
+        for draw in draws {
+            // GPU 2D 后端只接受屏幕空间样式（`record_scene` 的输出恒为此）；
+            // 世界度量需要相机 scale，不在本后端的职责内。
+            debug_assert!(
+                draw.style.space == MeasureSpace::Screen,
+                "GPU 2D 后端只接受 MeasureSpace::Screen 样式，收到 {:?}",
+                draw.style.space
+            );
+            let style = Style2D {
+                space: MeasureSpace::Screen,
+                ..draw.style
+            };
+            for tess in tessellate(&draw.shape, local, &style, tolerance) {
+                if tess.vertices.is_empty() || tess.indices.is_empty() {
+                    continue;
+                }
+                let hash = hash_tessellation(&tess);
+                let key = ResourceKey::content::<Geometry2DTag>(hash);
+                stats.geom_requests += 1;
+                // ⚠️ 命中必须 `mark_used`：`ResourceCache::get` 不刷新 `last_used_frame`，
+                // 只用 `get` 的话帧末 `evict_unused(0)` 会把稳态内容一并驱逐
+                // （缓存跨帧永不生效，`geom_misses` 永远等于请求数）。
+                if !self.geom_cache.mark_used(&key) {
+                    stats.geom_misses += 1;
+                    self.geom_cache.insert_handle(
+                        key,
+                        (),
+                        GpuHandle::new(CachedGeometry {
+                            vertices: tess.vertices,
+                            indices: tess.indices,
+                        }),
+                    );
+                }
+                let color = match tess.kind {
+                    TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
+                    TessKind::Stroke => style.stroke.unwrap_or(Color32::BLACK),
+                };
+                geoms.push((hash, color, style.stroke_width));
+            }
+        }
+        geoms
+    }
+
+    /// 趟 2：按 `(color, stroke_width)` 合批 → 每批**一次** draw call。
+    ///
+    /// 分组保序（首次出现的组按首个成员在绘制序中的位置排列），使同 z 下的
+    /// 覆盖关系与合批前逐条绘制一致。
+    fn batch_pass(&mut self, geoms: &[(u64, Color32, f32)], clip: Mat4) -> Vec<Prepared2D> {
+        let mut groups: Vec<(Color32, f32, Vec<u64>)> = Vec::new();
+        for (hash, color, width) in geoms {
+            match groups.iter_mut().find(|(c, w, _)| c == color && w == width) {
+                Some((_, _, keys)) => keys.push(*hash),
+                None => groups.push((*color, *width, vec![*hash])),
+            }
+        }
+
+        let mut prepared: Vec<Prepared2D> = Vec::with_capacity(groups.len());
+        for (color, width, keys) in &groups {
+            let bkey = ResourceKey::content::<Batch2DTag>(hash_batch(*color, *width, keys));
+            if !self.batch_cache.mark_used(&bkey) {
+                // 装配：成员顶点按序拼接，成员索引按各自顶点基址**重排**（rebase）。
+                let mut vertices: Vec<Vertex2D> = Vec::new();
+                let mut indices: Vec<u32> = Vec::new();
+                for &h in keys {
+                    let Some(handle) = self
+                        .geom_cache
+                        .get(ResourceKey::content::<Geometry2DTag>(h))
+                    else {
+                        continue;
+                    };
+                    let geom = handle
+                        .downcast_ref::<CachedGeometry>()
+                        .expect("2D 几何缓存条目必须是 CachedGeometry");
+                    let base = vertices.len() as u32;
+                    vertices.extend_from_slice(&geom.vertices);
+                    indices.extend(geom.indices.iter().map(|i| i + base));
+                }
+                if indices.is_empty() {
+                    continue;
+                }
+                let vb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-batch-vertices"),
+                        contents: bytes_of(&vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                let ib = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-batch-indices"),
+                        contents: bytes_of(&indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+                self.batch_cache.insert_handle(
+                    bkey,
+                    (),
+                    GpuHandle::new(BatchBuffers {
+                        vertex_buffer: vb,
+                        index_buffer: ib,
+                        index_count: indices.len() as u32,
+                    }),
+                );
+            }
+            let batch = self
+                .batch_cache
+                .get(bkey)
+                .and_then(|h| h.downcast_ref::<BatchBuffers>())
+                .expect("合批条目必须存在（刚插入或已命中）");
+            // 同批共享一个 uniform：颜色与描边宽度是分组键，clip 是帧级常量。
+            let block = self.arena.push(&uniform_bytes(clip, *color, *width));
+            prepared.push(Prepared2D {
+                vertex_buffer: batch.vertex_buffer.clone(),
+                index_buffer: batch.index_buffer.clone(),
+                index_count: batch.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+        prepared
+    }
+
+    /// 趟 3（S4.3）：形变项。
+    ///
+    /// 两端几何（等点重采样后）与 `t` 无关 ⇒ 缓存键**不含 `t`**，稳态零上传；
+    /// 逐帧只多写一个 `t` uniform。每个形变项一次 `draw_indexed`（`t` 逐项不同，
+    /// 不做跨项合批）。
+    ///
+    /// 顺序：形变项排在全部 `DrawQueue` 几何**之后**。二者同为 z = 0 的内容，
+    /// 网格 / 轴线（z < 0）不受影响；形变与其它 z = 0 内容的重叠次序因此
+    /// 变为"形变在上"（详见 `MorphQueue` 的 doc）。
+    fn morph_pass(
+        &mut self,
+        local: &Transform2D,
+        tolerance: f32,
+        clip: Mat4,
+        stats: &mut FrameCacheStats,
+    ) -> Vec<Prepared2DMorph> {
+        let mut prepared_morph: Vec<Prepared2DMorph> =
+            Vec::with_capacity(self.morph_recorder.len());
+        for item in mem::take(&mut self.morph_recorder) {
+            stats.morph_requests += 1;
+            let (from_path, to_path) = item.sampled_endpoints();
+            if from_path.commands.is_empty() || to_path.commands.is_empty() {
+                continue;
+            }
+            let style = Style2D {
+                space: MeasureSpace::Screen,
+                ..item.style
+            };
+            let from_tess = tessellate(&Shape2D::Path(from_path.clone()), local, &style, tolerance);
+            let to_tess = tessellate(&Shape2D::Path(to_path.clone()), local, &style, tolerance);
+            // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
+            //
+            // ⚠️ **退化一侧的合成**（P5 实测修）：`from` 是"退化点"（全部点重合）时
+            // lyon 不产出任何几何（实测 `t_len = 0`），若直接跳过，整条形变项就消失
+            // ——表现为"画面空白，而队列层（`MorphQueue`）看不出任何异常"。
+            // 故用**可三角化的一侧**的拓扑合成退化侧：顶点位置塌到该侧路径的点、
+            // 法线归零 ⇒ `t = 0` 时三角形退化（不可见），随 `t` 平滑长出，
+            // 且索引/顶点数**按构造相等**（拓扑一致是逐点插值的前提）。
+            let (from_tess, to_tess) =
+                match (from_tess.into_iter().next(), to_tess.into_iter().next()) {
+                    (Some(f), Some(t)) => (f, t),
+                    (None, Some(t)) => (collapsed_like(&t, &from_path), t),
+                    (Some(f), None) => {
+                        let c = collapsed_like(&f, &to_path);
+                        (f, c)
+                    }
+                    // 两侧都没有几何（空路径已在上方挡掉）⇒ 无从合成。
+                    (None, None) => continue,
+                };
+            let (from_tess, to_tess) = (&from_tess, &to_tess);
+            if from_tess.indices.len() != to_tess.indices.len()
+                || from_tess.vertices.len() != to_tess.vertices.len()
+            {
+                // 拓扑不一致 ⇒ 逐点插值无意义。等点重采样后理论上不会发生；
+                // 真发生则跳过（宁可少画，不可画出错位形变）。
+                debug_assert!(
+                    false,
+                    "形变两端拓扑不一致：顶点 {} vs {}、索引 {} vs {}",
+                    from_tess.vertices.len(),
+                    to_tess.vertices.len(),
+                    from_tess.indices.len(),
+                    to_tess.indices.len()
+                );
+                continue;
+            }
+            let mkey = ResourceKey::content::<Morph2DTag>(hash_morph(from_tess, to_tess));
+            if !self.morph_cache.mark_used(&mkey) {
+                stats.morph_misses += 1;
+                let fvb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-morph-from-vertices"),
+                        contents: bytes_of(&from_tess.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                let tvb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-morph-to-vertices"),
+                        contents: bytes_of(&to_tess.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                // 两侧拓扑一致 ⇒ 共用 from 的索引表。
+                let ib = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-morph-indices"),
+                        contents: bytes_of(&from_tess.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+                self.morph_cache.insert_handle(
+                    mkey,
+                    (),
+                    GpuHandle::new(MorphBuffers {
+                        from_vertex_buffer: fvb,
+                        to_vertex_buffer: tvb,
+                        index_buffer: ib,
+                        index_count: from_tess.indices.len() as u32,
+                    }),
+                );
+            }
+            let morph = self
+                .morph_cache
+                .get(mkey)
+                .and_then(|h| h.downcast_ref::<MorphBuffers>())
+                .expect("形变条目必须存在（刚插入或已命中）");
+            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
+            let block = self.arena.push(&uniform_bytes_morph(
+                clip,
+                color,
+                style.stroke_width,
+                item.t,
+            ));
+            prepared_morph.push(Prepared2DMorph {
+                from_vertex_buffer: morph.from_vertex_buffer.clone(),
+                to_vertex_buffer: morph.to_vertex_buffer.clone(),
+                index_buffer: morph.index_buffer.clone(),
+                index_count: morph.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+        prepared_morph
+    }
+
+    /// 趟 4（R0）：书写动画项。
+    ///
+    /// 几何 = 路径按 `REVEAL_STEP_PX` 预细分 + 每顶点归一化弧长 `s`；逐帧变的只有
+    /// 区间 `[a,b]`（走 uniform）⇒ **缓存键不含区间**，稳态零上传。
+    /// 区间逐项不同 ⇒ 同批只能共享一个区间 ⇒ **不进合批**，每项一次 `draw_indexed`
+    /// （与形变同一口径）。用的是**同一个** `pipeline_2d`（`shape_2d.wgsl` 内分支），
+    /// 即"新增书写动画不改 shader 之外的渲染结构"。
+    fn reveal_pass(
+        &mut self,
+        local: &Transform2D,
+        tolerance: f32,
+        clip: Mat4,
+        stats: &mut FrameCacheStats,
+    ) -> Vec<Prepared2DReveal> {
+        let mut prepared_reveal: Vec<Prepared2DReveal> =
+            Vec::with_capacity(self.reveal_recorder.len());
+        for item in mem::take(&mut self.reveal_recorder) {
+            stats.reveal_requests += 1;
+            let style = Style2D {
+                space: MeasureSpace::Screen,
+                ..item.style
+            };
+            let Some(tess) =
+                tessellate_reveal(&item.path, local, &style, tolerance, REVEAL_STEP_PX)
+            else {
+                continue;
+            };
+            if tess.vertices.is_empty() || tess.indices.is_empty() {
+                continue;
+            }
+            let rkey = ResourceKey::content::<Reveal2DTag>(hash_tessellation(&tess));
+            if !self.reveal_cache.mark_used(&rkey) {
+                stats.reveal_misses += 1;
+                let vb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-reveal-vertices"),
+                        contents: bytes_of(&tess.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                let ib = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("xcal-2d-reveal-indices"),
+                        contents: bytes_of(&tess.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+                self.reveal_cache.insert_handle(
+                    rkey,
+                    (),
+                    GpuHandle::new(RevealBuffers {
+                        vertex_buffer: vb,
+                        index_buffer: ib,
+                        index_count: tess.indices.len() as u32,
+                    }),
+                );
+            }
+            let reveal = self
+                .reveal_cache
+                .get(rkey)
+                .and_then(|h| h.downcast_ref::<RevealBuffers>())
+                .expect("书写动画条目必须存在（刚插入或已命中）");
+            let color = style.stroke.or(style.fill).unwrap_or(Color32::BLACK);
+            let block = self.arena.push(&uniform_bytes_reveal(
+                clip,
+                color,
+                style.stroke_width,
+                item.start,
+                item.end,
+            ));
+            prepared_reveal.push(Prepared2DReveal {
+                vertex_buffer: reveal.vertex_buffer.clone(),
+                index_buffer: reveal.index_buffer.clone(),
+                index_count: reveal.index_count,
+                uniform_offset: block * DYNAMIC_OFFSET_ALIGNMENT as u32,
+            });
+        }
+        prepared_reveal
+    }
 }
 
 // ─── Painter2DTarget：录制 + 输出离屏纹理 ─────────────────────────────────
@@ -1125,11 +1174,6 @@ impl Painter2DTarget for WgpuBackend2D {
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────
-
-/// 把 Copy 切片视为字节切片（顶点/索引上传用）。
-fn bytes_of<T: Copy>(data: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, mem::size_of_val(data)) }
-}
 
 /// 三角化结果的内容哈希（顶点 + 索引 + 种类），用于几何缓存复用。
 fn hash_tessellation(t: &Tessellation2D) -> u64 {
@@ -1185,8 +1229,7 @@ fn collapsed_like(template: &Tessellation2D, zero_path: &xc_notion::Path2D) -> T
 }
 
 fn hash_morph(from: &Tessellation2D, to: &Tessellation2D) -> u64 {
-    hash_tessellation(from).rotate_left(13)
-        ^ hash_tessellation(to).wrapping_mul(0x100_0000_01b3)
+    hash_tessellation(from).rotate_left(13) ^ hash_tessellation(to).wrapping_mul(0x100_0000_01b3)
 }
 
 /// uniform 字节：mat4 列主序（64）+ 预乘颜色 vec4（16）+ params vec4（16）。
@@ -1249,8 +1292,8 @@ fn uniform_bytes_reveal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_scene::domain::LayerBlend;
     use xcal_render::{DrawCommand, ZIndex};
+    use xcal_scene::domain::LayerBlend;
 
     use crate::compositor::{CompositeOp, Compositor};
 
@@ -1269,8 +1312,14 @@ mod tests {
         let (left, top, w, h) = g.viewport_px();
         assert_eq!(left, (1.5f32 * 100.0).round() as i32);
         assert_eq!(top, (1.5f32 * 50.0).round() as i32);
-        assert_eq!(w, ((1.5f32 * 400.0).round() - (1.5f32 * 100.0).round()) as u32);
-        assert_eq!(h, ((1.5f32 * 250.0).round() - (1.5f32 * 50.0).round()) as u32);
+        assert_eq!(
+            w,
+            ((1.5f32 * 400.0).round() - (1.5f32 * 100.0).round()) as u32
+        );
+        assert_eq!(
+            h,
+            ((1.5f32 * 250.0).round() - (1.5f32 * 50.0).round()) as u32
+        );
     }
 
     /// 视口超出屏幕时被钳制（不产生越界尺寸）。
@@ -1382,7 +1431,11 @@ mod tests {
     #[test]
     fn snapshot_is_stably_sorted_by_z() {
         let mut q = DrawQueue::new();
-        q.push(DrawCommand::new(ZIndex::new(5), Shape2D::Empty, Style2D::default()));
+        q.push(DrawCommand::new(
+            ZIndex::new(5),
+            Shape2D::Empty,
+            Style2D::default(),
+        ));
         q.push(DrawCommand::new(
             ZIndex::new(1),
             Shape2D::Line {
@@ -1391,7 +1444,11 @@ mod tests {
             },
             Style2D::default(),
         ));
-        q.push(DrawCommand::new(ZIndex::new(5), Shape2D::Empty, Style2D::default()));
+        q.push(DrawCommand::new(
+            ZIndex::new(5),
+            Shape2D::Empty,
+            Style2D::default(),
+        ));
         let snap = snapshot_queue(&q);
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].z, 1);
@@ -1422,8 +1479,7 @@ mod tests {
     fn composite_lands_inside_scoped_viewport_on_real_device() {
         // 用非 sRGB 的 RGBA 主目标：合成走 Identity 入口（字节直通），
         // 这样下面的颜色断言可以是逐字节精确的。
-        let Ok(ctx) =
-            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Rgba8Unorm)
+        let Ok(ctx) = crate::RenderContext::headless_with_format(wgpu::TextureFormat::Rgba8Unorm)
         else {
             return; // 无 GPU 环境：跳过
         };
@@ -1437,10 +1493,7 @@ mod tests {
         let mut q = DrawQueue::new();
         q.push(DrawCommand::new(
             ZIndex::new(0),
-            Shape2D::Rect(Rect2D::new(
-                Vec2::new(150.0, 75.0),
-                Vec2::new(250.0, 125.0),
-            )),
+            Shape2D::Rect(Rect2D::new(Vec2::new(150.0, 75.0), Vec2::new(250.0, 125.0))),
             Style2D {
                 fill: Some(Color32::new(255, 0, 0, 255)),
                 space: MeasureSpace::Screen,
@@ -1486,7 +1539,11 @@ mod tests {
         };
         let ops = [op];
         // C3：管线惰性建 ⇒ 合成前先确保本帧用到的组合已就绪（1 = 首帧现场建一条）。
-        assert_eq!(compositor.ensure_for(&ctx.device, &ops), 1, "首帧应现场建 1 条");
+        assert_eq!(
+            compositor.ensure_for(&ctx.device, &ops),
+            1,
+            "首帧应现场建 1 条"
+        );
         assert_eq!(
             compositor.ensure_for(&ctx.device, &ops),
             0,
@@ -1564,9 +1621,9 @@ mod tests {
     /// 无可用适配器（headless 构造失败）时跳过，与 `render_context` 既有约定一致。
     #[test]
     fn gpu_frame_rasterizes_and_recreates_targets_on_resize() {
-        let Ok(ctx) = crate::RenderContext::headless_with_format(
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-        ) else {
+        let Ok(ctx) =
+            crate::RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+        else {
             return; // 无 GPU 环境：跳过
         };
         let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
@@ -1576,10 +1633,7 @@ mod tests {
         let mut q = DrawQueue::new();
         q.push(DrawCommand::new(
             ZIndex::new(0),
-            Shape2D::Rect(Rect2D::new(
-                Vec2::new(150.0, 75.0),
-                Vec2::new(250.0, 125.0),
-            )),
+            Shape2D::Rect(Rect2D::new(Vec2::new(150.0, 75.0), Vec2::new(250.0, 125.0))),
             Style2D {
                 fill: Some(Color32::new(255, 0, 0, 255)),
                 space: MeasureSpace::Screen,
@@ -1623,7 +1677,11 @@ mod tests {
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("第一帧 submit 后 poll");
 
-        let px = read_texture(&ctx, backend.offscreen_texture(LayerId(0)).unwrap(), (200, 100));
+        let px = read_texture(
+            &ctx,
+            backend.offscreen_texture(LayerId(0)).unwrap(),
+            (200, 100),
+        );
         let at = |x: u32, y: u32| {
             let o = ((y * 200 + x) * 4) as usize;
             [px[o], px[o + 1], px[o + 2], px[o + 3]]
@@ -1657,7 +1715,11 @@ mod tests {
             .expect("第二帧 submit 后 poll");
 
         // 本地坐标不随视口变化（视口原点平移恒定），故内容位置与第一帧一致。
-        let px2 = read_texture(&ctx, backend.offscreen_texture(LayerId(0)).unwrap(), (400, 300));
+        let px2 = read_texture(
+            &ctx,
+            backend.offscreen_texture(LayerId(0)).unwrap(),
+            (400, 300),
+        );
         let at2 = |x: u32, y: u32| {
             let o = ((y * 400 + x) * 4) as usize;
             [px2[o], px2[o + 1], px2[o + 2], px2[o + 3]]
@@ -1740,7 +1802,10 @@ mod tests {
         assert_eq!(a.vertices.len(), b.vertices.len(), "顶点数必须与宽度无关");
         assert_eq!(a.indices, b.indices, "index 表必须与宽度无关");
         for (i, (x, y)) in a.vertices.iter().zip(&b.vertices).enumerate() {
-            assert_eq!(x.position, y.position, "第 {i} 个顶点的路径点必须逐字节相同");
+            assert_eq!(
+                x.position, y.position,
+                "第 {i} 个顶点的路径点必须逐字节相同"
+            );
             assert_eq!(x.side, y.side, "第 {i} 个顶点的 side 必须逐字节相同");
             assert!(
                 (x.normal[0] - y.normal[0]).abs() < 1e-5
@@ -1816,7 +1881,10 @@ mod tests {
                     label: Some("xcal-2d-bounded-frame"),
                 });
             let out = backend.finish_frame(&mut enc, LayerId(0), &g);
-            assert_eq!(out.draw_count, DRAWS as usize, "第 {frame} 帧：draw 数应为 {DRAWS}");
+            assert_eq!(
+                out.draw_count, DRAWS as usize,
+                "第 {frame} 帧：draw 数应为 {DRAWS}"
+            );
             ctx.queue.submit([enc.finish()]);
             ctx.device
                 .poll(wgpu::PollType::wait_indefinitely())
@@ -2149,7 +2217,10 @@ mod tests {
             covered.push(opaque);
         }
 
-        assert_eq!(covered[0], 0, "t = 0 应是退化点（不可见），实际覆盖 {covered:?}");
+        assert_eq!(
+            covered[0], 0,
+            "t = 0 应是退化点（不可见），实际覆盖 {covered:?}"
+        );
         assert!(
             covered[1] > 0,
             "t = 0.5 应已画出一半形状，实际覆盖 {covered:?}"
@@ -2164,10 +2235,7 @@ mod tests {
 
     /// 屏幕坐标下的一条水平直线：视口 (100,50) 起点 ⇒ 离屏本地 `x ∈ [10,190]`、`y = 50`。
     fn reveal_line_path() -> xc_notion::Path2D {
-        xc_notion::Path2D::from_polyline(
-            &[Vec2::new(110.0, 100.0), Vec2::new(290.0, 100.0)],
-            false,
-        )
+        xc_notion::Path2D::from_polyline(&[Vec2::new(110.0, 100.0), Vec2::new(290.0, 100.0)], false)
     }
 
     /// 书写动画的描边样式（青色、宽 6 —— 足够宽，像素判据稳定）。
@@ -2361,9 +2429,9 @@ mod tests {
     // hecs 只作为 **dev-dependency** 出现在此（库本体仍不认识 hecs）。
 
     use hecs::World;
+    use xc_object::{Camera2D, Circle};
     use xcal_render::{FillSolid, Opacity, record_scene_tagged};
     use xcal_scene::contract::{GroupId, GroupVisibility, ObjectId, Visibility, WorldView};
-    use xc_object::{Camera2D, Circle};
 
     /// N6 视口矩形：与 `geometry(200, 100, 1.0, [400, 200])` 的 viewport 一致。
     fn n6_viewport() -> Rect2D {
@@ -2382,7 +2450,13 @@ mod tests {
         groups: &GroupVisibility,
     ) -> DrawQueue {
         let mut q = DrawQueue::new();
-        record_scene_tagged(&WorldView::new(world), &n6_camera(), camera_tag, groups, &mut q);
+        record_scene_tagged(
+            &WorldView::new(world),
+            &n6_camera(),
+            camera_tag,
+            groups,
+            &mut q,
+        );
         q
     }
 
@@ -2422,7 +2496,10 @@ mod tests {
 
     /// 世界原点处一个**填充**圆（半径 0.5 × scale 40 = 20px，圆心落在本地 (100,50)）。
     fn n6_circle() -> (Circle, FillSolid) {
-        (Circle::new((0.0, 0.0), 0.5), FillSolid::new((255, 0, 0, 255)))
+        (
+            Circle::new((0.0, 0.0), 0.5),
+            FillSolid::new((255, 0, 0, 255)),
+        )
     }
 
     /// 非零 alpha 像素数（"是否投影到画面"的统一判据）。

@@ -11,7 +11,7 @@ use crate::cache::ContentCache;
 use crate::request::{
     CacheKey, ContentConfig, ContentError, ContentHandle, ContentResult, ContentStatus,
 };
-use xc_content::{normalize_source, ContentIR, ContentSource};
+use xc_content::{ContentIR, ContentSource, normalize_source};
 
 /// 预渲染引擎 trait。
 ///
@@ -33,6 +33,10 @@ pub trait ContentEngine: Send + Sync {
 }
 
 /// 完成的请求槽（内部用）。
+///
+/// 当前实现是同步的（`request` 直接写入 `Ready`），`Pending` / `Gone` 是给
+/// 未来异步引擎预留的状态：它们已有匹配分支与转移逻辑，但尚无构造点，
+/// 故保留 `allow(dead_code)`（体检第 11 项：确认是"接口预留"而非漏接线）。
 #[allow(dead_code)]
 enum Slot {
     Pending,
@@ -84,7 +88,9 @@ impl InMemoryEngine {
 }
 
 impl ContentEngine for InMemoryEngine {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn request(&self, source: &str, config: &ContentConfig) -> ContentHandle {
         let handle_val = self.handle_counter.fetch_add(1, Ordering::Relaxed);
@@ -141,7 +147,10 @@ impl ContentEngine for InMemoryEngine {
 mod tests {
     use super::*;
 
-    fn placeholder_compile(src: &ContentSource, cfg: &ContentConfig) -> Result<ContentIR, ContentError> {
+    fn placeholder_compile(
+        src: &ContentSource,
+        cfg: &ContentConfig,
+    ) -> Result<ContentIR, ContentError> {
         Ok(xc_content::placeholder::generate_placeholder(
             &src.text,
             &xc_content::placeholder::PlaceholderOptions {

@@ -4,12 +4,9 @@
 // ② 测试整个 engine/cache/handle 管线；③ 无字体时的降级方案。
 
 use crate::engine::{CompileFn, InMemoryEngine};
-use crate::request::{ContentConfig, ContentError, ContentResult};
+use crate::request::{ContentConfig, ContentResult};
 use std::sync::Arc;
-use xc_content::{
-    placeholder::PlaceholderOptions,
-    ContentIR, ContentSource,
-};
+use xc_content::{ContentIR, ContentSource, placeholder::PlaceholderOptions};
 
 /// Placeholder 编译函数（直接对齐 `CompileFn` 签名）。
 pub fn compile(src: &ContentSource, cfg: &ContentConfig) -> ContentResult {
@@ -25,7 +22,10 @@ pub fn compile(src: &ContentSource, cfg: &ContentConfig) -> ContentResult {
 
 /// 与 `generate_placeholder` 等价，但不再次归一化（避免二次归一化在极少情况下
 /// 改变锚点索引——实际规则稳定，但这里保留显式语义）。
-fn generate_placeholder_from_normalized(src: &ContentSource, opts: &PlaceholderOptions) -> ContentIR {
+fn generate_placeholder_from_normalized(
+    src: &ContentSource,
+    opts: &PlaceholderOptions,
+) -> ContentIR {
     let font_size = opts.nominal_font_size;
     let w = opts.glyph_width.unwrap_or(font_size * 0.6);
     let h = opts.glyph_height.unwrap_or(font_size);
@@ -48,7 +48,8 @@ fn generate_placeholder_from_normalized(src: &ContentSource, opts: &PlaceholderO
                 .line_to(Vec2::new(cursor_x + w, h))
                 .line_to(Vec2::new(cursor_x, h))
                 .close();
-            ir.items.push(StyledPath::filled(path, opts.fill).with_anchor(Span::new(start, end)));
+            ir.items
+                .push(StyledPath::filled(path, opts.fill).with_anchor(Span::new(start, end)));
         }
         cursor_x += w;
     }
@@ -61,6 +62,3 @@ pub fn engine() -> InMemoryEngine {
     let f: Arc<CompileFn> = Arc::new(|s, c| compile(s, c));
     InMemoryEngine::new("placeholder", f)
 }
-
-#[allow(dead_code)]
-fn _type_align(_: &dyn Fn(&ContentSource, &ContentConfig) -> Result<ContentIR, ContentError>) {}

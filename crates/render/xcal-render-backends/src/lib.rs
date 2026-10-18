@@ -15,6 +15,8 @@
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod gpu_test;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod gpu_util;
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod render_context;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod wgpu_3d;
@@ -53,9 +55,9 @@ pub mod scene_callback;
 pub use render_context::{DEFAULT_TARGET_FORMAT, RenderContext};
 // C1：GPU 用例的统一入口（跳过可见 + 严格模式）。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
-pub use gpu_test::{GpuGuard, require_gpu, require_gpu_named};
-#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use compositor::{CompositeFrame, CompositeOp, Compositor};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use gpu_test::{GpuGuard, require_gpu, require_gpu_named};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use vertex_layout::to_wgpu;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]

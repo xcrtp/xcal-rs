@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use mlua::{AnyUserData, Lua, MultiValue, Table, UserData, Value};
-use xc_pod::{Capability, ErasedFn, Field, ScalarKind, ScalarValue, TypeSpec, Pod, PodValue};
+use xc_pod::{Capability, ErasedFn, Field, Pod, PodValue, ScalarKind, ScalarValue, TypeSpec};
 use xc_pod_binding::{BindingPlan, ValueCodec, short_name};
 
 /// Lua 侧的不透明句柄令牌。
@@ -265,6 +265,8 @@ fn number(value: &Value) -> mlua::Result<f64> {
 fn integer(value: &Value) -> mlua::Result<i64> {
     match value {
         Value::Integer(i) => Ok(*i),
+        // 精确零语义：判断的是"这个 f64 的数学值是否为整数"，不是浮点计算结果
+        // 的近似比较；`fract() == 0.0` 对 Lua 传入的整数值是精确成立的。
         Value::Number(n) if n.fract() == 0.0 => Ok(*n as i64),
         other => Err(type_error("integer", other)),
     }

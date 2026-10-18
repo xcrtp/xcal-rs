@@ -225,7 +225,13 @@ impl Path2D {
                 }
                 PathCommand::QuadTo { ctrl, end } => {
                     let start = current.unwrap_or(end);
-                    flatten_quad(start, ctrl, end, tol, current_group.get_or_insert_with(Vec::new));
+                    flatten_quad(
+                        start,
+                        ctrl,
+                        end,
+                        tol,
+                        current_group.get_or_insert_with(Vec::new),
+                    );
                     current = Some(end);
                 }
                 PathCommand::CubicTo { ctrl1, ctrl2, end } => {
@@ -314,29 +320,7 @@ impl Path2D {
             return vec![pts[0]; n];
         }
 
-        let mut out = Vec::with_capacity(n);
-        let mut j = 0usize; // 段索引游标：target 单调不减 → 单遍推进
-        for i in 0..n {
-            let target = if closed {
-                total * (i as f32) / (n as f32)
-            } else if n == 1 {
-                0.0
-            } else {
-                total * (i as f32) / ((n as f32) - 1.0)
-            };
-            while j + 2 < pts.len() && cum[j + 1] < target {
-                j += 1;
-            }
-            let (a, b) = (pts[j], pts[j + 1]);
-            let seg = cum[j + 1] - cum[j];
-            let local = if seg > 1e-9 {
-                ((target - cum[j]) / seg).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            out.push(a + (b - a) * local);
-        }
-        out
+        resample_by_arc_length(&pts, &cum, total, n, closed)
     }
 
     /// 形变后的顶点列表：按弧长对齐后逐点插值。
@@ -405,8 +389,7 @@ impl Path2D {
                 } => {
                     const STEPS: usize = 32;
                     for k in 0..=STEPS {
-                        let a = start_angle
-                            + (end_angle - start_angle) * (k as f32 / STEPS as f32);
+                        let a = start_angle + (end_angle - start_angle) * (k as f32 / STEPS as f32);
                         let p = transform.apply_point(arc_point(center, radii, rotation, a));
                         if out.commands.is_empty() {
                             out.move_to(p);
@@ -540,7 +523,7 @@ impl Path3D {
 
     /// 总长度；`closed` 且首尾不重合时补上闭合段。
     pub fn length(&self) -> f32 {
-        let cum = cumulative_lengths3(&self.sample_points());
+        let cum = cumulative_lengths(&self.sample_points());
         cum.last().copied().unwrap_or(0.0)
     }
 
@@ -572,35 +555,13 @@ impl Path3D {
         if pts.len() == 1 {
             return vec![pts[0]; n];
         }
-        let cum = cumulative_lengths3(&pts);
+        let cum = cumulative_lengths(&pts);
         let total = *cum.last().unwrap();
         if total <= 1e-9 {
             return vec![pts[0]; n];
         }
 
-        let mut out = Vec::with_capacity(n);
-        let mut j = 0usize;
-        for i in 0..n {
-            let target = if self.closed {
-                total * (i as f32) / (n as f32)
-            } else if n == 1 {
-                0.0
-            } else {
-                total * (i as f32) / ((n as f32) - 1.0)
-            };
-            while j + 2 < pts.len() && cum[j + 1] < target {
-                j += 1;
-            }
-            let (a, b) = (pts[j], pts[j + 1]);
-            let seg = cum[j + 1] - cum[j];
-            let local = if seg > 1e-9 {
-                ((target - cum[j]) / seg).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            out.push(a + (b - a) * local);
-        }
-        out
+        resample_by_arc_length(&pts, &cum, total, n, self.closed)
     }
 
     /// 两条 3D 路径按弧长对齐逐点插值，输出闭合折线（`samples` 个不同顶点）。
@@ -662,6 +623,35 @@ impl Path3D {
 }
 
 // ─── 采样算法 ────────────────────────────────────────────────────────────────
+
+/// 折线点：弧长计算与插值所需的公共运算（`Vec2` / `Vec3` 共用）。
+///
+/// glam 的 `Vec2` / `Vec3` 没有描述"可做弧长重采样"的公共 trait，
+/// 故在此定义最小私有 trait，避免 2D / 3D 各写一份重采样循环。
+trait PolylinePoint: Copy {
+    fn distance(self, other: Self) -> f32;
+    fn lerp_to(self, other: Self, t: f32) -> Self;
+}
+
+impl PolylinePoint for Vec2 {
+    fn distance(self, other: Self) -> f32 {
+        (other - self).length()
+    }
+
+    fn lerp_to(self, other: Self, t: f32) -> Self {
+        self + (other - self) * t
+    }
+}
+
+impl PolylinePoint for Vec3 {
+    fn distance(self, other: Self) -> f32 {
+        (other - self).length()
+    }
+
+    fn lerp_to(self, other: Self, t: f32) -> Self {
+        self + (other - self) * t
+    }
+}
 
 fn arc_point(center: Vec2, radii: Vec2, rotation: f32, angle: f32) -> Vec2 {
     let (sin, cos) = rotation.sin_cos();
@@ -741,7 +731,10 @@ fn flatten_cubic(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, tol: f32, out: &mut Vec
 }
 
 /// 折线的累积弧长表：与点数等长，首元素 `0.0`，末元素为总长。
-fn cumulative_lengths(pts: &[Vec2]) -> Vec<f32> {
+///
+/// 契约：输入非空 ⇒ 输出非空，故调用方可用 `last().unwrap()` 取总长
+/// （体检第 18 项：这类 unwrap 由调用方保证，不是隐藏的 panic 点）。
+fn cumulative_lengths<P: PolylinePoint>(pts: &[P]) -> Vec<f32> {
     if pts.is_empty() {
         return Vec::new();
     }
@@ -749,25 +742,45 @@ fn cumulative_lengths(pts: &[Vec2]) -> Vec<f32> {
     let mut acc = 0.0f32;
     cum.push(0.0);
     for w in pts.windows(2) {
-        acc += (w[1] - w[0]).length();
+        acc += w[0].distance(w[1]);
         cum.push(acc);
     }
     cum
 }
 
-/// 3D 折线的累积弧长表（与 [`cumulative_lengths`] 同口径）。
-fn cumulative_lengths3(pts: &[Vec3]) -> Vec<f32> {
-    if pts.is_empty() {
-        return Vec::new();
+/// 按弧长把折线重采样为 `n` 个点（2D / 3D 共用）。
+///
+/// 调用方须保证：`pts.len() >= 2`、`cum` 与 `pts` 等长、`total > 0`。
+fn resample_by_arc_length<P: PolylinePoint>(
+    pts: &[P],
+    cum: &[f32],
+    total: f32,
+    n: usize,
+    closed: bool,
+) -> Vec<P> {
+    let mut out = Vec::with_capacity(n);
+    let mut j = 0usize; // 段索引游标：target 单调不减 → 单遍推进
+    for i in 0..n {
+        let target = if closed {
+            total * (i as f32) / (n as f32)
+        } else if n == 1 {
+            0.0
+        } else {
+            total * (i as f32) / ((n as f32) - 1.0)
+        };
+        while j + 2 < pts.len() && cum[j + 1] < target {
+            j += 1;
+        }
+        let (a, b) = (pts[j], pts[j + 1]);
+        let seg = cum[j + 1] - cum[j];
+        let local = if seg > 1e-9 {
+            ((target - cum[j]) / seg).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        out.push(a.lerp_to(b, local));
     }
-    let mut cum = Vec::with_capacity(pts.len());
-    let mut acc = 0.0f32;
-    cum.push(0.0);
-    for w in pts.windows(2) {
-        acc += (w[1] - w[0]).length();
-        cum.push(acc);
-    }
-    cum
+    out
 }
 
 #[cfg(test)]
@@ -961,7 +974,10 @@ mod tests {
         let single = Path2D::from_polyline(&[Vec2::new(3.0, 4.0)], false);
         let pts = single.resample_arc_length(8, 0.1, false);
         assert_eq!(pts.len(), 8);
-        assert!(pts.iter().all(|p| (*p - Vec2::new(3.0, 4.0)).length() < 1e-6));
+        assert!(
+            pts.iter()
+                .all(|p| (*p - Vec2::new(3.0, 4.0)).length() < 1e-6)
+        );
 
         // n = 0 → 空
         assert!(single.resample_arc_length(0, 0.1, false).is_empty());
@@ -1005,7 +1021,8 @@ mod tests {
     #[test]
     fn transformed_applies_scale_and_translate() {
         let p = Path2D::from_polyline(&[Vec2::new(0.0, 0.0), Vec2::new(2.0, 1.0)], false);
-        let t = Transform2D::scale(Vec2::splat(2.0)).compose(Transform2D::translate(Vec2::new(1.0, -1.0)));
+        let t = Transform2D::scale(Vec2::splat(2.0))
+            .compose(Transform2D::translate(Vec2::new(1.0, -1.0)));
         let out = p.transformed(&t);
         let b = out.compute_bounds().unwrap();
         // (0,0)→(1,-1)，(2,1)→(5,1)

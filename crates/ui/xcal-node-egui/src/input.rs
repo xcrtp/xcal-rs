@@ -14,9 +14,31 @@
 
 use glam::Vec2;
 use xc_node::{EdgeId, NodeId};
-use xcal_node_editor::{Command, Editor, HitTarget};
+use xcal_node_editor::{Command, Editor, EditorError, HitTarget};
 
 use crate::canvas::GraphCanvas;
+
+/// Applies a command and reports rejection instead of silently dropping it.
+///
+/// A failed UI command (delete / connect / move) used to be invisible: the
+/// user clicked and nothing happened, with no diagnostic. `tracing` keeps the
+/// hot path allocation-free when no subscriber is installed.
+fn apply(editor: &mut Editor, cmd: Command) -> bool {
+    match editor.apply(cmd) {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!("node editor command rejected: {err}");
+            false
+        }
+    }
+}
+
+/// Reports a failed undo/redo step (empty history is `Ok`, so this is a real error).
+fn report_history(result: Result<(), EditorError>) {
+    if let Err(err) = result {
+        tracing::warn!("node editor history step failed: {err}");
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum DragState {
@@ -67,18 +89,18 @@ impl InputHandler {
         {
             let selected: Vec<NodeId> = editor.selection().iter().copied().collect();
             for id in selected {
-                let _ = editor.apply(Command::RemoveNode(id));
+                apply(editor, Command::RemoveNode(id));
             }
         }
 
         if ctrl && !shift && ui.input(|i| i.key_pressed(egui::Key::Z)) {
-            let _ = editor.undo();
+            report_history(editor.undo());
         }
         if ctrl
             && (ui.input(|i| i.key_pressed(egui::Key::Y))
                 || shift && ui.input(|i| i.key_pressed(egui::Key::Z)))
         {
-            let _ = editor.redo();
+            report_history(editor.redo());
         }
     }
 
@@ -109,7 +131,7 @@ impl InputHandler {
         if primary_pressed && canvas.viewport().contains(pos) {
             match editor.hit_test(graph_pos) {
                 HitTarget::OutputSocket(id) => {
-                    if editor.apply(Command::BeginConnection(id)).is_ok() {
+                    if apply(editor, Command::BeginConnection(id)) {
                         self.drag = Some(DragState::Connection);
                     }
                 }
@@ -117,8 +139,8 @@ impl InputHandler {
                     // Grab the existing incoming edge and re-drag it.
                     if let Some(source) = editor.graph().upstream(id).pop() {
                         let edge = EdgeId { source, target: id };
-                        let _ = editor.apply(Command::Disconnect(edge));
-                        if editor.apply(Command::BeginConnection(source)).is_ok() {
+                        apply(editor, Command::Disconnect(edge));
+                        if apply(editor, Command::BeginConnection(source)) {
                             self.drag = Some(DragState::Connection);
                         }
                     }
@@ -134,7 +156,7 @@ impl InputHandler {
                         .is_some_and(|n| n.meta().interaction.resizable);
                     if resizable && let Some(rect) = editor.node_rect(id) {
                         let additive = ui.input(|i| i.modifiers.shift);
-                        let _ = editor.apply(Command::Select { node: id, additive });
+                        apply(editor, Command::Select { node: id, additive });
                         self.drag = Some(DragState::Resize {
                             node: id,
                             anchor: rect.min,
@@ -150,7 +172,7 @@ impl InputHandler {
                     let draggable = interaction.as_ref().is_none_or(|i| i.draggable);
                     if selectable {
                         let additive = ui.input(|i| i.modifiers.shift);
-                        let _ = editor.apply(Command::Select { node: id, additive });
+                        apply(editor, Command::Select { node: id, additive });
                     }
                     // Only the header band of a draggable card starts a move;
                     // body clicks fall through to the card's body widgets.
@@ -169,7 +191,7 @@ impl InputHandler {
                     // Edge click-to-delete is deferred to stage 10.
                 }
                 HitTarget::Nothing => {
-                    let _ = editor.apply(Command::ClearSelection);
+                    apply(editor, Command::ClearSelection);
                 }
             }
         }
@@ -186,21 +208,27 @@ impl InputHandler {
         if ui.input(|i| i.pointer.any_down()) {
             match self.drag {
                 Some(DragState::Node { node, grab_offset }) => {
-                    let _ = editor.apply(Command::MoveNode {
-                        node,
-                        to: graph_pos - grab_offset,
-                    });
+                    apply(
+                        editor,
+                        Command::MoveNode {
+                            node,
+                            to: graph_pos - grab_offset,
+                        },
+                    );
                 }
                 Some(DragState::Resize { node, anchor }) => {
                     // Card's top-left stays anchored; size tracks the pointer.
                     // The editor clamps to the node's min/max bounds.
-                    let _ = editor.apply(Command::ResizeNode {
-                        node,
-                        size: graph_pos - anchor,
-                    });
+                    apply(
+                        editor,
+                        Command::ResizeNode {
+                            node,
+                            size: graph_pos - anchor,
+                        },
+                    );
                 }
                 Some(DragState::Connection) => {
-                    let _ = editor.apply(Command::UpdateConnectionDrag(graph_pos));
+                    apply(editor, Command::UpdateConnectionDrag(graph_pos));
                 }
                 Some(DragState::Pan) => {
                     let delta = ui.input(|i| i.pointer.delta());
@@ -229,10 +257,10 @@ impl InputHandler {
                     });
                 match target {
                     Some(target) => {
-                        let _ = editor.apply(Command::CompleteConnection(target));
+                        apply(editor, Command::CompleteConnection(target));
                     }
                     None => {
-                        let _ = editor.apply(Command::CancelConnection);
+                        apply(editor, Command::CancelConnection);
                     }
                 }
             }

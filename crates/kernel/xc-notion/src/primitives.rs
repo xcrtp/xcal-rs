@@ -212,6 +212,8 @@ impl Ellipse2D {
     /// （`(0/0)` 视作与中心重合才命中）。
     pub fn contains(&self, p: Vec2) -> bool {
         let d = p - self.center;
+        // 精确零语义：`rx/ry` 来自构造（不是浮点运算结果），"半径恰好为 0"就是
+        // 退化椭圆的定义；这里不能换成 epsilon 比较，否则会把极扁椭圆误判为线段。
         let nx = if self.rx != 0.0 { d.x / self.rx } else { 0.0 };
         let ny = if self.ry != 0.0 { d.y / self.ry } else { 0.0 };
         let flat = (self.rx == 0.0 && d.x != 0.0) || (self.ry == 0.0 && d.y != 0.0);

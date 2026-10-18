@@ -759,6 +759,8 @@ fn target_label(name: &str) -> &str {
 /// CJK 字体候选路径：环境变量 `XCAL_CJK_FONT` **优先**，其次各平台常见内置路径。
 ///
 /// 只做"列候选"，是否存在由调用方过滤 —— 这样非 Windows 平台也能跑（无 panic / 无方框提示之外的行为）。
+/// 注意：下面的 `C:\Windows\Fonts\...` **只在 Windows 上存在**；在 Linux / macOS 上
+/// 这些候选会被"文件不存在"过滤掉，不是错误路径。
 fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(custom) = std::env::var("XCAL_CJK_FONT") {

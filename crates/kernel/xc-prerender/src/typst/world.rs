@@ -50,9 +50,11 @@ fn discover_fonts() -> (LazyHash<FontBook>, Vec<Font>) {
     }
 
     // math 字体兜底：如果 book 里没任何数学字体，给出警告（但不 panic）。
-    let has_math = book.families().any(|(family_name, _)| is_math_family(family_name));
+    let has_math = book
+        .families()
+        .any(|(family_name, _)| is_math_family(family_name));
     if !has_math {
-        eprintln!(
+        tracing::warn!(
             "[xc-prerender::typst] 警告：未检测到支持数学表的字体（Latin Modern Math / STIX / Cambria Math 等）。\
              复杂数学公式将无法正确显示。"
         );
@@ -146,7 +148,9 @@ impl TypstWorld {
 }
 
 impl Default for TypstWorld {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl World for TypstWorld {
@@ -164,12 +168,10 @@ impl World for TypstWorld {
 
     fn source(&self, id: FileId) -> FileResult<Source> {
         let map = self.sources_by_id.lock().unwrap();
-        map.get(&id)
-            .cloned()
-            .ok_or_else(|| {
-                let path = id.vpath().as_rooted_path().to_path_buf();
-                FileError::NotFound(path)
-            })
+        map.get(&id).cloned().ok_or_else(|| {
+            let path = id.vpath().as_rooted_path().to_path_buf();
+            FileError::NotFound(path)
+        })
     }
 
     fn file(&self, _id: FileId) -> FileResult<Bytes> {

@@ -33,6 +33,7 @@ impl<'a> GraphPainter<'a> {
 
     /// Full repaint: background grid → edges → node cards → sockets → the
     /// pending drag connection.
+    // 体检第 9 项（观察，暂不改）：本函数约 225 行，可按上述五个绘制阶段拆分。
     pub fn paint(
         &self,
         ui: &mut egui::Ui,

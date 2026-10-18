@@ -8,7 +8,6 @@
 pub mod convert;
 pub mod world;
 
-#[allow(unused_imports)]
 use self::world::TypstWorld;
 
 use crate::engine::{CompileFn, InMemoryEngine};
@@ -27,7 +26,10 @@ pub fn compile(
 ) -> ContentResult {
     let raw_body = wrap_if_math(&src.text);
     let font_size_pt = cfg.font_size.max(1.0);
-    let rgb_hex = format!("\"#{:02x}{:02x}{:02x}\"", cfg.fill.r, cfg.fill.g, cfg.fill.b);
+    let rgb_hex = format!(
+        "\"#{:02x}{:02x}{:02x}\"",
+        cfg.fill.r, cfg.fill.g, cfg.fill.b
+    );
     let fs_pt = format!("{}pt", font_size_pt);
     // 前缀 = #set page + #set text 行；body 紧随其后。
     let prefix = format!(
@@ -49,7 +51,10 @@ pub fn compile(
     world.set_body_offset(body_offset);
 
     if std::env::var_os("XC_PRERENDER_DUMP_SRC").is_some() {
-        eprintln!("[xc-prerender::typst] wrapped source:\n----------\n{}\n----------", wrapped_src);
+        tracing::debug!(
+            "[xc-prerender::typst] wrapped source:\n----------\n{}\n----------",
+            wrapped_src
+        );
     }
 
     let warned = typst::compile::<typst::layout::PagedDocument>(&world);
@@ -107,8 +112,8 @@ pub fn engine() -> Result<InMemoryEngine, ContentError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request::ContentConfig;
     use crate::ContentEngine;
+    use crate::request::ContentConfig;
     use xc_content::ContentSource;
     use xc_notion::Color32;
 
@@ -125,14 +130,22 @@ mod tests {
     fn typst_compiles_x2_plus_1() {
         let engine = engine().expect("typst engine");
         let h = engine.request("x^2 + 1", &cfg(24.0));
-        let ir = engine
-            .take(h)
-            .expect("ready")
-            .expect("ok");
-        assert!(!ir.items.is_empty(), "预期至少一个 glyph path；实际 items=0");
+        let ir = engine.take(h).expect("ready").expect("ok");
+        assert!(
+            !ir.items.is_empty(),
+            "预期至少一个 glyph path；实际 items=0"
+        );
         let b = ir.bounds;
-        assert!(b.min.x.is_finite() && b.max.x > b.min.x, "x bounds 应当有限: {:?}", b);
-        assert!(b.min.y.is_finite() && b.max.y > b.min.y, "y bounds 应当有限: {:?}", b);
+        assert!(
+            b.min.x.is_finite() && b.max.x > b.min.x,
+            "x bounds 应当有限: {:?}",
+            b
+        );
+        assert!(
+            b.min.y.is_finite() && b.max.y > b.min.y,
+            "y bounds 应当有限: {:?}",
+            b
+        );
         assert!(ir.nominal_font_size > 0.0);
     }
 
@@ -166,7 +179,12 @@ mod tests {
             }
         }
         let unique: std::collections::BTreeSet<String> = hits.into_iter().collect();
-        assert!(unique.len() >= 2, "锚点回切唯一 token 过少：{:?}（norm={:?}）", unique, norm);
+        assert!(
+            unique.len() >= 2,
+            "锚点回切唯一 token 过少：{:?}（norm={:?}）",
+            unique,
+            norm
+        );
     }
 
     /// 相同源码两次 request：handle 不同；ir items 长度与归一化 hash 相同。
@@ -186,7 +204,8 @@ mod tests {
     /// compile 函数幂等 + 输出 SVG 快照到临时目录。
     #[test]
     fn compile_fn_idempotent_and_writes_svg_snapshot() {
-        let world_provider: Arc<dyn Fn() -> TypstWorld + Send + Sync> = Arc::new(|| TypstWorld::new());
+        let world_provider: Arc<dyn Fn() -> TypstWorld + Send + Sync> =
+            Arc::new(|| TypstWorld::new());
         let src = ContentSource::from_raw("a/b");
         let conf = cfg(14.0);
         let ir1 = compile(&world_provider, &src, &conf).expect("compile 1");

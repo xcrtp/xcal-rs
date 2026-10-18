@@ -16,9 +16,12 @@ use std::collections::HashMap;
 
 use wgpu::util::DeviceExt as _;
 
+use xcal_render::{
+    AaModel, CacheStrategy, POST_UNIFORM_SIZE, PostFilterChain, Vertex2D, VertexLayout,
+};
 use xcal_scene::domain::LayerBlend;
-use xcal_render::{AaModel, CacheStrategy, PostFilterChain, Vertex2D, VertexLayout, POST_UNIFORM_SIZE};
 
+use crate::gpu_util::bytes_of;
 use crate::vertex_layout::to_wgpu;
 
 /// 合成着色器：源纹理 → 主 pass（含 sRGB / 非 sRGB 双入口 + opacity uniform）。
@@ -310,12 +313,11 @@ impl Compositor {
                     },
                 ],
             });
-        let post_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("xcal-post-pipeline-layout"),
-                bind_group_layouts: &[Some(&post_bind_group_layout)],
-                immediate_size: 0,
-            });
+        let post_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("xcal-post-pipeline-layout"),
+            bind_group_layouts: &[Some(&post_bind_group_layout)],
+            immediate_size: 0,
+        });
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("xcal-post-shader"),
             source: wgpu::ShaderSource::Wgsl(POST_SHADER.into()),
@@ -494,7 +496,11 @@ impl Compositor {
     }
 
     /// 惰性（重）建中间全屏纹理：尺寸变化时重建。
-    fn ensure_post_target(&mut self, device: &wgpu::Device, size: (u32, u32)) -> &wgpu::TextureView {
+    fn ensure_post_target(
+        &mut self,
+        device: &wgpu::Device,
+        size: (u32, u32),
+    ) -> &wgpu::TextureView {
         let size = (size.0.max(1), size.1.max(1));
         if self.post_target.as_ref().map(|t| t.size) != Some(size) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -508,7 +514,8 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.target_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -554,7 +561,10 @@ impl Compositor {
                 });
                 PreparedCompositeOp {
                     bind_group,
-                    key: (op.blend, Conversion::for_formats(op.src_format, self.target_format)),
+                    key: (
+                        op.blend,
+                        Conversion::for_formats(op.src_format, self.target_format),
+                    ),
                     _opacity_buffer: uniform,
                 }
             })
@@ -687,11 +697,6 @@ fn blend_state(blend: LayerBlend) -> wgpu::BlendState {
     }
 }
 
-/// 把 Copy 切片视为字节切片（顶点/uniform 上传用）。
-fn bytes_of<T: Copy>(data: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data)) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,7 +721,10 @@ mod tests {
         assert_eq!(additive.alpha.src_factor, wgpu::BlendFactor::One);
         assert_eq!(additive.alpha.dst_factor, wgpu::BlendFactor::One);
         // 三者互不相同（否则 HashMap 会互相覆盖）。
-        assert_ne!(blend_state(LayerBlend::Alpha), blend_state(LayerBlend::Additive));
+        assert_ne!(
+            blend_state(LayerBlend::Alpha),
+            blend_state(LayerBlend::Additive)
+        );
     }
 
     /// 四边形：4 顶点、全 NDC 覆盖、UV (0,0)-(1,1)（契约布局 R0 后 stride 24）。
@@ -781,8 +789,14 @@ mod tests {
     fn conversion_for_formats_matches_srgb_domains() {
         use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
         // 同域（含非 sRGB ↔ 非 sRGB、sRGB ↔ sRGB）：原样输出。
-        assert_eq!(Conversion::for_formats(Rgba8Unorm, Bgra8Unorm), Conversion::Identity);
-        assert_eq!(Conversion::for_formats(Rgba8Unorm, Rgba8Unorm), Conversion::Identity);
+        assert_eq!(
+            Conversion::for_formats(Rgba8Unorm, Bgra8Unorm),
+            Conversion::Identity
+        );
+        assert_eq!(
+            Conversion::for_formats(Rgba8Unorm, Rgba8Unorm),
+            Conversion::Identity
+        );
         assert_eq!(
             Conversion::for_formats(Bgra8UnormSrgb, Rgba8UnormSrgb),
             Conversion::Identity
@@ -799,8 +813,14 @@ mod tests {
         );
         // 三个入口点各不相同。
         assert_eq!(Conversion::Identity.entry_point(), "fs_identity");
-        assert_eq!(Conversion::GammaToLinear.entry_point(), "fs_gamma_to_linear");
-        assert_eq!(Conversion::LinearToGamma.entry_point(), "fs_linear_to_gamma");
+        assert_eq!(
+            Conversion::GammaToLinear.entry_point(),
+            "fs_gamma_to_linear"
+        );
+        assert_eq!(
+            Conversion::LinearToGamma.entry_point(),
+            "fs_linear_to_gamma"
+        );
     }
 
     // ── 真实设备：顺序 / opacity / 像素结果 ────────────────────────────────
@@ -1040,8 +1060,16 @@ mod tests {
             &ctx,
             &mut comp,
             &[
-                op(solid_texture(&ctx, [255, 0, 0, 255]), LayerBlend::Alpha, 1.0),
-                op(solid_texture(&ctx, [0, 0, 255, 255]), LayerBlend::Alpha, 0.0),
+                op(
+                    solid_texture(&ctx, [255, 0, 0, 255]),
+                    LayerBlend::Alpha,
+                    1.0,
+                ),
+                op(
+                    solid_texture(&ctx, [0, 0, 255, 255]),
+                    LayerBlend::Alpha,
+                    0.0,
+                ),
             ],
         );
         assert_eq!(
@@ -1054,8 +1082,16 @@ mod tests {
             &ctx,
             &mut comp,
             &[
-                op(solid_texture(&ctx, [255, 0, 0, 255]), LayerBlend::Alpha, 1.0),
-                op(solid_texture(&ctx, [0, 0, 255, 255]), LayerBlend::Alpha, 1.0),
+                op(
+                    solid_texture(&ctx, [255, 0, 0, 255]),
+                    LayerBlend::Alpha,
+                    1.0,
+                ),
+                op(
+                    solid_texture(&ctx, [0, 0, 255, 255]),
+                    LayerBlend::Alpha,
+                    1.0,
+                ),
             ],
         );
         assert_eq!(
@@ -1069,8 +1105,16 @@ mod tests {
             &ctx,
             &mut comp,
             &[
-                op(solid_texture(&ctx, [255, 0, 0, 255]), LayerBlend::Alpha, 1.0),
-                op(solid_texture(&ctx, [0, 0, 255, 255]), LayerBlend::Alpha, 2.0),
+                op(
+                    solid_texture(&ctx, [255, 0, 0, 255]),
+                    LayerBlend::Alpha,
+                    1.0,
+                ),
+                op(
+                    solid_texture(&ctx, [0, 0, 255, 255]),
+                    LayerBlend::Alpha,
+                    2.0,
+                ),
             ],
         );
         assert_eq!(px_clamped, [0, 0, 255, 255], "opacity 应被钳制到 [0,1]");
@@ -1105,9 +1149,21 @@ mod tests {
         };
         let comp = Compositor::new(&ctx.device, TEST_FORMAT);
         let ops = [
-            op(solid_texture(&ctx, [255, 0, 0, 255]), LayerBlend::Opaque, 1.0),
-            op(solid_texture(&ctx, [0, 255, 0, 255]), LayerBlend::Alpha, 1.0),
-            op(solid_texture(&ctx, [0, 0, 255, 255]), LayerBlend::Additive, 1.0),
+            op(
+                solid_texture(&ctx, [255, 0, 0, 255]),
+                LayerBlend::Opaque,
+                1.0,
+            ),
+            op(
+                solid_texture(&ctx, [0, 255, 0, 255]),
+                LayerBlend::Alpha,
+                1.0,
+            ),
+            op(
+                solid_texture(&ctx, [0, 0, 255, 255]),
+                LayerBlend::Additive,
+                1.0,
+            ),
         ];
         let frame = comp.prepare(&ctx.device, &ops);
         assert_eq!(frame.len(), 3);
@@ -1306,8 +1362,16 @@ mod tests {
         };
         let mut comp = Compositor::new(&ctx.device, TEST_FORMAT);
         let ops = [
-            op(solid_texture(&ctx, [255, 0, 0, 255]), LayerBlend::Alpha, 1.0),
-            op(solid_texture(&ctx, [0, 0, 255, 255]), LayerBlend::Alpha, 0.5),
+            op(
+                solid_texture(&ctx, [255, 0, 0, 255]),
+                LayerBlend::Alpha,
+                1.0,
+            ),
+            op(
+                solid_texture(&ctx, [0, 0, 255, 255]),
+                LayerBlend::Alpha,
+                0.5,
+            ),
         ];
         // 直通：合成到不透明黑底（既有路径）。
         let direct = composite_pixel(&ctx, &mut comp, &ops);
@@ -1411,7 +1475,11 @@ mod tests {
         };
         let mut comp = Compositor::new(&ctx.device, TEST_FORMAT);
         let src = patterned_texture(&ctx, 64, |x, _| {
-            if x < 32 { [255, 0, 0, 255] } else { [0, 0, 0, 0] }
+            if x < 32 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 0, 0]
+            }
         });
         let ops = [op_fmt(src, TEST_FORMAT, LayerBlend::Alpha, 1.0)];
 

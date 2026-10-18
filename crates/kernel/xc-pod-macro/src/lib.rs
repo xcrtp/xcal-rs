@@ -118,6 +118,8 @@ pub fn capability(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
+// 体检第 9 项（观察，暂不改）：本函数约 338 行。拆分需先明确
+// 「属性解析 / 字段分类 / 方法生成 / registry 生成」的独立边界，收益次之，留待单独重构。
 fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
     let name = &input.ident;
     let vis = &input.vis;
@@ -330,8 +332,7 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
                     ).map_err(|e| ::xc_pod::PodError::CallFailed(e.to_string()))?;
                 }
             });
-            let arg_idents: Vec<Ident> =
-                (0..n).map(|i| format_ident!("__arg{}", i)).collect();
+            let arg_idents: Vec<Ident> = (0..n).map(|i| format_ident!("__arg{}", i)).collect();
             let call = if arg_idents.is_empty() {
                 quote!(__f(pod))
             } else {
@@ -814,10 +815,7 @@ fn expand_pod_type(input: &DeriveInput) -> syn::Result<TokenStream2> {
             )
         }
         Data::Union(_) => {
-            return Err(syn::Error::new(
-                name.span(),
-                "PodType 不支持 union",
-            ));
+            return Err(syn::Error::new(name.span(), "PodType 不支持 union"));
         }
     };
 
@@ -868,7 +866,9 @@ fn pod_type_name(attrs: &[syn::Attribute], ident: &Ident) -> syn::Result<String>
     Ok(ident.to_string())
 }
 
-fn named_fields(fields: &syn::punctuated::Punctuated<Field, syn::Token![,]>) -> syn::Result<Vec<NamedField>> {
+fn named_fields(
+    fields: &syn::punctuated::Punctuated<Field, syn::Token![,]>,
+) -> syn::Result<Vec<NamedField>> {
     fields
         .iter()
         .map(|field| {
@@ -882,19 +882,15 @@ fn named_fields(fields: &syn::punctuated::Punctuated<Field, syn::Token![,]>) -> 
         .collect()
 }
 
-fn named_variants(
-    data: &syn::DataEnum,
-) -> syn::Result<Vec<(Ident, LitStr, Vec<NamedField>)>> {
+fn named_variants(data: &syn::DataEnum) -> syn::Result<Vec<(Ident, LitStr, Vec<NamedField>)>> {
     data.variants
         .iter()
         .map(|variant| {
             let vname = LitStr::new(&variant.ident.to_string(), variant.ident.span());
             match &variant.fields {
-                Fields::Named(named) => Ok((
-                    variant.ident.clone(),
-                    vname,
-                    named_fields(&named.named)?,
-                )),
+                Fields::Named(named) => {
+                    Ok((variant.ident.clone(), vname, named_fields(&named.named)?))
+                }
                 Fields::Unit => Ok((variant.ident.clone(), vname, Vec::new())),
                 Fields::Unnamed(_) => Err(syn::Error::new(
                     variant.span(),

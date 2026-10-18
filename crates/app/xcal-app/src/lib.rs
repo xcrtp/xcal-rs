@@ -181,6 +181,8 @@ impl App {
     }
 
     /// 按 [`SceneChoice`] 装配 App（**唯一的装配入口**）。
+    // 体检第 9 项（观察，暂不改）：本函数约 311 行，后续可按
+    // 「字体/主题 → 渲染后端 → 场景系统 → 面板」四段抽成私有方法。
     pub fn new_with_scene(ctx: &eframe::CreationContext, choice: SceneChoice) -> Result<Self> {
         // 宿主字体（平台相关）：候选路径 + `XCAL_CJK_FONT`；找不到只提示、不中止。
         if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() {

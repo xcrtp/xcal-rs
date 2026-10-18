@@ -10,6 +10,8 @@ xcal-node-editor = { path = "../xcal-node-editor" }
 xc-node = { path = "../../graph/xc-node" }
 egui = { workspace = true }
 glam = { workspace = true }
+# 交互失败不能静默（delete / connect / move 被拒绝时给出诊断）。
+tracing = { workspace = true }
 
 [dev-dependencies]
 eframe = { workspace = true, features = ["default_fonts"] }

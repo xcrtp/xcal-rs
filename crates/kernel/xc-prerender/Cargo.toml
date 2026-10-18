@@ -13,9 +13,13 @@ xc-notion = { path = "../xc-notion" }
 xc-content = { path = "../xc-content" }
 thiserror = { workspace = true }
 derive_more = { workspace = true }
+# 诊断输出（替代 eprintln!，由订阅方决定是否可见）。
+tracing = { workspace = true }
 
 # Typst 引擎依赖（全部 optional，由 feature = "typst" 打开）。
 typst = { version = "0.14", optional = true }
+# `typst-library` 在本 crate 源码中零直接 `use`：它是 `typst` 的版本锁定依赖，
+# 保证 workspace 内 typst 全家桶版本一致（不要因"零引用"而删除）。
 typst-library = { version = "0.14", optional = true }
 ecow = { version = "0.2", optional = true }
 fontdb = { version = "0.16", optional = true }

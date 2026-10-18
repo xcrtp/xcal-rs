@@ -32,6 +32,17 @@ members = [
 ]
 resolver = "2"
 
+# ─── 全仓体检观察项（第 15–18 项，本轮暂不改动）──────────────────────────────
+# 15. crate 内模块级循环依赖（xc-graph-eval / xc-node-schema / xc-pod / xc-time /
+#     xcal-render-backends / xcal-scene / xcal-schedule）：Rust 允许同一编译单元内
+#     模块互相 `use`，不是 bug；拆分属于架构调整，不在本轮范围。
+# 16. `//!` 模块文档覆盖率约 37%（156/247 缺）：缺口集中在 tests / examples / benches，
+#     生产模块优先补齐，不强制一次性补全。
+# 17. 外部依赖 `workspace = true` 继承率约 57%：未继承的主要是三个 proc-macro crate 的
+#     `syn`（版本同为 2，仅 features 不同）。统一收益有限，暂保留各自声明。
+# 18. 生产代码 `unwrap()` 共约 62 处：以 `Mutex::lock().unwrap()` 为主
+#     （锁中毒视为不可恢复，属可接受惯例）；其余为"调用方已保证非空/存在"的契约型 unwrap。
+
 [workspace.package]
 edition = "2024"
 version = "0.1.0"
@@ -48,13 +59,11 @@ egui = "0.36"
 egui-wgpu = "0.36"
 wgpu = "30"
 
-nalgebra = "0.33"
 glam = "0.33.6"
 pollster = "0.3"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0" }
-serde_yaml = { version = "1.0" }
 # 序列帧导出：最小 PNG 编码器（全仓此前零图像库）。
 png = "0.17"
 # GPU 测试汇报：直接写 fd 2，绕过 libtest 的输出捕获（见 gpu_test.rs）。

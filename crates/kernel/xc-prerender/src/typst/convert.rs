@@ -14,16 +14,16 @@
 
 use std::ops::Range;
 
+use ttf_parser::{GlyphId, OutlineBuilder};
 use typst::layout::{Abs, Frame, FrameItem, Point, Transform};
 use typst::syntax::Span;
 use typst::text::TextItem;
 use typst::visualize::{CurveItem, FixedStroke, Geometry, Paint};
-use ttf_parser::{GlyphId, OutlineBuilder};
-use xc_notion::{Color32, Path2D, Stroke2D, Vec2};
 use xc_content::{ContentIR, ContentSource, Span as XSpan, StyledPath};
+use xc_notion::{Color32, Path2D, Stroke2D, Vec2};
 
-use crate::request::{ContentConfig, ContentError};
 use super::world::TypstWorld;
+use crate::request::{ContentConfig, ContentError};
 
 const PT_UNIT: typst::layout::AbsUnit = typst::layout::AbsUnit::Pt;
 
@@ -41,14 +41,22 @@ fn point_to_v2(p: Point) -> Vec2 {
 /// [ 0   0   1  ]
 #[derive(Debug, Clone, Copy)]
 struct M3 {
-    pub sx: f32, pub kx: f32, pub tx: f32,
-    pub ky: f32, pub sy: f32, pub ty: f32,
+    pub sx: f32,
+    pub kx: f32,
+    pub tx: f32,
+    pub ky: f32,
+    pub sy: f32,
+    pub ty: f32,
 }
 
 impl M3 {
     const IDENTITY: Self = Self {
-        sx: 1.0, kx: 0.0, tx: 0.0,
-        ky: 0.0, sy: 1.0, ty: 0.0,
+        sx: 1.0,
+        kx: 0.0,
+        tx: 0.0,
+        ky: 0.0,
+        sy: 1.0,
+        ty: 0.0,
     };
 
     fn from_typst(t: Transform) -> Self {
@@ -59,11 +67,25 @@ impl M3 {
         let sy = t.sy.get() as f32;
         let tx = abs_to_pt(t.tx);
         let ty = abs_to_pt(t.ty);
-        Self { sx, kx, tx, ky, sy, ty }
+        Self {
+            sx,
+            kx,
+            tx,
+            ky,
+            sy,
+            ty,
+        }
     }
 
     fn translate(x: f32, y: f32) -> Self {
-        Self { sx: 1.0, kx: 0.0, tx: x, ky: 0.0, sy: 1.0, ty: y }
+        Self {
+            sx: 1.0,
+            kx: 0.0,
+            tx: x,
+            ky: 0.0,
+            sy: 1.0,
+            ty: y,
+        }
     }
 
     fn mul(self, b: Self) -> Self {
@@ -119,8 +141,14 @@ struct PathSink {
 }
 
 impl PathSink {
-    fn new() -> Self { Self { path: Path2D::new() } }
-    fn finish(self) -> Path2D { self.path }
+    fn new() -> Self {
+        Self {
+            path: Path2D::new(),
+        }
+    }
+    fn finish(self) -> Path2D {
+        self.path
+    }
 }
 
 impl OutlineBuilder for PathSink {
@@ -199,13 +227,22 @@ fn transform_path(path: &Path2D, m: M3) -> Path2D {
         out.commands.push(match *cmd {
             MoveTo(p) => MoveTo(m.apply(p)),
             LineTo(p) => LineTo(m.apply(p)),
-            QuadTo { ctrl, end } => QuadTo { ctrl: m.apply(ctrl), end: m.apply(end) },
+            QuadTo { ctrl, end } => QuadTo {
+                ctrl: m.apply(ctrl),
+                end: m.apply(end),
+            },
             CubicTo { ctrl1, ctrl2, end } => CubicTo {
                 ctrl1: m.apply(ctrl1),
                 ctrl2: m.apply(ctrl2),
                 end: m.apply(end),
             },
-            Arc { center, radii, rotation, start_angle, end_angle } => {
+            Arc {
+                center,
+                radii,
+                rotation,
+                start_angle,
+                end_angle,
+            } => {
                 // typst Geometry 曲线不产 Arc 命令；仅 Shape 会产 Line/Rect/Curve，
                 // 但 Curve 里没有 Arc。所以这里保守处理：仅对 center 做仿射，
                 // radii / 角度不变（一般遇到 Group 里的 Arc 极少）。
@@ -270,7 +307,6 @@ pub fn frame_to_ir(
 
     // 先算一次 Y-down bounds 做翻转参考。
     // y_min 仅用于判定有限性：当 bounds 非有限时将 y_max 设为 0 避免 NaN 矩阵。
-    #[allow(unused_variables)]
     let y_min;
     let mut y_max = f32::NEG_INFINITY;
     {
@@ -290,8 +326,12 @@ pub fn frame_to_ir(
     // 翻转：y' = -(y - y_max) = y_max - y  → 原页顶 y_min → y_max - y_min，原页底 y_max → 0。
     // 再平移让最小 y'（= 0）保持 0；最大 y' = y_max - y_min。
     let flip = M3 {
-        sx: 1.0, kx: 0.0, tx: 0.0,
-        ky: 0.0, sy: -1.0, ty: y_max,
+        sx: 1.0,
+        kx: 0.0,
+        tx: 0.0,
+        ky: 0.0,
+        sy: -1.0,
+        ty: y_max,
     };
     for it in items.iter_mut() {
         it.path = transform_path(&it.path, flip);
@@ -337,7 +377,10 @@ fn walk_frame(
                 let path = geometry_to_path(&s.geometry);
                 let path = transform_path(&path, combined);
                 let fill = s.fill.as_ref().and_then(|p| paint_to_color(p, cfg.fill));
-                let stroke = s.stroke.as_ref().and_then(|s| fixed_stroke_to_stroke2d(s, cfg.fill));
+                let stroke = s
+                    .stroke
+                    .as_ref()
+                    .and_then(|s| fixed_stroke_to_stroke2d(s, cfg.fill));
                 let anchor = span_to_normalized_range(world, *span, original_norm)
                     .map(|r| XSpan::new(r.start, r.end));
                 // 如果 fill/stroke 同时没给，按计划 1.3 至少保留一种：这里给个 fallback fill。
@@ -346,7 +389,12 @@ fn walk_frame(
                 } else {
                     (fill, stroke)
                 };
-                out.push(StyledPath { path, fill, stroke, anchor });
+                out.push(StyledPath {
+                    path,
+                    fill,
+                    stroke,
+                    anchor,
+                });
             }
             FrameItem::Image(..) | FrameItem::Link(..) | FrameItem::Tag(..) => {
                 // 数学/短文本主场景：不处理
@@ -410,12 +458,23 @@ fn convert_text(
         .mul(combined);
 
         let mut sink = PathSink::new();
-        // 只要能取到 outline（没有就跳过，不 panic）。
-        let _ = face.outline_glyph(GlyphId(g.id), &mut sink);
+        // 取不到 outline（字体缺该字形）时跳过，但要留诊断：静默吞掉会导致
+        // 公式缺笔画却无从排查。
+        if face.outline_glyph(GlyphId(g.id), &mut sink).is_none() {
+            tracing::debug!(
+                "[xc-prerender::typst] glyph {} 无轮廓（字体缺字形），已跳过",
+                g.id
+            );
+        }
         let local_path = sink.finish();
         if !local_path.commands.is_empty() {
             let path = transform_path(&local_path, glyph_transform);
-            out.push(StyledPath { path, fill: Some(fill), stroke: stroke.clone(), anchor });
+            out.push(StyledPath {
+                path,
+                fill: Some(fill),
+                stroke: stroke.clone(),
+                anchor,
+            });
         }
 
         advance_cursor += xadv_pt;

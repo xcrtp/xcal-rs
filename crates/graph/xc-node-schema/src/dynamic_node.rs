@@ -156,8 +156,15 @@ impl DynamicNodeBuilder {
         // Builder API is best-effort: duplicate names are ignored to keep
         // construction ergonomic; use `object_mut().add(...)` for checked adds.
         let name = name.into();
-        if self.object.get(&name).is_none() {
-            let _ = self.object.add(name, property);
+        if self.object.get(&name).is_none()
+            && let Err(err) = self.object.add(name, property)
+        {
+            // `get` 已排除重名，走到这里说明契约被破坏：保留 best-effort 语义，
+            // 但在 debug 下立即暴露，而不是静默吞掉。
+            debug_assert!(
+                false,
+                "dynamic field add failed after duplicate check: {err}"
+            );
         }
         self
     }
@@ -165,8 +172,13 @@ impl DynamicNodeBuilder {
     /// Add a required runtime property field.
     pub fn required_field(mut self, name: impl Into<String>, property: Property) -> Self {
         let name = name.into();
-        if self.object.get(&name).is_none() {
-            let _ = self.object.add_required(name, property);
+        if self.object.get(&name).is_none()
+            && let Err(err) = self.object.add_required(name, property)
+        {
+            debug_assert!(
+                false,
+                "dynamic required field add failed after duplicate check: {err}"
+            );
         }
         self
     }
