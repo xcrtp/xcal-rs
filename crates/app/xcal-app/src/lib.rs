@@ -29,7 +29,7 @@ use xcal_render::{
 use xcal_render_backends::RenderContext;
 pub use xcal_scene::Result;
 use xcal_scene::animation::{Binding, BindingTable, CameraEye};
-use xcal_scene::contract::{GroupVisibility, SceneRead};
+use xcal_scene::contract::{GroupVisibility, ObjectId, SceneRead};
 use xcal_scene::director_state::DirectorState;
 use xcal_scene::domain::{ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
@@ -132,6 +132,8 @@ pub fn build_script_runtime(
             source: source.into(),
             language,
         },
+        // headless 脚本 = 完整作品：不叠加 demo3d。
+        false,
     )
 }
 
@@ -195,7 +197,7 @@ impl App {
             xcal_render_backends::install_standard_backends(&rs)
         };
 
-        let runtime = build_runtime(render_ctx, SceneSource::Choice(choice))?;
+        let runtime = build_runtime(render_ctx, SceneSource::Choice(choice), true)?;
         // App 订阅事件：进度只观测 `FrameFinished`（不碰命令队列）。
         let progress = Arc::new(ui::FrameProgress::new());
         let sink: Arc<dyn Pod> = Arc::clone(&progress) as Arc<dyn Pod>;
@@ -225,16 +227,24 @@ impl App {
 
 /// **唯一的场景装配实现**：GUI 与 headless 走同一条路径。
 ///
-/// 分叉点只允许在"渲染上下文怎么来"（`eframe` vs headless wgpu）与
-/// "每帧 dt 怎么来"（墙钟 vs 固定 `1/fps`）——场景、系统图、Driver pod 完全相同。
-fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runtime> {
+/// 分叉点只允许在"渲染上下文怎么来"（`eframe` vs headless wgpu）、
+/// "每帧 dt 怎么来"（墙钟 vs 固定 `1/fps`）、以及**是否叠加 app 自带的 3D demo**
+/// （GUI 默认叠加；headless 脚本是完整场景，不叠加）——场景、系统图、Driver pod 完全相同。
+fn build_runtime(
+    render_ctx: RenderContext,
+    source: SceneSource,
+    with_demo3d: bool,
+) -> Result<Runtime> {
     let mut scene = Scene::new();
 
     // 排版引擎在 App 侧建一次：内容纹理、分镜脚本与内容服务共用。
     let engine = Arc::new(formula::build_engine());
 
     // 3D 场景（线框立方体 + 参数曲面 + 内容纹理公式）由场景层声明（A6）。
-    let demo3d = xcal_scene::authored::demo3d::build(&mut scene, engine.as_ref());
+    // headless 脚本是**独立作品**：不叠加 app 的 demo3d（否则 3D 物体会盖住脚本画面，
+    // 且脚本无法关闭该图层）。
+    let demo3d = with_demo3d
+        .then(|| xcal_scene::authored::demo3d::build(&mut scene, engine.as_ref()));
 
     // ── 2D 场景：脚本 / 能力 demo（启动参数切换，见 `SceneChoice`）──────────
     // 两条来源产出**同形的三样东西**：时钟树 + 绑定表 + 主 2D 相机句柄；
@@ -275,8 +285,12 @@ fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runti
             speed: 0.5,
             initial_angle: 0.0,
         },
+        // 无 demo3d 时指向悬垂 id（不会命中任何对象）；CameraDriveSystem 仍拿到一条
+        // 形状合法的绑定，不必为 headless 分叉场景层签名。
         target: Arc::new(CameraEye {
-            id: demo3d.camera3d.0,
+            id: demo3d
+                .as_ref()
+                .map_or(ObjectId::DANGLING, |demo| demo.camera3d.0),
         }),
         seek_kind: SeekKind::O1,
     };
@@ -293,7 +307,9 @@ fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runti
     // P1-1：相机状态**不再是 Resource** —— 场景里有一个 2D 相机对象，
     // 这里只放它的**句柄**（引用型，P2）；K3 再加 3D 相机句柄。
     resources.insert(camera2d_handle);
-    resources.insert(demo3d.camera3d);
+    if let Some(demo) = &demo3d {
+        resources.insert(demo.camera3d);
+    }
     resources.insert(TimeState::default());
     resources.insert(UiConfig::default());
     resources.insert(ViewRect::default());
@@ -301,24 +317,30 @@ fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runti
     resources.insert(DrawQueue::new());
     resources.insert(DrawQueue3D::new());
     // S3-3 内容纹理：配置（唯一真相来源）+ 当帧录制结果。
-    // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
-    let content_camera = demo3d.content_camera.unwrap_or_else(|| {
-        Camera2D::new(
-            (0.0, 0.0).into(),
-            25.0,
-            Rect2D::new(
-                xc_notion::Vec2::ZERO,
-                xc_notion::Vec2::new(CONTENT_TEXTURE_WIDTH as f32, CONTENT_TEXTURE_HEIGHT as f32),
-            ),
-        )
-    });
-    resources.insert(ContentTextureSpec {
-        camera: content_camera,
-        size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
-        texture: TextureHandle::new(CONTENT_TEXTURE_ID),
-        composite: false,
-    });
-    resources.insert(ContentTextureQueue::default());
+    // 仅 demo3d 需要它（参数曲面采样公式纹理）；headless 脚本没有 3D 曲面 ⇒ 不声明该图层。
+    if let Some(demo) = &demo3d {
+        // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
+        let content_camera = demo.content_camera.unwrap_or_else(|| {
+            Camera2D::new(
+                (0.0, 0.0).into(),
+                25.0,
+                Rect2D::new(
+                    xc_notion::Vec2::ZERO,
+                    xc_notion::Vec2::new(
+                        CONTENT_TEXTURE_WIDTH as f32,
+                        CONTENT_TEXTURE_HEIGHT as f32,
+                    ),
+                ),
+            )
+        });
+        resources.insert(ContentTextureSpec {
+            camera: content_camera,
+            size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
+            texture: TextureHandle::new(CONTENT_TEXTURE_ID),
+            composite: false,
+        });
+        resources.insert(ContentTextureQueue::default());
+    }
     // S4.3 形变：当帧的形变项（`from`/`to` 常量 + 逐帧 `t`），由 MorphRecordSystem 写。
     resources.insert(MorphQueue::default());
     // R0 书写动画：当帧的 reveal 项（路径常量 + 区间 [start, end]）。
@@ -1047,6 +1069,69 @@ mod tests {
             "[D-PY] 对象 {} / 绑定 {}",
             fingerprints_a.len(),
             rows_a.len()
+        );
+    }
+
+    /// **本轮验收**：`fourier.lua` 与 `fourier.py` 必须产出**同一份场景**。
+    ///
+    /// 与 `python_storyboard_matches_hardcoded` 同口径：对象数、逐对象组件指纹、
+    /// 时序 / 曲线 / target 逐行相等；另加时长一致（两版脚本的时间编排等价）。
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_fourier_matches_lua() {
+        use xc_prerender::placeholder_engine;
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 Pod 装配成功（含 Python）");
+        let lua = assembly
+            .run_script(include_str!("../scripts/fourier.lua"))
+            .expect("Lua 傅里叶脚本执行成功");
+        let py = assembly
+            .run_python_script(include_str!("../scripts/fourier.py"))
+            .expect("Python 傅里叶脚本执行成功");
+        assert_eq!(lua.duration(), py.duration(), "两侧时长必须一致");
+        let duration = lua.duration();
+
+        let mut scene_lua = Scene::new();
+        let mut scene_py = Scene::new();
+        let recipe_lua = lua.commit(&mut scene_lua).expect("Lua commit");
+        let recipe_py = py.commit(&mut scene_py).expect("Python commit");
+
+        let ids_lua = storyboard_ids(&scene_lua);
+        let ids_py = storyboard_ids(&scene_py);
+        assert_eq!(ids_lua.len(), ids_py.len(), "对象数必须一致");
+        assert_eq!(
+            recipe_lua.handles.len(),
+            ids_lua.len(),
+            "Lua 句柄数 = 对象数"
+        );
+        assert_eq!(
+            recipe_py.handles.len(),
+            ids_py.len(),
+            "Python 句柄数 = 对象数"
+        );
+
+        let fingerprints_lua: Vec<String> = ids_lua
+            .iter()
+            .map(|id| object_fingerprint(&scene_lua, *id))
+            .collect();
+        let fingerprints_py: Vec<String> = ids_py
+            .iter()
+            .map(|id| object_fingerprint(&scene_py, *id))
+            .collect();
+        assert_eq!(
+            fingerprints_lua, fingerprints_py,
+            "组件类型与值必须逐对象相等"
+        );
+
+        let rows_lua = binding_rows(&recipe_lua.forest, &recipe_lua.bindings, &ids_lua);
+        let rows_py = binding_rows(&recipe_py.forest, &recipe_py.bindings, &ids_py);
+        assert_eq!(rows_lua, rows_py, "时序 / 曲线 / target 必须全等");
+
+        eprintln!(
+            "[fourier] 对象 {} / 绑定 {} / 时长 {duration:.3}s",
+            fingerprints_lua.len(),
+            rows_lua.len()
         );
     }
 
