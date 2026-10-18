@@ -3,9 +3,7 @@
 //! 适配器只实现 [`ValueCodec`]（Lua 的 userdata / Python 的 PyObject），
 //! 参数个数校验、`PodValue` 转换、返回值回写都由 [`invoke`] 统一完成。
 
-use std::sync::Arc;
-
-use xc_pod::{ErasedFn, TypeSpec, Pod, PodValue};
+use xc_pod::{ErasedFn, Pod, PodValue, TypeSpec};
 
 /// 语言侧的值编解码器。
 pub trait ValueCodec {
@@ -36,7 +34,7 @@ pub trait ValueCodec {
 /// 4. `codec.from_pod` 回写。
 pub fn invoke<C: ValueCodec>(
     codec: &C,
-    service: &Arc<dyn Pod>,
+    service: &dyn Pod,
     item: ErasedFn,
     args: &[C::Value],
 ) -> Result<C::Value, C::Error> {
@@ -53,6 +51,6 @@ pub fn invoke<C: ValueCodec>(
     for (arg, param) in args.iter().zip(io.params) {
         values.push(codec.to_pod(arg, param.ty)?);
     }
-    let out = (item.call)(&**service, &values).map_err(|e| codec.error(e.to_string()))?;
+    let out = (item.call)(service, &values).map_err(|e| codec.error(e.to_string()))?;
     codec.from_pod(&out)
 }

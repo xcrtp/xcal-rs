@@ -1,14 +1,15 @@
 // imp.rs — pyo3 实现（仅 `feature = "python"` 编译）。
 //
-// # 线程模型
+// # 线程模型（P1：SyncPod 徽章）
 //
-// `Pod` 不要求 `Send + Sync`，而 `PyCFunction::new_closure` 要求闭包 `Send + Sync`。
-// 因此 Python 侧的函数闭包只捕获一个**槽位号**；真正的 `Arc<dyn Pod>` 放在
-// 线程本地表里（Python 调用始终在同一线程 + GIL 下）。这是类型系统约束下的
-// 最小桥；不用 `unsafe`。
+// `PyCFunction::new_closure` 要求闭包 `Send + Sync`。服务以 `Arc<dyn SyncPod>`
+// **直接捕获进闭包**（`SyncPod: Pod + Send + Sync`）⇒ 不再需要线程本地槽位表，
+// 也不再需要 `sys.modules` 之外的全局锁来保护槽位。
+//
+// 代价：提供方必须登记 `SyncPod` 徽章（`PodNode::new_sync`）；未登记 ⇒ Broker
+// 给出明确的 `NotSyncPod` 错误，而不是静默降级。
 
 use std::any::Any;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
 use std::sync::Arc;
@@ -20,43 +21,18 @@ use pyo3::prelude::*;
 use pyo3::types::{PyCFunction, PyDict, PyList, PyModule, PyTuple};
 use xc_pod::{
     Capability, ErasedFn, Field, FunctionId, QualifiedName, RegistryPod, ScalarKind, ScalarValue,
-    ServiceRequirement, TypeSpec, Pod, PodError, PodId,
+    ServiceRequirement, SyncPod, TypeSpec, Pod, PodError, PodId,
 };
 use xc_pod_binding::{BindingPlan, ValueCodec, invoke, short_name};
 
 use crate::{ENTRY_SERVICE, FINISH_PATH, FloatList, PythonApi, RESET_PATH, RUN_PATH};
 
-// ─── 线程本地服务表（闭包只捕获槽位号）─────────────────────────────────
-
-thread_local! {
-    static SERVICES: RefCell<HashMap<u64, Arc<dyn Pod>>> = RefCell::new(HashMap::new());
-}
-
-static NEXT_SLOT: AtomicU64 = AtomicU64::new(1);
 /// Python 模块名必须**每个 PyPod 唯一**：`PyImport_ExecCodeModuleEx` 会复用
 /// `sys.modules` 里的同名模块，多实例会共享 globals。
 static NEXT_MODULE: AtomicU64 = AtomicU64::new(1);
 /// `sys.modules` 里的 `xcal.*` 别名是进程级的；脚本执行期间必须串行，
 /// 否则两个 PyPod 会互相覆盖。锁在 GIL 内获取 ⇒ 不会与解释器锁形成死锁。
 static PY_RUN_LOCK: Mutex<()> = Mutex::new(());
-
-fn register_service(pod: Arc<dyn Pod>) -> u64 {
-    let id = NEXT_SLOT.fetch_add(1, Ordering::Relaxed);
-    SERVICES.with(|services| {
-        services.borrow_mut().insert(id, pod);
-    });
-    id
-}
-
-fn with_service<R>(slot: u64, f: impl FnOnce(&Arc<dyn Pod>) -> R) -> Option<R> {
-    SERVICES.with(|services| services.borrow().get(&slot).map(f))
-}
-
-fn unregister_service(slot: u64) {
-    SERVICES.with(|services| {
-        services.borrow_mut().remove(&slot);
-    });
-}
 
 // ─── Python 侧的值载体 ─────────────────────────────────────────────────
 
@@ -177,7 +153,7 @@ impl<'py> ValueCodec for PyCodec<'py> {
 fn make_function<'py>(
     py: Python<'py>,
     item: ErasedFn,
-    slot: u64,
+    service: Arc<dyn SyncPod>,
 ) -> PyResult<Bound<'py, PyCFunction>> {
     PyCFunction::new_closure(
         py,
@@ -187,10 +163,7 @@ fn make_function<'py>(
             let py = args.py();
             let values: Vec<Bound<'_, PyAny>> = args.iter().collect();
             let codec = PyCodec { py };
-            match with_service(slot, |service| invoke(&codec, service, item, &values)) {
-                Some(result) => result.map(|value| value.unbind()),
-                None => Err(PyErr::new::<PyRuntimeError, _>("场景服务已释放")),
-            }
+            invoke(&codec, service.as_pod(), item, &values).map(|value| value.unbind())
         },
     )
 }
@@ -201,7 +174,7 @@ fn make_ctor<'py>(
     type_name: &'static str,
     variant: Option<&'static str>,
     ctor: Option<ErasedFn>,
-    slot: u64,
+    service: Arc<dyn SyncPod>,
 ) -> PyResult<Bound<'py, PyCFunction>> {
     PyCFunction::new_closure(
         py,
@@ -229,8 +202,7 @@ fn make_ctor<'py>(
             };
             match ctor {
                 Some(ctor) => {
-                    let out = with_service(slot, |service| (ctor.call)(&**service, &[value]))
-                        .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("场景服务已释放"))?
+                    let out = (ctor.call)(service.as_pod(), &[value])
                         .map_err(|error| PyErr::new::<PyRuntimeError, _>(error.to_string()))?;
                     codec.from_pod(&out).map(|value| value.unbind())
                 }
@@ -244,13 +216,14 @@ fn make_ctor<'py>(
 }
 
 /// 一个已注册能力的绑定器（泛型在注册时单态化，运行时只留 fn 指针）。
-type BindFn = for<'py> fn(Python<'py>, &PyPod, &str, u64) -> PyResult<()>;
+type BindFn = for<'py> fn(Python<'py>, &PyPod, &str, Arc<dyn SyncPod>) -> PyResult<()>;
 
 /// 确保包链存在（如 `xcal`），返回最末一级包模块。
 fn ensure_package(py: Python<'_>, this: &PyPod, path: &str) -> PyResult<Py<PyModule>> {
     let existing = this
         .packages
-        .borrow()
+        .lock()
+        .expect("Python 包表锁中毒")
         .get(path)
         .map(|module| module.clone_ref(py));
     if let Some(module) = existing {
@@ -265,7 +238,8 @@ fn ensure_package(py: Python<'_>, this: &PyPod, path: &str) -> PyResult<Py<PyMod
     }
     let module = module.unbind();
     this.packages
-        .borrow_mut()
+        .lock()
+        .expect("Python 包表锁中毒")
         .insert(path.to_string(), module.clone_ref(py));
     Ok(module)
 }
@@ -274,19 +248,19 @@ fn ensure_package(py: Python<'_>, this: &PyPod, path: &str) -> PyResult<Py<PyMod
 fn bind_capability<C: Capability<'static>>(
     py: Python<'_>,
     this: &PyPod,
-    service: &str,
-    slot: u64,
+    service_name: &str,
+    service: Arc<dyn SyncPod>,
 ) -> PyResult<()> {
     let namespace = C::signatures()
         .first()
         .map(|signature| signature.namespace)
         .filter(|namespace| !namespace.is_empty())
-        .unwrap_or(service);
+        .unwrap_or(service_name);
 
     let service_module = PyModule::new(py, namespace)?;
     let plan = BindingPlan::new(C::calls());
     for item in plan.calls {
-        let function = make_function(py, *item, slot)?;
+        let function = make_function(py, *item, Arc::clone(&service))?;
         service_module.setattr(item.signature.name, function)?;
     }
 
@@ -295,11 +269,12 @@ fn bind_capability<C: Capability<'static>>(
         let parent = ensure_package(py, this, parent_path)?;
         parent.bind(py).setattr(name, &service_module)?;
     }
-    this.module.bind(py).setattr(service, &service_module)?;
+    this.module.bind(py).setattr(service_name, &service_module)?;
 
-    register_types(py, this, &service_module, &plan, slot)?;
+    register_types(py, this, &service_module, &plan, service)?;
     this.modules
-        .borrow_mut()
+        .lock()
+        .expect("Python 模块表锁中毒")
         .insert(namespace.to_string(), service_module.unbind());
     Ok(())
 }
@@ -312,7 +287,7 @@ fn register_types(
     this: &PyPod,
     service_module: &Bound<'_, PyModule>,
     plan: &BindingPlan,
-    slot: u64,
+    service: Arc<dyn SyncPod>,
 ) -> PyResult<()> {
     for (&full_name, &spec) in &plan.types {
         let short = short_name(full_name);
@@ -329,7 +304,8 @@ fn register_types(
         match spec {
             TypeSpec::Struct { name, fields } => {
                 let ctor = plan.component_ctor(name);
-                let function = make_ctor(py, fields, name, None, ctor, slot)?;
+                let function =
+                    make_ctor(py, fields, name, None, ctor, Arc::clone(&service))?;
                 this.module.bind(py).setattr(short, &function)?;
                 service_module.setattr(short, &function)?;
                 if let Some(home_module) = &home_module {
@@ -351,8 +327,14 @@ fn register_types(
                             .into_any(),
                         )?;
                     } else {
-                        let function =
-                            make_ctor(py, variant.fields, name, Some(variant.name), None, slot)?;
+                        let function = make_ctor(
+                            py,
+                            variant.fields,
+                            name,
+                            Some(variant.name),
+                            None,
+                            Arc::clone(&service),
+                        )?;
                         enum_module.setattr(variant.name, function)?;
                     }
                 }
@@ -383,20 +365,23 @@ def make_dot(x, y, r):
     return scene.spawn([shape])
 "#;
 
-/// Python Pod：实现 `Pod` + `Injector` + `PythonApi`。
+/// Python Pod：实现 `Pod` + `Injector` + `SyncInjector` + `PythonApi`。
+///
+/// 所有可变状态都是 `Mutex`（不是 `RefCell`）⇒ 本类型登记 `SyncPod` 徽章，
+/// 注入的服务可以被 Python 闭包直接捕获（闭包要求 `Send + Sync`）。
 pub struct PyPod {
     id: PodId,
     registry: RegistryPod,
     module: Py<PyModule>,
-    injected: RefCell<Vec<String>>,
+    injected: Mutex<Vec<String>>,
     /// Service 名 → 能力绑定器（**不写死任何 domain 类型**）。
-    binders: RefCell<BTreeMap<String, BinderEntry>>,
-    /// 已注入 Service 的线程本地槽位（`Drop` 时清理）。
-    slots: RefCell<HashMap<String, u64>>,
+    binders: Mutex<BTreeMap<String, BinderEntry>>,
+    /// 已注入 Service 的线程安全视图（`Drop` 时随 `Arc` 一起释放）。
+    slots: Mutex<HashMap<String, Arc<dyn SyncPod>>>,
     /// capability 包树（`xcal` 等）；脚本执行前安装到 `sys.modules`。
-    packages: RefCell<BTreeMap<String, Py<PyModule>>>,
+    packages: Mutex<BTreeMap<String, Py<PyModule>>>,
     /// capability 模块（`xcal.scene` 等）；脚本可用 `import xcal.scene`。
-    modules: RefCell<BTreeMap<String, Py<PyModule>>>,
+    modules: Mutex<BTreeMap<String, Py<PyModule>>>,
 }
 
 /// 一个已注册能力的注入端点。
@@ -432,6 +417,14 @@ impl PyPod {
             "InjectResult",
             py_inject,
         );
+        // P1：线程安全注入端点（Broker 在提供方登记 SyncPod 时优先走这条）。
+        registry.register_fn2_named::<String, Arc<dyn SyncPod>, Result<(), PodError>>(
+            "xc_pod::injector::inject_sync",
+            "ServiceName",
+            "ServiceSyncPod",
+            "InjectResult",
+            py_inject_sync,
+        );
         registry.register_fn3_named::<f32, f32, u32, FloatList>(
             "xcal.python::linspace",
             "f32",
@@ -455,11 +448,11 @@ impl PyPod {
             id: PodId::next(),
             registry,
             module,
-            injected: RefCell::new(Vec::new()),
-            binders: RefCell::new(BTreeMap::new()),
-            slots: RefCell::new(HashMap::new()),
-            packages: RefCell::new(BTreeMap::new()),
-            modules: RefCell::new(BTreeMap::new()),
+            injected: Mutex::new(Vec::new()),
+            binders: Mutex::new(BTreeMap::new()),
+            slots: Mutex::new(HashMap::new()),
+            packages: Mutex::new(BTreeMap::new()),
+            modules: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -471,13 +464,16 @@ impl PyPod {
             .iter()
             .map(|sig| ServiceRequirement::new(service, &sig.qualified().to_string(), required))
             .collect();
-        self.binders.borrow_mut().insert(
-            service.to_string(),
-            BinderEntry {
-                bind: bind_capability::<C>,
-                requirements,
-            },
-        );
+        self.binders
+            .lock()
+            .expect("Python 绑定表锁中毒")
+            .insert(
+                service.to_string(),
+                BinderEntry {
+                    bind: bind_capability::<C>,
+                    requirements,
+                },
+            );
     }
 
     /// 宿主 → 脚本：执行一段 Python 源码，取回入口 Service 的产物 `T`。
@@ -502,15 +498,10 @@ impl PyPod {
 
     /// 已注入的 Service 名（测试 / 排查）。
     pub fn injected(&self) -> Vec<String> {
-        self.injected.borrow().clone()
-    }
-}
-
-impl Drop for PyPod {
-    fn drop(&mut self) {
-        for slot in self.slots.borrow().values() {
-            unregister_service(*slot);
-        }
+        self.injected
+            .lock()
+            .expect("Python 注入表锁中毒")
+            .clone()
     }
 }
 
@@ -554,29 +545,56 @@ fn py_pod(pod: &dyn Pod) -> &PyPod {
 fn py_requirements(pod: &dyn Pod) -> Vec<ServiceRequirement> {
     let this = py_pod(pod);
     this.binders
-        .borrow()
+        .lock()
+        .expect("Python 绑定表锁中毒")
         .values()
         .flat_map(|entry| entry.requirements.iter().cloned())
         .collect()
 }
 
-fn py_inject(pod: &dyn Pod, service: String, service_pod: Arc<dyn Pod>) -> Result<(), PodError> {
+/// 普通注入：**明确拒绝**非线程安全提供方（Python 闭包必须捕获 `Arc<dyn SyncPod>`）。
+fn py_inject(pod: &dyn Pod, service: String, _service_pod: Arc<dyn Pod>) -> Result<(), PodError> {
+    let _ = py_pod(pod);
+    Err(PodError::CallFailed(format!(
+        "Python 侧 `{service}` 需要线程安全 Service：提供方未登记 SyncPod 徽章\
+         （用 PodNode::new_sync 注册；Broker 会优先走 inject_sync）"
+    )))
+}
+
+/// 线程安全注入：把同一个实例的 `Arc<dyn SyncPod>` 交出去（闭包直接捕获）。
+fn py_inject_sync(
+    pod: &dyn Pod,
+    service: String,
+    service_pod: Arc<dyn SyncPod>,
+) -> Result<(), PodError> {
     let this = py_pod(pod);
-    let binder = this.binders.borrow().get(&service).map(|entry| entry.bind);
+    let binder = this
+        .binders
+        .lock()
+        .expect("Python 绑定表锁中毒")
+        .get(&service)
+        .map(|entry| entry.bind);
     let Some(binder) = binder else {
         return Err(PodError::CallFailed(format!(
             "未知 Service `{service}`（能力未注册；先调用 `PyPod::register_capability`）"
         )));
     };
 
-    let slot = register_service(Arc::clone(&service_pod));
-    this.slots.borrow_mut().insert(service.clone(), slot);
-    this.injected.borrow_mut().push(service.clone());
+    this.slots
+        .lock()
+        .expect("Python 注入表锁中毒")
+        .insert(service.clone(), Arc::clone(&service_pod));
+    this.injected
+        .lock()
+        .expect("Python 注入表锁中毒")
+        .push(service.clone());
 
-    let result = Python::attach(|py| binder(py, this, &service, slot));
+    let result = Python::attach(|py| binder(py, this, &service, service_pod));
     if let Err(error) = result {
-        unregister_service(slot);
-        this.slots.borrow_mut().remove(&service);
+        this.slots
+            .lock()
+            .expect("Python 注入表锁中毒")
+            .remove(&service);
         return Err(PodError::CallFailed(format!(
             "Python 侧绑定 `{service}` 失败：{error}"
         )));
@@ -620,10 +638,20 @@ fn py_run(pod: &dyn Pod, args: &[&dyn Any]) -> Result<Box<dyn Any>, PodError> {
 fn install_modules(py: Python<'_>, this: &PyPod) -> PyResult<()> {
     let sys = py.import("sys")?;
     let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
-    for (name, module) in this.packages.borrow().iter() {
+    for (name, module) in this
+        .packages
+        .lock()
+        .expect("Python 包表锁中毒")
+        .iter()
+    {
         modules.set_item(name.as_str(), module.bind(py))?;
     }
-    for (name, module) in this.modules.borrow().iter() {
+    for (name, module) in this
+        .modules
+        .lock()
+        .expect("Python 模块表锁中毒")
+        .iter()
+    {
         modules.set_item(name.as_str(), module.bind(py))?;
     }
     Ok(())
@@ -631,19 +659,17 @@ fn install_modules(py: Python<'_>, this: &PyPod) -> PyResult<()> {
 
 fn run_impl(pod: &dyn Pod, source: String) -> Result<Box<dyn Any>, PodError> {
     let this = py_pod(pod);
-    let slot = this
+    let service = this
         .slots
-        .borrow()
+        .lock()
+        .expect("Python 注入表锁中毒")
         .get(ENTRY_SERVICE)
-        .copied()
+        .cloned()
         .ok_or_else(|| PodError::CallFailed("Python Pod 尚未注入入口服务（scene）".to_string()))?;
 
     // 每轮先丢弃上一轮录制状态。
-    with_service(slot, |service| {
-        let id = function_id(service, RESET_PATH, "()")?;
-        service.call(id, &[])
-    })
-    .ok_or_else(|| PodError::CallFailed("入口服务已释放".to_string()))??;
+    let reset = function_id(service.as_pod(), RESET_PATH, "()")?;
+    service.call(reset, &[])?;
 
     // 在模块自己的 globals 里执行：脚本能直接看到注入的 `scene` / `content` 与类型构造器。
     Python::attach(|py| -> PyResult<()> {
@@ -660,11 +686,12 @@ fn run_impl(pod: &dyn Pod, source: String) -> Result<Box<dyn Any>, PodError> {
     })
     .map_err(|error| PodError::CallFailed(format!("Python 执行失败：{error}")))?;
 
-    let out = with_service(slot, |service| {
-        let id = function_id(service, FINISH_PATH, "Result<Box<dyn Any>, String>")?;
-        service.call(id, &[])
-    })
-    .ok_or_else(|| PodError::CallFailed("入口服务已释放".to_string()))??;
+    let finish = function_id(
+        service.as_pod(),
+        FINISH_PATH,
+        "Result<Box<dyn Any>, String>",
+    )?;
+    let out = service.call(finish, &[])?;
 
     match out.downcast::<Result<Box<dyn Any>, String>>() {
         Ok(result) => match *result {
@@ -677,7 +704,7 @@ fn run_impl(pod: &dyn Pod, source: String) -> Result<Box<dyn Any>, PodError> {
     }
 }
 
-fn function_id(pod: &Arc<dyn Pod>, path: &str, ret: &str) -> Result<FunctionId, PodError> {
+fn function_id(pod: &dyn Pod, path: &str, ret: &str) -> Result<FunctionId, PodError> {
     pod.function_id(&QualifiedName::from_path(path, vec![], ret))
         .ok_or_else(|| PodError::UnknownFunction(path.to_string()))
 }

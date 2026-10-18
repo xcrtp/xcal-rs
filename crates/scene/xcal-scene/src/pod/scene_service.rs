@@ -9,7 +9,7 @@
 // `spawn` 时展开 —— 内容路径的样式（颜色 / 线宽）不必在脚本里重述。
 
 use std::any::Any;
-use std::cell::RefCell;
+use std::sync::{Mutex, MutexGuard};
 
 use crate::Curve as NativeCurve;
 use crate::animation::TargetKind;
@@ -78,11 +78,27 @@ impl Recording {
     }
 }
 
+/// 录制状态的**线程安全**容器（P1：让 `SceneServicePod` 登记 `SyncPod` 徽章）。
+///
+/// 保留原 `borrow_mut()` 的调用形态，内部是 `Mutex` —— 调用点无需改动；
+/// 锁只在装配期（脚本执行）使用，不在渲染热路径上。
+struct RecordingCell(Mutex<Recording>);
+
+impl RecordingCell {
+    fn new(recording: Recording) -> Self {
+        Self(Mutex::new(recording))
+    }
+
+    fn borrow_mut(&self) -> MutexGuard<'_, Recording> {
+        self.0.lock().expect("场景录制状态锁中毒")
+    }
+}
+
 /// 宿主侧场景能力 Pod。
 pub struct SceneServicePod {
     id: PodId,
     registry: RegistryPod,
-    rec: RefCell<Recording>,
+    rec: RecordingCell,
     paths: PathStore,
 }
 
@@ -203,7 +219,7 @@ impl SceneServicePod {
         Self {
             id,
             registry,
-            rec: RefCell::new(Recording::new()),
+            rec: RecordingCell::new(Recording::new()),
             paths,
         }
     }

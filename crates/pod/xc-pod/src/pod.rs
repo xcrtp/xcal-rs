@@ -88,6 +88,34 @@ pub trait Pod: 'static {
     }
 }
 
+/// **线程安全徽章**：`Pod + Send + Sync` 的自动认证。
+///
+/// # 为什么是 supertrait 而不是反向 impl
+///
+/// `SyncPod: Pod` ⇒ 每个 `SyncPod` 天然是 `Pod`（"自动实现 Pod"由 supertrait 成立）；
+/// blanket impl 只提供"自动认证"，不写 `impl<T: SyncPod> Pod for T`（那会循环且冲突）。
+///
+/// # 为什么不能强制 `trait Pod: Send + Sync`
+///
+/// 强制会给所有 Pod 的 `RefCell` 换成锁、`Rc` 换成 `Arc`，连无竞争的热路径也要加锁。
+/// 本项目的并发模型是"主线程唯一、并发只在极小边界" —— 全局强制正好反着来。
+/// 因此线程安全是 **opt-in 徽章**：需要跨线程（pyo3 闭包 / 未来 async）的 Pod 才声明。
+///
+/// # 为什么有 `as_pod`
+///
+/// 让 `Arc<dyn SyncPod>` 在不依赖 trait upcasting 的工具链上也能拿到 `&dyn Pod`
+/// （能力协商只认 `Pod`）。blanket impl 里由具体类型完成这次 unsized 转换。
+pub trait SyncPod: Pod + Send + Sync {
+    /// 以基础 `Pod` trait object 使用（能力协商 / `Pod::call` 的入口）。
+    fn as_pod(&self) -> &dyn Pod;
+}
+
+impl<T: Pod + Send + Sync> SyncPod for T {
+    fn as_pod(&self) -> &dyn Pod {
+        self
+    }
+}
+
 /// 对 **trait object**（`&dyn Pod`）可用的协商入口。
 ///
 /// # 为什么是自由函数而不是 trait 方法

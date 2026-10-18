@@ -16,12 +16,11 @@
 //!
 //! # 与 `Broadcast<E>` 的关系
 //!
-//! `Broadcast<E>` 是既有的 typed 兼容入口（`xcal-scene` 的 Driver pod 仍在使用），
-//! 它的 `publish` 只调用**提供方自己的实现**，本身不做扇出。
-//! 新代码应使用本模块：成员来自 Broker 查询，而不是发布方持有的 `Arc<dyn Pod>` 列表。
+//! `Broadcast<E>` 是既有的 typed 兼容入口：它的 `publish` 只调用
+//! **提供方自己的实现**，本身不做扇出。P4 之后 `xcal-scene` 的 Driver pod
+//! 已改走本模块（成员来自 Broker 查询），`Broadcast` 只保留给尚未迁移的调用方。
 //!
-//! 两者是**并行关系**（不是替换）：`Broadcast<E>` 不删除，避免改 domain 行为；
-//! 新机制是推荐路径。
+//! 新代码应使用本模块：成员来自 Broker 查询，而不是发布方持有的 `Arc<dyn Pod>` 列表。
 
 use crate::broker::{Broker, BrokerError};
 use crate::command::EventSink;

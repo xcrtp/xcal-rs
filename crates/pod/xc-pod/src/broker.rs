@@ -28,11 +28,12 @@ use crate::capability::Capability;
 use crate::error::PodError;
 use crate::handle::PodHandle;
 use crate::inject::{
-    Injector, MissingRequirements, Service, ServiceRequirement, validate_requirements,
+    Injector, MissingRequirements, Service, ServiceRequirement, SyncInjector,
+    validate_requirements,
 };
 use crate::lifecycle::Lifecycle;
 use crate::qualified::QualifiedName;
-use crate::pod::{Pod, negotiate_dyn};
+use crate::pod::{Pod, SyncPod, negotiate_dyn};
 
 /// 描述层的一个节点：**纯数据**（不持有 Pod）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +106,11 @@ pub struct PodNode {
     pub name: String,
     /// Pod 实例。
     pub pod: Arc<dyn Pod>,
+    /// **同一个实例**的线程安全视图（仅当注册时登记了 `SyncPod` 徽章）。
+    ///
+    /// `None` ⇒ 该 Pod 没有声明 `Send + Sync`：跨线程接收方（如 pyo3 闭包）
+    /// 必须得到明确的 `NotSyncPod` 错误，而不是静默降级。
+    pub sync: Option<Arc<dyn SyncPod>>,
     /// 它提供的 Service 名（App 显式声明；一个 Pod 可提供多个）。
     pub provides: Vec<String>,
     /// 它订阅的 topic 名（扇出成员）。
@@ -112,11 +118,27 @@ pub struct PodNode {
 }
 
 impl PodNode {
-    /// 逐字段构造。
+    /// 逐字段构造（**不登记**线程安全徽章）。
     pub fn new(name: impl Into<String>, pod: Arc<dyn Pod>, provides: &[&str]) -> Self {
         Self {
             name: name.into(),
             pod,
+            sync: None,
+            provides: provides.iter().map(|name| (*name).to_string()).collect(),
+            topics: Vec::new(),
+        }
+    }
+
+    /// 构造**线程安全**节点：`pod` 同时生成 `Arc<dyn Pod>` 与 `Arc<dyn SyncPod>`，
+    /// 两者指向同一个实例（不是两份状态）。
+    pub fn new_sync<T>(name: impl Into<String>, pod: Arc<T>, provides: &[&str]) -> Self
+    where
+        T: Pod + Send + Sync,
+    {
+        Self {
+            name: name.into(),
+            pod: Arc::clone(&pod) as Arc<dyn Pod>,
+            sync: Some(pod as Arc<dyn SyncPod>),
             provides: provides.iter().map(|name| (*name).to_string()).collect(),
             topics: Vec::new(),
         }
@@ -225,6 +247,8 @@ pub enum BrokerError {
     },
     /// 显式指定的节点不提供该能力。
     UnsupportedCapability { node: String, capability: String },
+    /// 请求线程安全视图，但该节点没有登记 `SyncPod` 徽章。
+    NotSyncPod { node: String },
 }
 
 impl fmt::Display for BrokerError {
@@ -281,6 +305,10 @@ impl fmt::Display for BrokerError {
             Self::UnsupportedCapability { node, capability } => {
                 write!(f, "`{node}` 不提供能力 `{capability}`")
             }
+            Self::NotSyncPod { node } => write!(
+                f,
+                "`{node}` 没有登记 SyncPod 徽章（不是 Send + Sync），不能跨线程注入"
+            ),
         }
     }
 }
@@ -385,6 +413,23 @@ impl Broker {
         self.nodes.iter().find(|node| node.handle() == handle)
     }
 
+    /// **线程安全视图查询**：按句柄取同一实例的 `Arc<dyn SyncPod>`。
+    ///
+    /// 节点未登记 `SyncPod` 徽章 ⇒ **明确** [`BrokerError::NotSyncPod`]
+    /// （不静默降级成 `Arc<dyn Pod>`：调用方要跨线程，降级只会把错误推迟到运行时）。
+    pub fn sync_pod(&self, handle: PodHandle) -> Result<Arc<dyn SyncPod>, BrokerError> {
+        let node = self
+            .node_by_handle(handle)
+            .ok_or_else(|| BrokerError::UnknownNode {
+                node: handle.to_string(),
+            })?;
+        node.sync
+            .clone()
+            .ok_or_else(|| BrokerError::NotSyncPod {
+                node: node.name.clone(),
+            })
+    }
+
     /// 路由策略 1 的句柄版本：在 `handle` 指向的节点上协商能力。
     ///
     /// topic 扇出用它（成员身份来自查询，不是发布方持有的 `Arc<dyn Pod>`）。
@@ -486,12 +531,20 @@ impl Broker {
                 let Some(provider) = providers.get(requirement.service.as_str()) else {
                     continue; // optional 缺失（必需项已在校验阶段报错）
                 };
-                injector
-                    .inject(&requirement.service, Arc::clone(&provider.pod))
-                    .map_err(|source| BrokerError::Injection {
-                        node: node.name.clone(),
-                        source,
-                    })?;
+                // 提供方登记了 SyncPod 且消费方暴露 SyncInjector ⇒ 交付线程安全视图。
+                // 否则走普通注入（`Arc<dyn Pod>`），行为与引入 SyncPod 之前一致。
+                let sync_injection = provider.sync.as_ref().and_then(|sync| {
+                    negotiate_dyn::<SyncInjector>(&*node.pod)
+                        .map(|injector| (injector, Arc::clone(sync)))
+                });
+                let injected = match sync_injection {
+                    Some((injector, sync)) => injector.inject(&requirement.service, sync),
+                    None => injector.inject(&requirement.service, Arc::clone(&provider.pod)),
+                };
+                injected.map_err(|source| BrokerError::Injection {
+                    node: node.name.clone(),
+                    source,
+                })?;
                 report
                     .injected
                     .push((node.name.clone(), requirement.service.clone()));
@@ -1071,5 +1124,46 @@ mod tests {
             empty.negotiate_unique::<Lifecycle<'_>>(),
             Err(BrokerError::NoProvider { .. })
         ));
+    }
+
+    // ─── P1：SyncPod 徽章 ─────────────────────────────────────────────
+
+    /// 登记徽章的节点能取到**同一实例**的线程安全视图。
+    #[test]
+    fn sync_pod_returns_the_same_instance() {
+        let registry = Arc::new(crate::registry::RegistryPod::new());
+        let node = PodNode::new_sync("sync", Arc::clone(&registry), &[]);
+        let handle = node.handle();
+        let broker = Broker::new(vec![node]);
+
+        let sync = broker.sync_pod(handle).expect("已登记 SyncPod 徽章");
+        assert_eq!(sync.id(), registry.id(), "必须是同一个 Pod 实例");
+    }
+
+    /// 未登记徽章 ⇒ **明确** `NotSyncPod`（不静默降级）。
+    #[test]
+    fn sync_pod_without_badge_is_an_explicit_error() {
+        let pod: Arc<dyn Pod> = Arc::new(crate::registry::RegistryPod::new());
+        let node = PodNode::new("plain", pod, &[]);
+        let handle = node.handle();
+        let error = match Broker::new(vec![node]).sync_pod(handle) {
+            Ok(_) => panic!("未登记徽章时必须报 NotSyncPod"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, BrokerError::NotSyncPod { ref node } if node == "plain"),
+            "期望 NotSyncPod，实际 {error:?}"
+        );
+    }
+
+    /// 未知句柄 ⇒ 明确 `UnknownNode`。
+    #[test]
+    fn sync_pod_unknown_handle_is_an_explicit_error() {
+        let broker = Broker::new(vec![]);
+        let error = match broker.sync_pod(PodHandle::new(PodId::new(999))) {
+            Ok(_) => panic!("未知句柄必须报 UnknownNode"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, BrokerError::UnknownNode { .. }));
     }
 }

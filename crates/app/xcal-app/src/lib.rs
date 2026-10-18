@@ -199,7 +199,10 @@ impl App {
         // App 订阅事件：进度只观测 `FrameFinished`（不碰命令队列）。
         let progress = Arc::new(ui::FrameProgress::new());
         let sink: Arc<dyn Pod> = Arc::clone(&progress) as Arc<dyn Pod>;
-        runtime.driver.attach_sink(sink);
+        runtime
+            .driver
+            .attach_sink(sink)
+            .map_err(|e| Error::InitializationError(format!("Driver 事件订阅失败：{e}")))?;
         let frame = SceneFrame::new(Arc::clone(&runtime.driver));
         Ok(Self {
             driver: runtime.driver,

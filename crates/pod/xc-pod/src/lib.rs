@@ -90,7 +90,7 @@ pub use command::{
 pub use error::PodError;
 pub use handle::{Handle, HandleTable, PodHandle, PodId};
 pub use inject::{
-    INJECTOR_NAMESPACE, Injector, MissingRequirements, Service, ServiceRequirement,
+    INJECTOR_NAMESPACE, Injector, MissingRequirements, Service, ServiceRequirement, SyncInjector,
     validate_requirements,
 };
 pub use lifecycle::{LIFECYCLE_NAMESPACE, Lifecycle};
@@ -108,4 +108,4 @@ pub use typespec::{
 pub use value::{
     ScalarValue, PodType, PodValue, PodValueError, describe, expect_enum, expect_struct, field,
 };
-pub use pod::{FunctionId, Pod, negotiate_dyn};
+pub use pod::{FunctionId, Pod, SyncPod, negotiate_dyn};

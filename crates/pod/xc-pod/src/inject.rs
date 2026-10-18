@@ -29,7 +29,7 @@ use std::sync::Arc;
 use crate::capability::{Capability, CapabilityMeta, FnSig, Resolved};
 use crate::error::PodError;
 use crate::qualified::QualifiedName;
-use crate::pod::Pod;
+use crate::pod::{Pod, SyncPod};
 
 /// `Injector` 占用的保留 namespace。
 pub const INJECTOR_NAMESPACE: &str = "xc_pod::injector";
@@ -161,6 +161,7 @@ pub fn validate_requirements(
 
 type RequirementsFn = fn(&dyn Pod) -> Vec<ServiceRequirement>;
 type InjectFn = fn(&dyn Pod, String, Arc<dyn Pod>) -> Result<(), PodError>;
+type InjectSyncFn = fn(&dyn Pod, String, Arc<dyn SyncPod>) -> Result<(), PodError>;
 
 /// 注入端点（普通 capability，保留 namespace [`INJECTOR_NAMESPACE`]）。
 ///
@@ -234,6 +235,61 @@ impl<'a> Capability<'a> for Injector<'a> {
             pod,
             requirements: *resolved.get(0)?.callable.downcast_ref::<RequirementsFn>()?,
             inject: *resolved.get(1)?.callable.downcast_ref::<InjectFn>()?,
+        })
+    }
+}
+
+/// **同步注入端点**（普通 capability，`Injector` 的线程安全版本）。
+///
+/// # 为什么需要独立 capability
+///
+/// `Injector::inject` 的参数是 `Arc<dyn Pod>`：`dyn Pod` 不要求 `Send + Sync`，
+/// 因此接收方无法把它捕获进 pyo3 闭包（`new_closure` 要求 `Send + Sync`）。
+/// 本 capability 把**同一个** Service 以 `Arc<dyn SyncPod>` 交付 —— 只有登记了
+/// `SyncPod` 徽章的提供方才会被 Broker 走这条路径。
+///
+/// 它是**独立 capability**（不是给 [`Injector`] 加第三个签名）：
+/// 后者的"全有或全无"会让所有既有注入方（含非 Sync 的 Lua）协商失败。
+///
+/// 只提供 `inject_sync(ServiceName, ServiceSyncPod) -> InjectResult` 一个签名。
+pub struct SyncInjector<'a> {
+    pod: &'a dyn Pod,
+    inject: InjectSyncFn,
+}
+
+impl<'a> SyncInjector<'a> {
+    /// 按 Service 名注入一个**线程安全**的能力 Pod。
+    pub fn inject(&self, service: &str, pod: Arc<dyn SyncPod>) -> Result<(), PodError> {
+        (self.inject)(self.pod, service.to_string(), pod)
+    }
+
+    /// 句柄持有的目标 Pod。
+    pub fn pod(&self) -> &'a dyn Pod {
+        self.pod
+    }
+
+    #[doc(hidden)]
+    const SIGS: &'static [FnSig] = &[FnSig::new(
+        INJECTOR_NAMESPACE,
+        "inject_sync",
+        &["ServiceName", "ServiceSyncPod"],
+        "InjectResult",
+    )];
+}
+
+impl<'a> Capability<'a> for SyncInjector<'a> {
+    fn signatures() -> &'static [FnSig] {
+        Self::SIGS
+    }
+
+    fn meta() -> CapabilityMeta {
+        CapabilityMeta::new(Some("1"), Some("宿主能力注入端点（仅接收 SyncPod 提供方）"))
+    }
+
+    fn from_negotiated(pod: &'a dyn Pod, resolved: &[Resolved<'_>]) -> Option<Self> {
+        Some(Self {
+            pod,
+            inject: *resolved.first()?.callable.downcast_ref::<InjectSyncFn>()?,
         })
     }
 }

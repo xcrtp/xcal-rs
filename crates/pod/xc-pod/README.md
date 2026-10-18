@@ -43,6 +43,10 @@
 
 `submit` 返回 [`Receipt`]：导出循环用 `receipt.wait()` 同步等一帧完成，
 异步订阅方仍走事件总线观测 —— 同步与异步走同一条路径。
+**主线程不得调用 `Receipt::wait()`**：它只自旋让出时间片、不驱动队列，
+等待一个"本该由自己 pump 的队列"会死锁；主线程改用
+`Receipt::wait_pumping(|| queue.pump())`（等待期间继续推进队列）。
+`wait()` 只允许在工作线程、或同步驱动（命令已在 `submit` 内完成）时使用。
 发布事件时按 broker 查询到的 `EventSink<E>` 逐个 **typed** 调用 `on_event`，
 全程无 `Arc<dyn Fn>` 过 Pod 边界、无 `unsafe`。
 
@@ -57,8 +61,9 @@
 发布方**不得**硬编码订阅者句柄列表；扇出顺序与节点声明顺序无关。
 声明了 topic 却没提供对应 `EventSink<E>` ⇒ **明确错误**（不静默跳过）。
 
-`Broadcast<E>` 保留为兼容入口（`xcal-scene` 的 Driver pod 仍在使用），
-它的 `publish` 只调用提供方自己的实现，**本身不做扇出**；两者并行，新代码走 topic。
+`Broadcast<E>` 保留为兼容入口（P4 后 Driver pod **已改走 topic**，
+不再有第二套扇出路径），它的 `publish` 只调用提供方自己的实现，**本身不做扇出**；
+新代码一律走 topic。
 
 ## Ord：逻辑时序（不是墙钟）
 

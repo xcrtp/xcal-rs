@@ -133,7 +133,8 @@ pub fn assemble(engine: Arc<InMemoryEngine>) -> Result<PodAssembly, AssemblyErro
         let python = Arc::new(xc_pod_py::PyPod::new().map_err(AssemblyError::Python)?);
         python.register_capability::<SceneApi>("scene", true);
         python.register_capability::<ContentApi>("content", true);
-        nodes.push(PodNode::new("python", python, &["python"]));
+        // P1：Python 闭包要求 `Send + Sync` ⇒ 登记 SyncPod 徽章，Broker 走 inject_sync。
+        nodes.push(PodNode::new_sync("python", python, &["python"]));
     }
 
     run_broker(lua, nodes)
@@ -152,8 +153,10 @@ fn base_nodes(engine: Arc<InMemoryEngine>) -> (Arc<LuaPod>, Vec<PodNode>) {
     lua.register_capability::<xc_pod_py::PythonApi>("python", false);
 
     let nodes = vec![
-        PodNode::new("scene", scene, &["scene"]),
-        PodNode::new("content", content, &["content"]),
+        // scene / content 只含装配期状态（内部用锁），登记 SyncPod 徽章供 Python 闭包捕获。
+        PodNode::new_sync("scene", scene, &["scene"]),
+        PodNode::new_sync("content", content, &["content"]),
+        // LuaPod 持有 mlua 解释器（非 Send + Sync）⇒ 不登记徽章。
         PodNode::new("lua", Arc::clone(&lua) as Arc<dyn Pod>, &["script"]),
     ];
     (lua, nodes)

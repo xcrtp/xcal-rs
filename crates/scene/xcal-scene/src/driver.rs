@@ -1,11 +1,11 @@
 //! Driver pod：**命令驱动**的场景推进器（P4）。
 //!
-//! 持有 `Scheduler`（World + Resources）+ 帧计数，对外提供两个泛型 capability：
+//! 持有 `Scheduler`（World + Resources）+ 帧计数，对外提供：
 //!
 //! | 能力 | 命令 / 事件 | 语义 |
 //! |---|---|---|
 //! | [`CommandQueue<DriverCommand>`] | `Advance` / `Batch` / `Seek` / `Reset` | 控制：FIFO、确定、参与帧推进 |
-//! | [`Broadcast<DriverEvent>`] | `FrameFinished` / `Advanced` / `Error` | 通知：只做观测 |
+//! | [`EventSink<DriverEvent>`] | 订阅方实现（driver 经 topic 扇出） | 通知：只做观测 |
 //!
 //! # 为什么是 Pod
 //!
@@ -19,23 +19,27 @@
 //! 比实时墙钟更确定。命令序列可录制（[`DriverPod::commands`]），
 //! 用于比对导出与实时两条路径**过程相同**（不只是像素相同）。
 //!
-//! # 事件订阅
+//! # 事件分发（P4：只走 topic）
 //!
-//! 发布事件时按 [`EventSink<DriverEvent>`] 逐个 **typed** 调用订阅方，
-//! 不跨 Pod 边界传闭包、无 `unsafe`。
+//! 订阅方经 [`DriverPod::attach_sink`] 登记为一个 topic 成员；
+//! 发布走 [`xc_pod::publish_topic`]（成员查询 + 按 `PodId` 升序单播）。
+//! **不再保留旧事件总线入口**：扇出顺序只有 topic 一个来源。
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use xc_pod::{
-    Broadcast, Capability, CommandQueue, EventSink, FunctionId, Pod, PodError, PodId,
-    QualifiedName, Receipt, negotiate_dyn,
+    Broker, Capability, CommandQueue, EventSink, FunctionId, Pod, PodError, PodId, PodNode,
+    QualifiedName, Receipt, negotiate_dyn, publish_topic,
 };
 use xcal_schedule::scheduler::Scheduler;
 
 use crate::TimeState;
 use crate::director_state::DirectorState;
+
+/// Driver 事件的 topic 名（订阅方在 `attach_sink` 时登记为成员）。
+pub const EVENT_TOPIC: &str = "xcal.driver.events";
 
 /// 驱动命令（命令枚举由 domain 注入泛型 capability）。
 #[derive(Clone, Debug, PartialEq, xc_pod_macro::PodType)]
@@ -86,18 +90,19 @@ pub enum DriverEvent {
 }
 
 type SubmitFn = fn(&dyn Pod, DriverCommand) -> Receipt;
-type PublishFn = fn(&dyn Pod, DriverEvent);
 
 /// 命令驱动的场景推进器。
 pub struct DriverPod {
     id: PodId,
     scheduler: RefCell<Scheduler>,
     frame: Cell<u32>,
+    /// 已登记的订阅方（`attach_sink` 的原始列表，重建 topic 成员时用）。
     sinks: RefCell<Vec<Arc<dyn Pod>>>,
+    /// 由 `sinks` 派生的 topic 成员表（成员来自 Broker 查询，不是发布方硬编码）。
+    topic: RefCell<Option<Arc<Broker>>>,
     commands: RefCell<Vec<DriverCommand>>,
     events: RefCell<Vec<DriverEvent>>,
     submit: SubmitFn,
-    publish: PublishFn,
     functions: Vec<QualifiedName>,
 }
 
@@ -107,17 +112,16 @@ impl DriverPod {
         let functions = vec![
             <CommandQueue<'static, DriverCommand> as Capability<'static>>::signatures()[0]
                 .qualified(),
-            <Broadcast<'static, DriverEvent> as Capability<'static>>::signatures()[0].qualified(),
         ];
         Self {
             id: PodId::next(),
             scheduler: RefCell::new(scheduler),
             frame: Cell::new(0),
             sinks: RefCell::new(Vec::new()),
+            topic: RefCell::new(None),
             commands: RefCell::new(Vec::new()),
             events: RefCell::new(Vec::new()),
             submit: Self::submit_command,
-            publish: Self::publish_event,
             functions,
         }
     }
@@ -129,9 +133,31 @@ impl DriverPod {
         Self::submit_command(self, command)
     }
 
-    /// 挂一个事件订阅方（提供 [`EventSink<DriverEvent>`] 的 Pod）。
-    pub fn attach_sink(&self, sink: Arc<dyn Pod>) {
-        self.sinks.borrow_mut().push(sink);
+    /// 挂一个事件订阅方（必须提供 [`EventSink<DriverEvent>`]）。
+    ///
+    /// 订阅方成为 topic 成员；扇出顺序由 `Broker::topic_members` 按 `PodId` 升序决定。
+    /// 不提供接收端 ⇒ **明确错误**（声明了 topic 却没有 `EventSink` 是装配错误）。
+    pub fn attach_sink(&self, sink: Arc<dyn Pod>) -> Result<(), PodError> {
+        let _: EventSink<'_, DriverEvent> = negotiate_dyn(&*sink).ok_or_else(|| {
+            PodError::CallFailed(
+                "Driver 订阅方必须提供 EventSink<DriverEvent>（xc_pod::event_sink::on_event）"
+                    .to_string(),
+            )
+        })?;
+
+        let mut sinks = self.sinks.borrow_mut();
+        sinks.push(sink);
+        // 成员来自查询：这里只构造 Broker 的节点声明，不在发布路径上硬编码句柄。
+        let nodes = sinks
+            .iter()
+            .enumerate()
+            .map(|(index, pod)| {
+                PodNode::new(format!("driver-sink-{index}"), Arc::clone(pod), &[])
+                    .with_topics(&[EVENT_TOPIC])
+            })
+            .collect();
+        *self.topic.borrow_mut() = Some(Arc::new(Broker::new(nodes)));
+        Ok(())
     }
 
     /// 已执行的命令序列（确定性比对用：导出路径 == 实时路径）。
@@ -179,14 +205,6 @@ impl DriverPod {
         }
         receipt.complete();
         receipt
-    }
-
-    fn publish_event(pod: &dyn Pod, event: DriverEvent) {
-        let driver = pod
-            .as_any()
-            .downcast_ref::<DriverPod>()
-            .expect("publish 只由 DriverPod 提供");
-        driver.dispatch_event(event);
     }
 
     fn run_frames(&self, frames: u32, dt: f64) {
@@ -238,12 +256,10 @@ impl DriverPod {
 
     fn dispatch_event(&self, event: DriverEvent) {
         self.events.borrow_mut().push(event.clone());
-        // 先克隆订阅方列表，避免 on_event 回调里再借用 sinks。
-        let sinks = self.sinks.borrow().clone();
-        for sink in sinks {
-            if let Some(sink) = negotiate_dyn::<EventSink<DriverEvent>>(sink.as_ref()) {
-                sink.on_event(event.clone());
-            }
+        // P4：只走 topic（成员查询 + 按 PodId 升序单播），扇出顺序只有一个来源。
+        if let Some(topic) = self.topic.borrow().as_ref() {
+            // 成员在 `attach_sink` 已逐个校验过 EventSink；这里只剩"成员已释放"的理论错误。
+            let _ = publish_topic(topic, EVENT_TOPIC, &event);
         }
     }
 }
@@ -264,8 +280,6 @@ impl Pod for DriverPod {
     fn resolve(&self, name: &QualifiedName) -> Option<&(dyn Any + Send + Sync)> {
         if *name == self.functions[0] {
             Some(&self.submit)
-        } else if *name == self.functions[1] {
-            Some(&self.publish)
         } else {
             None
         }
@@ -291,7 +305,7 @@ pub fn event_type_name() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_pod::{Broadcast, CommandQueue};
+    use xc_pod::{Capability, CommandQueue, EventSink};
     use xcal_schedule::resource::Resources;
 
     fn scheduler() -> Scheduler {
@@ -338,10 +352,12 @@ mod tests {
         let mut sink = RegistryPod::new();
         // 订阅方只需要提供 on_event 的 typed 签名。
         sink.register_fn1::<DriverEvent, ()>("xc_pod::event_sink::on_event", count_event);
-        pod.attach_sink(Arc::new(sink));
+        pod.attach_sink(Arc::new(sink))
+            .expect("订阅方提供 EventSink<DriverEvent>");
 
-        let bus: Broadcast<'_, DriverEvent> = pod.negotiate().expect("事件总线可协商");
-        bus.publish(DriverEvent::Advanced { dt: 0.1 });
+        // 走命令路径（P4：事件只经 topic 扇出，没有第二个发布入口）。
+        let queue: CommandQueue<'_, DriverCommand> = pod.negotiate().expect("命令队列可协商");
+        queue.submit(DriverCommand::Seek { t: 0.0 }).wait();
         assert_eq!(HITS.load(Ordering::Relaxed), 1);
     }
 
@@ -387,11 +403,12 @@ mod tests {
                 command_type_name()
             )
         );
+        // 事件接收端是订阅方的能力；driver 只经 topic 单播，不提供旧事件总线入口。
         assert_eq!(
-            Broadcast::<DriverEvent>::signatures()[0]
+            EventSink::<DriverEvent>::signatures()[0]
                 .qualified()
                 .to_string(),
-            format!("xc_pod::broadcast::publish({}) -> ()", event_type_name())
+            format!("xc_pod::event_sink::on_event({}) -> ()", event_type_name())
         );
     }
 }

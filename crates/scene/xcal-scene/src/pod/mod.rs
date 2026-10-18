@@ -25,15 +25,17 @@ pub use types::*;
 
 use std::sync::Arc;
 
-use xc_pod::Pod;
 use xc_prerender::InMemoryEngine;
 
-/// 构造场景 Service（返回 trait object：适配层不需要知道具体类型）。
-pub fn scene_service(paths: PathStore) -> Arc<dyn Pod> {
+/// 构造场景 Service（返回**具体类型**：调用方可用它登记 `SyncPod` 徽章）。
+pub fn scene_service(paths: PathStore) -> Arc<SceneServicePod> {
     Arc::new(SceneServicePod::with_paths(paths))
 }
 
-/// 构造内容 Service。
-pub fn content_service(engine: Arc<InMemoryEngine>, paths: PathStore) -> Arc<dyn Pod> {
+/// 构造内容 Service（返回具体类型，理由同上）。
+pub fn content_service(
+    engine: Arc<InMemoryEngine>,
+    paths: PathStore,
+) -> Arc<ContentServicePod> {
     Arc::new(ContentServicePod::new(engine, paths))
 }

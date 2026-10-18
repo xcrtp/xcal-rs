@@ -21,6 +21,22 @@
 //! 不靠监听 `Finished` 事件推进；异步订阅方仍走事件总线观测。
 //! 同步与异步因此走**同一条路径**，不分叉。
 //!
+//! # 主线程禁令（`Receipt::wait`）
+//!
+//! [`Receipt::wait`] 是**自旋让出时间片**的忙等，本身不驱动任何队列。
+//!
+//! - **主线程不得调用 `wait()`**：若回执要等的那条命令正由主线程的队列
+//!   `pump` 推进（GUI / headless 的帧循环都属于这种），主线程在这里让出
+//!   时间片 ⇒ **没有任何线程会再推进队列** ⇒ 死锁。
+//! - **主线程必须等待时，用 [`Receipt::wait_pumping`]**：每轮循环调用一次
+//!   传入的 `pump`，让队列继续推进；等待期间队列不会停摆。
+//! - **`wait()` 的合法场景**：工作线程等待另一个线程驱动的队列；
+//!   或导出二进制在**同步驱动**下等待（命令已在 `submit` 内完成，立即返回）。
+//!
+//! 运行期守护：debug 构建下，对待完成回执调用 `wait()` 时，若当前线程正是
+//! 提交该回执的线程（最常见的就是主线程），会触发 `debug_assert`。
+//! 命名区分：`wait`（纯自旋，不得在主线程用）/ `wait_pumping`（主线程可用）。
+//!
 //! # 不跨边界传闭包
 //!
 //! 事件发布由宿主（或 domain pod）按 broker 注册表找到提供 `EventSink<E>` 的
@@ -48,6 +64,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::ThreadId;
 
 use crate::capability::{Capability, CapabilityMeta, FnSig, Resolved};
 use crate::pod::Pod;
@@ -80,7 +97,14 @@ enum ReceiptState {
     /// 已完成（无分配快路径）。
     Done,
     /// 待完成（只有异步驱动才分配）。
-    Pending(Arc<AtomicBool>),
+    Pending(Arc<PendingState>),
+}
+
+#[derive(Debug)]
+struct PendingState {
+    done: AtomicBool,
+    /// 提交该回执的线程（`wait()` 的主线程禁令用）。
+    submitter: ThreadId,
 }
 
 impl Default for Receipt {
@@ -90,10 +114,13 @@ impl Default for Receipt {
 }
 
 impl Receipt {
-    /// 尚未完成的回执（**会分配**：共享完成标志）。
+    /// 尚未完成的回执（**会分配**：共享完成标志 + 提交线程标识）。
     pub fn pending() -> Self {
         Self {
-            state: ReceiptState::Pending(Arc::new(AtomicBool::new(false))),
+            state: ReceiptState::Pending(Arc::new(PendingState {
+                done: AtomicBool::new(false),
+                submitter: std::thread::current().id(),
+            })),
         }
     }
 
@@ -106,8 +133,8 @@ impl Receipt {
 
     /// 标记完成（驱动方调用；幂等；对已完成回执是 no-op）。
     pub fn complete(&self) {
-        if let ReceiptState::Pending(flag) = &self.state {
-            flag.store(true, Ordering::Release);
+        if let ReceiptState::Pending(state) = &self.state {
+            state.done.store(true, Ordering::Release);
         }
     }
 
@@ -115,16 +142,50 @@ impl Receipt {
     pub fn is_done(&self) -> bool {
         match &self.state {
             ReceiptState::Done => true,
-            ReceiptState::Pending(flag) => flag.load(Ordering::Acquire),
+            ReceiptState::Pending(state) => state.done.load(Ordering::Acquire),
         }
     }
 
-    /// 同步等待完成。
+    /// 当前线程是否就是提交该回执的线程（`Done` 回执恒为 `false`）。
+    fn submitted_here(&self) -> bool {
+        match &self.state {
+            ReceiptState::Done => false,
+            ReceiptState::Pending(state) => state.submitter == std::thread::current().id(),
+        }
+    }
+
+    /// 同步等待完成（**纯自旋让出时间片，不驱动队列**）。
     ///
-    /// 不引入 `Condvar`：宿主在 `submit` 内完成命令（同步驱动）时立即返回；
-    /// 异步驱动下退化为让出时间片的忙等，且本方法在无操作系统的目标上仍可编译。
+    /// # 主线程禁令
+    ///
+    /// **主线程不得调用本方法**：若回执要等的那条命令正由主线程的队列推进，
+    /// 主线程在此让出时间片 ⇒ 队列停摆 ⇒ **死锁**。
+    /// 主线程必须等待时改用 [`Receipt::wait_pumping`]（每轮 pump 一次队列）。
+    ///
+    /// 合法场景：工作线程等待另一个线程驱动的队列；或同步驱动下命令已在
+    /// `submit` 内完成（本方法立即返回）。
+    ///
+    /// debug 构建下做了运行期守护：对待完成回执在**提交线程**上调用会触发
+    /// `debug_assert`（最常见的提交线程就是主线程）。
     pub fn wait(&self) {
+        debug_assert!(
+            self.is_done() || !self.submitted_here(),
+            "Receipt::wait() 在提交线程（通常是主线程）上等待未完成回执 ⇒ 队列无人推进 ⇒ 死锁。\
+             主线程必须等待时改用 Receipt::wait_pumping(|| queue.pump())，\
+             或把等待移到工作线程。"
+        );
         while !self.is_done() {
+            std::thread::yield_now();
+        }
+    }
+
+    /// **主线程可用**的同步等待：每轮循环先执行一次 `pump`（驱动队列），再让出时间片。
+    ///
+    /// 适用：GUI / headless 帧循环在主线程上等待异步驱动的回执。
+    /// `pump` 应尽量无阻塞（例如把队列中已到达的命令全部执行完）。
+    pub fn wait_pumping<F: FnMut()>(&self, mut pump: F) {
+        while !self.is_done() {
+            pump();
             std::thread::yield_now();
         }
     }
@@ -303,5 +364,40 @@ where
             on_event: *resolved.first()?.callable.downcast_ref::<OnEventFn<E>>()?,
             _marker: PhantomData,
         })
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+
+    /// 已完成回执：`wait()` 立即返回（同步驱动的零分配快路径）。
+    #[test]
+    fn wait_on_completed_receipt_returns_immediately() {
+        Receipt::completed().wait();
+    }
+
+    /// 主线程等待异步回执：`wait_pumping` 每轮推进队列，直到完成。
+    #[test]
+    fn wait_pumping_drives_the_queue_to_completion() {
+        let receipt = Receipt::pending();
+        let mut pumps = 0;
+        receipt.wait_pumping(|| {
+            pumps += 1;
+            if pumps == 3 {
+                receipt.complete();
+            }
+        });
+        assert!(receipt.is_done());
+        assert_eq!(pumps, 3, "每轮必须 pump 一次，且完成即停止");
+    }
+
+    /// 在提交线程上等待未完成回执 ⇒ debug 构建触发守护（主线程死锁的形态）。
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "主线程")]
+    fn wait_on_pending_receipt_from_submitter_panics_in_debug() {
+        let receipt = Receipt::pending();
+        receipt.wait();
     }
 }

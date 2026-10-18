@@ -58,7 +58,7 @@
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use xc_pod::{
     Broadcast, Capability, CommandQueue, EventSink, FunctionId, Handle, Pod, PodError, PodHandle,
@@ -539,10 +539,13 @@ struct Recorded {
 }
 
 /// 宿主侧 mini Service（Lua / Python 共用；不依赖任何 domain crate）。
+///
+/// `Recorded` 用 `Mutex`（不是 `RefCell`）⇒ 本类型可登记 `SyncPod` 徽章，
+/// Python 闭包能直接捕获它的 `Arc<dyn SyncPod>`。
 pub struct MiniRecorderPod {
     id: PodId,
     registry: RegistryPod,
-    rec: RefCell<Recorded>,
+    rec: Mutex<Recorded>,
 }
 
 impl MiniRecorderPod {
@@ -560,7 +563,7 @@ impl MiniRecorderPod {
         registry.register_fn0::<f32>("mini::total", mini_total);
         registry.register_fn1::<Kind, ()>("mini::kind", mini_kind);
         registry.register_erased(xc_pod_lua::RESET_PATH, &[], "()", |pod, _| {
-            *mini(pod).rec.borrow_mut() = Recorded::default();
+            *mini(pod).rec.lock().expect("录制表锁中毒") = Recorded::default();
             Ok(Box::new(()))
         });
         registry.register_erased(
@@ -572,12 +575,12 @@ impl MiniRecorderPod {
         Self {
             id,
             registry,
-            rec: RefCell::new(Recorded::default()),
+            rec: Mutex::new(Recorded::default()),
         }
     }
 
     fn finish(&self) -> Result<MiniOutput, String> {
-        let rec = self.rec.borrow();
+        let rec = self.rec.lock().expect("录制表锁中毒");
         Ok(MiniOutput {
             dots: rec.dots,
             values: rec.values.clone(),
@@ -600,16 +603,27 @@ fn mini(pod: &dyn Pod) -> &MiniRecorderPod {
 
 fn mini_dot(pod: &dyn Pod, shape: Dot) -> Handle {
     let this = mini(pod);
-    this.rec.borrow_mut().dots += 1;
+    this.rec.lock().expect("录制表锁中毒").dots += 1;
     Handle::new(this.id, (shape.x + shape.y + shape.r) as u64, 1)
 }
 
 fn mini_emit(pod: &dyn Pod, value: f32) {
-    mini(pod).rec.borrow_mut().values.push(value);
+    mini(pod)
+        .rec
+        .lock()
+        .expect("录制表锁中毒")
+        .values
+        .push(value);
 }
 
 fn mini_total(pod: &dyn Pod) -> f32 {
-    mini(pod).rec.borrow().values.iter().sum()
+    mini(pod)
+        .rec
+        .lock()
+        .expect("录制表锁中毒")
+        .values
+        .iter()
+        .sum()
 }
 
 fn mini_kind(pod: &dyn Pod, kind: Kind) {
@@ -617,7 +631,12 @@ fn mini_kind(pod: &dyn Pod, kind: Kind) {
         Kind::Const => "Const".to_string(),
         Kind::Weight { value } => format!("Weight({value})"),
     };
-    mini(pod).rec.borrow_mut().kinds.push(label);
+    mini(pod)
+        .rec
+        .lock()
+        .expect("录制表锁中毒")
+        .kinds
+        .push(label);
 }
 
 impl Pod for MiniRecorderPod {
@@ -640,7 +659,7 @@ impl Pod for MiniRecorderPod {
             .ok_or_else(|| PodError::UnknownFunction(format!("函数编号 {id}")))?;
         match name.name() {
             "__reset" => {
-                *self.rec.borrow_mut() = Recorded::default();
+                *self.rec.lock().expect("录制表锁中毒") = Recorded::default();
                 Ok(Box::new(()))
             }
             "__finish" => Ok(Box::new(

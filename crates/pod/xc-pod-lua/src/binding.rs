@@ -77,7 +77,7 @@ fn register_function(
     let func = lua.create_function(move |lua, args: MultiValue| {
         let values: Vec<Value> = args.into_iter().collect();
         let codec = LuaCodec { lua };
-        xc_pod_binding::invoke(&codec, &service, item, &values)
+        xc_pod_binding::invoke(&codec, &*service, item, &values)
     })?;
     table.set(name, func)
 }
