@@ -8,11 +8,13 @@
 // egui 适配的唯一入口在 xcal-egui 的 host（EguiSceneHost）。
 
 pub mod camera;
+pub mod config;
 pub mod event;
 pub mod view;
 
 pub use camera::{CameraCommand, CameraMode};
-pub use event::{ids, InputEvents, SceneEvent, WidgetId};
+pub use config::{UiConfig, ViewportCamera};
+pub use event::{InputEvents, SceneEvent, WidgetId, ids};
 pub use view::{
     ContentHandle, ContentTextureSpec, DEFAULT_BACKGROUND, LayerBlend, LayerDescriptor, LayerId,
     LayerKind, SceneView,

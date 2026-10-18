@@ -17,7 +17,11 @@ pub struct SvgOptions {
 
 impl Default for SvgOptions {
     fn default() -> Self {
-        Self { precision: 3, include_anchors: true, include_viewbox: true }
+        Self {
+            precision: 3,
+            include_anchors: true,
+            include_viewbox: true,
+        }
     }
 }
 
@@ -31,7 +35,11 @@ pub fn to_svg(ir: &ContentIR, opts: &SvgOptions) -> String {
         let pad = 1.0;
         out.push_str(&format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{:.p$} {:.p$} {:.p$} {:.p$}\">\n",
-            b.min.x - pad, b.min.y - pad, w + pad * 2.0, h + pad * 2.0, p = p
+            b.min.x - pad,
+            b.min.y - pad,
+            w + pad * 2.0,
+            h + pad * 2.0,
+            p = p
         ));
     }
     for item in &ir.items {
@@ -63,7 +71,11 @@ fn write_styled_path(out: &mut String, sp: &StyledPath, opts: &SvgOptions) {
             out.push_str(" stroke=\"#");
             write_hex(out, s.color);
             out.push('"');
-            out.push_str(&format!(" stroke-width=\"{:.p$}\"", s.width, p = opts.precision));
+            out.push_str(&format!(
+                " stroke-width=\"{:.p$}\"",
+                s.width,
+                p = opts.precision
+            ));
         }
     }
     if opts.include_anchors {
@@ -77,17 +89,38 @@ fn write_styled_path(out: &mut String, sp: &StyledPath, opts: &SvgOptions) {
 fn write_path_data(out: &mut String, cmds: &[PathCommand], p: usize) {
     let mut first = true;
     for cmd in cmds {
-        if !first { out.push(' '); }
+        if !first {
+            out.push(' ');
+        }
         first = false;
         match *cmd {
             PathCommand::MoveTo(v) => out.push_str(&format!("M {:.p$},{:.p$}", v.x, v.y, p = p)),
             PathCommand::LineTo(v) => out.push_str(&format!("L {:.p$},{:.p$}", v.x, v.y, p = p)),
             PathCommand::QuadTo { ctrl, end } => out.push_str(&format!(
-                "Q {:.p$},{:.p$} {:.p$},{:.p$}", ctrl.x, ctrl.y, end.x, end.y, p = p)),
+                "Q {:.p$},{:.p$} {:.p$},{:.p$}",
+                ctrl.x,
+                ctrl.y,
+                end.x,
+                end.y,
+                p = p
+            )),
             PathCommand::CubicTo { ctrl1, ctrl2, end } => out.push_str(&format!(
                 "C {:.p$},{:.p$} {:.p$},{:.p$} {:.p$},{:.p$}",
-                ctrl1.x, ctrl1.y, ctrl2.x, ctrl2.y, end.x, end.y, p = p)),
-            PathCommand::Arc { center, radii, rotation, start_angle, end_angle } => {
+                ctrl1.x,
+                ctrl1.y,
+                ctrl2.x,
+                ctrl2.y,
+                end.x,
+                end.y,
+                p = p
+            )),
+            PathCommand::Arc {
+                center,
+                radii,
+                rotation,
+                start_angle,
+                end_angle,
+            } => {
                 write_svg_arc(out, center, radii, rotation, start_angle, end_angle, p);
             }
             PathCommand::Close => out.push('Z'),
@@ -96,13 +129,34 @@ fn write_path_data(out: &mut String, cmds: &[PathCommand], p: usize) {
 }
 
 /// 参数化弧（中心+半径+起止角）→ SVG A 命令（终点+标志位形式）。
-fn write_svg_arc(out: &mut String, center: Vec2, radii: Vec2, rot: f32, sa: f32, ea: f32, p: usize) {
+fn write_svg_arc(
+    out: &mut String,
+    center: Vec2,
+    radii: Vec2,
+    rot: f32,
+    sa: f32,
+    ea: f32,
+    p: usize,
+) {
     let end = arc_point(center, radii, rot, ea);
     let delta = ea - sa;
-    let large_arc = if delta.abs() > std::f32::consts::PI { 1 } else { 0 };
+    let large_arc = if delta.abs() > std::f32::consts::PI {
+        1
+    } else {
+        0
+    };
     let sweep = if delta > 0.0 { 1 } else { 0 };
-    out.push_str(&format!("A {:.p$} {:.p$} {:.p$} {} {} {:.p$},{:.p$}",
-        radii.x, radii.y, rot.to_degrees(), large_arc, sweep, end.x, end.y, p = p));
+    out.push_str(&format!(
+        "A {:.p$} {:.p$} {:.p$} {} {} {:.p$},{:.p$}",
+        radii.x,
+        radii.y,
+        rot.to_degrees(),
+        large_arc,
+        sweep,
+        end.x,
+        end.y,
+        p = p
+    ));
 }
 
 fn arc_point(center: Vec2, radii: Vec2, rot: f32, angle: f32) -> Vec2 {
@@ -130,11 +184,15 @@ mod tests {
             .line_to(Vec2::new(10.0, 10.0))
             .line_to(Vec2::new(0.0, 10.0))
             .close();
-        ir.items.push(StyledPath::filled(p1, Color32::from_rgb(0xFF0000)).with_anchor(Span::new(0, 1)));
+        ir.items
+            .push(StyledPath::filled(p1, Color32::from_rgb(0xFF0000)).with_anchor(Span::new(0, 1)));
         let mut p2 = Path2D::new();
-        p2.move_to(Vec2::new(20.0, 20.0)).quad_to(Vec2::new(25.0, 30.0), Vec2::new(30.0, 20.0));
-        ir.items.push(StyledPath::stroked(p2, Stroke2D::new(Color32::from_rgb(0x0000FF), 1.5))
-            .with_anchor(Span::new(1, 2)));
+        p2.move_to(Vec2::new(20.0, 20.0))
+            .quad_to(Vec2::new(25.0, 30.0), Vec2::new(30.0, 20.0));
+        ir.items.push(
+            StyledPath::stroked(p2, Stroke2D::new(Color32::from_rgb(0x0000FF), 1.5))
+                .with_anchor(Span::new(1, 2)),
+        );
         ir.recompute_bounds();
         ir.baseline = 10.0;
         ir
@@ -144,7 +202,11 @@ mod tests {
     fn deterministic_output() {
         let ir = sample_ir();
         let o = SvgOptions::default();
-        assert_eq!(to_svg(&ir, &o), to_svg(&ir, &o), "同一 IR 两次序列化必须逐字节相等");
+        assert_eq!(
+            to_svg(&ir, &o),
+            to_svg(&ir, &o),
+            "同一 IR 两次序列化必须逐字节相等"
+        );
     }
 
     #[test]
@@ -161,8 +223,20 @@ mod tests {
     #[test]
     fn anchor_toggle() {
         let ir = sample_ir();
-        let a = to_svg(&ir, &SvgOptions { include_anchors: true, ..Default::default() });
-        let b = to_svg(&ir, &SvgOptions { include_anchors: false, ..Default::default() });
+        let a = to_svg(
+            &ir,
+            &SvgOptions {
+                include_anchors: true,
+                ..Default::default()
+            },
+        );
+        let b = to_svg(
+            &ir,
+            &SvgOptions {
+                include_anchors: false,
+                ..Default::default()
+            },
+        );
         assert!(a.contains("data-span"));
         assert!(!b.contains("data-span"));
     }
@@ -170,7 +244,13 @@ mod tests {
     #[test]
     fn precision_effect() {
         let ir = sample_ir();
-        let coarse = to_svg(&ir, &SvgOptions { precision: 1, ..Default::default() });
+        let coarse = to_svg(
+            &ir,
+            &SvgOptions {
+                precision: 1,
+                ..Default::default()
+            },
+        );
         assert!(!coarse.contains("1.500"));
         assert!(coarse.contains("1.5"));
     }

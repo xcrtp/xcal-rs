@@ -11,28 +11,23 @@
 //
 // 本模块是接线，不新增架构抽象：缩放与平移完全复用 `ir_to_draw_cmds`。
 
+#[cfg(test)]
 use xc_content::ContentIR;
+#[cfg(test)]
 use xc_notion::Path2D;
-use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
-use xcal_render::{ContentDrawCmd, MeasureSpace, Shape2D, ir_to_draw_cmds};
+use xc_prerender::InMemoryEngine;
+#[cfg(test)]
+use xc_prerender::{ContentConfig, ContentEngine};
+#[cfg(test)]
+use xcal_render::{MeasureSpace, ir_to_draw_cmds};
+#[cfg(test)]
 use xcal_scene::types::Color32;
 
-/// 曲线展平容差（pt，相对 **标称字号** 尺度）。
-///
-/// 因为 `rebuild()` 用标称字号（默认 12.0）编译 IR，容差相对字形尺度始终
-/// 合理（0.1/12 ≈ 0.8%）；最终显示尺寸缩小不会放大该误差。
-const FLATTEN_TOLERANCE: f32 = 0.1;
-/// 只有 fill、没有 stroke 时使用的默认描边宽度（**标称 pt**）。
-///
-/// 需乘 `target / nominal` 换算为世界单位后使用（描边属世界空间）。
-const DEFAULT_STROKE_WIDTH_PT: f32 = 1.0;
-/// Typst 编译用的标称字号（pt）。曲线提取精度以它为基准；
-/// 目标显示大小由 [`FormulaSpec::font_size`] 经 `ir_to_draw_cmds` 缩放得到。
-const DEFAULT_NOMINAL_FONT_SIZE: f32 = 12.0;
-/// 子路径首尾点距离 ≤ 此值视为闭合。
-const CLOSE_EPS: f32 = 1e-4;
-
 /// 公式源描述（静态配置；将来接交互时改为可编辑字段）。
+///
+/// A1/A2 后生产路径不再消费它（分镜已搬到 `xcal-scene`）；保留作等价性/
+/// 几何用例的类型夹具。
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct FormulaSpec {
     /// Typst 源码。
@@ -46,6 +41,7 @@ pub struct FormulaSpec {
     pub nominal_font_size: f32,
 }
 
+#[cfg(test)]
 impl FormulaSpec {
     /// 用默认标称字号（12.0）构造。
     pub fn new(source: impl Into<String>, font_size: f32, world_pos: glam::Vec2) -> Self {
@@ -53,7 +49,7 @@ impl FormulaSpec {
             source: source.into(),
             font_size,
             world_pos,
-            nominal_font_size: DEFAULT_NOMINAL_FONT_SIZE,
+            nominal_font_size: xc_content::DEFAULT_NOMINAL_FONT_SIZE,
         }
     }
 }
@@ -76,6 +72,7 @@ pub fn build_engine() -> InMemoryEngine {
 /// 注意：`ContentConfig.font_size` 填的是**标称字号**（决定曲线提取精度），
 /// 不是目标显示大小；显示用的缩放由 `ir_to_draw_cmds` 的
 /// `scale = target / nominal` 完成，勿绕过。
+#[cfg(test)]
 pub fn rebuild(engine: &InMemoryEngine, spec: &FormulaSpec) -> Option<ContentIR> {
     let config = ContentConfig {
         font_size: spec.nominal_font_size,
@@ -98,6 +95,7 @@ pub fn rebuild(engine: &InMemoryEngine, spec: &FormulaSpec) -> Option<ContentIR>
 /// ⇒ Typst 渲染为**直立正文**（非斜体、空格原样保留），观感与正文一致。
 /// 于是 `rebuild` / `compile_to_stroke_paths` 一行不动 ⇒ 自动继承
 /// `Reveal`（书写）/ `Opacity`（淡入）/ `Visibility` / `Group` / `Transform`。
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct TextSpec {
     /// 纯文本内容（无需 Typst 语法）。
@@ -110,6 +108,7 @@ pub struct TextSpec {
     pub nominal_font_size: f32,
 }
 
+#[cfg(test)]
 impl TextSpec {
     /// 用默认标称字号（12.0）构造。
     pub fn new(source: impl Into<String>, font_size: f32, world_pos: glam::Vec2) -> Self {
@@ -117,7 +116,7 @@ impl TextSpec {
             source: source.into(),
             font_size,
             world_pos,
-            nominal_font_size: DEFAULT_NOMINAL_FONT_SIZE,
+            nominal_font_size: xc_content::DEFAULT_NOMINAL_FONT_SIZE,
         }
     }
 
@@ -126,20 +125,12 @@ impl TextSpec {
     /// 其余字段原样保留 ⇒ 缩放 / 锚点 / 标称字号口径与公式完全一致。
     pub fn to_formula_spec(&self) -> FormulaSpec {
         FormulaSpec {
-            source: text_literal_source(&self.source),
+            source: xc_content::text_literal_source(&self.source),
             font_size: self.font_size,
             world_pos: self.world_pos,
             nominal_font_size: self.nominal_font_size,
         }
     }
-}
-
-/// 纯文本 → Typst 数学模式下的**字符串字面量**（upright 正文外观）。
-///
-/// 只需转义反斜杠与双引号（字面量内部）。
-fn text_literal_source(text: &str) -> String {
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }
 
 /// 一条可 spawn 的描边路径：`(路径, 颜色, 线宽, 线宽所属空间)`。
@@ -149,46 +140,26 @@ fn text_literal_source(text: &str) -> String {
 ///
 /// `space` 由 `ir_to_draw_cmds` 声明（当前恒为 `MeasureSpace::World`：
 /// 宽度已乘 `target / nominal` 换算为世界单位，与字形一同随缩放变化）。
+#[cfg(test)]
 pub type StrokePath = (Path2D, Color32, f32, MeasureSpace);
 
 /// IR → 可 spawn 的描边路径列表。
 ///
-/// 复用 [`ir_to_draw_cmds`] 完成缩放与平移；再用 `Path2D::flatten_subpaths`
-/// 按子路径分组，逐组应用变换落到世界坐标。描边色回退规则见 [`stroke_style`]。
+/// 纯逻辑（展平 / 缩放 / 平移 / 描边回退）在 `xc-content`，两侧共用同一实现；
+/// 这里只做形状适配。
+#[cfg(test)]
 pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<StrokePath> {
-    // 与 `ir_to_draw_cmds` 相同的换算系数：标称 pt → 世界单位。
-    // 用于把"默认细线宽"（以标称 pt 表述）换算到世界空间。
-    let scale = if ir.nominal_font_size > 0.0 {
-        spec.font_size / ir.nominal_font_size
-    } else {
-        1.0
-    };
-
-    let mut out = Vec::new();
-    for cmd in ir_to_draw_cmds(ir, spec.font_size, spec.world_pos) {
-        let Shape2D::Path(path) = &cmd.shape else {
-            continue;
-        };
-        let Some((color, width)) = stroke_style(&cmd, scale) else {
-            continue;
-        };
-
-        for sub in path.flatten_subpaths(FLATTEN_TOLERANCE) {
-            if sub.is_empty() {
-                continue;
-            }
-            let closed = is_closed(&sub);
-            let world: Vec<glam::Vec2> =
-                sub.iter().map(|p| cmd.transform.apply_point(*p)).collect();
-            out.push((
-                Path2D::from_polyline(&world, closed),
-                color,
-                width,
-                cmd.style.space,
-            ));
-        }
-    }
-    out
+    xc_content::stroke_outlines(ir, spec.font_size, spec.world_pos, false)
+        .into_iter()
+        .map(|outline| {
+            (
+                outline.path,
+                outline.color,
+                outline.width,
+                MeasureSpace::World,
+            )
+        })
+        .collect()
 }
 
 /// 语义形变（S1b）：按源码锚点配对两个公式的路径，并把每对路径变换到世界坐标。
@@ -207,6 +178,7 @@ pub fn compile_to_stroke_paths(ir: &ContentIR, spec: &FormulaSpec) -> Vec<Stroke
 /// demo，本轮分镜脚本（`storyboard.rs`）取代了那批 2D demo。函数与文档一并保留 ——
 /// 它是"语义配对形变"这条既有能力的接线（配对知识在 `xc_content`，不在 `xc-time`），
 /// 删除属于独立的下游 churn，不属于本轮范围。
+#[cfg(test)]
 #[allow(dead_code)]
 pub fn compile_morph_pairs(
     from_ir: &ContentIR,
@@ -233,30 +205,6 @@ pub fn compile_morph_pairs(
         .into_iter()
         .map(|(a, b)| (a.transformed(&transform), b.transformed(&transform)))
         .collect()
-}
-
-/// 描边色 / 宽度回退规则（计划 §3.3）：
-/// 1. stroke 存在且宽度 > 0 → 用其颜色与宽度（`content_ir` 已换算为**世界单位**）；
-/// 2. 否则若 fill 存在 → 用 fill 色 + 默认细线宽（`DEFAULT_STROKE_WIDTH_PT × scale`，
-///    同样换算为世界单位——描边是世界空间，须与字形成比例）；
-/// 3. 都无 → 跳过该 path。
-fn stroke_style(cmd: &ContentDrawCmd, scale: f32) -> Option<(Color32, f32)> {
-    let style = &cmd.style;
-    let default_w = DEFAULT_STROKE_WIDTH_PT * scale;
-    match (style.stroke, style.fill) {
-        (Some(color), _) if style.stroke_width > 0.0 => Some((color, style.stroke_width)),
-        (Some(color), _) => Some((color, default_w)),
-        (None, Some(color)) => Some((color, default_w)),
-        (None, None) => None,
-    }
-}
-
-/// 子路径组内首尾点相同即视为闭合。
-fn is_closed(sub: &[glam::Vec2]) -> bool {
-    match (sub.first(), sub.last()) {
-        (Some(a), Some(b)) => sub.len() >= 2 && (*a - *b).length() <= CLOSE_EPS,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

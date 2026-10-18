@@ -7,23 +7,24 @@
 // - F10 把当前 World + Resources 通过 SnapshotRegistry 导出为 pretty JSON，
 //   写入当前工作目录 `xcal_snapshot_tick{N}.json`，用于 bug 复现与状态对比。
 //
-// 本模块全部依赖 xcal-scene telemetry feature（默认开启）。
+// A5：本模块从 `xcal-app` 归位到 UI 层（它含 egui 绘制，属于 UI）。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use xcal_schedule::resource::Resources;
-use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
-
-use xc_object::{Camera2DHandle, Camera3D, Framing2D};
-use xcal_egui::resources::UiConfig;
 use xcal_render::ViewRect;
 use xcal_render::components::{Circle, PhaseAnim, StrokeSolid};
 use xcal_render::{DrawQueue, DrawQueue3D};
 use xcal_render_backends::RenderContext;
 use xcal_scene::TimeState;
 use xcal_scene::scene::components::{Material3D, MeshGeometry};
+use xcal_schedule::resource::Resources;
+use xcal_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
+
+use xc_object::{Camera2DHandle, Camera3D, Framing2D};
+
+use crate::resources::UiConfig;
 
 /// 环形缓冲保留的帧耗时样本数（约 4 秒 @60fps）。
 const HISTORY_LEN: usize = 240;

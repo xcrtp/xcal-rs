@@ -8,7 +8,9 @@
 // 独立的 `xcal-schedule` crate。
 
 pub mod animation;
+pub mod authored;
 pub mod camera_input;
+pub mod content;
 pub mod contract;
 pub mod deferred;
 pub mod director_state;
@@ -17,9 +19,10 @@ pub mod driver;
 pub mod errors;
 pub mod math_pod;
 pub mod persist;
+pub mod pod;
+pub mod register;
 pub mod scene;
 pub mod scene_script;
-pub mod pod;
 pub mod time_state;
 pub mod transform;
 pub mod types;

@@ -1,8 +1,8 @@
 // param_panel.rs — 参数面板事件消费（LogicUpdate 阶段）
 //
 // B 阶段（UI 解耦）后本模块不含任何 egui 类型：
-// - 面板 chrome（滑块绘制）在 xcal-egui::host::draw_param_panel，控件交互以
-//   SceneEvent::Slider（WidgetId 标识）写入 InputEvents；
+// - 面板 chrome（滑块绘制）在 `host::draw_param_panel`，控件交互以
+//   `SceneEvent::Slider`（WidgetId 标识）写入 InputEvents；
 // - 本 System 只消费 Slider 事件并按 **WidgetId** 写回 BindingTable
 //   （与 A5 一致，不依赖插入顺序）——可 headless 测试。
 //
@@ -11,8 +11,7 @@
 // 故 `kind` 是冗余的保险，去掉后仍无歧义。滑块是否显示由**曲线类型**决定（见 host 侧），
 // 与 target 无关。
 //
-// 这是节点编辑器的简化版，后续替换为完整节点图（xc-node-schema + xcal-node-egui）
-// 时上层逻辑不动。
+// A5：本模块从 `xcal-app` 归位到 UI 层（它是面板事件消费的接线）。
 
 use xcal_scene::Curve;
 use xcal_scene::animation::BindingTable;

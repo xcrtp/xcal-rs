@@ -24,8 +24,8 @@
 
 use std::sync::Arc;
 use xc_notion::Vec3;
-use xc_pod_macro::PodType;
 use xc_object::{Camera3D, Circle, Framing2D, Transform};
+use xc_pod_macro::PodType;
 use xc_render_ir::Opacity;
 use xc_scene_contract::ObjectId;
 // `Scene as _`：只为方法解析（`WorldScene::get_mut`）—— **target 不再认识 hecs**。

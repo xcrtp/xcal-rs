@@ -5,9 +5,9 @@
 //   host.rs::draw_time_panel，控件交互以 SceneEvent（WidgetId 标识）写入 InputEvents；
 // - 本 System 只消费事件并写 DirectorState——可 headless 测试。
 
-use xcal_schedule::context::ExecutorContext;
-use xcal_scene::domain::{ids, InputEvents, SceneEvent};
 use xcal_scene::director_state::DirectorState;
+use xcal_scene::domain::{InputEvents, SceneEvent, ids};
+use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 
 pub struct TimeControlSystem;
@@ -72,7 +72,9 @@ mod tests {
     #[test]
     fn play_pause_button_toggles_director() {
         let before = DirectorState::new();
-        let after = run_with_events(vec![SceneEvent::Button { id: ids::PLAY_PAUSE }]);
+        let after = run_with_events(vec![SceneEvent::Button {
+            id: ids::PLAY_PAUSE,
+        }]);
         assert_ne!(after.director.playing, before.director.playing);
     }
 
@@ -95,7 +97,11 @@ mod tests {
         sched.run_frame(0.016);
 
         let d = sched.resources().get::<DirectorState>().unwrap();
-        assert!(d.director.global_t.abs() < 1e-9, "应拨回 0，实际 {}", d.director.global_t);
+        assert!(
+            d.director.global_t.abs() < 1e-9,
+            "应拨回 0，实际 {}",
+            d.director.global_t
+        );
         assert!(d.director.playing, "重播后应处于播放态");
     }
 

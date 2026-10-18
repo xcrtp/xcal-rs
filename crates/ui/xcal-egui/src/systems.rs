@@ -17,12 +17,12 @@
 // Phase 分配：
 // - Prepare: AxesRefresh / FunctionGraphRefresh（几何在场景对象层，本层只接线）
 
-use xcal_schedule::context::ExecutorContext;
-use xcal_schedule::system::System;
+use xc_object::{Axes2D, Camera2DHandle, FunctionGraph};
+use xcal_render::ViewRect;
 use xcal_scene::contract::{SceneRead, WorldScene, WorldView};
 use xcal_scene::scene::components::PhaseAnim;
-use xcal_render::ViewRect;
-use xc_object::{Axes2D, Camera2DHandle, FunctionGraph};
+use xcal_schedule::context::ExecutorContext;
+use xcal_schedule::system::System;
 
 use crate::resources::UiConfig;
 
@@ -107,9 +107,9 @@ impl System for FunctionGraphRefreshSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xc_object::{AxesLine, Framing2D, ZOrder};
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xc_object::{AxesLine, Framing2D, ZOrder};
 
     fn count_axes_lines(world: &hecs::World) -> usize {
         world.query::<&AxesLine>().iter().count()
@@ -149,7 +149,12 @@ mod tests {
         assert_eq!(count_axes_lines(sched.world()), 39);
 
         // 网格线上的 ZOrder 必须压在内容之下（-100 网格 / -90 坐标轴）。
-        let zs: Vec<i32> = sched.world().query::<&ZOrder>().iter().map(|z| z.0).collect();
+        let zs: Vec<i32> = sched
+            .world()
+            .query::<&ZOrder>()
+            .iter()
+            .map(|z| z.0)
+            .collect();
         assert!(zs.iter().all(|z| *z < 0), "网格不得落在内容层：{zs:?}");
     }
 
@@ -178,7 +183,11 @@ mod tests {
         sched.run_frame(0.016);
         assert_eq!(count_axes_lines(sched.world()), 0, "关闭网格后不应有线段");
 
-        sched.resources_mut().get_mut::<UiConfig>().unwrap().show_grid = true;
+        sched
+            .resources_mut()
+            .get_mut::<UiConfig>()
+            .unwrap()
+            .show_grid = true;
         sched.run_frame(0.016);
         assert!(count_axes_lines(sched.world()) > 0, "重新打开应重建网格");
     }
@@ -247,7 +256,10 @@ mod tests {
         // 相位加在自变量上：x = {0,1} ⇒ y = {1,2}。
         assert_eq!(
             pts,
-            vec![xc_notion::Vec2::new(0.0, 1.0), xc_notion::Vec2::new(1.0, 2.0)]
+            vec![
+                xc_notion::Vec2::new(0.0, 1.0),
+                xc_notion::Vec2::new(1.0, 2.0)
+            ]
         );
     }
 }

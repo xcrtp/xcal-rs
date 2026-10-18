@@ -25,8 +25,8 @@ pub use types::*;
 
 use std::sync::Arc;
 
-use xc_prerender::InMemoryEngine;
 use xc_pod::Pod;
+use xc_prerender::InMemoryEngine;
 
 /// 构造场景 Service（返回 trait object：适配层不需要知道具体类型）。
 pub fn scene_service(paths: PathStore) -> Arc<dyn Pod> {

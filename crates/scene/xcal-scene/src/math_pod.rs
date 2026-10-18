@@ -33,7 +33,7 @@
 use std::sync::{Arc, OnceLock};
 
 use xc_notion::FunctionX2Y;
-use xc_pod::{IntoPodTypeName, QualifiedName, RegistryPod, Pod};
+use xc_pod::{IntoPodTypeName, Pod, QualifiedName, RegistryPod};
 
 /// 可当函数提供者的 Pod：**具体类型**必须 `Send + Sync`（trait 本身不变）。
 ///
@@ -89,7 +89,10 @@ pub fn builtin_f32(name: &str) -> Option<FunctionX2Y<f32, f32>> {
 pub fn rebind_components(components: &mut xc_scene_contract::Components) {
     for c in components.iter_mut() {
         // 必须显式解引用到 `dyn Component`（`Box<dyn Component>` 也满足 blanket impl）。
-        if let Some(graph) = (**c).as_any_mut().downcast_mut::<xc_object::FunctionGraph>() {
+        if let Some(graph) = (**c)
+            .as_any_mut()
+            .downcast_mut::<xc_object::FunctionGraph>()
+        {
             if graph.func.is_bound() {
                 continue;
             }

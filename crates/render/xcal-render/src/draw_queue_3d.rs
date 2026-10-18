@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use glam::Mat4;
-use xcal_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 use xc_notion::{Color32, Vec3};
+use xcal_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
 /// 一次网格绘制命令：共享几何 + 模型变换 + 材质。
 ///
@@ -103,7 +103,12 @@ impl DrawQueue3D {
     }
 
     /// 追加一个网格绘制命令。
-    pub fn draw_mesh(&mut self, geometry: Arc<MeshGeometry>, transform: Mat4, material: Material3D) {
+    pub fn draw_mesh(
+        &mut self,
+        geometry: Arc<MeshGeometry>,
+        transform: Mat4,
+        material: Material3D,
+    ) {
         self.meshes
             .push(MeshDraw::new(geometry, transform, material));
     }

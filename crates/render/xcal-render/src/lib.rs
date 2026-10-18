@@ -86,7 +86,8 @@ pub use filters::{FilterKind, FilterSlot, MAX_FILTER_SLOTS, POST_UNIFORM_SIZE, P
 
 // ─── 录制 System（P4 从 xcal-egui 归位到渲染层） ──────────────────────────
 pub use record_systems::{
-    ContentTextureRecordSystem, MorphRecordSystem, RevealRecordSystem, SceneRecordSystem,
+    ContentTextureRecordSystem, MorphRecordSystem, RevealRecordSystem, SceneRecord3DSystem,
+    SceneRecordSystem, register_record_systems,
 };
 
 // ─── 内容 IR 与预留后端目标 ───────────────────────────────────────────────
@@ -101,9 +102,9 @@ pub use tessellate::{
 
 // ─── 顶点格式契约（纯数据，无 wgpu 依赖；翻译层在 xcal-render-backends） ──
 pub use vertex::{
-    hash_bytes, hash_bytes_sampled, AaModel, AaSlotSemantics, AttribSemantic, AttribType,
-    CacheStrategy, StaticConsistencyChecker, StepMode, VertexAttrib, VertexInputDesc,
-    VertexLayout, VertexLayoutError,
+    AaModel, AaSlotSemantics, AttribSemantic, AttribType, CacheStrategy, StaticConsistencyChecker,
+    StepMode, VertexAttrib, VertexInputDesc, VertexLayout, VertexLayoutError, hash_bytes,
+    hash_bytes_sampled,
 };
 
 // ─── wgpu 抽象（feature gate） ────────────────────────────────────────────
@@ -114,9 +115,7 @@ pub use render_layer::RenderLayer;
 #[cfg(feature = "wgpu")]
 pub use render_target::RenderTarget;
 #[cfg(feature = "wgpu")]
-pub use resource_cache::{
-    DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey,
-};
+pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};
 
 // GpuHandle / GpuResourceId / AccessError 是纯 Any 包装 + 类型，无 wgpu 依赖，始终可用。
 pub use render_backend::{AccessError, GpuHandle, GpuResourceId};

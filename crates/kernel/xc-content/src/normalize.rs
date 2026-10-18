@@ -9,13 +9,21 @@ pub fn normalize_source(raw: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '/' {
-            while i < chars.len() && chars[i] != '\n' { i += 1; }
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
             continue;
         }
         if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
             i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') { i += 1; }
-            i = if i + 1 < chars.len() { i + 2 } else { chars.len() };
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = if i + 1 < chars.len() {
+                i + 2
+            } else {
+                chars.len()
+            };
             continue;
         }
         out.push(chars[i]);
@@ -27,7 +35,10 @@ pub fn normalize_source(raw: &str) -> String {
     let mut prev_space = false;
     for c in out.chars() {
         if c.is_whitespace() {
-            if !prev_space { folded.push(' '); prev_space = true; }
+            if !prev_space {
+                folded.push(' ');
+                prev_space = true;
+            }
         } else {
             folded.push(c);
             prev_space = false;

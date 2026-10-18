@@ -25,8 +25,12 @@ pub struct LayerId(pub u32);
 ///   `AppCamera::to_camera_2d`（UI 侧），不要在各处硬编码 `Camera2D::new`。
 #[derive(Debug, Clone, Copy)]
 pub enum LayerKind {
-    Viewport2D { camera: Camera2D },
-    Viewport3D { camera: Camera3D },
+    Viewport2D {
+        camera: Camera2D,
+    },
+    Viewport3D {
+        camera: Camera3D,
+    },
     /// 内容纹理层（S3-3）：渲染到**独立纹理**，供 3D 材质采样。
     ///
     /// 与视口层的区别：不绑定屏幕视口，绑定一张固定尺寸纹理。

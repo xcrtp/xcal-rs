@@ -13,31 +13,22 @@
 //
 // # 与 `xcal-app::formula` 的关系
 //
-// 落点转换（IR → 展平子路径 → 世界坐标）与 App 的 `formula.rs` 逐式一致
-// （同一份 `xc-content` / `xc-notion` 原语）；本模块不依赖 `xcal-render`
+// 落点转换已下沉 `xc-content::stroke`（**唯一实现**，含常量）；
+// 本模块只做引擎调用与类型适配。本模块不依赖 `xcal-render`
 // （那会让 scene 层反向依赖 render 层）。
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use xc_content::{ContentIR, StyledPath};
-use xc_notion::{Color32 as NotionColor, Path2D, Transform2D, Vec2 as NotionVec2};
-use xc_prerender::{ContentConfig, ContentEngine, InMemoryEngine};
-use xc_pod::{FunctionId, Handle, HandleTable, QualifiedName, RegistryPod, Pod, PodError, PodId};
+use xc_content::StrokeOutline;
+use xc_notion::{Color32 as NotionColor, Path2D, Vec2 as NotionVec2};
+use xc_pod::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
+use xc_prerender::InMemoryEngine;
 
 use crate::pod::types::{Color, Formula, Path, PathList, Text};
 
 /// 注入时使用的 Service 名。
 pub const CONTENT_SERVICE_NAME: &str = "content";
-
-/// 曲线展平容差（pt，相对标称字号尺度）——与 App 的 `formula.rs` 同值。
-const FLATTEN_TOLERANCE: f32 = 0.1;
-/// 只有 fill、没有 stroke 时的默认描边宽度（标称 pt）。
-const DEFAULT_STROKE_WIDTH_PT: f32 = 1.0;
-/// Typst 编译用的标称字号（pt）。
-const DEFAULT_NOMINAL_FONT_SIZE: f32 = 12.0;
-/// 子路径首尾点距离 ≤ 此值视为闭合。
-const CLOSE_EPS: f32 = 1e-4;
 
 /// **内容路径表**：内容服务写入、场景服务读取的共享资源。
 ///
@@ -149,7 +140,7 @@ fn content_formula(pod: &dyn Pod, spec: Formula) -> PathList {
 }
 
 fn content_text(pod: &dyn Pod, spec: Text) -> PathList {
-    let source = text_literal_source(&spec.source);
+    let source = xc_content::text_literal_source(&spec.source);
     compile(pod, &source, spec.font_size, spec.x, spec.y, false)
 }
 
@@ -162,92 +153,26 @@ fn compile(
     sort_reading_order: bool,
 ) -> PathList {
     let this = service(pod);
-    let config = ContentConfig {
-        font_size: DEFAULT_NOMINAL_FONT_SIZE,
-        fill: NotionColor::WHITE,
-        scale_factor: 1.0,
-    };
-    let handle = this.engine.request(source, &config);
-    let Some(Ok(ir)) = this.engine.take(handle) else {
-        return PathList(Vec::new());
-    };
-    PathList(convert(
-        &this.paths,
-        &ir,
+    let outlines = crate::content::compile(
+        &this.engine,
+        source,
         font_size,
         NotionVec2::new(x, y),
         sort_reading_order,
-    ))
+    );
+    PathList(store_paths(&this.paths, outlines))
 }
 
-/// IR → 世界坐标描边路径（逐式对应 `xcal-app::formula::compile_to_stroke_paths`）。
-fn convert(
-    store: &PathStore,
-    ir: &ContentIR,
-    font_size: f32,
-    world_pos: NotionVec2,
-    sort_reading_order: bool,
-) -> Vec<Path> {
-    if ir.is_empty() {
-        return Vec::new();
-    }
-    let scale = if ir.nominal_font_size > 0.0 {
-        font_size / ir.nominal_font_size
-    } else {
-        1.0
-    };
-    let transform =
-        Transform2D::scale(NotionVec2::splat(scale)).compose(Transform2D::translate(world_pos));
-
-    let mut built: Vec<(Path2D, Color, f32)> = Vec::new();
-    for item in &ir.items {
-        let Some((color, width)) = stroke_style(item, scale) else {
-            continue;
-        };
-        for sub in item.path.flatten_subpaths(FLATTEN_TOLERANCE) {
-            if sub.is_empty() {
-                continue;
-            }
-            let closed = is_closed(&sub);
-            let world: Vec<NotionVec2> = sub.iter().map(|p| transform.apply_point(*p)).collect();
-            built.push((
-                Path2D::from_polyline(&world, closed),
-                to_color(color),
-                width,
-            ));
-        }
-    }
-
-    if sort_reading_order {
-        order_by_reading_order(&mut built);
-    }
-
-    built
+/// 世界坐标轮廓 → 脚本层 `Path`（句柄入表，颜色转脚本枚举）。
+fn store_paths(store: &PathStore, outlines: Vec<StrokeOutline>) -> Vec<Path> {
+    outlines
         .into_iter()
-        .map(|(path, color, width)| Path {
-            path: store.insert(path),
-            color,
-            width,
+        .map(|outline| Path {
+            path: store.insert(outline.path),
+            color: to_color(outline.color),
+            width: outline.width,
         })
         .collect()
-}
-
-/// 描边色 / 宽度回退规则（与 `formula.rs` 同口径）。
-fn stroke_style(item: &StyledPath, scale: f32) -> Option<(NotionColor, f32)> {
-    let default_w = DEFAULT_STROKE_WIDTH_PT * scale;
-    match (&item.stroke, item.fill) {
-        (Some(stroke), _) if stroke.width > 0.0 => Some((stroke.color, stroke.width * scale)),
-        (Some(stroke), _) => Some((stroke.color, default_w)),
-        (None, Some(fill)) => Some((fill, default_w)),
-        (None, None) => None,
-    }
-}
-
-fn is_closed(sub: &[NotionVec2]) -> bool {
-    match (sub.first(), sub.last()) {
-        (Some(a), Some(b)) => sub.len() >= 2 && (*a - *b).length() <= CLOSE_EPS,
-        _ => false,
-    }
 }
 
 fn to_color(color: NotionColor) -> Color {
@@ -257,25 +182,4 @@ fn to_color(color: NotionColor) -> Color {
         b: color.b(),
         a: color.a(),
     }
-}
-
-/// 阅读顺序：包围盒 `min_x` 升序；无包围盒排最后；同 `min_x` 保持输入顺序。
-///
-/// 与 `xcal-app::storyboard::order_by_reading_order` 同口径（稳定排序）。
-fn order_by_reading_order(paths: &mut [(Path2D, Color, f32)]) {
-    paths.sort_by(|a, b| {
-        let key = |p: &(Path2D, Color, f32)| p.0.compute_bounds().map(|r| r.min.x);
-        match (key(a), key(b)) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
-    });
-}
-
-/// 纯文本 → Typst 数学模式下的字符串字面量（直立正文外观）。
-fn text_literal_source(text: &str) -> String {
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
 }

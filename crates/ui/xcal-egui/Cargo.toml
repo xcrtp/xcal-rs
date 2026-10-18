@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene" }
+# 事件订阅方（FrameProgress）实现 Pod 的 EventSink。
+xc-pod = { path = "../../pod/xc-pod" }
 # ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 # 仅用 2D 冻结管线（draw/components），不需要 xcal-render 的 wgpu feature。
@@ -21,12 +23,15 @@ xc-notion = { path = "../../kernel/xc-notion" }
 xc-object = { path = "../../object/xc-object" }
 
 egui.workspace = true
-# EguiSceneHost::present 把 3D 内容封装为 egui_wgpu 回调提交（原 RenderSubmit3DSystem 职责）。
+# A5：GUI 帧体 / 窗口参数归位到 UI 层，需要 eframe 的 `App` 无关宿主类型。
+eframe.workspace = true
 egui-wgpu.workspace = true
 hecs.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
 glam.workspace = true
+# health overlay 的 F10 快照日志（与 xcal-schedule telemetry 同源）。
+tracing.workspace = true
 
 [dev-dependencies]
 egui.workspace = true

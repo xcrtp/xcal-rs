@@ -20,9 +20,9 @@ use xc_object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Circle as NativeCircle, Framing2D,
     Path as NativePath, TickSpec, Transform as NativeTransform,
 };
+use xc_pod::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use xc_render_ir::{FillSolid, MeasureSpace, StrokeSolid};
 use xc_scene_contract::Components;
-use xc_pod::{FunctionId, Handle, HandleTable, QualifiedName, RegistryPod, Pod, PodError, PodId};
 
 use crate::pod::content_service::PathStore;
 use crate::pod::types::{
@@ -183,13 +183,18 @@ impl SceneServicePod {
         registry.register_fn1::<f64, ()>("xcal.scene::wait", scene_wait);
 
         // ── 内部交接（不是脚本可见 API；走 erased / `Pod::call`）────────────
-        registry.register_erased(FINISH_PATH, &[], "Result<Box<dyn Any>, String>", |pod, _| {
-            Ok(Box::new(
-                service(pod)
-                    .finish()
-                    .map(|script| Box::new(script) as Box<dyn Any>),
-            ))
-        });
+        registry.register_erased(
+            FINISH_PATH,
+            &[],
+            "Result<Box<dyn Any>, String>",
+            |pod, _| {
+                Ok(Box::new(
+                    service(pod)
+                        .finish()
+                        .map(|script| Box::new(script) as Box<dyn Any>),
+                ))
+            },
+        );
         registry.register_erased(RESET_PATH, &[], "()", |pod, _| {
             service(pod).reset();
             Ok(Box::new(()))

@@ -11,10 +11,10 @@
 // App 的形变实体**不带 `Path`**，故本 System 在 App 里自然不命中。
 
 use xc_notion::Path2D;
+use xc_object::Path;
+use xcal_scene::scene::components::MorphShape;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::scene::components::MorphShape;
-use xc_object::Path;
 
 /// 形变应用（CPU 回退）：`Path2D::morph_points(from, to, t, samples)` → 写入同实体的
 /// `Path.path`（闭合折线，`from_polyline(..., true)` 携带闭合语义）。render 层由
@@ -37,14 +37,14 @@ impl System for MorphApplySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeState;
     use crate::animation::binding::{Binding, BindingTable, SeekKind};
     use crate::animation::system::BindingApplySystem;
     use crate::animation::target::MorphT;
-    use xcal_schedule::resource::Resources;
-    use xcal_schedule::scheduler::{Phase, Scheduler};
-    use crate::TimeState;
     use xc_notion::Vec2;
     use xc_time::{ClockForest, ClockNode, Curve};
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     fn square(half: f32) -> Path2D {
         Path2D::from_polyline(
@@ -100,10 +100,7 @@ mod tests {
         let pts = path.0.flatten(0.01);
         assert_eq!(pts.len(), 129, "顶点数应恒为 samples + 闭合回起点");
         assert!(
-            matches!(
-                path.0.commands.last(),
-                Some(xc_notion::PathCommand::Close)
-            ),
+            matches!(path.0.commands.last(), Some(xc_notion::PathCommand::Close)),
             "形变输出应闭合（末命令为 Close）"
         );
         let max_x = pts.iter().map(|p| p.x).fold(f32::MIN, f32::max);

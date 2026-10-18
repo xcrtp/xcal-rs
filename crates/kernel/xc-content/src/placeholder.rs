@@ -61,7 +61,8 @@ pub fn generate_placeholder(raw: &str, opts: &PlaceholderOptions) -> ContentIR {
                 .line_to(Vec2::new(cursor_x, h))
                 .close();
             let anchor = Span::new(start, end);
-            ir.items.push(StyledPath::filled(path, opts.fill).with_anchor(anchor));
+            ir.items
+                .push(StyledPath::filled(path, opts.fill).with_anchor(anchor));
         }
         cursor_x += w;
         byte_idx = end;
@@ -75,7 +76,7 @@ pub fn generate_placeholder(raw: &str, opts: &PlaceholderOptions) -> ContentIR {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::svg::{to_svg, SvgOptions};
+    use crate::svg::{SvgOptions, to_svg};
 
     #[test]
     fn placeholder_maps_each_visible_char_to_rect_with_anchor() {
@@ -98,7 +99,10 @@ mod tests {
 
     #[test]
     fn placeholder_bounds_equals_union_of_rects() {
-        let opts = PlaceholderOptions { nominal_font_size: 10.0, ..Default::default() };
+        let opts = PlaceholderOptions {
+            nominal_font_size: 10.0,
+            ..Default::default()
+        };
         let ir = generate_placeholder("ab", &opts);
         // 两字符宽 0.6 * 10 = 6 共 12；高 10。
         let approx_w = 12.0f32;
@@ -120,7 +124,10 @@ mod tests {
         let fs = 12.0f32;
         let w = fs * 0.6;
         let b_rect_min_x = ir.items[1].path.compute_bounds().unwrap().min.x;
-        assert!((b_rect_min_x - 2.0 * w).abs() < 1e-4, "b 的 x 应为 2w，实际 {b_rect_min_x}");
+        assert!(
+            (b_rect_min_x - 2.0 * w).abs() < 1e-4,
+            "b 的 x 应为 2w，实际 {b_rect_min_x}"
+        );
     }
 
     #[test]

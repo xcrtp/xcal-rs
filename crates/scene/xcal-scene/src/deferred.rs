@@ -212,12 +212,12 @@ impl System for ReplaySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TimeState;
     use crate::animation::BindingApplySystem;
     use crate::scene::Scene as SceneStruct;
-    use crate::TimeState;
+    use xc_object::Circle;
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xc_object::Circle;
 
     fn circle(x: f32) -> Components {
         vec![Box::new(Circle::new((x, 0.0), 1.0))]
@@ -319,9 +319,8 @@ mod tests {
     /// **B4 核心断言（§10.3.2）**：运行时创建的对象在重播后**不残留**。
     #[test]
     fn replay_removes_runtime_created_objects() {
-        let replay_events = || {
-            InputEvents::from_events(vec![SceneEvent::Button { id: ids::REPLAY }])
-        };
+        let replay_events =
+            || InputEvents::from_events(vec![SceneEvent::Button { id: ids::REPLAY }]);
 
         let mut res = Resources::new();
         res.insert(DeferredCommands::new());
@@ -353,7 +352,11 @@ mod tests {
         sched.run_frame(0.016);
         assert_eq!(sched.world().len() as usize, 0, "重播后运行时对象不残留");
         assert!(
-            sched.resources().get::<DynamicObjects>().unwrap().is_empty(),
+            sched
+                .resources()
+                .get::<DynamicObjects>()
+                .unwrap()
+                .is_empty(),
             "台账必须清空"
         );
 

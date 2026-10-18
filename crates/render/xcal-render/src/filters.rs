@@ -194,8 +194,14 @@ mod tests {
         assert_eq!(bytes.len(), 160);
         // 头：count = 2；全局参数：纹素步长。
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 2);
-        assert_eq!(f32::from_le_bytes(bytes[16..20].try_into().unwrap()), 1.0 / 64.0);
-        assert_eq!(f32::from_le_bytes(bytes[20..24].try_into().unwrap()), 1.0 / 32.0);
+        assert_eq!(
+            f32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+            1.0 / 64.0
+        );
+        assert_eq!(
+            f32::from_le_bytes(bytes[20..24].try_into().unwrap()),
+            1.0 / 32.0
+        );
         // 槽 0：kind = 1（Gain），params 全 0.5。
         assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 1);
         assert_eq!(f32::from_le_bytes(bytes[48..52].try_into().unwrap()), 0.5);
@@ -212,7 +218,11 @@ mod tests {
         for _ in 0..10 {
             chain.push(FilterSlot::blur(0.5));
         }
-        assert_eq!(chain.slots.len(), MAX_FILTER_SLOTS, "超出槽位应被忽略（不扩容）");
+        assert_eq!(
+            chain.slots.len(),
+            MAX_FILTER_SLOTS,
+            "超出槽位应被忽略（不扩容）"
+        );
         // 编码里 count 也不超过槽位数。
         let bytes = chain.to_uniform_bytes([0.0, 0.0]);
         assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 4);

@@ -9,12 +9,14 @@
 // 5. Timeline（P3）把"先…再…"的顺序编排编译成 `ClockNode + Binding`，求值层零改动。
 
 pub mod binding;
+pub mod camera_drive;
 pub mod morph;
 pub mod system;
 pub mod target;
 pub mod timeline;
 
 pub use binding::{Binding, BindingTable, SeekKind};
+pub use camera_drive::CameraDriveSystem;
 pub use morph::MorphApplySystem;
 pub use system::BindingApplySystem;
 pub use target::{

@@ -1,9 +1,9 @@
 // director_state.rs — Director + 推进 System（xcal-scene）
 
 use xc_time::Director;
+use xcal_scene::TimeState;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::TimeState;
 
 /// 全局时间控制 Resource：包装 `xc_time::Director`。
 /// 由 `DirectorAdvanceSystem`（Input 阶段）推进，`TimeControlSystem`（LogicUpdate）读写。

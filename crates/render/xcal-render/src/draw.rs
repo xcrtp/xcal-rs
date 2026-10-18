@@ -149,7 +149,11 @@ impl DrawQueue {
 
     /// 路径填充：`path` 已在屏幕空间。
     pub fn path_fill(&mut self, z: ZIndex, path: Path, fill: FillSolid) {
-        self.push(DrawCommand::new(z, Shape2D::Path(path.0), fill_style(&fill)));
+        self.push(DrawCommand::new(
+            z,
+            Shape2D::Path(path.0),
+            fill_style(&fill),
+        ));
     }
 
     /// 路径描边：`path` 已在屏幕空间。
@@ -419,12 +423,8 @@ impl<S: ToShape2D, T: ResolveStyle> Drawable for (&S, &T) {
 /// `items` 每项 = `(可绘制对象, z)`。`z` 是绘制层级（越小越先画），写入
 /// `DrawCommand` 时取整为 [`ZIndex`]；同一 `z` 内保持 `items` 的迭代顺序
 /// （[`DrawQueue`] 的排序是稳定的）。`to_primitive` 返回 `None` 的项被跳过（剔除）。
-pub fn record_drawables<D: Drawable, I>(
-    queue: &mut DrawQueue,
-    t: &Affine2D,
-    scale: f32,
-    items: I,
-) where
+pub fn record_drawables<D: Drawable, I>(queue: &mut DrawQueue, t: &Affine2D, scale: f32, items: I)
+where
     I: IntoIterator<Item = (D, f32)>,
 {
     for (item, z) in items {
@@ -689,10 +689,10 @@ pub fn push_reveal_item(
 #[allow(unused_imports)]
 mod tests {
     use super::*;
-    use xcal_scene::scene::components::*;
     use std::any::Any;
     use xc_notion::{MeasureSpace, Path2D};
     use xc_scene_contract::{Component, Components, ObjectId, Parent, Scene, SceneRead};
+    use xcal_scene::scene::components::*;
 
     // ─── 非 ECS 的测试 Scene（M3-7 判据：`record_scene` 不依赖 hecs）──────────
     //
@@ -801,10 +801,8 @@ mod tests {
             let id = ObjectId::new(self.items.len() as u32, 1);
             // 测试场景内部仍用 `Any` 存储（它能装任意测试类型）；这里把
             // `Component` 重新擦除回 `Any`（`into_any`）。
-            self.items.push((
-                id,
-                components.into_iter().map(|c| c.into_any()).collect(),
-            ));
+            self.items
+                .push((id, components.into_iter().map(|c| c.into_any()).collect()));
             Some(id)
         }
 
@@ -949,7 +947,11 @@ mod tests {
 
     impl Painter2D for RecordingPainter {
         fn paint(&self, shape: &Shape2D, style: &Style2D) {
-            let style_kind = if style.fill.is_some() { "fill" } else { "stroke" };
+            let style_kind = if style.fill.is_some() {
+                "fill"
+            } else {
+                "stroke"
+            };
             self.calls
                 .borrow_mut()
                 .push(format!("{}_{}", shape_kind(shape), style_kind));
@@ -1096,7 +1098,11 @@ mod tests {
             .commands()
             .iter()
             .map(|c| {
-                let style_kind = if c.style.fill.is_some() { "fill" } else { "stroke" };
+                let style_kind = if c.style.fill.is_some() {
+                    "fill"
+                } else {
+                    "stroke"
+                };
                 format!("{}_{}", shape_kind(&c.shape), style_kind)
             })
             .collect();
@@ -1274,16 +1280,15 @@ mod tests {
     fn absent_or_identity_transform_is_bit_identical() {
         let mut world = TestScene::new();
         world.spawn((mk_circle(3.0), mk_stroke()));
-        world.spawn((
-            mk_circle(3.0),
-            mk_stroke(),
-            xc_object::Transform::default(),
-        ));
+        world.spawn((mk_circle(3.0), mk_stroke(), xc_object::Transform::default()));
         // spawn 顺序 = 查询顺序 ⇒ 两条命令一一对应。
         let mut q = DrawQueue::new();
         record_scene(&world, &cam_with_scale(10.0), &mut q);
         assert_eq!(q.len(), 2);
-        assert_eq!(q.commands()[0].shape.bounds(), q.commands()[1].shape.bounds());
+        assert_eq!(
+            q.commands()[0].shape.bounds(),
+            q.commands()[1].shape.bounds()
+        );
     }
 
     /// **T1**：摆放 `position = (1, 0)` ⇒ 几何整体右移 `1 × camera.scale` 像素。
@@ -1349,13 +1354,19 @@ mod tests {
             panic!("expected Line");
         };
         // 基准（未摆放）：世界 (0,0)→(1,0) ⇒ 屏幕 (50,50)→(60,50)。
-        assert_eq!((*s0, *e0), (glam::Vec2::new(50.0, 50.0), glam::Vec2::new(60.0, 50.0)));
+        assert_eq!(
+            (*s0, *e0),
+            (glam::Vec2::new(50.0, 50.0), glam::Vec2::new(60.0, 50.0))
+        );
 
         let Shape2D::Line { start: s1, end: e1 } = &q.commands()[1].shape else {
             panic!("expected Line");
         };
         // 旋转 90°：世界 (1,0) → (0,1) ⇒ 屏幕 (50, 40)（Y-down 翻转）。
-        assert!((s1.x - 50.0).abs() < 1e-4 && (s1.y - 50.0).abs() < 1e-4, "start = {s1:?}");
+        assert!(
+            (s1.x - 50.0).abs() < 1e-4 && (s1.y - 50.0).abs() < 1e-4,
+            "start = {s1:?}"
+        );
         assert!(
             (e1.x - 50.0).abs() < 1e-4 && (e1.y - 40.0).abs() < 1e-4,
             "旋转后终点应为 (50, 40)，实际 {e1:?}"
@@ -1381,7 +1392,10 @@ mod tests {
                 Shape2D::Group { children } => {
                     assert_eq!(children.len(), 2, "第 {i} 条：杆 + 头");
                     for c in children {
-                        assert!(matches!(c, Shape2D::Polygon { .. }), "子图元必须是闭合多边形");
+                        assert!(
+                            matches!(c, Shape2D::Polygon { .. }),
+                            "子图元必须是闭合多边形"
+                        );
                     }
                 }
                 other => panic!("第 {i} 条应为 Group，实际 {other:?}"),
@@ -1451,11 +1465,7 @@ mod tests {
         };
         let (from, to) = item.sampled_endpoints();
         for (name, p) in [("from", &from), ("to", &to)] {
-            assert_eq!(
-                p.flatten(0.0).len(),
-                32,
-                "{name} 重采样点数应恒为 samples"
-            );
+            assert_eq!(p.flatten(0.0).len(), 32, "{name} 重采样点数应恒为 samples");
             assert!(
                 !matches!(p.commands.last(), Some(xc_notion::PathCommand::Close)),
                 "{name} 应保持开口（否则首尾会多出一条弦）"

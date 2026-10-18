@@ -169,8 +169,8 @@ fn contour_of(mut points: Vec<Vec2>, force_closed: bool) -> Option<Contour> {
     if points.len() < 2 {
         return None;
     }
-    let duplicated = points.len() >= 3
-        && (points[0] - points[points.len() - 1]).length() <= closed_eps();
+    let duplicated =
+        points.len() >= 3 && (points[0] - points[points.len() - 1]).length() <= closed_eps();
     let closed = force_closed || duplicated;
     if duplicated {
         points.pop();
@@ -199,7 +199,8 @@ fn ellipse_points(center: Vec2, rx: f32, ry: f32, tolerance: f32) -> Vec<Vec2> {
 
 /// `Shape2D` → 轮廓列表（已应用 `transform`；`Path` 额外按 `tolerance` 展平）。
 fn contours_of(shape: &Shape2D, transform: &Transform2D, tolerance: f32) -> Vec<Contour> {
-    let map = |pts: &[Vec2]| -> Vec<Vec2> { pts.iter().map(|p| transform.apply_point(*p)).collect() };
+    let map =
+        |pts: &[Vec2]| -> Vec<Vec2> { pts.iter().map(|p| transform.apply_point(*p)).collect() };
 
     match shape {
         Shape2D::Empty => Vec::new(),
@@ -294,7 +295,11 @@ impl StrokeVertexConstructor<Vertex2D> for StrokeCtor {
         let p = vertex.position_on_path();
         // 保持 lyon 原样：含 miter 缩放，**不归一化**（归一化会在拐角产生错误收缩）。
         let n = vertex.normal();
-        let side = if vertex.side().is_positive() { 1.0 } else { -1.0 };
+        let side = if vertex.side().is_positive() {
+            1.0
+        } else {
+            -1.0
+        };
         Vertex2D {
             position: [p.x, p.y],
             normal: [n.x, n.y],
@@ -338,7 +343,11 @@ fn subdivide_by_step(points: &[Vec2], step: f32, closed: bool) -> Vec<Vec2> {
     let mut out = Vec::with_capacity(points.len() * 2);
     // 首点必须在列首（下面各段只负责"段内插值 + 段端点"）。
     out.push(points[0]);
-    let seg_count = if closed { points.len() } else { points.len() - 1 };
+    let seg_count = if closed {
+        points.len()
+    } else {
+        points.len() - 1
+    };
     for i in 0..seg_count {
         let a = points[i];
         let b = points[(i + 1) % points.len()];
@@ -435,7 +444,12 @@ fn tessellate_custom(
     if let Some(to_path) = data.to_path {
         // 约定：`to_path` 产出**已应用 transform** 的路径。
         let path = to_path(data, transform);
-        return tessellate(&Shape2D::Path(path), &Transform2D::identity(), style, tolerance);
+        return tessellate(
+            &Shape2D::Path(path),
+            &Transform2D::identity(),
+            style,
+            tolerance,
+        );
     }
     Vec::new()
 }
@@ -540,7 +554,10 @@ pub fn position_on_path_of(v: &Vertex2D) -> Vec2 {
 /// 填充顶点 `normal = [0,0]` → 恒等于 `position`。
 pub fn contour_position_of(v: &Vertex2D, stroke_width: f32) -> Vec2 {
     let k = stroke_width * 0.5;
-    Vec2::new(v.position[0] + v.normal[0] * k, v.position[1] + v.normal[1] * k)
+    Vec2::new(
+        v.position[0] + v.normal[0] * k,
+        v.position[1] + v.normal[1] * k,
+    )
 }
 
 /// 顶点三元组的三角形总面积（光栅化面积统计用）。
@@ -749,7 +766,11 @@ mod tests {
         for shape in &cases {
             let thin = &tessellate(shape, &identity(), &style_stroke(2.0), 0.05)[0];
             let thick = &tessellate(shape, &identity(), &style_stroke(8.0), 0.05)[0];
-            assert_eq!(thin.vertices.len(), thick.vertices.len(), "顶点数不得依赖宽度");
+            assert_eq!(
+                thin.vertices.len(),
+                thick.vertices.len(),
+                "顶点数不得依赖宽度"
+            );
             assert_eq!(thin.indices, thick.indices, "索引（拓扑）不得依赖宽度");
             for (a, b) in thin.vertices.iter().zip(&thick.vertices) {
                 assert_eq!(a.position, b.position, "路径点不得依赖宽度");
@@ -781,7 +802,11 @@ mod tests {
             fn new_vertex(&mut self, vertex: StrokeVertex) -> Vertex2D {
                 let p = vertex.position();
                 let n = vertex.normal();
-                let side = if vertex.side().is_positive() { 1.0 } else { -1.0 };
+                let side = if vertex.side().is_positive() {
+                    1.0
+                } else {
+                    -1.0
+                };
                 Vertex2D {
                     position: [p.x, p.y],
                     normal: [n.x, n.y],
@@ -805,7 +830,10 @@ mod tests {
                 },
                 3.0,
             ),
-            (Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(8.0, 5.0))), 2.0),
+            (
+                Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(8.0, 5.0))),
+                2.0,
+            ),
             (
                 Shape2D::Circle {
                     center: Vec2::new(3.0, 4.0),
@@ -873,8 +901,14 @@ mod tests {
         let a_thin = total_area(thin, 2.0);
         let a_thick = total_area(thick, 8.0);
         // 长 10、宽 2 → 20；长 10、宽 8 → 80（butt 端帽不外扩）。
-        assert!((a_thin - 20.0).abs() < 1e-3, "宽 2 面积应为 20，实际 {a_thin}");
-        assert!((a_thick - 80.0).abs() < 1e-3, "宽 8 面积应为 80，实际 {a_thick}");
+        assert!(
+            (a_thin - 20.0).abs() < 1e-3,
+            "宽 2 面积应为 20，实际 {a_thin}"
+        );
+        assert!(
+            (a_thick - 80.0).abs() < 1e-3,
+            "宽 8 面积应为 80，实际 {a_thick}"
+        );
         assert!(
             (a_thick - a_thin * 4.0).abs() < 1e-2,
             "宽度 4 倍 → 面积 4 倍（{a_thin} vs {a_thick}）"
@@ -938,9 +972,12 @@ mod tests {
                     // 参数化后顶点存的是路径点：面积必须按 shader 的偏移公式
                     // 还原轮廓，否则描边三角形会全部退化成 0。
                     for tri in t.indices.chunks_exact(3) {
-                        let a = contour_position_of(&t.vertices[tri[0] as usize], style.stroke_width);
-                        let b = contour_position_of(&t.vertices[tri[1] as usize], style.stroke_width);
-                        let c = contour_position_of(&t.vertices[tri[2] as usize], style.stroke_width);
+                        let a =
+                            contour_position_of(&t.vertices[tri[0] as usize], style.stroke_width);
+                        let b =
+                            contour_position_of(&t.vertices[tri[1] as usize], style.stroke_width);
+                        let c =
+                            contour_position_of(&t.vertices[tri[2] as usize], style.stroke_width);
                         let area = Triangle2D::new(a, b, c).area();
                         assert!(area > 1e-9, "退化三角形 area={area}");
                     }
@@ -987,7 +1024,8 @@ mod tests {
     fn two_subpath_path() -> Path2D {
         let mut p = Path2D::with_capacity(8);
         p.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(10.0, 0.0));
-        p.move_to(Vec2::new(0.0, 100.0)).line_to(Vec2::new(30.0, 100.0));
+        p.move_to(Vec2::new(0.0, 100.0))
+            .line_to(Vec2::new(30.0, 100.0));
         p
     }
 
@@ -995,7 +1033,11 @@ mod tests {
     #[test]
     fn reveal_advance_spans_unit_interval_monotonically() {
         let path = Path2D::from_polyline(
-            &[Vec2::new(0.0, 0.0), Vec2::new(30.0, 0.0), Vec2::new(30.0, 40.0)],
+            &[
+                Vec2::new(0.0, 0.0),
+                Vec2::new(30.0, 0.0),
+                Vec2::new(30.0, 40.0),
+            ],
             false,
         );
         let t = tessellate_reveal(&path, &identity(), &style_stroke(2.0), 0.05, 1.0)
@@ -1008,20 +1050,28 @@ mod tests {
                 v.advance
             );
         }
-        let min = t.vertices.iter().map(|v| v.advance).fold(f32::MAX, f32::min);
-        let max = t.vertices.iter().map(|v| v.advance).fold(f32::MIN, f32::max);
+        let min = t
+            .vertices
+            .iter()
+            .map(|v| v.advance)
+            .fold(f32::MAX, f32::min);
+        let max = t
+            .vertices
+            .iter()
+            .map(|v| v.advance)
+            .fold(f32::MIN, f32::max);
         assert_eq!(min, 0.0, "起点必须为 0");
         assert_eq!(max, 1.0, "终点必须为 1（归一化到实测最大推进量）");
 
         // 按 x 排序（第一段沿 +x）⇒ advance 单调不减。
-        let mut by_x: Vec<(f32, f32)> = t.vertices.iter().map(|v| (v.position[0], v.advance)).collect();
+        let mut by_x: Vec<(f32, f32)> = t
+            .vertices
+            .iter()
+            .map(|v| (v.position[0], v.advance))
+            .collect();
         by_x.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         for w in by_x.windows(2) {
-            assert!(
-                w[1].1 + 1e-6 >= w[0].1,
-                "advance 沿路径不得回退：{:?}",
-                w
-            );
+            assert!(w[1].1 + 1e-6 >= w[0].1, "advance 沿路径不得回退：{:?}", w);
         }
     }
 
@@ -1030,8 +1080,14 @@ mod tests {
     /// ⇒ 区间首尾相接、整体递增，书写顺序是"轮廓依次写出"。
     #[test]
     fn reveal_advance_accumulates_across_subpaths() {
-        let t = tessellate_reveal(&two_subpath_path(), &identity(), &style_stroke(2.0), 0.05, 1.0)
-            .expect("双子路径应产出几何");
+        let t = tessellate_reveal(
+            &two_subpath_path(),
+            &identity(),
+            &style_stroke(2.0),
+            0.05,
+            1.0,
+        )
+        .expect("双子路径应产出几何");
         let (mut a_max, mut b_min, mut b_max) = (f32::MIN, f32::MAX, f32::MIN);
         for v in &t.vertices {
             if v.position[1].abs() < 1e-3 {
@@ -1048,10 +1104,7 @@ mod tests {
         );
         assert!(b_max > a_max, "第二条子路径必须延伸到更后面");
         // 第一段长 10 / 总长 40 ⇒ 分界 ≈ 0.25（子路径间不补"抬笔"距离）。
-        assert!(
-            (a_max - 0.25).abs() < 0.02,
-            "首段应约占 0.25，实际 {a_max}"
-        );
+        assert!((a_max - 0.25).abs() < 0.02, "首段应约占 0.25，实际 {a_max}");
     }
 
     /// 预细分（y：lyon 不细分直线段）：切口精度 = `step`，与"顶点间距"同量级。
@@ -1061,8 +1114,14 @@ mod tests {
     #[test]
     fn reveal_pre_subdivision_bounds_cut_precision() {
         let step = 1.0f32;
-        let t = tessellate_reveal(&two_subpath_path(), &identity(), &style_stroke(2.0), 0.05, step)
-            .expect("双子路径应产出几何");
+        let t = tessellate_reveal(
+            &two_subpath_path(),
+            &identity(),
+            &style_stroke(2.0),
+            0.05,
+            step,
+        )
+        .expect("双子路径应产出几何");
         let mut s: Vec<f32> = t.vertices.iter().map(|v| v.advance).collect();
         s.sort_by(|a, b| a.partial_cmp(b).unwrap());
         s.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -1096,7 +1155,11 @@ mod tests {
         let path = Path2D::from_polyline(&ring, true);
         let t = tessellate_reveal(&path, &identity(), &style_stroke(2.0), 0.05, 1.0)
             .expect("闭合描边应产出几何");
-        let max = t.vertices.iter().map(|v| v.advance).fold(f32::MIN, f32::max);
+        let max = t
+            .vertices
+            .iter()
+            .map(|v| v.advance)
+            .fold(f32::MIN, f32::max);
         assert_eq!(max, 1.0, "闭合轮廓的最大推进量也应归一化到 1");
     }
 
@@ -1128,14 +1191,18 @@ mod tests {
     #[test]
     fn reveal_matches_plain_tessellation_geometry() {
         let path = Path2D::from_polyline(
-            &[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0)],
+            &[
+                Vec2::new(0.0, 0.0),
+                Vec2::new(10.0, 0.0),
+                Vec2::new(10.0, 10.0),
+            ],
             false,
         );
         let style = style_stroke(3.0);
         let plain = &tessellate(&Shape2D::Path(path.clone()), &identity(), &style, 0.05)[0];
         // step 远大于段长 ⇒ 不补点（每段 1 段）。
-        let reveal = tessellate_reveal(&path, &identity(), &style, 0.05, 1e6)
-            .expect("描边路径应产出几何");
+        let reveal =
+            tessellate_reveal(&path, &identity(), &style, 0.05, 1e6).expect("描边路径应产出几何");
         assert_eq!(plain.vertices.len(), reveal.vertices.len());
         assert_eq!(plain.indices, reveal.indices);
         for (a, b) in plain.vertices.iter().zip(&reveal.vertices) {
@@ -1144,7 +1211,6 @@ mod tests {
             assert_eq!(a.advance, b.advance, "两条路径的 s 归一化口径必须一致");
         }
     }
-
 
     // ── Group / Empty ─────────────────────────────────────────────────────
 
@@ -1189,13 +1255,20 @@ mod tests {
     #[test]
     fn circle_approximation_stays_within_tolerance() {
         let (c, r) = (Vec2::new(2.0, -1.0), 5.0f32);
-        let shape = Shape2D::Circle { center: c, radius: r };
+        let shape = Shape2D::Circle {
+            center: c,
+            radius: r,
+        };
         let tol = 0.05;
         let t = &tessellate(&shape, &identity(), &style_stroke(1.0), tol)[0];
         for v in &t.vertices {
             let center = position_on_path_of(v);
             let d = (center - c).length();
-            assert!((d - r).abs() <= tol + 1e-3, "半径偏差 {} (d={d})", (d - r).abs());
+            assert!(
+                (d - r).abs() <= tol + 1e-3,
+                "半径偏差 {} (d={d})",
+                (d - r).abs()
+            );
         }
     }
 
@@ -1265,7 +1338,12 @@ mod tests {
             Rect2D::new(Vec2::ZERO, Vec2::new(4.0, 4.0)),
         )
         .with_to_path(|_, _| Path2D::from_polyline(&[Vec2::ZERO, Vec2::new(4.0, 0.0)], false));
-        let out = tessellate(&Shape2D::Custom(data), &identity(), &style_stroke(1.0), 0.05);
+        let out = tessellate(
+            &Shape2D::Custom(data),
+            &identity(),
+            &style_stroke(1.0),
+            0.05,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, TessKind::Stroke);
     }

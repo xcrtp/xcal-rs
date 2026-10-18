@@ -105,9 +105,7 @@ pub fn serialize_components(components: &Components) -> Result<Vec<TaggedCompone
 ///
 /// **默认绑定**：函数类组件的"名字壳"由 [`crate::math_pod::math_pod`] 按名反查
 /// （内置数学函数无需调用方再手动绑定）。未知名字保持未绑定。
-pub fn deserialize_components(
-    tagged: Vec<TaggedComponent>,
-) -> Result<Components, PersistError> {
+pub fn deserialize_components(tagged: Vec<TaggedComponent>) -> Result<Components, PersistError> {
     let mut components: Components = tagged
         .into_iter()
         .map(|t| crate::contract::deserialize_component(&t.type_name, t.data))

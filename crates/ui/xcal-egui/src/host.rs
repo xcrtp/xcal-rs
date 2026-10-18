@@ -24,21 +24,21 @@ use std::sync::Arc;
 
 use egui::Panel;
 
-use xcal_scene::animation::BindingTable;
-use xcal_scene::contract::WorldView;
-use xcal_scene::director_state::DirectorState;
-use xcal_scene::domain::{
-    ids, CameraCommand, ContentHandle, ContentTextureSpec, InputEvents, LayerBlend,
-    LayerDescriptor, LayerId, LayerKind, SceneEvent, SceneView,
-};
-use xcal_schedule::resource::Resources;
+use xc_notion::Rect2D;
 use xc_object::{Camera2DHandle, Camera3D};
-use xcal_scene::{Curve, TimeState};
 use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, PostFilterChain, RevealQueue, ViewRect,
 };
 use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
-use xc_notion::Rect2D;
+use xcal_scene::animation::BindingTable;
+use xcal_scene::contract::WorldView;
+use xcal_scene::director_state::DirectorState;
+use xcal_scene::domain::{
+    CameraCommand, ContentHandle, ContentTextureSpec, InputEvents, LayerBlend, LayerDescriptor,
+    LayerId, LayerKind, SceneEvent, SceneView, ids,
+};
+use xcal_scene::{Curve, TimeState};
+use xcal_schedule::resource::Resources;
 
 use crate::resources::{UiConfig, ViewportCamera};
 
@@ -294,7 +294,10 @@ impl EguiSceneHost {
                         });
                     }
                     // 拖拽（左/右/中键任一）→ 绕目标公转：向右拖 = 场景向右转。
-                    if i.pointer.primary_down() || i.pointer.secondary_down() || i.pointer.middle_down() {
+                    if i.pointer.primary_down()
+                        || i.pointer.secondary_down()
+                        || i.pointer.middle_down()
+                    {
                         let d = i.pointer.delta();
                         if d != egui::Vec2::ZERO {
                             events.push(SceneEvent::Camera {
@@ -399,7 +402,11 @@ impl EguiSceneHost {
                 ui.separator();
                 // 视口操作目标（K3）：2D / 3D 同屏 ⇒ 由本开关决定拖拽/滚轮操作谁。
                 ui.label("视口操作");
-                ui.radio_value(&mut ui_config.viewport_camera, ViewportCamera::TwoD, "2D 相机（平移/缩放）");
+                ui.radio_value(
+                    &mut ui_config.viewport_camera,
+                    ViewportCamera::TwoD,
+                    "2D 相机（平移/缩放）",
+                );
                 ui.radio_value(
                     &mut ui_config.viewport_camera,
                     ViewportCamera::ThreeDOrbit,
@@ -413,7 +420,10 @@ impl EguiSceneHost {
                 // 2D 相机的驱动方式：分镜（动画推动）还是自由（用户平移缩放）。
                 // 「自由」会把分镜的 2D 相机绑定移出绑定表 —— 否则它每帧无条件重写
                 // center/scale，用户操作同帧就被抹掉（见 `CameraDriveSystem`）。
-                ui.checkbox(&mut ui_config.free_2d_camera, "2D 相机自由（关闭=分镜驱动）");
+                ui.checkbox(
+                    &mut ui_config.free_2d_camera,
+                    "2D 相机自由（关闭=分镜驱动）",
+                );
 
                 ui.separator();
                 // S3-2 验收开关：翻转图层叠放顺序（见 `UiConfig::flip_layer_order`）。
@@ -449,7 +459,7 @@ impl EguiSceneHost {
             *cfg = ui_config.clone();
         }
         // C 线：面板开关 → **合成后滤镜链**（Resource）。全关 ⇒ 空链 ⇒ 渲染层直通。
-        res.insert(ui_config.post_filters());
+        res.insert(crate::resources::post_filters(&ui_config));
         Vec::new()
     }
 
@@ -471,9 +481,15 @@ impl EguiSceneHost {
                 ui.separator();
 
                 // 播放/暂停切换
-                let label = if director.director.playing { "⏸ 暂停" } else { "▶ 播放" };
+                let label = if director.director.playing {
+                    "⏸ 暂停"
+                } else {
+                    "▶ 播放"
+                };
                 if ui.button(label).clicked() {
-                    events.push(SceneEvent::Button { id: ids::PLAY_PAUSE });
+                    events.push(SceneEvent::Button {
+                        id: ids::PLAY_PAUSE,
+                    });
                 }
 
                 // 重新播放：把时间拨回 0 并恢复播放（分镜从头重放）。
@@ -738,19 +754,9 @@ impl EguiSceneHost {
             .map(|q| q.0.clone())
             .unwrap_or_default();
         // 合成后滤镜链（C 线）：空链 ⇒ 渲染层走直通（不建中间纹理、画面逐位不变）。
-        let filters = res
-            .get::<PostFilterChain>()
-            .cloned()
-            .unwrap_or_default();
+        let filters = res.get::<PostFilterChain>().cloned().unwrap_or_default();
         Some(SceneCompositorCallback::new(
-            viewport,
-            gpu_specs,
-            queue_2d,
-            queue_3d,
-            content,
-            morphs,
-            reveals,
-            filters,
+            viewport, gpu_specs, queue_2d, queue_3d, content, morphs, reveals, filters,
         ))
     }
 }
@@ -804,20 +810,18 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xcal_schedule::resource::Resources;
-    use xcal_scene::contract::WorldScene;
     use xc_object::{Camera3D, Framing2D, Projection};
+    use xcal_scene::contract::WorldScene;
+    use xcal_schedule::resource::Resources;
 
     /// 建含 3D 相机的世界（3D 图层来源）。
     fn spawn_3d_camera(world: &mut hecs::World) {
-        world.spawn((
-            Camera3D::new(
-                glam::Vec3::new(0.0, 0.0, 5.0),
-                glam::Vec3::ZERO,
-                glam::Vec3::Y,
-                Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
-            ),
-        ));
+        world.spawn((Camera3D::new(
+            glam::Vec3::new(0.0, 0.0, 5.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+            Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
+        ),));
     }
 
     /// 建含 2D 相机对象的场景 + 其句柄 Resource（P1：相机是场景对象）。
@@ -894,9 +898,11 @@ mod tests {
         let empty_world = hecs::World::new();
         let mut res_stale = Resources::new();
         res_stale.insert(Camera2DHandle::default());
-        assert!(EguiSceneHost::build_scene_view(&empty_world, &res_stale)
-            .layers
-            .is_empty());
+        assert!(
+            EguiSceneHost::build_scene_view(&empty_world, &res_stale)
+                .layers
+                .is_empty()
+        );
     }
 
     /// 2D 图层相机 = 场景里的取景参数（`Framing2D`）绑定 `ViewRect` —— P1-2 的
@@ -905,8 +911,9 @@ mod tests {
     fn scene_view_2d_camera_binds_framing_to_view_rect() {
         let mut world = hecs::World::new();
         let mut scene = WorldScene::new(&mut world);
-        let handle = xc_object::spawn_camera2d(&mut scene, Framing2D::new((2.0, -3.0).into(), 55.0))
-            .expect("Framing2D 已登记");
+        let handle =
+            xc_object::spawn_camera2d(&mut scene, Framing2D::new((2.0, -3.0).into(), 55.0))
+                .expect("Framing2D 已登记");
 
         let mut res = Resources::new();
         res.insert(handle);

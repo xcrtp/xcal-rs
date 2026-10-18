@@ -8,9 +8,9 @@
 // "遍历 + 求值 + 派发"，**不认识任何具体目标**（新增目标零 System 改动）。
 
 use xc_time::{AnimValue, ClockForest};
+use xcal_scene::TimeState;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xcal_scene::TimeState;
 
 use crate::animation::binding::BindingTable;
 use crate::contract::WorldScene;
@@ -25,7 +25,10 @@ impl System for BindingApplySystem {
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         // 先从 ctx.get 取出所有数据（&mut ctx 的借用到此释放），
         // 再独立用 ctx.world 做 &mut query。
-        let t_global = ctx.get::<TimeState>().map(|s| s.elapsed as f64).unwrap_or(0.0);
+        let t_global = ctx
+            .get::<TimeState>()
+            .map(|s| s.elapsed as f64)
+            .unwrap_or(0.0);
         let forest = match ctx.get::<ClockForest>().cloned() {
             Some(f) => f,
             None => return,
@@ -50,15 +53,15 @@ impl System for BindingApplySystem {
 #[cfg(test)]
 mod tests {
     use super::BindingApplySystem;
+    use crate::TimeState;
     use crate::animation::binding::{Binding, BindingTable, SeekKind};
     use crate::animation::target::CircleRadius;
-    use xcal_schedule::resource::Resources;
-    use xc_object::Circle;
-    use xcal_schedule::scheduler::{Phase, Scheduler};
-    use crate::TimeState;
     use hecs::World;
     use xc_notion::Vec3;
+    use xc_object::Circle;
     use xc_time::{ClockForest as XcClockForest, ClockNode, Curve};
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     /// 场景向量（M2.5 后 `xcal_scene::types::Vec2` 就是 `xc_notion::Vec2`（= glam）的转发，
     /// 图元对象用的也是同一类型 —— 原来的 `vec2` / `obj_vec2` 两个包装已被消灭）。
@@ -222,14 +225,21 @@ mod tests {
         sched.init_resources();
 
         let x_at = |sched: &mut Scheduler, t: f32| -> f32 {
-            sched.resources_mut().get_mut::<TimeState>().unwrap().elapsed = t;
+            sched
+                .resources_mut()
+                .get_mut::<TimeState>()
+                .unwrap()
+                .elapsed = t;
             sched.run_frame(0.0);
             sched.world().get::<&Transform>(entity).unwrap().position.x
         };
         assert_eq!(x_at(&mut sched, 0.0), 0.0);
         assert!((x_at(&mut sched, 1.0) - 1.0).abs() < 1e-4, "段内线性插值");
         assert!((x_at(&mut sched, 2.0) - 2.0).abs() < 1e-4, "段末到终值");
-        assert!((x_at(&mut sched, 5.0) - 2.0).abs() < 1e-6, "段外冻结（Hold）");
+        assert!(
+            (x_at(&mut sched, 5.0) - 2.0).abs() < 1e-6,
+            "段外冻结（Hold）"
+        );
     }
 
     /// **改动 1 的行为等价证据**：同一场景里八个 target 各一条绑定，`BindingApplySystem`
@@ -258,14 +268,12 @@ mod tests {
         let mut world = World::new();
         let circle = world.spawn((Circle::new((0.0, 0.0), 1.0),));
         let phase = world.spawn((PhaseAnim::new(0.0, 1.0),));
-        let camera3d = world.spawn((
-            Camera3D::new(
-                Vec3::ZERO,
-                Vec3::ZERO,
-                Vec3::Y,
-                Projection::perspective(1.0, 1.0, 0.1, 100.0),
-            ),
-        ));
+        let camera3d = world.spawn((Camera3D::new(
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::Y,
+            Projection::perspective(1.0, 1.0, 0.1, 100.0),
+        ),));
         let morph = world.spawn((MorphShape::new(
             xc_notion::Path2D::new(),
             xc_notion::Path2D::new(),
@@ -374,7 +382,10 @@ mod tests {
         let w = sched.world();
         assert_eq!(w.get::<&Circle>(circle).unwrap().radius, 0.5);
         assert_eq!(w.get::<&PhaseAnim>(phase).unwrap().phase, 1.0);
-        assert_eq!(w.get::<&Camera3D>(camera3d).unwrap().eye, Vec3::new(0.5, 1.0, 1.5));
+        assert_eq!(
+            w.get::<&Camera3D>(camera3d).unwrap().eye,
+            Vec3::new(0.5, 1.0, 1.5)
+        );
         assert_eq!(w.get::<&MorphShape>(morph).unwrap().t, 0.5);
         {
             let f = w.get::<&Framing2D>(camera2d).unwrap();

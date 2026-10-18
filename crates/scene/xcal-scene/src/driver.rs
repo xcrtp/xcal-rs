@@ -391,10 +391,7 @@ mod tests {
             Broadcast::<DriverEvent>::signatures()[0]
                 .qualified()
                 .to_string(),
-            format!(
-                "xc_pod::broadcast::publish({}) -> ()",
-                event_type_name()
-            )
+            format!("xc_pod::broadcast::publish({}) -> ()", event_type_name())
         );
     }
 }

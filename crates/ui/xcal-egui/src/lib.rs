@@ -21,12 +21,35 @@
 // 图层合成回调（SceneCompositorCallback）位于 xcal-render-backends。
 // S4.1：Painter2D 的 egui 回放实现与旧 CPU 2D 管线已删除。
 
+pub mod frame;
+pub mod health;
 pub mod host;
+pub mod param_panel;
+pub mod progress;
 pub mod resources;
 pub mod systems;
 pub mod time_control;
 
+pub use frame::{SceneFrame, install_visuals, window_options};
+pub use health::HealthOverlay;
 pub use host::EguiSceneHost;
+pub use param_panel::ParamPanelSystem;
+pub use progress::FrameProgress;
 pub use resources::{TimeState, UiConfig};
 pub use systems::{AxesRefreshSystem, FunctionGraphRefreshSystem};
 pub use time_control::TimeControlSystem;
+
+/// **UI 层 System 注册点**（A6：注册序列不再住在 app）。
+///
+/// Phase 分配与迁入前逐位一致：
+/// - `LogicUpdate`：TimeControl（R=InputEvents，W=DirectorState）、
+///   ParamPanel（R=InputEvents，W=BindingTable）；
+/// - `Prepare`：AxesRefresh + FunctionGraphRefresh（几何在场景对象层）。
+pub fn register_ui_systems(scheduler: &mut xcal_schedule::scheduler::Scheduler) {
+    use xcal_schedule::scheduler::Phase;
+
+    scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
+    scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
+    scheduler.add_system(Phase::Prepare, AxesRefreshSystem);
+    scheduler.add_system(Phase::Prepare, FunctionGraphRefreshSystem);
+}

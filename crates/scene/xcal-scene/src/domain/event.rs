@@ -49,8 +49,14 @@ pub mod ids {
 #[derive(Debug, Clone, Copy)]
 pub enum SceneEvent {
     // ─── 视口拾取（坐标已换算为场景坐标；非相机操作）───
-    ViewportHover { layer: LayerId, scene_pos: Vec2 },
-    ViewportClick { layer: LayerId, scene_pos: Vec2 },
+    ViewportHover {
+        layer: LayerId,
+        scene_pos: Vec2,
+    },
+    ViewportClick {
+        layer: LayerId,
+        scene_pos: Vec2,
+    },
 
     // ─── 相机命令（语义化，不含 center/scale/eye 等字段名）───
     // 命令如何改变相机状态由相机控制器按 CameraMode 决定（PanZoom/Orbit/Path）。
@@ -60,9 +66,17 @@ pub enum SceneEvent {
     },
 
     // ─── 控件事件（按 ID 标识，场景侧认不出 egui）───
-    Toggle { id: WidgetId, value: bool },
-    Slider { id: WidgetId, value: f32 },
-    Button { id: WidgetId },
+    Toggle {
+        id: WidgetId,
+        value: bool,
+    },
+    Slider {
+        id: WidgetId,
+        value: f32,
+    },
+    Button {
+        id: WidgetId,
+    },
 }
 
 use crate::domain::view::LayerId;
@@ -123,7 +137,9 @@ mod tests {
             layer: LayerId(0),
             command: crate::domain::CameraCommand::Zoom { factor: 1.1 },
         });
-        events.push(SceneEvent::Button { id: ids::PLAY_PAUSE });
+        events.push(SceneEvent::Button {
+            id: ids::PLAY_PAUSE,
+        });
         events.push(SceneEvent::Slider {
             id: ids::SPEED,
             value: 2.0,

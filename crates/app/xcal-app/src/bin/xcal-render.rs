@@ -22,7 +22,8 @@ use std::process::{Child, Command, Stdio};
 use xc_notion::{Rect2D, Vec2};
 use xcal_app::export::{ExportError, target_pix_fmt, to_rgba, write_png};
 use xcal_app::{ScriptLanguage, build_script_runtime, language_from_path};
-use xcal_egui::EguiSceneHost;
+use xcal_egui as ui;
+use ui::EguiSceneHost;
 use xcal_render::ViewRect;
 use xcal_render_backends::{RenderContext, ScreenParams, StandardBackends, render_frame_headless};
 use xcal_scene::DriverCommand;
@@ -60,6 +61,16 @@ impl Args {
                         raw.get(i).ok_or("--frames 需要一个目录参数")?,
                     ));
                 }
+                // 与位置参数等价（计划 A0 的验收命令使用 `--script PATH`）。
+                "--script" => {
+                    i += 1;
+                    if script.is_some() {
+                        return Err("脚本路径重复（--script 与位置参数只能给一个）".to_string());
+                    }
+                    script = Some(PathBuf::from(
+                        raw.get(i).ok_or("--script 需要一个脚本路径")?,
+                    ));
+                }
                 "--fps" => {
                     i += 1;
                     fps = raw
@@ -79,10 +90,8 @@ impl Args {
                         .split_once('x')
                         .ok_or_else(|| "--size 必须是 WxH（如 640x480）".to_string())?;
                     size = (
-                        w.parse()
-                            .map_err(|_| "--size 宽度不是数字".to_string())?,
-                        h.parse()
-                            .map_err(|_| "--size 高度不是数字".to_string())?,
+                        w.parse().map_err(|_| "--size 宽度不是数字".to_string())?,
+                        h.parse().map_err(|_| "--size 高度不是数字".to_string())?,
                     );
                 }
                 other if other.starts_with("--") => {
@@ -127,10 +136,9 @@ fn run() -> Result<(), String> {
         );
     }
 
-    let ctx = RenderContext::headless()
-        .map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
-    let runtime =
-        build_script_runtime(ctx.clone(), source, language).map_err(|e| e.to_string())?;
+    let ctx =
+        RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
+    let runtime = build_script_runtime(ctx.clone(), source, language).map_err(|e| e.to_string())?;
 
     let (width, height) = args.size;
     // headless 没有 egui 布局：视口 = 整幅画面（GUI 里由 `update_view_rect` 写入）。
@@ -177,10 +185,8 @@ fn run() -> Result<(), String> {
         let callback = runtime
             .driver
             .with_scheduler(|scheduler| {
-                let view = EguiSceneHost::build_scene_view(
-                    scheduler.world(),
-                    scheduler.resources(),
-                );
+                let view =
+                    EguiSceneHost::build_scene_view(scheduler.world(), scheduler.resources());
                 EguiSceneHost::build_render_callback(&view, scheduler.resources())
             })
             .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
@@ -297,11 +303,7 @@ impl Ffmpeg {
     }
 
     fn write(&mut self, pixels: &[u8]) -> Result<(), String> {
-        let stdin = self
-            .child
-            .stdin
-            .as_mut()
-            .ok_or("ffmpeg stdin 不可用")?;
+        let stdin = self.child.stdin.as_mut().ok_or("ffmpeg stdin 不可用")?;
         stdin
             .write_all(pixels)
             .map_err(|e| format!("写入 ffmpeg 失败：{e}"))
@@ -314,7 +316,10 @@ impl Ffmpeg {
             .wait()
             .map_err(|e| format!("等待 ffmpeg 失败：{e}"))?;
         if !status.success() {
-            return Err(format!("ffmpeg 退出码 {status}（输出 {}）", self.out.display()));
+            return Err(format!(
+                "ffmpeg 退出码 {status}（输出 {}）",
+                self.out.display()
+            ));
         }
         eprintln!("完成：{}", self.out.display());
         Ok(())

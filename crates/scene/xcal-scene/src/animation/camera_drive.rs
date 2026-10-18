@@ -27,14 +27,16 @@
 // `Scheduler::add_system` 在 debug 下做静态借用冲突检查：**同相位内不能有两个
 // `BindingTable` 写者**（3D 让位最初就是踩这个坑崩的，见 ARCHITECTURE「K 线实测坑」）。
 // 两个相机要让位的是同一张表 ⇒ 必须由**一个** System 原子地完成两台相机的让位判定。
+//
+// A4：本 System 是**场景 system**，从 `xcal-app` 归位到此；app 只负责注册。
 
 use xc_object::{Camera2DHandle, Camera3DHandle};
-use xcal_egui::resources::{UiConfig, ViewportCamera};
-use xcal_scene::animation::{Binding, BindingTable};
-use xcal_scene::contract::{ObjectId, entity_of};
-use xcal_scene::domain::CameraMode;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
+
+use crate::animation::{Binding, BindingTable};
+use crate::contract::{ObjectId, entity_of};
+use crate::domain::{CameraMode, UiConfig, ViewportCamera};
 
 /// 按 `UiConfig` 决定两台相机"由分镜驱动还是由交互驱动"，并做绑定让位/复位。
 pub struct CameraDriveSystem {
@@ -122,7 +124,7 @@ impl System for CameraDriveSystem {
 
 /// 把 `mode` 写到 `id` 指向的相机对象上（对象不存在则静默跳过）。
 ///
-/// 只在**变化时**写组件：`xcal-scene` 的相机模式默认是 `PanZoom`（未挂组件时的取值），
+/// 只在**变化时**写组件：本层的相机模式默认是 `PanZoom`（未挂组件时的取值），
 /// 但这里显式落组件，让"谁驱动"这件事在场景数据里可查（而不是靠缺省）。
 fn write_mode(ctx: &mut ExecutorContext<'_>, id: ObjectId, mode: CameraMode) {
     let Some(entity) = entity_of(id) else {
@@ -143,10 +145,11 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use xc_object::{Camera3D, Framing2D, Projection};
-    use xcal_scene::animation::{Camera2DFraming, CameraEye, SeekKind};
-    use xcal_scene::{ClockForest, ClockId, ClockNode, Curve};
     use xcal_schedule::resource::Resources;
     use xcal_schedule::scheduler::{Phase, Scheduler};
+
+    use crate::animation::{Camera2DFraming, CameraEye, SeekKind};
+    use crate::{ClockForest, ClockId, ClockNode, Curve};
 
     /// 测试脚手架：1 台 2D 相机 + 1 台 3D 相机 + 分镜 2D 绑定×2 + 自动轨道×1。
     struct Fixture {
@@ -178,13 +181,13 @@ mod tests {
                     clock: c_center,
                     curve: Curve::Keyframes {
                         keys: vec![
-                            (0.0, xcal_scene::AnimValue::Vec2((0.0, 0.0).into())),
-                            (1.0, xcal_scene::AnimValue::Vec2((1.0, 1.0).into())),
+                            (0.0, crate::AnimValue::Vec2((0.0, 0.0).into())),
+                            (1.0, crate::AnimValue::Vec2((1.0, 1.0).into())),
                         ],
-                        interpolation: xcal_scene::Interp::Linear,
+                        interpolation: crate::Interp::Linear,
                     },
                     target: Arc::new(Camera2DFraming {
-                        id: xcal_scene::contract::object_id_of(cam2d),
+                        id: crate::contract::object_id_of(cam2d),
                     }),
                     seek_kind: SeekKind::O1,
                 },
@@ -192,13 +195,13 @@ mod tests {
                     clock: c_scale,
                     curve: Curve::Keyframes {
                         keys: vec![
-                            (0.0, xcal_scene::AnimValue::Scalar(40.0)),
-                            (1.0, xcal_scene::AnimValue::Scalar(110.0)),
+                            (0.0, crate::AnimValue::Scalar(40.0)),
+                            (1.0, crate::AnimValue::Scalar(110.0)),
                         ],
-                        interpolation: xcal_scene::Interp::Linear,
+                        interpolation: crate::Interp::Linear,
                     },
                     target: Arc::new(Camera2DFraming {
-                        id: xcal_scene::contract::object_id_of(cam2d),
+                        id: crate::contract::object_id_of(cam2d),
                     }),
                     seek_kind: SeekKind::O1,
                 },
@@ -212,7 +215,7 @@ mod tests {
                     initial_angle: 0.0,
                 },
                 target: Arc::new(CameraEye {
-                    id: xcal_scene::contract::object_id_of(cam3d),
+                    id: crate::contract::object_id_of(cam3d),
                 }),
                 seek_kind: SeekKind::O1,
             };
@@ -225,8 +228,8 @@ mod tests {
 
             let mut res = Resources::new();
             res.insert(cfg);
-            res.insert(Camera2DHandle(xcal_scene::contract::object_id_of(cam2d)));
-            res.insert(Camera3DHandle(xcal_scene::contract::object_id_of(cam3d)));
+            res.insert(Camera2DHandle(crate::contract::object_id_of(cam2d)));
+            res.insert(Camera3DHandle(crate::contract::object_id_of(cam3d)));
             res.insert(table);
 
             let mut sched = Scheduler::new(world, res);
@@ -345,13 +348,6 @@ mod tests {
     /// 句柄失效（无相机对象）⇒ 不 panic；绑定让位仍生效。
     #[test]
     fn missing_cameras_are_noop() {
-        let camera = Camera3D::new(
-            glam::Vec3::ZERO,
-            glam::Vec3::new(0.0, 0.0, -1.0),
-            glam::Vec3::Y,
-            Projection::perspective(1.0, 1.0, 0.1, 100.0),
-        );
-        let _ = camera;
         let mut res = Resources::new();
         res.insert(UiConfig {
             free_2d_camera: true,
@@ -363,7 +359,7 @@ mod tests {
             clock: ClockId(0),
             curve: Curve::Phase { omega: 1.0 },
             target: Arc::new(CameraEye {
-                id: xcal_scene::contract::ObjectId::DANGLING,
+                id: crate::contract::ObjectId::DANGLING,
             }),
             seek_kind: SeekKind::O1,
         };

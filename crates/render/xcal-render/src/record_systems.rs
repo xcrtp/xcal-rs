@@ -41,25 +41,33 @@
 // 的**内联 hecs 查询**（`world.query::<..>()`）随归位一并改为契约层查询
 // —— 这是把 "换场景实现要整体重写" 变成 "只需换适配器"。
 
-use xcal_schedule::context::ExecutorContext;
-use xcal_schedule::system::System;
+use std::sync::Arc;
+
 use xcal_scene::contract::{SceneRead, WorldView};
 use xcal_scene::domain::ContentTextureSpec;
-use xcal_scene::scene::components::{ContentTextureItem, MorphShape, Reveal};
+use xcal_scene::scene::components::{
+    ContentTextureItem, Material3D, MeshGeometry, MorphShape, Reveal,
+};
+use xcal_schedule::context::ExecutorContext;
+use xcal_schedule::system::System;
 
-use xc_object::{Camera2DHandle, Path};
+use xc_object::{Camera2DHandle, Path, Transform};
 
 use crate::draw::{
     ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
     push_reveal_item, record_path_stroke, record_scene_tagged, visible_for,
 };
+use crate::draw_queue_3d::DrawQueue3D;
 use crate::view_rect::ViewRect;
 use xc_render_ir::StrokeSolid;
 // N5：组级开关（可缺席资源 ⇒ 缺席 = 所有组可见）。
 use xc_scene_contract::GroupVisibility;
 
 /// 本帧的相机（取景参数 + 视口矩形）解析；句柄失效 / 无相机对象 ⇒ `None`。
-fn resolve_camera(ctx: &mut ExecutorContext<'_>, rect: xc_notion::Rect2D) -> Option<xc_object::Camera2D> {
+fn resolve_camera(
+    ctx: &mut ExecutorContext<'_>,
+    rect: xc_notion::Rect2D,
+) -> Option<xc_object::Camera2D> {
     let handle = *ctx.get::<Camera2DHandle>()?;
     let world = ctx.borrow_world();
     handle.resolve(&WorldView::new(world), rect)
@@ -95,13 +103,7 @@ impl System for SceneRecordSystem {
         ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, queue| {
             // `record_scene_tagged` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
             // `WorldView` 接入 —— 渲染管线不认识 hecs（不可变借用，渲染只需要读）。
-            record_scene_tagged(
-                &WorldView::new(world),
-                &camera,
-                camera_tag,
-                &groups,
-                queue,
-            );
+            record_scene_tagged(&WorldView::new(world), &camera, camera_tag, &groups, queue);
         });
     }
 }
@@ -248,20 +250,67 @@ impl System for ContentTextureRecordSystem {
     }
 }
 
+// ─── SceneRecord3DSystem（A6：从 app 归位到渲染层）─────────────────────────
+
+/// 3D 图层录制（RenderCommit）：每帧清空 [`DrawQueue3D`]，把世界中的全部
+/// `Arc<MeshGeometry>`（带可选 [`Material3D`] 与可选 [`Transform`]）录进队列。
+///
+/// 几何以 `Arc` 持有：此处仅克隆引用计数，不再深拷贝顶点数据。
+pub struct SceneRecord3DSystem;
+impl System for SceneRecord3DSystem {
+    type Reads = ();
+    type Writes = (DrawQueue3D,);
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        ctx.with_world_and_resource_mut::<DrawQueue3D, _>(|world, queue| {
+            queue.clear();
+            let scene = WorldView::new(world);
+            // 先收集（读借用），再统一入队（写借用已由 `queue` 独占）。
+            let mut items = Vec::new();
+            scene.for_each::<Arc<MeshGeometry>>(|id, mesh| {
+                let material = scene
+                    .with::<Material3D, _>(id, |material| *material)
+                    .unwrap_or_default();
+                let model = scene
+                    .with::<Transform, _>(id, |transform| transform.matrix())
+                    .unwrap_or(glam::Mat4::IDENTITY);
+                items.push((Arc::clone(mesh), model, material));
+            });
+            for (mesh, model, material) in items {
+                queue.draw_mesh(mesh, model, material);
+            }
+        });
+    }
+}
+
+/// **唯一的渲染录制注册点**（A6：注册序列不再住在 app）。
+///
+/// 五个 System 的写集（`DrawQueue` / `ContentTextureQueue` / `MorphQueue` /
+/// `RevealQueue` / `DrawQueue3D`）互不相交，可同相位注册。
+pub fn register_record_systems(scheduler: &mut xcal_schedule::scheduler::Scheduler) {
+    use xcal_schedule::scheduler::Phase;
+
+    scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
+    scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+    scheduler.add_system(Phase::RenderCommit, MorphRecordSystem);
+    scheduler.add_system(Phase::RenderCommit, RevealRecordSystem);
+    scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // ⚠️ 测试用 `hecs::World`（Scheduler 的容器就是它）——`hecs` 只在 **dev-dependencies**，
     // 库本体（M3-7 纪律：本 crate 不认识 hecs）不受影响。
     use hecs::World;
-    use xcal_schedule::resource::Resources;
-    use xcal_schedule::scheduler::{Phase, Scheduler};
-    use xcal_scene::contract::{GroupId, Visibility, WorldScene};
-    use xcal_scene::scene::components::TextureHandle;
-    use xcal_scene::types::Vec2;
     use xc_notion::{Path2D, PathCommand, Rect2D};
     use xc_object::{Circle, Framing2D};
     use xc_render_ir::Opacity;
+    use xcal_scene::contract::{GroupId, Visibility, WorldScene};
+    use xcal_scene::scene::components::TextureHandle;
+    use xcal_scene::types::Vec2;
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     /// 建一个含 2D 相机对象的场景（取景为 `framing`），返回世界与句柄。
     fn world_with_camera(framing: Framing2D) -> (World, Camera2DHandle) {
@@ -291,10 +340,7 @@ mod tests {
             StrokeSolid::new(2.0, (255, 0, 0, 255)),
         ));
 
-        let mut res = resources_with(
-            Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)),
-            handle,
-        );
+        let mut res = resources_with(Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)), handle);
         res.insert(DrawQueue::new());
 
         let mut sched = Scheduler::new(world, res);
@@ -337,17 +383,18 @@ mod tests {
     fn morph_record_emits_constant_endpoints_and_t() {
         let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
         let path = Path2D::from_polyline(
-            &[Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)],
+            &[
+                Vec2::new(-1.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 1.0),
+            ],
             true,
         );
         let mut morph = MorphShape::new(path.clone(), path);
         morph.t = 0.25;
         world.spawn((morph, StrokeSolid::new(2.0, (0, 255, 0, 255))));
 
-        let mut res = resources_with(
-            Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)),
-            handle,
-        );
+        let mut res = resources_with(Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)), handle);
         res.insert(MorphQueue::default());
 
         let mut sched = Scheduler::new(world, res);
@@ -504,7 +551,11 @@ mod tests {
         let q = sched.resources().get::<MorphQueue>().unwrap();
         assert_eq!(q.0.len(), 1, "不可见对象不录");
         let stroke = q.0[0].style.stroke.expect("形变项应有描边样式");
-        assert_eq!((stroke.r(), stroke.g(), stroke.b()), (255, 0, 0), "rgb 不动");
+        assert_eq!(
+            (stroke.r(), stroke.g(), stroke.b()),
+            (255, 0, 0),
+            "rgb 不动"
+        );
         assert_eq!(stroke.a(), 128, "opacity = 0.5 ⇒ alpha 减半");
     }
 

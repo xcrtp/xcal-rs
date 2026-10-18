@@ -73,7 +73,11 @@ fn styled_path_to_cmd(p: &StyledPath, transform: Transform2D, scale: f32) -> Con
         stroke_width: p.stroke.as_ref().map(|s| s.width * scale).unwrap_or(0.0),
         space: MeasureSpace::World,
     };
-    ContentDrawCmd { shape, style, transform }
+    ContentDrawCmd {
+        shape,
+        style,
+        transform,
+    }
 }
 
 #[cfg(test)]
@@ -102,8 +106,7 @@ mod tests {
         let p = StyledPath::filled(path, Color32::BLACK).with_anchor(Span::new(0, 1));
         let ir = make_ir(12.0, vec![p]);
 
-        let cmds: Vec<ContentDrawCmd> =
-            ir_to_draw_cmds(&ir, 24.0, Vec2::new(3.0, 3.0)).collect();
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 24.0, Vec2::new(3.0, 3.0)).collect();
         assert_eq!(cmds.len(), 1);
         // 校验：shape 是 Path。
         let bounds = cmds[0].shape.bounds().unwrap();
@@ -111,8 +114,16 @@ mod tests {
         // 校验 transform：scale 2，再 translate (3,3)。
         // 直接乘积：点 (6, 6) → 先 scale 2 → (12, 12)；再 +3 → (15, 15)。
         let result = cmds[0].transform.apply_point(Vec2::new(6.0, 6.0));
-        assert!((result.x - 15.0).abs() < 1e-4, "transformed x = {}", result.x);
-        assert!((result.y - 15.0).abs() < 1e-4, "transformed y = {}", result.y);
+        assert!(
+            (result.x - 15.0).abs() < 1e-4,
+            "transformed x = {}",
+            result.x
+        );
+        assert!(
+            (result.y - 15.0).abs() < 1e-4,
+            "transformed y = {}",
+            result.y
+        );
     }
 
     /// fill + stroke 字段一一对应；无 stroke 时 stroke_width 为 0。
@@ -121,7 +132,8 @@ mod tests {
         let fill = Color32::from_rgba(1, 2, 3, 4);
         let stroke = Stroke2D::new(Color32::from_rgba(5, 6, 7, 8), 1.5);
         let mut path = Path2D::new();
-        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(2.0, 2.0));
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 2.0));
         let p = StyledPath {
             path,
             fill: Some(fill),
@@ -129,8 +141,7 @@ mod tests {
             anchor: None,
         };
         let ir = make_ir(10.0, vec![p]);
-        let cmds: Vec<ContentDrawCmd> =
-            ir_to_draw_cmds(&ir, 10.0, Vec2::ZERO).collect();
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 10.0, Vec2::ZERO).collect();
         let s = &cmds[0].style;
         assert_eq!(s.fill, Some(fill));
         assert_eq!(s.stroke, Some(stroke.color));
@@ -144,14 +155,19 @@ mod tests {
     #[test]
     fn stroke_width_scales_to_world_units() {
         let mut path = Path2D::new();
-        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(2.0, 0.0));
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0));
         let p = StyledPath::stroked(path, Stroke2D::new(Color32::BLACK, 2.0));
         let ir = make_ir(12.0, vec![p]);
 
         // target = 6 → scale = 0.5 → 2.0pt × 0.5 = 1.0 世界单位
         let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 6.0, Vec2::ZERO).collect();
         let s = &cmds[0].style;
-        assert!((s.stroke_width - 1.0).abs() < 1e-6, "got {}", s.stroke_width);
+        assert!(
+            (s.stroke_width - 1.0).abs() < 1e-6,
+            "got {}",
+            s.stroke_width
+        );
         assert_eq!(s.space, MeasureSpace::World);
 
         // 数值校验（计划 §3.6）：nominal=12 / target=1.3 → s≈0.1083；
@@ -176,7 +192,8 @@ mod tests {
     #[test]
     fn no_stroke_yields_zero_width() {
         let mut path = Path2D::new();
-        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(2.0, 0.0));
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(2.0, 0.0));
         let ir = make_ir(12.0, vec![StyledPath::filled(path, Color32::BLACK)]);
         let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
         assert_eq!(cmds[0].style.stroke_width, 0.0);
@@ -186,10 +203,10 @@ mod tests {
     #[test]
     fn zero_nominal_font_size_preserves_scale_1() {
         let mut path = Path2D::new();
-        path.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(1.0, 0.0));
+        path.move_to(Vec2::new(0.0, 0.0))
+            .line_to(Vec2::new(1.0, 0.0));
         let ir = make_ir(0.0, vec![StyledPath::filled(path, Color32::BLACK)]);
-        let cmds: Vec<ContentDrawCmd> =
-            ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
         // scale = 1.0（nominal=0 时退化保护）
         let v1 = cmds[0].transform.apply_point(Vec2::new(3.0, 4.0));
         assert!((v1.x - 3.0).abs() < 1e-6);
@@ -201,14 +218,15 @@ mod tests {
     fn empty_ir_produces_no_cmds() {
         // items 为空
         let ir = make_ir(12.0, vec![]);
-        let cmds: Vec<ContentDrawCmd> =
-            ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
+        let cmds: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir, 24.0, Vec2::ZERO).collect();
         assert!(cmds.is_empty());
 
         // items 非空但路径退化（零面积 bounds）
-        let ir2 = make_ir(12.0, vec![StyledPath::filled(Path2D::new(), Color32::BLACK)]);
-        let cmds2: Vec<ContentDrawCmd> =
-            ir_to_draw_cmds(&ir2, 24.0, Vec2::ZERO).collect();
+        let ir2 = make_ir(
+            12.0,
+            vec![StyledPath::filled(Path2D::new(), Color32::BLACK)],
+        );
+        let cmds2: Vec<ContentDrawCmd> = ir_to_draw_cmds(&ir2, 24.0, Vec2::ZERO).collect();
         assert!(cmds2.is_empty(), "零面积 bounds 应早退");
     }
 }

@@ -1,5 +1,5 @@
-use eframe::egui;
 use xcal_app::{App, SceneChoice};
+use xcal_egui as ui;
 
 /// 2D 场景选择：`--demo`（或 `--capability-demo`）/ 环境变量 `XCAL_DEMO=1` ⇒ 能力 demo；
 /// `--script` ⇒ 用 Lua 脚本编排最小分镜；`--python` ⇒ 用 Python 脚本编排同一分镜。
@@ -36,14 +36,9 @@ fn main() -> eframe::Result<()> {
 
     let choice = scene_choice();
 
-    let options = eframe::NativeOptions {
-        renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]),
-        ..Default::default()
-    };
     eframe::run_native(
         "xcal",
-        options,
+        ui::window_options(),
         Box::new(move |cc| Ok(Box::new(App::new_with_scene(cc, choice)?))),
     )
 }

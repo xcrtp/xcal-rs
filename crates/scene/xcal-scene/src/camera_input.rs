@@ -28,11 +28,9 @@
 // 且各模式互不重叠）；将来出现"多个 2D 视口各自一台相机"时才需要 layer→相机 映射。
 
 use xc_notion::Vec3;
+use xc_object::{Camera2DHandle, Camera3D, Camera3DHandle, FPS_PITCH_LIMIT, FpsView, Framing2D};
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
-use xc_object::{
-    Camera2DHandle, Camera3D, Camera3DHandle, FPS_PITCH_LIMIT, FpsView, Framing2D,
-};
 
 use crate::contract::entity_of;
 use crate::domain::{CameraCommand, CameraMode, InputEvents, SceneEvent};
@@ -233,12 +231,12 @@ impl System for CameraInputSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::LayerId;
     use crate::TimeState;
-    use xcal_schedule::resource::Resources;
-    use xcal_schedule::scheduler::{Phase, Scheduler};
+    use crate::domain::LayerId;
     use xc_object::Projection;
     use xc_scene_contract::ObjectId;
+    use xcal_schedule::resource::Resources;
+    use xcal_schedule::scheduler::{Phase, Scheduler};
 
     fn cam_zoom(factor: f32) -> SceneEvent {
         SceneEvent::Camera {
@@ -301,7 +299,10 @@ mod tests {
     }
 
     /// 建一个含 3D 相机对象的场景 + 句柄（`CameraMode` + 可选 `FpsView`）。
-    fn world_with_camera3d(mode: CameraMode, fps: Option<FpsView>) -> (hecs::World, Camera3DHandle) {
+    fn world_with_camera3d(
+        mode: CameraMode,
+        fps: Option<FpsView>,
+    ) -> (hecs::World, Camera3DHandle) {
         let mut world = hecs::World::new();
         let camera = Camera3D::new(
             Vec3::new(0.0, 0.0, 5.0),
@@ -352,7 +353,12 @@ mod tests {
     fn panzoom_zoom_is_clamped() {
         let (world, h2d) = world_with_camera(None);
         let entity = entity_of(h2d.0).unwrap();
-        let sched = run(world, h2d, Camera3DHandle::default(), vec![cam_zoom(1000.0)]);
+        let sched = run(
+            world,
+            h2d,
+            Camera3DHandle::default(),
+            vec![cam_zoom(1000.0)],
+        );
         let scale = sched.world().get::<&Framing2D>(entity).unwrap().scale;
         assert!((scale - 500.0).abs() < 1e-4, "scale = {scale}");
     }
@@ -362,7 +368,12 @@ mod tests {
     fn panzoom_applies_pan_to_scene_object() {
         let (world, h2d) = world_with_camera(None);
         let entity = entity_of(h2d.0).unwrap();
-        let sched = run(world, h2d, Camera3DHandle::default(), vec![cam_pan(2.0, -1.0)]);
+        let sched = run(
+            world,
+            h2d,
+            Camera3DHandle::default(),
+            vec![cam_pan(2.0, -1.0)],
+        );
         let view = sched.world().get::<&Framing2D>(entity).unwrap();
         assert!((view.center.x - 2.0).abs() < 1e-5);
         assert!((view.center.y + 1.0).abs() < 1e-5);
@@ -406,9 +417,7 @@ mod tests {
                 delta_yaw: 1.0,
                 delta_pitch: 0.5,
             },
-            CameraCommand::Move {
-                delta: Vec3::ONE,
-            },
+            CameraCommand::Move { delta: Vec3::ONE },
         ] {
             apply_pan_zoom(&mut view, cmd);
         }
@@ -524,7 +533,10 @@ mod tests {
         );
         let camera = sched.world().get::<&Camera3D>(entity).unwrap();
         let dist = (camera.eye - camera.target).length();
-        assert!((dist - 4.0).abs() < 1e-3, "Dolly 应把距离从 5 收到 4，实际 {dist}");
+        assert!(
+            (dist - 4.0).abs() < 1e-3,
+            "Dolly 应把距离从 5 收到 4，实际 {dist}"
+        );
         assert!(camera.eye.y > 1e-3, "Orbit 的 +pitch 应把 eye 抬起来");
     }
 
@@ -580,12 +592,19 @@ mod tests {
                 delta: Vec3::new(0.0, 0.0, 2.0), // 前进 2
             },
         );
-        assert!((camera.eye.z - 3.0).abs() < 1e-4, "前向应使 z 减 2，实际 {}", camera.eye.z);
+        assert!(
+            (camera.eye.z - 3.0).abs() < 1e-4,
+            "前向应使 z 减 2，实际 {}",
+            camera.eye.z
+        );
         assert!(
             ((camera.target - camera.eye).normalize() - dir0).length() < 1e-4,
             "Move 不改变朝向"
         );
-        assert!(((camera.target - camera.eye).length() - 1.0).abs() < 1e-4, "target 跟随 eye");
+        assert!(
+            ((camera.target - camera.eye).length() - 1.0).abs() < 1e-4,
+            "target 跟随 eye"
+        );
 
         // 右移：+X（朝向 -Z 时 right = forward × Y = -Z × Y = +X）。
         let eye1 = camera.eye;
@@ -596,7 +615,11 @@ mod tests {
                 delta: Vec3::new(1.0, 0.0, 0.0),
             },
         );
-        assert!((camera.eye.x - (eye1.x + 1.0)).abs() < 1e-4, "eye = {:?}", camera.eye);
+        assert!(
+            (camera.eye.x - (eye1.x + 1.0)).abs() < 1e-4,
+            "eye = {:?}",
+            camera.eye
+        );
     }
 
     /// FPS 相机经 System 消费 Look / Move，且**朝向状态跨帧累积**（回写组件）。
@@ -605,7 +628,12 @@ mod tests {
         // 第 1 帧：只转头。初始朝向 = -Z ⇒ yaw = -π/2、pitch = 0。
         let (world, h3d) = world_with_camera3d(CameraMode::FPS, None);
         let entity = entity_of(h3d.0).unwrap();
-        let sched = run(world, Camera2DHandle::default(), h3d, vec![cam_look(0.3, 0.0)]);
+        let sched = run(
+            world,
+            Camera2DHandle::default(),
+            h3d,
+            vec![cam_look(0.3, 0.0)],
+        );
         let fps = *sched.world().get::<&FpsView>(entity).unwrap();
         assert!(
             (fps.yaw - (-std::f32::consts::FRAC_PI_2 + 0.3)).abs() < 1e-4,
@@ -652,6 +680,10 @@ mod tests {
             ],
         );
         let camera = sched.world().get::<&Camera3D>(entity).unwrap();
-        assert_eq!(camera.eye, Vec3::new(0.0, 0.0, 5.0), "Orbit 模式不得被 Look/Move 改动");
+        assert_eq!(
+            camera.eye,
+            Vec3::new(0.0, 0.0, 5.0),
+            "Orbit 模式不得被 Look/Move 改动"
+        );
     }
 }

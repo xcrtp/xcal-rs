@@ -1,8 +1,10 @@
 // storyboard.rs — 首个**数学动画原型**（P5）：§1.1 六条分镜的**声明处**。
 //
-// 本轮定位（§0）：过去几轮是"把引擎整理干净"，本轮是"让引擎能写出一个数学动画"。
-// **用户友好 = 写动画的人友好** —— 本文件用几行声明表达整段分镜，而不是手工
-// spawn 一堆实体 + 手写 offset。
+// # 定位（A2/A3 后）
+//
+// 本文件是 `storyboard.lua` / `storyboard.py` 的**等价性参照基准**，不是死代码。
+// 生产路径（默认启动 / `--script` / `--python`）已统一走脚本版；本文件只被
+// 等价性用例引用。**不得因"默认路径已切脚本版"而删除。**
 //
 // # §1.1 分镜（本文件逐条落地）
 //
@@ -16,29 +18,20 @@
 //    并**逐轮廓依次**占一段（第 i 个轮廓独占 `[3.5 + i·1/N, 3.5 + (i+1)·1/N]`）。
 //    顺序来自 `Timeline` 的**顺序游标**：连续 `play` 即首尾相接；用 `parallel` 会让
 //    全部轮廓**同时**被写出（实测踩过 —— 那看起来像"整体浮现"，不是写字）。
-//
-// > R0 之前分镜 3 / 6 走的是**形变管线**（`MorphShape`：整条曲线从一点"绽开"）
-// > —— 那不是书写动画。形变管线仍在（GPU 用例覆盖），只是不再是本脚本的默认表达。
-//
-// # 为什么这个脚本"最小但够"（§1.2）
-//
-// 同时消费五样东西：书写动画（R0 新增）、时间编排（P3 Timeline）、2D 相机动画
-// （P0 `Camera2DFraming` 目标 + P1 相机对象）、公式（已有 Typst 管线）、网格（对象层）；
-// 不碰 3D、不需要箭头 / Text、不需要 seek；每条分镜都落到既有设施上，不新建 crate。
 
 use std::f32::consts::FRAC_PI_2;
 
-use xc_notion::Path2D;
+use xc_notion::{MeasureSpace, Path2D};
 use xc_object::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
 use xc_prerender::InMemoryEngine;
-use xcal_render::{FillSolid, MeasureSpace, StrokeSolid};
-use xcal_scene::animation::{Camera2DFraming, RevealRange};
-use xcal_scene::scene::Scene;
-use xcal_scene::scene::components::Reveal;
-use xcal_scene::scene_script::{Handle, SceneEncoder};
-use xcal_scene::{AnimValue, BindingTable, ClockForest, Curve, Interp};
+use xc_render_ir::{FillSolid, StrokeSolid};
 
-use crate::formula;
+use crate::animation::{Camera2DFraming, RevealRange};
+use crate::content;
+use crate::scene::Scene;
+use crate::scene::components::Reveal;
+use crate::scene_script::{Handle, SceneEncoder};
+use crate::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 
 /// 主 2D 相机初始取景（世界原点居中、40 px/世界单位）。
 const CAMERA_START: Framing2D = Framing2D {
@@ -209,34 +202,6 @@ fn keyframes_vec2(dur: f64, from: glam::Vec2, to: glam::Vec2) -> Curve {
     }
 }
 
-/// 按**阅读顺序**（包围盒 `min_x` 升序）排列书写轮廓 —— **稳定排序**。
-///
-/// **为什么需要它**：`compile_to_stroke_paths` 的返回顺序是**引擎输出顺序**，
-/// 不是任何 API 承诺（Typst 的字形顺序 / 占位引擎的字符顺序碰巧都是左→右，
-/// 但那属实现细节）。书写动画的"依次"必须由我们**显式定义方向**，
-/// 否则换引擎 / 换排版就是另一幅画。
-///
-/// 放这里而不是放进 `compile_to_stroke_paths`：后者是通用工具
-/// （内容纹理层也用它），**不该知道书写语义**。
-///
-/// - 无包围盒的轮廓（空路径）排在**最后**；
-/// - `min_x` 相同时保持原相对顺序（同一字形的多个笔画之间不乱序）。
-///
-/// **局限（本轮不处理）**：只有 `min_x` 一个键 ⇒ 单行公式正确；
-/// 多行 / 上下标需要按行分组的 `(min_y, min_x)` 字典序或行高聚类，届时再换键。
-fn order_by_reading_order(paths: &mut [formula::StrokePath]) {
-    paths.sort_by(|a, b| {
-        let key = |p: &formula::StrokePath| p.0.compute_bounds().map(|r| r.min.x);
-        match (key(a), key(b)) {
-            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
-            // 有包围盒的排在无包围盒的前面。
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        }
-    });
-}
-
 /// 公式 `y = \sin x` → **每个描边子轮廓**一个书写动画对象，返回其**脚本句柄**
 /// （**已按阅读顺序** = 包围盒 `min_x` 升序）。
 ///
@@ -245,30 +210,33 @@ fn order_by_reading_order(paths: &mut [formula::StrokePath]) {
 /// 字形轮廓会"一个接一个"地写，但切口**无法**在轮廓之间停顿/独立排期；
 /// 拆成多个对象后由 `Timeline` 给每个轮廓一段（见 `build`）⇒ 真正的**逐笔**书写。
 ///
-/// **顺序显式定义**（[`order_by_reading_order`]）：返回顺序 = 书写顺序 = 从左往右。
-/// **局限**：只按 `min_x` 单键排序 ⇒ 单行公式正确；多行 / 上下标可能不符阅读顺序。
+/// **顺序显式定义**（`xc_content::order_by_reading_order`）：返回顺序 = 书写顺序 =
+/// 从左往右。**局限**：只按 `min_x` 单键排序 ⇒ 单行公式正确；多行 / 上下标可能不符
+/// 阅读顺序。
 ///
 /// 编译失败（占位引擎也会给方块轮廓）时返回空 —— 调用方据此跳过第 6 条分镜
 /// （优雅降级，不 panic）。
 fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<Handle> {
     // 字号 0.8 / 锚点 (1.0, 2.0)：镜头推进后仍完整落在可见范围内
     // （推进后可见 x ∈ [-2.14, 5.21]、y ∈ [-1.73, 3.73]）。
-    let spec = formula::FormulaSpec::new("y = sin x", 0.8, glam::Vec2::new(1.0, 2.0));
-    let Some(ir) = formula::rebuild(engine, &spec) else {
-        eprintln!("[xcal-app] 分镜 6：公式 `y = sin x` 编译失败，跳过书写");
+    let Some(ir) = content::build_ir(engine, "y = sin x") else {
+        eprintln!("[xcal-scene] 分镜 6：公式 `y = sin x` 编译失败，跳过书写");
         return Vec::new();
     };
 
-    // 编译产物 → **按阅读顺序排序** → 录进脚本。排序在此处（而非 `compile_to_stroke_paths`
-    // 内）：书写方向是动画语义，通用三角/路径工具不该知道它。
-    let mut paths = formula::compile_to_stroke_paths(&ir, &spec);
-    order_by_reading_order(&mut paths);
+    // 编译产物 → **按阅读顺序排序** → 录进脚本。排序在此处（而非通用工具内）：
+    // 书写方向是动画语义，通用路径工具不该知道它。
+    let outlines = xc_content::stroke_outlines(&ir, 0.8, glam::Vec2::new(1.0, 2.0), true);
 
     let mut handles = Vec::new();
-    for (path, color, width, space) in paths {
+    for outline in outlines {
         handles.push(enc.spawn(vec![
-            Box::new(Reveal::new(path)),
-            Box::new(StrokeSolid::new_in(width, color, space)),
+            Box::new(Reveal::new(outline.path)),
+            Box::new(StrokeSolid::new_in(
+                outline.width,
+                outline.color,
+                MeasureSpace::World,
+            )),
         ]));
     }
     handles
@@ -282,16 +250,19 @@ fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<
 ///
 /// 编译失败（如 Typst 引擎不可用）时静默跳过（优雅降级，不 panic）。
 fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
-    let text = formula::TextSpec::new("math animation", TEXT_FONT_SIZE, glam::Vec2::ZERO);
-    let spec = text.to_formula_spec();
-    let Some(ir) = formula::rebuild(engine, &spec) else {
-        eprintln!("[xcal-app] T3 标注文字编译失败，跳过");
+    let source = xc_content::text_literal_source("math animation");
+    let Some(ir) = content::build_ir(engine, &source) else {
+        eprintln!("[xcal-scene] T3 标注文字编译失败，跳过");
         return;
     };
-    for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
+    for outline in xc_content::stroke_outlines(&ir, TEXT_FONT_SIZE, glam::Vec2::ZERO, false) {
         enc.spawn(vec![
-            Box::new(Path::new(path)),
-            Box::new(StrokeSolid::new_in(width, color, space)),
+            Box::new(Path::new(outline.path)),
+            Box::new(StrokeSolid::new_in(
+                outline.width,
+                outline.color,
+                MeasureSpace::World,
+            )),
             Box::new(Transform {
                 position: TEXT_POS,
                 ..Default::default()
@@ -303,9 +274,9 @@ fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::{Target, Timeline};
+    use crate::contract::{ObjectId, SceneRead};
     use xc_prerender::placeholder_engine;
-    use xcal_scene::animation::{Target, Timeline};
-    use xcal_scene::contract::{ObjectId, SceneRead};
 
     /// §11.1：六条分镜能被**声明**出来 —— 场景对象齐备且**时序正确**。
     #[test]
@@ -378,12 +349,9 @@ mod tests {
     /// **书写方向**：公式轮廓必须按包围盒 `min_x` **升序**排期（从左往右写），
     /// 而不是"引擎给什么顺序就写什么顺序"。
     ///
-    /// 证伪：把 [`order_by_reading_order`] 的比较改成降序（`y.cmp(&x)`）
-    /// ⇒ 本用例 RED；改回升序 ⇒ GREEN。
+    /// 证伪：把阅读顺序的比较改成降序（`y.cmp(&x)`）⇒ 本用例 RED。
     #[test]
     fn formula_contours_are_ordered_left_to_right() {
-        // B1/B2 后 `spawn_formula_reveal` 产出**脚本句柄**：先录进脚本，再 commit 到场景
-        // 取回 `ObjectId` 才能查询几何（声明期无 id —— 这正是脚本的语义）。
         let engine = placeholder_engine();
         let mut enc = SceneEncoder::new();
         let handles = spawn_formula_reveal(&mut enc, &engine);
@@ -449,55 +417,6 @@ mod tests {
         assert_eq!(n, 1, "分镜应装配一支静态箭头");
     }
 
-    /// [`order_by_reading_order`] 的**乱序输入**用例（含无包围盒者 + 稳定性）。
-    ///
-    /// 上一条用例的真实输入恰好已是左→右（占位引擎的字符顺序），故它只能证伪"降序"；
-    /// 本条用**故意打乱**的输入把排序逻辑本身钉死：
-    /// 1. `min_x` 升序；2. 无包围盒（空路径）排**最后**；3. 同 `min_x` 保持输入顺序。
-    ///
-    /// 证伪：把 `None` 当 0.0 处理 ⇒ 第 2 条 RED；换 `sort_unstable_by` ⇒ 第 3 条可能 RED。
-    #[test]
-    fn reading_order_is_min_x_ascending_without_bounds_last() {
-        use xcal_scene::types::Color32;
-
-        // `x` 处、高 `h` 的矩形轮廓。
-        let rect = |x: f32, h: f32| {
-            Path2D::from_polyline(
-                &[
-                    glam::Vec2::new(x, 0.0),
-                    glam::Vec2::new(x + 1.0, 0.0),
-                    glam::Vec2::new(x + 1.0, h),
-                    glam::Vec2::new(x, h),
-                ],
-                true,
-            )
-        };
-        let item = |x: f32, h: f32| (rect(x, h), Color32::WHITE, 1.0, MeasureSpace::Screen);
-        let empty = || (Path2D::new(), Color32::WHITE, 1.0, MeasureSpace::Screen);
-
-        // 故意乱序：右 → 左 → 空 → 中。
-        let mut paths = vec![item(2.0, 1.0), item(0.0, 1.0), empty(), item(1.0, 1.0)];
-        order_by_reading_order(&mut paths);
-        let xs: Vec<Option<f32>> = paths
-            .iter()
-            .map(|p| p.0.compute_bounds().map(|b| b.min.x))
-            .collect();
-        assert_eq!(
-            xs,
-            vec![Some(0.0), Some(1.0), Some(2.0), None],
-            "必须 min_x 升序且无包围盒者排最后"
-        );
-
-        // 稳定性：同 `min_x`（都为 1.0）时保持输入顺序 —— 高的那个先写的仍是它。
-        let mut same_x = vec![item(1.0, 5.0), item(1.0, 1.0)];
-        order_by_reading_order(&mut same_x);
-        let heights: Vec<f32> = same_x
-            .iter()
-            .map(|p| p.0.compute_bounds().unwrap().max.y)
-            .collect();
-        assert_eq!(heights, vec![5.0, 1.0], "同 min_x 必须稳定（保持输入顺序）");
-    }
-
     /// §11.2：新增驱动目标**不需要改枚举、也不需要改 System 源码** ——
     /// 本脚本用的 `Camera2DFraming` 就是 P0 新增、无 System 改动的目标。
     ///
@@ -544,118 +463,6 @@ mod tests {
         tl.set_duration(0, 3.0);
         assert_eq!(tl.schedule()[1].start, 3.5, "镜头推进自动顺延");
         assert_eq!(tl.schedule()[2].start, 4.5, "公式书写自动顺延");
-    }
-
-    /// **可渲染性**（本环境无法目视 GUI 时的替代验证）：把分镜场景接进**真实 System
-    /// 链路**跑几帧，断言 2D 队列（网格）与**书写动画队列**在 t=1s / 4s 确有产出，
-    /// 且"写到哪"（`end`）随时间正确推进、相机被推进到峰值。
-    #[test]
-    fn storyboard_produces_draw_output_over_time() {
-        use xcal_egui::resources::UiConfig;
-        use xcal_egui::systems::AxesRefreshSystem;
-        use xcal_render::{
-            DrawQueue, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect,
-        };
-        use xcal_scene::TimeState;
-        use xcal_scene::animation::BindingApplySystem;
-        use xcal_schedule::resource::Resources;
-        use xcal_schedule::scheduler::{Phase, Scheduler};
-
-        let mut scene = Scene::new();
-        let engine = placeholder_engine();
-        let sb = build(&mut scene, &engine);
-        let camera_id = sb.camera.0;
-        let camera_entity = xcal_scene::contract::entity_of(camera_id).unwrap();
-        let world = scene.into_world();
-
-        let mut res = Resources::new();
-        res.insert(sb.camera);
-        res.insert(ViewRect::default());
-        res.insert(UiConfig::default());
-        res.insert(TimeState::default());
-        res.insert(sb.forest);
-        res.insert(sb.bindings);
-        res.insert(DrawQueue::new());
-        res.insert(RevealQueue::default());
-
-        let mut sched = Scheduler::new(world, res);
-        sched.add_system(Phase::SceneSync, BindingApplySystem);
-        sched.add_system(Phase::Prepare, AxesRefreshSystem);
-        sched.add_system(Phase::RenderCommit, SceneRecordSystem);
-        sched.add_system(Phase::RenderCommit, RevealRecordSystem);
-        sched.init_resources();
-
-        // ── t = 1s：网格已建；曲线写到一半（其余公式尚未开始） ──
-        sched
-            .resources_mut()
-            .get_mut::<TimeState>()
-            .unwrap()
-            .elapsed = 1.0;
-        sched.run_frame(0.0);
-
-        let grid = sched.resources().get::<DrawQueue>().unwrap().len();
-        assert!(
-            grid > 0,
-            "网格/坐标轴线段应已录进 2D 队列（t=1s），实际 {grid}"
-        );
-
-        let reveals = sched.resources().get::<RevealQueue>().unwrap().0.clone();
-        assert!(
-            reveals.len() >= 2,
-            "曲线 + 公式应有书写项，实际 {}",
-            reveals.len()
-        );
-        let max_end = reveals.iter().map(|r| r.end).fold(f32::MIN, f32::max);
-        assert!(
-            (max_end - 0.5).abs() < 1e-3,
-            "t=1s 时曲线应写到 0.5（其余仍为 0），实际 max end = {max_end}"
-        );
-        // 区间起点恒为 0（`Scalar` 只推 `end`）。
-        assert!(reveals.iter().all(|r| r.start == 0.0), "start 应恒为 0");
-
-        // ── t = 4s：曲线写满（end=1）；公式**写到一半（逐轮廓在途）**；相机到峰值 ──
-        sched
-            .resources_mut()
-            .get_mut::<TimeState>()
-            .unwrap()
-            .elapsed = 4.0;
-        sched.run_frame(0.0);
-
-        let reveals = sched.resources().get::<RevealQueue>().unwrap().0.clone();
-        let max_end = reveals.iter().map(|r| r.end).fold(f32::MIN, f32::max);
-        assert!(
-            (max_end - 1.0).abs() < 1e-3,
-            "曲线应写满（end=1），实际 {max_end}"
-        );
-        // **逐轮廓依次书写**的判据：窗口过半时，前面的轮廓已写完、后面的**还没开始**。
-        // 若各轮廓共享同一区间（并行动作），此刻它们会**全部**是 0.5
-        // ⇒ `pending == 0`，本断言即失败。
-        let pending = reveals.iter().filter(|r| r.end == 0.0).count();
-        let done = reveals
-            .iter()
-            .filter(|r| (r.end - 1.0).abs() < 1e-6)
-            .count();
-        assert!(
-            pending >= 1,
-            "t=4s（公式窗口过半）应仍有未开始的轮廓（依次书写），实际 pending={pending}、\
-             各轮廓 end = {:?}",
-            reveals.iter().map(|r| r.end).collect::<Vec<_>>()
-        );
-        assert!(
-            done >= 1,
-            "t=4s 应已有写完的轮廓（曲线 + 公式前几笔），实际 done={done}"
-        );
-
-        let view = sched.world().get::<&Framing2D>(camera_entity).unwrap();
-        assert!(
-            (view.scale - CAMERA_SCALE_PUSHED).abs() < 1e-3,
-            "相机应推进到 scale={CAMERA_SCALE_PUSHED}，实际 {}",
-            view.scale
-        );
-        assert!(
-            (view.center - CAMERA_PEAK).length() < 1e-3,
-            "相机中心应到峰值"
-        );
     }
 
     /// 从编译产物反推每个 `play` 的时间区间（`(offset, span_hi - span_lo)`）。

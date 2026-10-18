@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use glam::Mat4;
-use xcal_scene::scene::components::{Material3D, MeshGeometry};
 use xc_notion::{Color32, Vec3};
+use xcal_scene::scene::components::{Material3D, MeshGeometry};
 
 /// 3D 绘制器 trait。
 ///
