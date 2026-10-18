@@ -164,7 +164,7 @@ Lua / Python 脚本
 ```
 
 - `xc-pod-lua` / `xc-pod-py` 的生产依赖不含任何 `xcal-*`；domain 能力由 App 注入；
-- 入口：`cargo run -p xcal-app -- --script`（Lua）/ `--python`（Python）；
+- 入口：`cargo run -p xcal-gui -- --script`（Lua）/ `--python`（Python）；
 - 文档导出：`cargo run -p xcal-app --example export_scene_api`
   （`target/scene_api/` 下的 JSON + LuaLS + `.pyi`）。
 
@@ -172,21 +172,21 @@ Lua / Python 脚本
 
 ```shell
 # 默认：§1.1 六条分镜（硬编码参考实现）
-cargo run -p xcal-app
+cargo run -p xcal-gui
 
 # 脚本编排同一分镜（装配期）
-cargo run -p xcal-app -- --script          # Lua
-cargo run -p xcal-app -- --python          # Python（需系统 Python）
+cargo run -p xcal-gui -- --script          # Lua
+cargo run -p xcal-gui -- --python          # Python（需系统 Python）
 
 # 能力测试 demo（Name / Group / Visibility / Opacity）
-cargo run -p xcal-app -- --demo
+cargo run -p xcal-gui -- --demo
 
 # headless：脚本直接渲到 mp4（默认 ffmpeg 管道；--frames DIR 走序列帧）
 cargo run -p xcal-app --bin xcal-render -- \
     crates/app/xcal-app/scripts/storyboard.lua --out out/storyboard.mp4 --fps 30 --size 640x480
 
 # placeholder 兜底（关闭 Typst；同时关闭 Python）
-cargo run -p xcal-app --no-default-features
+cargo run -p xcal-gui --no-default-features
 
 # 独立 3D demo（不依赖 xcal-app / scheduler，直接演示 WgpuBackend3D）
 cargo run -p xcal-render-backends --example cube_3d

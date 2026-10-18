@@ -10,8 +10,8 @@
 //!
 //! 旧版本每帧手动 `graph.refresh(...)` / `scene.set(...)`：它能导出是因为那个场景的
 //! 动画是手写的。脚本产出的动画全在 `SceneRecipe` 里，**不走调度器就一动不动**。
-//! 现在每帧只发一条 `Advance(dt)` 命令，渲染回调由
-//! `EguiSceneHost::build_render_callback` 生成 —— 与 GUI 是同一份帧体。
+//! 现在每帧只发一条 `Advance(dt)` 命令，渲染帧体由 `xcal_render::frame` +
+//! `xcal_render_backends::frame` 构造 —— 与 GUI 是同一份帧体。
 //!
 //! 无 GPU 适配器时明确报错退出。
 
@@ -20,10 +20,10 @@ use std::path::PathBuf;
 use xc_notion::{Rect2D, Vec2};
 use xcal_app::export::{ExportSpec, export_sequence};
 use xcal_app::{build_script_runtime, language_from_path};
-use xcal_egui::EguiSceneHost;
 use xcal_render::{DrawQueue, DrawQueue3D, PostFilterChain, ViewRect};
 use xcal_render_backends::{RenderContext, SceneCompositorCallback};
 use xcal_scene::DriverCommand;
+use xcal_scene::contract::WorldView;
 
 fn arg(name: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -118,9 +118,14 @@ fn main() {
         let callback = runtime
             .driver
             .with_scheduler(|scheduler| {
-                let view =
-                    EguiSceneHost::build_scene_view(scheduler.world(), scheduler.resources());
-                EguiSceneHost::build_render_callback(&view, scheduler.resources())
+                let options = xcal_render::FrameOptions::default();
+                let view = xcal_render::frame::build_scene_view(
+                    &WorldView::new(scheduler.world()),
+                    scheduler.resources(),
+                    options,
+                );
+                xcal_render::frame::build_frame_inputs(&view, scheduler.resources(), options)
+                    .and_then(xcal_render_backends::frame::build_scene_callback)
             })
             .unwrap_or_else(|| {
                 SceneCompositorCallback::new(
@@ -137,7 +142,7 @@ fn main() {
 
         // 帧末清理（与宿主 `end_frame` 同口径）。
         runtime.driver.with_scheduler_mut(|scheduler| {
-            EguiSceneHost::end_frame(scheduler.resources_mut());
+            xcal_render::frame::end_frame(scheduler.resources_mut());
         });
         callback
     })

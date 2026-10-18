@@ -12,8 +12,8 @@
 //! # 与 GUI 的一致性
 //!
 //! 场景推进只经 **Driver pod** 的 `Advance(dt)` 命令（固定 `dt = 1/fps`），
-//! 渲染回调来自 `EguiSceneHost::build_render_callback` —— 与 GUI 是同一份帧体。
-//! 因此导出路径不存在"另写一套简化帧循环"的分叉。
+//! 渲染帧体来自 `xcal_render::frame` + `xcal_render_backends::frame` ——
+//! 与 GUI 是同一份构造。因此导出路径不存在"另写一套简化帧循环"的分叉。
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,11 +22,10 @@ use std::process::{Child, Command, Stdio};
 use xc_notion::{Rect2D, Vec2};
 use xcal_app::export::{ExportError, target_pix_fmt, to_rgba, write_png};
 use xcal_app::{ScriptLanguage, build_script_runtime, language_from_path};
-use xcal_egui as ui;
-use ui::EguiSceneHost;
 use xcal_render::ViewRect;
 use xcal_render_backends::{RenderContext, ScreenParams, StandardBackends, render_frame_headless};
 use xcal_scene::DriverCommand;
+use xcal_scene::contract::WorldView;
 
 struct Args {
     script: PathBuf,
@@ -185,9 +184,14 @@ fn run() -> Result<(), String> {
         let callback = runtime
             .driver
             .with_scheduler(|scheduler| {
-                let view =
-                    EguiSceneHost::build_scene_view(scheduler.world(), scheduler.resources());
-                EguiSceneHost::build_render_callback(&view, scheduler.resources())
+                let options = xcal_render::FrameOptions::default();
+                let view = xcal_render::frame::build_scene_view(
+                    &WorldView::new(scheduler.world()),
+                    scheduler.resources(),
+                    options,
+                );
+                xcal_render::frame::build_frame_inputs(&view, scheduler.resources(), options)
+                    .and_then(xcal_render_backends::frame::build_scene_callback)
             })
             .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
 
@@ -195,7 +199,7 @@ fn run() -> Result<(), String> {
         sink.write(&ctx, index, &pixels)?;
 
         runtime.driver.with_scheduler_mut(|scheduler| {
-            EguiSceneHost::end_frame(scheduler.resources_mut());
+            xcal_render::frame::end_frame(scheduler.resources_mut());
         });
     }
 

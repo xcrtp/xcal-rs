@@ -1,0 +1,30 @@
+[package]
+name = "xcal-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GUI 可执行壳：组装 xcal-app 的 Runtime 与 xcal-egui 的每帧帧体"
+
+[[bin]]
+name = "xcal-app"
+path = "src/main.rs"
+
+[dependencies]
+# 组装层：Pod 装配 / Resources / Runtime（不依赖 UI）。
+xcal-app = { path = "../xcal-app" }
+# UI 层：EguiSceneHost / SceneFrame / FrameProgress / 主题与字体。
+xcal-egui = { path = "../../ui/xcal-egui" }
+# 场景类型（Result / DriverPod）与后端安装。
+xcal-scene = { path = "../../scene/xcal-scene" }
+xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
+xcal-schedule = { path = "../../schedule/xcal-schedule" }
+xc-pod = { path = "../../pod/xc-pod" }
+
+eframe.workspace = true
+egui.workspace = true
+
+[features]
+# 与 xcal-app 的默认 feature 对齐（GUI 也走同一套脚本 / 内容引擎）。
+default = ["typst", "python"]
+typst = ["xcal-app/typst"]
+python = ["xcal-app/python"]

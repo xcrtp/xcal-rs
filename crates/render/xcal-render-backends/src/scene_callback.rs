@@ -26,7 +26,7 @@
 // （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
 use xc_object::LayerKind;
-use xc_render_ir::{LayerBlend, LayerId};
+use xc_render_ir::LayerId;
 use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, PostFilterChain, RevealItem, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_notion::{Rect2D, Vec2 as GeoVec2};
@@ -35,21 +35,10 @@ use crate::compositor::{CompositeFrame, CompositeOp, Compositor, PostBlit};
 use crate::standard_backends::{BackendStore, ScreenParams};
 use crate::wgpu_2d::{Frame2DData, Frame2DGeometry, OFFSCREEN_FORMAT, Recorded2D, snapshot_queue};
 
-/// 本帧一个图层的声明（有效序，由 `EguiSceneHost::present` 排好）。
+/// 本帧一个图层的声明（有效序，由宿主排好）。
 ///
-/// 只带合成所需的最小信息：`LayerKind`（含相机，用于 3D 的 view-projection）
-/// + 混合方式 + 不透明度。
-#[derive(Debug, Clone)]
-pub struct SceneLayer {
-    /// 层标识（每层唯一，见 `build_scene_view`）。
-    pub id: LayerId,
-    /// 层类型（2D 视口 / 3D 视口）。
-    pub kind: LayerKind,
-    /// 与下层的混合方式。
-    pub blend: LayerBlend,
-    /// 不透明度（[0,1]）。
-    pub opacity: f32,
-}
+/// 定义已上移到 `xcal-render::frame::SceneLayer`（后端中立，避免后端依赖 `xcal-scene`）。
+pub use xcal_render::SceneLayer;
 
 /// 一帧合成结果 + 保活句柄。
 ///
@@ -435,6 +424,7 @@ impl egui_wgpu::CallbackTrait for SceneCompositorCallback {
 #[cfg(all(test, feature = "egui-wgpu"))]
 mod tests {
     use super::*;
+    use xc_render_ir::LayerBlend;
     use crate::render_context::RenderContext;
     use crate::standard_backends::{StandardBackends, render_frame_headless};
     use crate::wgpu_3d::WgpuBackend3D;

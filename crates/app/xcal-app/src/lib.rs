@@ -1,28 +1,21 @@
-// xcal-app: 组装 + 启动层（A 线瘦身后的**壳子**）
+// xcal-app: 组装层（A 线瘦身后的**壳子**）
 //
 // 只负责：
 //   - Pod 装配（scene / content / lua / python）；
-//   - 建 Resources、注册各层 System（调用 scene / render / ui 各自的注册函数）；
+//   - 建 Resources、注册各层 System（scene / render 各自的注册函数）；
 //   - 提交 `Advance(dt)` 命令、订阅 `FrameFinished` 事件；
-//   - 实现 eframe::App 并**委托** UI 层的每帧帧体。
+//   - 构建 GUI / headless 共用的 `Runtime`。
 //
-// 场景内容（3D demo / 分镜 / 能力 demo）归 `xcal-scene::authored`；
-// 帧体 / health / 参数面板归 `xcal-egui`；录制 System 归 `xcal-render`。
+// GUI 的可执行壳在 `xcal-gui`（它依赖本 crate + `xcal-egui`）。
+// 本 crate **不依赖 xcal-egui**：headless 导出与脚本装配都可独立使用。
 
 use std::sync::Arc;
 
-use eframe::{App as EframeApp, egui as gui};
-
-use xc_pod::Pod;
-
-use ui::resources::UiConfig;
-use ui::{EguiSceneHost, SceneFrame};
 use xc_notion::Rect2D;
 use xc_object::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
     Framing2D,
 };
-use xcal_egui as ui;
 use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect, scene::Scene,
 };
@@ -31,7 +24,7 @@ pub use xcal_scene::Result;
 use xcal_scene::animation::{Binding, BindingTable, CameraEye};
 use xcal_scene::contract::{GroupVisibility, ObjectId, SceneRead};
 use xcal_scene::director_state::DirectorState;
-use xcal_scene::domain::{ContentTextureSpec, InputEvents};
+use xcal_scene::domain::{ContentTextureSpec, InputEvents, UiConfig};
 use xcal_scene::errors::Error;
 use xcal_scene::scene::components::TextureHandle;
 use xcal_scene::{
@@ -50,7 +43,7 @@ mod formula;
 
 /// **2D 场景选择**（启动参数切换，见 `main.rs`）。
 ///
-/// 为什么是启动参数而不是 UI 开关：场景在 `App::new` 里**一次性装配**（spawn 决定
+/// 为什么是启动参数而不是 UI 开关：场景在 `build_scene_runtime` 里**一次性装配**（spawn 决定
 /// `ObjectId`、时钟树与绑定表在装配期编译），运行态重建整张场景图需要尚未具备的
 /// 生命周期设施（见「运行时创建/销毁对象」的记账）。故本轮用**启动参数**切换：
 ///
@@ -69,16 +62,6 @@ pub enum SceneChoice {
     CapabilityDemo,
     ScriptStoryboard,
     PythonStoryboard,
-}
-
-pub struct App {
-    /// 场景推进器（GUI 与 headless 共用同一条命令路径）。
-    driver: Arc<DriverPod>,
-    /// 事件订阅方：只观测 `FrameFinished`（进度条 / health overlay）。
-    progress: Arc<ui::FrameProgress>,
-    render_ctx: RenderContext,
-    /// 每帧帧体（墙钟 / health / 呈现）—— UI 层实现，app 只委托。
-    frame: SceneFrame,
 }
 
 /// 一次装配的产物：**GUI 与 headless 共用**。
@@ -137,6 +120,13 @@ pub fn build_script_runtime(
     )
 }
 
+/// **GUI 装配入口**：内置场景 → Runtime（带 app 自带的 3D demo）。
+///
+/// GUI 壳（`xcal-gui`）用本入口；headless 脚本用 [`build_script_runtime`]。
+pub fn build_scene_runtime(render_ctx: RenderContext, choice: SceneChoice) -> Result<Runtime> {
+    build_runtime(render_ctx, SceneSource::Choice(choice), true)
+}
+
 /// 2D 相机的**语义判据**：场景里唯一带 `Framing2D` 的对象。
 ///
 /// 不能按"第几个句柄"取：脚本可以任意安排创建顺序（当前坐标轴先于相机）。
@@ -148,13 +138,12 @@ fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
     })
 }
 
-/// **唯一的 System 注册入口**（`App::new` 与回归测试共用）。
+/// **唯一的 System 注册入口**（回归测试共用）。
 ///
-/// A6：注册序列归位到各层自己的注册函数 —— app 只按层次顺序调用，
-/// 不再持有任何场景细节（否则瘦完还会胖回去）：
-/// - `xcal-scene::register`：场景 system（Director / 相机驱动 / 绑定 / 延迟命令）；
-/// - `xcal-render::register_record_systems`：五个录制 System；
-/// - `xcal-egui` 的 `register_ui_systems`：UI 接线（时间控制 / 参数面板 / 坐标轴刷新）。
+/// 注册序列归位到各层自己的注册函数 —— app 只按层次顺序调用：
+/// - `xcal-scene::register`：场景 system（Director / 相机驱动 / 绑定 / 延迟命令 /
+///   坐标轴与函数图刷新 / 时间与参数面板事件消费）；
+/// - `xcal-render::register_record_systems`：五个录制 System。
 ///
 /// 抽成函数的原因不变：`Scheduler::add_system` 在 debug 下做**静态借用冲突检查**并
 /// 直接 `panic!`，单测分别装单个 System 测不出来；整张图由
@@ -165,64 +154,7 @@ fn register_systems(
     orbit_binding: Binding,
 ) {
     xcal_scene::register::register_systems(scheduler, cam2d_bindings, orbit_binding);
-    ui::register_ui_systems(scheduler);
     xcal_render::register_record_systems(scheduler);
-}
-
-impl App {
-    /// 默认场景（§1.1 分镜）。保留此入口是为了不改既有调用点（`main.rs` / 测试）。
-    pub fn new(ctx: &eframe::CreationContext) -> Result<Self> {
-        Self::new_with_scene(ctx, SceneChoice::Storyboard)
-    }
-
-    /// 按 [`SceneChoice`] 装配 App（GUI 入口）。
-    pub fn new_with_scene(ctx: &eframe::CreationContext, choice: SceneChoice) -> Result<Self> {
-        // 宿主字体（平台相关）：候选路径 + `XCAL_CJK_FONT`；找不到只提示、不中止。
-        if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() {
-            eprintln!(
-                "警告：未找到可用的中文字体（可用环境变量 XCAL_CJK_FONT 指定字体路径），中文可能显示为方框。"
-            );
-        }
-        ui::install_visuals(&ctx.egui_ctx);
-
-        // 渲染环境（后端 + 合成器 + RenderContext）由 backends 侧的"标准安装"负责：
-        // app 不需要知道要装哪几个后端、以什么顺序装。
-        let render_ctx = {
-            let rs = ctx
-                .wgpu_render_state
-                .clone()
-                .ok_or(Error::InitializationError(
-                    "Wgpu render state not available".to_string(),
-                ))?;
-            xcal_render_backends::install_standard_backends(&rs)
-        };
-
-        let runtime = build_runtime(render_ctx, SceneSource::Choice(choice), true)?;
-        // App 订阅事件：进度只观测 `FrameFinished`（不碰命令队列）。
-        let progress = Arc::new(ui::FrameProgress::new());
-        let sink: Arc<dyn Pod> = Arc::clone(&progress) as Arc<dyn Pod>;
-        runtime
-            .driver
-            .attach_sink(sink)
-            .map_err(|e| Error::InitializationError(format!("Driver 事件订阅失败：{e}")))?;
-        let frame = SceneFrame::new(Arc::clone(&runtime.driver));
-        Ok(Self {
-            driver: runtime.driver,
-            progress,
-            render_ctx: runtime.render_ctx,
-            frame,
-        })
-    }
-
-    /// 本帧渲染上下文。
-    pub fn render_context(&self) -> RenderContext {
-        self.render_ctx.clone()
-    }
-
-    /// 场景推进器句柄（测试 / headless 与 GUI 共用同一条命令路径）。
-    pub fn driver(&self) -> Arc<DriverPod> {
-        Arc::clone(&self.driver)
-    }
 }
 
 /// **唯一的场景装配实现**：GUI 与 headless 走同一条路径。
@@ -505,15 +437,6 @@ fn forest_duration(forest: &ClockForest, bindings: &BindingTable) -> f64 {
         .fold(0.0, f64::max)
 }
 
-impl EframeApp for App {
-    fn ui(&mut self, ui: &mut gui::Ui, _frame: &mut eframe::Frame) {
-        // A5：帧体（视图 / 输入 / 命令 / 呈现 / 可观测性）在 UI 层实现；
-        // app 只把事件订阅方收到的进度交出去。
-        self.frame
-            .ui(ui, (self.progress.frames(), self.progress.time()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,12 +487,12 @@ mod tests {
     /// 坑：3D 模式 System 原先与 `ParamPanelSystem` 同处 `LogicUpdate` 且都写
     /// `BindingTable` ⇒ `Scheduler::add_system` 的**静态借用冲突检查在 app 启动时
     /// panic**（`Scheduler conflict in phase LogicUpdate ...`），而"每个 System 各装
-    /// 一次的"单测完全测不出来 —— `App::new` 需要 `eframe::CreationContext`，跑不到。
+    /// 一次的"单测完全测不出来 —— 完整 GUI 装配需要 `eframe::CreationContext`，跑不到。
     ///
     /// 修法：相机驱动 System 移到 `Input`（那里没有别的 `BindingTable` 写者），并把它与
     /// `CameraInputSystem` 的先后固定为「先改模式、后解释输入」。切换开关（2D 自由 / 3D
     /// 视口目标）都会走到这条路径。
-    /// 本用例走与 `App::new` **同一个** `register_systems` ⇒ 注册序列变化会被它挡住。
+    /// 本用例走与 GUI / headless **同一个** `register_systems` ⇒ 注册序列变化会被它挡住。
     #[test]
     fn full_system_graph_assembles_without_borrow_conflicts() {
         let mut world = hecs::World::new();

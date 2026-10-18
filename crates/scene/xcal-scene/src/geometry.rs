@@ -1,30 +1,19 @@
-// systems.rs: 场景侧 System（UI 相关的**接线**部分）
+// geometry.rs — 场景几何刷新 System（S0：从 `xcal-egui` 归位）。
 //
-// 每个 System 显式声明 `Reads` / `Writes` 关联类型，使用
-// `ctx.get` / `ctx.get_mut` 访问 Resource。
-//
-// # 归位后本文件只剩两个"接线" System
-//
+// 两个 System 都只做**接线**，几何算法在对象层：
 // - `AxesRefreshSystem`（Prepare）：取本帧相机 → 逐个刷新场景里的坐标轴对象；
 // - `FunctionGraphRefreshSystem`（Prepare）：取实体上的相位 → 重新采样函数图像。
 //
-// 已迁出（P4 / P1）：
-// - `SceneRecord` / `MorphRecord` / `ContentTextureRecord` → `xcal-render::record_systems`
-//   （渲染动作住渲染层；不再依赖 UI 定义的 `ViewRect` / `AppCamera`）；
-// - `CameraInput` → `xcal_scene::camera_input`（相机状态归场景对象；
-//   控制器纯函数 `apply_pan_zoom` 也搬过去了）。
-//
-// Phase 分配：
-// - Prepare: AxesRefresh / FunctionGraphRefresh（几何在场景对象层，本层只接线）
+// 它们不属于 UI：`Axes2D` / `FunctionGraph` 是场景对象，刷新结果也是场景组件。
+// 归位前住在 `xcal-egui`，导致 headless 也必须依赖 UI 层。
 
 use xc_object::{Axes2D, Camera2DHandle, FunctionGraph};
-use xcal_render::ViewRect;
-use xcal_scene::contract::{SceneRead, WorldScene, WorldView};
-use xcal_scene::scene::components::PhaseAnim;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 
-use crate::resources::UiConfig;
+use crate::contract::{SceneRead, WorldScene, WorldView};
+use crate::domain::{UiConfig, ViewRect};
+use crate::scene::components::PhaseAnim;
 
 // ─── AxesRefreshSystem（M4-4：原网格构建 System 退役）───────────────────────
 
@@ -85,7 +74,7 @@ impl System for AxesRefreshSystem {
 /// 现归场景对象层 [`xc_object::FunctionGraph`]，本 System 只负责把当前相位
 /// （由 `BindingApplySystem` 写入实体的 `PhaseAnim`）交给它。
 ///
-/// 写路径是契约层 [`xc_scene_contract::Scene::set`]（M4-3b 的消费方）：
+/// 写路径是契约层 [`crate::contract::Scene::set`]（M4-3b 的消费方）：
 /// 采样点数固定 ⇒ 覆盖既有 `Path` 组件即可，无需清旧建新。
 pub struct FunctionGraphRefreshSystem;
 impl System for FunctionGraphRefreshSystem {
@@ -227,7 +216,7 @@ mod tests {
         let handle = graph
             .build(
                 &mut WorldScene::new(&mut world),
-                xcal_render::StrokeSolid::new(1.0, (0, 200, 200, 255)),
+                xc_render_ir::StrokeSolid::new(1.0, (0, 200, 200, 255)),
             )
             .expect("FunctionGraph 已登记");
 
@@ -235,7 +224,7 @@ mod tests {
         let mut anim = PhaseAnim::new(0.0, 1.5);
         anim.phase = 1.0;
         world
-            .insert_one(xcal_scene::contract::entity_of(handle).unwrap(), anim)
+            .insert_one(crate::contract::entity_of(handle).unwrap(), anim)
             .unwrap();
 
         let mut sched = Scheduler::new(world, Resources::new());
@@ -245,7 +234,7 @@ mod tests {
 
         let path = sched
             .world()
-            .get::<&xc_object::Path>(xcal_scene::contract::entity_of(handle).unwrap())
+            .get::<&xc_object::Path>(crate::contract::entity_of(handle).unwrap())
             .unwrap();
         let mut pts = Vec::new();
         for cmd in &path.0.commands {

@@ -25,6 +25,7 @@ pub mod content_ir;
 pub mod draw;
 pub mod draw_queue_3d;
 pub mod filters;
+pub mod frame;
 pub mod painter_2d;
 pub mod painter_3d;
 pub mod record_systems;
@@ -78,8 +79,14 @@ pub use painter_3d::Painter3D;
 // ─── 视口（纯数据） ───────────────────────────────────────────────────────
 pub use viewport::Viewport;
 
-// ─── 渲染目标矩形（Resource；P4 从 xcal-egui 归位） ───────────────────────
+// ─── 渲染目标矩形（Resource；S0 定义下沉 xcal-scene::domain）─────────────
 pub use view_rect::ViewRect;
+
+// ─── 帧体构造（S0 从 xcal-egui 归位；无 egui / 无后端类型）────────────────
+pub use frame::{
+    FrameInputs, FrameOptions, SceneLayer, build_frame_inputs, build_scene_view, draw_call_count,
+    end_frame,
+};
 
 // ─── 合成后滤镜链（C 线：纯数据；管线/着色器在 xcal-render-backends） ─────
 pub use filters::{FilterKind, FilterSlot, MAX_FILTER_SLOTS, POST_UNIFORM_SIZE, PostFilterChain};

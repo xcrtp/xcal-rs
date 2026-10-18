@@ -1,13 +1,14 @@
 # xcal-app
 
-> **组装与启动层**。基于 `eframe 0.36`（egui + wgpu），把
-> `xcal-scene / xcal-render / xcal-render-backends / xcal-egui`
-> 提供的所有 System、Resource、Backend 按阶段装配成一个可运行的桌面应用。
+> **组装层**（无 UI）。把 `xcal-scene / xcal-render / xcal-render-backends`
+> 提供的 System、Resource、Backend 按阶段装配成 GUI / headless 共用的 `Runtime`。
+> GUI 可执行壳在 `xcal-gui`（依赖本 crate + `xcal-egui`）；headless 入口是本 crate 的
+> `xcal-render` 二进制。
 
 ```bash
-cargo run -p xcal-app              # 默认：§1.1 六条分镜（storyboard）
-cargo run -p xcal-app -- --demo    # N 线能力测试 demo（capability_demo）
-# 亦可用环境变量：XCAL_DEMO=1 cargo run -p xcal-app
+cargo run -p xcal-gui              # 默认：§1.1 六条分镜（storyboard）
+cargo run -p xcal-gui -- --demo    # N 线能力测试 demo（capability_demo）
+# 亦可用环境变量：XCAL_DEMO=1 cargo run -p xcal-gui
 ```
 
 ---
@@ -389,25 +390,26 @@ snapshots/
 ```toml
 xcal-scene                              # 场景组件 / 装配对象 / 动画（ClockForest + Binding + Timeline）
 xcal-schedule                           # 调度内核 + Telemetry
-xcal-render                             # 2D 管线（含四个录制 System：P4 三个 + R0 书写动画 + ViewRect）
+xcal-render                             # 2D 管线（含录制 System；帧体构造）
 xcal-render-backends   = { features = ["egui-wgpu"] }
-xcal-egui
 xc-macro
 xc-content                              # 公式 IR 类型
 xc-prerender           = { default-features = false }   # Typst / placeholder 引擎
 xc-notion                             # 分镜：直接构造 Path2D（MorphShape 的 from/to）
 xc-object                             # 相机句柄 / 取景参数 / 图元
 
-eframe = { version = "0.36", default-features = false, features = ["wgpu","x11","wayland"] }
-egui / egui-wgpu / wgpu 30
+wgpu 30
 hecs / glam
 derive-new / derive_builder
 tracing 0.1
 
 [features]
-default = ["typst"]
+default = ["typst", "python"]
 typst   = ["xc-prerender/typst"]        # 关闭时回退 placeholder 引擎
+python  = ["dep:xc-pod-py", "xc-pod-py/python"]
 ```
+
+> **S0**：本 crate 不依赖 `xcal-egui`；GUI 壳在 `xcal-gui`。
 
 > **铁律**：`xcal-render` 只能依赖轻的 `xc-content`，**不得**依赖 `xc-prerender`
 > （否则关掉 feature 也会把 typst 拖进渲染层）。验收：
@@ -418,9 +420,9 @@ typst   = ["xc-prerender/typst"]        # 关闭时回退 placeholder 引擎
 ## 运行 / 测试
 
 ```bash
-cargo run   -p xcal-app                               # 启动主 GUI（桌面环境，真公式）
-cargo run   -p xcal-app --no-default-features         # placeholder 兜底（显示方块）
-cargo test  -p xcal-app                               # formula.rs / param_panel.rs 单测
+cargo run   -p xcal-gui                               # 启动主 GUI（桌面环境，真公式）
+cargo run   -p xcal-gui --no-default-features         # placeholder 兜底（显示方块）
+cargo test  -p xcal-app                               # formula.rs / 组装层单测
 cargo build -p xcal-app --no-default-features         # 两种 feature 组合都需通过
 cargo clippy -p xcal-app --all-targets -- -D warnings # 严格检查
 ```

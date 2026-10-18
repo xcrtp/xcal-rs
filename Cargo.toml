@@ -31,6 +31,7 @@ members = [
     "crates/ui/xcal-node-egui",
     "crates/ui/xcal-node-egui-ui",
     "crates/app/xcal-app",
+    "crates/app/xcal-gui",
 ]
 resolver = "2"
 

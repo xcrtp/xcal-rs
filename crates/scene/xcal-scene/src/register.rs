@@ -20,6 +20,8 @@ use crate::camera_input::CameraInputSystem;
 use crate::composer::ComposerSystem;
 use crate::deferred::{DeferredApplySystem, ReplaySystem};
 use crate::director_state::DirectorAdvanceSystem;
+use crate::geometry::{AxesRefreshSystem, FunctionGraphRefreshSystem};
+use crate::input::{ParamPanelSystem, TimeControlSystem};
 use crate::lifetime::LifetimeFlushSystem;
 
 /// 注册场景侧全部 System。
@@ -57,4 +59,11 @@ pub fn register_systems(
     scheduler.add_system(Phase::FrameEnd, DeferredApplySystem);
     // S1：生命周期事件必须在**删除生效之后**求差 ⇒ 注册在 DeferredApply 之后。
     scheduler.add_system(Phase::FrameEnd, LifetimeFlushSystem);
+
+    // S0：UI 输入的**场景侧**消费者（从 xcal-egui 归位；面板 chrome 仍在 UI 层）。
+    scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
+    scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
+    // S0：场景几何刷新（从 xcal-egui 归位；几何算法在对象层）。
+    scheduler.add_system(Phase::Prepare, AxesRefreshSystem);
+    scheduler.add_system(Phase::Prepare, FunctionGraphRefreshSystem);
 }

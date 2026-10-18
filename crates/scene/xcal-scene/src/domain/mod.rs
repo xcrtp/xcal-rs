@@ -11,6 +11,7 @@ pub mod camera;
 pub mod config;
 pub mod event;
 pub mod view;
+pub mod view_rect;
 
 pub use camera::{CameraCommand, CameraMode};
 pub use config::{UiConfig, ViewportCamera};
@@ -19,3 +20,4 @@ pub use view::{
     ContentHandle, ContentTextureSpec, DEFAULT_BACKGROUND, LayerBlend, LayerDescriptor, LayerId,
     LayerKind, SceneView,
 };
+pub use view_rect::ViewRect;

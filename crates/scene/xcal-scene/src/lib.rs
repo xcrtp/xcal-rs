@@ -18,6 +18,8 @@ pub mod director_state;
 pub mod domain;
 pub mod driver;
 pub mod errors;
+pub mod geometry;
+pub mod input;
 pub mod lifetime;
 pub mod math_pod;
 pub mod persist;
@@ -43,6 +45,8 @@ pub use deferred::{
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
 pub use driver::{DriverCommand, DriverEvent, DriverPod};
 pub use errors::Error;
+pub use geometry::{AxesRefreshSystem, FunctionGraphRefreshSystem};
+pub use input::{ParamPanelSystem, TimeControlSystem};
 pub use lifetime::{
     LifetimeEvent, LifetimeEventKind, LifetimeEvents, LifetimeFlushSystem, LifetimeTracker,
 };

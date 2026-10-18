@@ -45,6 +45,9 @@ pub mod standard_backends;
 // `impl egui_wgpu::CallbackTrait` 留在 `egui-wgpu` 门控内。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod scene_callback;
+// S0：帧回调构造（从 xcal-egui 归位；输入是后端中立的 `FrameInputs`）。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod frame;
 
 // 旧 svg_recorder / text 空壳已删除（见上注）。
 // 下游若有使用，改为：xc-prerender::engine → xc-content::ContentIR → xcal-render::ir_to_draw_cmds。
@@ -72,6 +75,8 @@ pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 pub use eframe_backend::{EframeWgpuBackend, install_standard_backends};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use frame::build_scene_callback;
 // W1：不依赖 egui 的装配 + headless 渲染入口。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use standard_backends::{

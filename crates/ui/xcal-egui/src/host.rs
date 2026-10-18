@@ -25,17 +25,13 @@ use std::sync::Arc;
 use egui::Panel;
 
 use xc_notion::Rect2D;
-use xc_object::{Camera2DHandle, Camera3D};
-use xcal_render::{
-    ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, PostFilterChain, RevealQueue, ViewRect,
-};
-use xcal_render_backends::{Recorded2D, SceneCompositorCallback, SceneLayer, snapshot_queue};
+use xcal_render::ViewRect;
+use xcal_render_backends::SceneCompositorCallback;
 use xcal_scene::animation::BindingTable;
 use xcal_scene::contract::WorldView;
 use xcal_scene::director_state::DirectorState;
 use xcal_scene::domain::{
-    CameraCommand, ContentHandle, ContentTextureSpec, InputEvents, LayerBlend, LayerDescriptor,
-    LayerId, LayerKind, SceneEvent, SceneView, ids,
+    CameraCommand, InputEvents, LayerDescriptor, LayerKind, SceneEvent, SceneView, ids,
 };
 use xcal_scene::{Curve, TimeState};
 use xcal_schedule::resource::Resources;
@@ -107,98 +103,33 @@ impl EguiSceneHost {
 
     /// 本帧的**绘制调用数**（2D 命令 + 3D mesh/line 条数）。
     ///
-    /// ⚠️ 口径说明（本轮实测）：`xcal-schedule::FrameReport` 只有 System 耗时 / 实体数，
-    /// `xcal_render_backends::FrameCacheStats` 只有三角化缓存的请求 / 未命中 —— **两者都没有**
-    /// "绘制调用数"字段。故这里保留"查队列求长度"的原口径，只是把取数从 app 收到 host
-    /// （app 不该知道队列的内部结构；将来 `FrameReport` 若增字段，可再收敛到这里）。
+    /// 逻辑已在 `xcal-render::frame::draw_call_count`（S0 归位）；本方法只是
+    /// egui 宿主的转发入口。
     pub fn draw_call_count(res: &Resources) -> usize {
-        let two_d = res.get::<DrawQueue>().map_or(0, |q| q.len());
-        let three_d = res
-            .get::<DrawQueue3D>()
-            .map_or(0, |q| q.mesh_count() + q.line_count());
-        two_d + three_d
+        xcal_render::frame::draw_call_count(res)
     }
 
     /// 帧末清理：2D 队列内容已被 `present` 消费，清空以便下帧重新录制。
     ///
-    /// 为什么在 host 而不是 app：这是**帧管理**（谁消费、谁负责重置），
-    /// app 只应表达"这一帧结束了"，不该知道要清哪个队列。
+    /// 逻辑已在 `xcal-render::frame::end_frame`（S0 归位）；本方法只是转发。
     pub fn end_frame(res: &mut Resources) {
-        if let Some(queue) = res.get_mut::<DrawQueue>() {
-            queue.clear();
-        }
+        xcal_render::frame::end_frame(res);
     }
 
     // ─── 场景 → UI：视图声明 ───────────────────────────────────────────────
 
     /// 从场景状态构建本帧视图声明（纯数据，无 egui 类型）。
     ///
-    /// - 2D 图层：相机来自**场景对象**（`Camera2DHandle` 指认 `Framing2D`），
-    ///   视口矩形由 `ViewRect` 绑定（P1-1 / P1-2：UI 不再持有相机状态）；
-    ///   受 `UiConfig::show_2d` 控制（关掉即"关掉 2D 相机"）；
-    /// - 3D 图层：相机取 World 中第一个 `Camera3D` 组件，受 `UiConfig::show_3d` 控制；
-    /// - `ContentHandle` 为 B 阶段占位（S3 统一管线接管后指向 RenderQueue 分片）；
-    /// - **混合方式（S3-2）**：两个图层的内容都渲染到**透明底**离屏纹理，
-    ///   所以声明为 [`LayerBlend::Alpha`] —— 用 `Opaque`(REPLACE) 会把透明像素
-    ///   原样写进主 pass，抹掉背景与下层（`Opaque` 仅作枚举默认值）。
+    /// 逻辑已在 `xcal-render::frame::build_scene_view`（S0 归位）；本方法只负责
+    /// 把 UI 配置翻译成 [`FrameOptions`](xcal_render::FrameOptions)。
     pub fn build_scene_view(world: &hecs::World, res: &Resources) -> SceneView {
-        let rect = res
-            .get::<ViewRect>()
-            .map(|v| v.rect)
-            .unwrap_or_else(|| ViewRect::default().rect);
-        let cfg = res.get::<UiConfig>().cloned().unwrap_or_default();
-
-        let mut view = SceneView::default();
-
-        // ⚠️ **总闸优先（N3）**：`UiConfig::show_2d` / `show_3d` 是**图层级总闸**，
-        // 关掉即整层不画（连 `Viewport2D` 图层都不声明）——此时**不看**任何对象的
-        // 场景级 `Visibility`。总闸开时才轮到录制路径按对象 tag 逐对象判
-        // （见 `xcal_render::draw::record_scene_tagged`）。
-        if cfg.show_2d {
-            if let Some(handle) = res.get::<Camera2DHandle>() {
-                if let Some(camera) = handle.resolve(&WorldView::new(world), rect) {
-                    view.layers.push(LayerDescriptor {
-                        id: LayerId(view.layers.len() as u32),
-                        kind: LayerKind::Viewport2D { camera },
-                        content: ContentHandle::OPAQUE,
-                        opacity: 1.0,
-                        blend: LayerBlend::Alpha,
-                    });
-                }
-            }
-        }
-
-        // hecs 0.11：单组件查询的 iter 产出 `&Camera3D`（无 Entity）。
-        if cfg.show_3d {
-            if let Some(camera3d) = world.query::<&Camera3D>().iter().next() {
-                view.layers.push(LayerDescriptor {
-                    id: LayerId(view.layers.len() as u32),
-                    kind: LayerKind::Viewport3D { camera: *camera3d },
-                    content: ContentHandle::OPAQUE,
-                    opacity: 1.0,
-                    blend: LayerBlend::Alpha,
-                });
-            }
-        }
-
-        // 内容纹理层（S3-3）：仅当注册了 `ContentTextureSpec` 时声明。
-        // 它不是视口层——渲染到独立纹理供 3D 材质采样（默认不参与合成）。
-        if let Some(spec) = res.get::<ContentTextureSpec>() {
-            view.layers.push(LayerDescriptor {
-                id: LayerId(view.layers.len() as u32),
-                kind: LayerKind::ContentTexture {
-                    camera: spec.camera,
-                    size_px: spec.size_px,
-                    texture: spec.texture,
-                    composite: spec.composite,
-                },
-                content: ContentHandle::OPAQUE,
-                opacity: 1.0,
-                blend: LayerBlend::Alpha,
-            });
-        }
-
-        view
+        let default = UiConfig::default();
+        let config = res.get::<UiConfig>().unwrap_or(&default);
+        xcal_render::frame::build_scene_view(
+            &WorldView::new(world),
+            res,
+            xcal_render::FrameOptions::from_ui_config(config),
+        )
     }
 
     // ─── UI → 场景：原始输入翻译 ───────────────────────────────────────────
@@ -682,82 +613,21 @@ impl EguiSceneHost {
 
     /// 从本帧视图与资源构造**唯一**合成回调（不含任何 egui 调用）。
     ///
-    /// GUI（[`Self::present`]）与 headless 导出（`xcal-app` 的图像序列 / ffmpeg 管道）
-    /// 共用同一份构造逻辑 —— 导出路径与实时路径的帧体因此不可能分叉。
+    /// 逻辑分两层（S0 归位）：
+    /// - `xcal_render::frame::build_frame_inputs`：视图 + 资源 → 后端中立输入；
+    /// - `xcal_render_backends::frame::build_scene_callback`：输入 → 具体回调。
+    ///
+    /// GUI（[`Self::present`]）与 headless 导出共用这条构造，帧体因此不可能分叉。
     /// 返回 `None` 表示本帧没有图层（只画背景）。
     pub fn build_render_callback(
         view: &SceneView,
         res: &Resources,
     ) -> Option<SceneCompositorCallback> {
-        let view_rect = res
-            .get::<ViewRect>()
-            .map(|v| v.rect)
-            .unwrap_or_else(|| ViewRect::default().rect);
-
-        // 无图层时不注册回调（与 S4.1 前"无 GPU 图层则不加回调"一致）。
-        if view.layers.is_empty() {
-            return None;
-        }
-
-        // 图层顺序开关（UI 状态）。缺省与 `UiConfig::default()` 一致（不翻转）。
-        let flip = res
-            .get::<UiConfig>()
-            .map(|c| c.flip_layer_order)
-            .unwrap_or(false);
-
-        // 按有效序收集全部图层声明。S4.1 后所有 `LayerKind` 都走 GPU，
-        // 故不再需要"逐层判断是否 GPU"，回调固定落在有效序起点。
-        let order: Vec<usize> = if flip {
-            (0..view.layers.len()).rev().collect()
-        } else {
-            (0..view.layers.len()).collect()
-        };
-        let gpu_specs: Vec<SceneLayer> = order
-            .iter()
-            .map(|&idx| {
-                let layer = &view.layers[idx];
-                SceneLayer {
-                    id: layer.id,
-                    kind: layer.kind.clone(),
-                    blend: layer.blend,
-                    opacity: layer.clamped_opacity(),
-                }
-            })
-            .collect();
-
-        // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
-        let viewport = Rect2D::new(view_rect.min, view_rect.max);
-
-        let (queue_2d, queue_3d) = (res.get::<DrawQueue>()?, res.get::<DrawQueue3D>()?);
-        // 内容纹理层快照（S3-3）：单份 `ContentTextureQueue` → 关联到
-        // 唯一的 `ContentTexture` 图层 id（单层约束见 `ContentTextureSpec`）。
-        let content: Vec<(LayerId, Vec<Recorded2D>)> = res
-            .get::<ContentTextureQueue>()
-            .map(|q| {
-                let snap = snapshot_queue(&q.0);
-                gpu_specs
-                    .iter()
-                    .filter(|l| matches!(l.kind, LayerKind::ContentTexture { .. }))
-                    .map(|l| (l.id, snap.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // 形变项（S4.3）：回调在 `prepare` 阶段才消费，故需 owned 快照
-        // （与 `SceneLayer` / 内容纹理快照同一口径）。
-        let morphs = res
-            .get::<MorphQueue>()
-            .map(|q| q.0.clone())
-            .unwrap_or_default();
-        // 书写动画项（R0）：同口径的 owned 快照。
-        let reveals = res
-            .get::<RevealQueue>()
-            .map(|q| q.0.clone())
-            .unwrap_or_default();
-        // 合成后滤镜链（C 线）：空链 ⇒ 渲染层走直通（不建中间纹理、画面逐位不变）。
-        let filters = res.get::<PostFilterChain>().cloned().unwrap_or_default();
-        Some(SceneCompositorCallback::new(
-            viewport, gpu_specs, queue_2d, queue_3d, content, morphs, reveals, filters,
-        ))
+        let default = UiConfig::default();
+        let config = res.get::<UiConfig>().unwrap_or(&default);
+        let options = xcal_render::FrameOptions::from_ui_config(config);
+        let input = xcal_render::frame::build_frame_inputs(view, res, options)?;
+        xcal_render_backends::frame::build_scene_callback(input)
     }
 }
 
@@ -810,8 +680,9 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xc_object::{Camera3D, Framing2D, Projection};
+    use xc_object::{Camera2DHandle, Camera3D, Framing2D, Projection};
     use xcal_scene::contract::WorldScene;
+    use xcal_scene::domain::{ContentHandle, LayerBlend};
     use xcal_schedule::resource::Resources;
 
     /// 建含 3D 相机的世界（3D 图层来源）。

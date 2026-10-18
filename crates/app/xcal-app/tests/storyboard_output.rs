@@ -20,8 +20,8 @@ const CAMERA_PEAK: glam::Vec2 = glam::Vec2::new(FRAC_PI_2, 1.0);
 
 #[test]
 fn storyboard_produces_draw_output_over_time() {
-    use xcal_egui::resources::UiConfig;
-    use xcal_egui::systems::AxesRefreshSystem;
+    use xcal_scene::AxesRefreshSystem;
+    use xcal_scene::domain::UiConfig;
 
     let mut scene = Scene::new();
     let engine = xc_prerender::placeholder_engine();

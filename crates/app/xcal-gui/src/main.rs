@@ -1,5 +1,6 @@
-use xcal_app::{App, SceneChoice};
+use xcal_app::SceneChoice;
 use xcal_egui as ui;
+use xcal_gui::App;
 
 /// 2D 场景选择：`--demo`（或 `--capability-demo`）/ 环境变量 `XCAL_DEMO=1` ⇒ 能力 demo；
 /// `--script` ⇒ 用 Lua 脚本编排最小分镜；`--python` ⇒ 用 Python 脚本编排同一分镜。

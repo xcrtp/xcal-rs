@@ -6,11 +6,6 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "xcal-app"
-path = "src/main.rs"
-
-# headless 薄壳（脚本 → mp4 / 序列帧）。真二进制，不是 example。
-[[bin]]
 name = "xcal-render"
 path = "src/bin/xcal-render.rs"
 
@@ -28,7 +23,6 @@ xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }
 # RenderContext / WgpuBackend3D / WgpuBackend2D / SceneCompositorCallback 等具体后端实现。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
-xcal-egui = { path = "../../ui/xcal-egui" }
 xc-macro = { path = "../../kernel/xc-macro" }
 # 内容管线接线：xc-content（IR 类型）+ xc-prerender（Typst/占位引擎）。
 # 铁律：xcal-render 只能依赖轻的 xc-content，不得依赖 xc-prerender——
@@ -40,9 +34,6 @@ xc-notion = { path = "../../kernel/xc-notion" }
 # 场景对象层：图元 newtype 与摆放组件（Circle / Path / Line / Rect / Transform）。
 xc-object = { path = "../../object/xc-object" }
 
-eframe.workspace = true
-egui.workspace = true
-egui-wgpu.workspace = true
 wgpu.workspace = true
 hecs.workspace = true
 glam.workspace = true
@@ -51,6 +42,10 @@ derive_builder.workspace = true
 tracing.workspace = true
 # 序列帧导出（B 线）：最小 PNG 编码器。
 png.workspace = true
+
+[dev-dependencies]
+# 像素一致性用例直接驱动 egui-wgpu 的回调路径（不是生产依赖）。
+egui-wgpu.workspace = true
 
 [features]
 # typst 默认开：否则看不见真公式，demo 无意义。

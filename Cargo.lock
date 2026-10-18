@@ -6002,8 +6002,6 @@ version = "0.1.0"
 dependencies = [
  "derive-new",
  "derive_builder",
- "eframe",
- "egui",
  "egui-wgpu",
  "glam",
  "hecs",
@@ -6019,7 +6017,6 @@ dependencies = [
  "xc-pod-lua",
  "xc-pod-py",
  "xc-prerender",
- "xcal-egui",
  "xcal-render",
  "xcal-render-backends",
  "xcal-scene",
@@ -6043,6 +6040,20 @@ dependencies = [
  "xc-object",
  "xc-pod",
  "xcal-render",
+ "xcal-render-backends",
+ "xcal-scene",
+ "xcal-schedule",
+]
+
+[[package]]
+name = "xcal-gui"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui",
+ "xc-pod",
+ "xcal-app",
+ "xcal-egui",
  "xcal-render-backends",
  "xcal-scene",
  "xcal-schedule",
