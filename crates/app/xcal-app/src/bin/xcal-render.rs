@@ -2,12 +2,14 @@
 //!
 //! ```text
 //! xcal-render <脚本路径> [--frames DIR] [--fps N] [--out FILE] [--size WxH]
+//! xcal-render --bundle <file.xsb> [--frames DIR] [--fps N] [--out FILE] [--size WxH]
 //! ```
 //!
 //! - 默认 **ffmpeg 管道**（rawvideo → libx264）；ffmpeg 不在 PATH ⇒ **明确报错**并提示 `--frames`；
 //! - `--frames DIR` 走序列帧（PNG，交给外部工具合成）；
-//! - 帧数 = `ceil(duration × fps)`，时长由脚本决定；
-//! - 脚本语言按扩展名推断（`.lua` / `.py`）；`.py` 但未开 `python` feature ⇒ 明确报错。
+//! - 帧数 = `ceil(duration × fps)`，时长由脚本 / 产物决定；
+//! - 脚本语言按扩展名推断（`.lua` / `.py`）；`.py` 但未开 `python` feature ⇒ 明确报错；
+//! - `--bundle` 读 XSB 产物：先做可还原性检查，再走**与脚本完全相同**的 Runtime 路径。
 //!
 //! # 与 GUI 的一致性
 //!
@@ -21,14 +23,18 @@ use std::process::{Child, Command, Stdio};
 
 use xc_notion::{Rect2D, Vec2};
 use xcal_app::export::{ExportError, target_pix_fmt, to_rgba, write_png};
-use xcal_app::{ScriptLanguage, build_script_runtime, language_from_path};
+use xcal_app::{
+    ScriptLanguage, build_bundle_runtime, build_script_runtime, language_from_path,
+};
 use xcal_render::ViewRect;
 use xcal_render_backends::{RenderContext, ScreenParams, StandardBackends, render_frame_headless};
 use xcal_scene::DriverCommand;
 use xcal_scene::contract::WorldView;
+use xcal_scene_bundle::Bundle;
 
 struct Args {
-    script: PathBuf,
+    script: Option<PathBuf>,
+    bundle: Option<PathBuf>,
     frames_dir: Option<PathBuf>,
     fps: f64,
     out: PathBuf,
@@ -46,6 +52,7 @@ impl Args {
         }
 
         let mut script: Option<PathBuf> = None;
+        let mut bundle: Option<PathBuf> = None;
         let mut frames_dir = None;
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
@@ -68,6 +75,15 @@ impl Args {
                     }
                     script = Some(PathBuf::from(
                         raw.get(i).ok_or("--script 需要一个脚本路径")?,
+                    ));
+                }
+                "--bundle" => {
+                    i += 1;
+                    if bundle.is_some() {
+                        return Err("--bundle 重复".to_string());
+                    }
+                    bundle = Some(PathBuf::from(
+                        raw.get(i).ok_or("--bundle 需要一个 .xsb 路径")?,
                     ));
                 }
                 "--fps" => {
@@ -106,8 +122,16 @@ impl Args {
             i += 1;
         }
 
+        if script.is_some() && bundle.is_some() {
+            return Err("脚本路径与 --bundle 只能给一个".to_string());
+        }
+        if script.is_none() && bundle.is_none() {
+            return Err("缺少脚本路径（或 --bundle <file.xsb>）".to_string());
+        }
+
         Ok(Self {
-            script: script.ok_or("缺少脚本路径")?,
+            script,
+            bundle,
             frames_dir,
             fps,
             out,
@@ -125,19 +149,36 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args = Args::parse()?;
-    let source = std::fs::read_to_string(&args.script)
-        .map_err(|e| format!("读取脚本 {} 失败：{e}", args.script.display()))?;
-    let language = language_from_path(&args.script).map_err(|e| e.to_string())?;
-    if language == ScriptLanguage::Python && !cfg!(feature = "python") {
-        return Err(
-            "脚本是 .py，但本二进制编译时未启用 `python` feature（请重新构建或改用 .lua）"
-                .to_string(),
-        );
-    }
 
     let ctx =
         RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
-    let runtime = build_script_runtime(ctx.clone(), source, language).map_err(|e| e.to_string())?;
+
+    let runtime = if let Some(script_path) = &args.script {
+        let source = std::fs::read_to_string(script_path)
+            .map_err(|e| format!("读取脚本 {} 失败：{e}", script_path.display()))?;
+        let language = language_from_path(script_path).map_err(|e| e.to_string())?;
+        if language == ScriptLanguage::Python && !cfg!(feature = "python") {
+            return Err(
+                "脚本是 .py，但本二进制编译时未启用 `python` feature（请重新构建或改用 .lua）"
+                    .to_string(),
+            );
+        }
+        build_script_runtime(ctx.clone(), source, language).map_err(|e| e.to_string())?
+    } else if let Some(bundle_path) = &args.bundle {
+        let bytes = std::fs::read(bundle_path)
+            .map_err(|e| format!("读取 XSB {} 失败：{e}", bundle_path.display()))?;
+        let bundle = Bundle::from_bytes(&bytes)
+            .map_err(|e| format!("XSB 解析失败（{}）：{e}", bundle_path.display()))?;
+        eprintln!(
+            "[xsb] payload hash = {}（{} 个对象，{}s）",
+            bundle.payload_hash_hex(),
+            bundle.meta().object_count,
+            bundle.meta().duration
+        );
+        build_bundle_runtime(ctx.clone(), &bundle).map_err(|e| e.to_string())?
+    } else {
+        unreachable!("Args::parse 已保证二者恰有一个")
+    };
 
     let (width, height) = args.size;
     // headless 没有 egui 布局：视口 = 整幅画面（GUI 里由 `update_view_rect` 写入）。

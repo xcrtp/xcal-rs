@@ -56,7 +56,7 @@ use lyon_tessellation::{
 
 use xc_notion::{Path2D, Transform2D, Triangle2D, Vec2};
 
-use crate::shape::{CustomShapeData, Shape2D, Style2D};
+use crate::shape::{CustomShapeData, CustomSpecs, Shape2D, Style2D};
 use crate::vertex::{AaModel, CacheStrategy, VertexLayout};
 
 /// 书写动画（reveal）的默认细分步长：**输出空间单位**（= 屏幕像素）。
@@ -368,7 +368,43 @@ fn subdivide_by_step(points: &[Vec2], step: f32, closed: bool) -> Vec<Vec2> {
 
 // ─── 顶层 API ─────────────────────────────────────────────────────────────
 
-/// `Shape2D` → 三角化结果列表。
+/// 三角化失败（**显式错误**：不存在"静默返回空几何"）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TessellateError {
+    /// `Shape2D::Custom` 的 `SpecId` 在当前运行时的注册表里不存在。
+    UnresolvedCustom { spec: String },
+    /// 规格已注册，但没有提供任何几何降级函数。
+    CustomWithoutGeometry { spec: String },
+}
+
+impl std::fmt::Display for TessellateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnresolvedCustom { spec } => {
+                write!(f, "未注册的 Custom SpecId：`{spec}`")
+            }
+            Self::CustomWithoutGeometry { spec } => {
+                write!(f, "Custom SpecId `{spec}` 没有提供 to_path / to_triangles")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TessellateError {}
+
+/// `Shape2D` → 三角化结果列表（使用空规格表）。
+///
+/// 没有自定义图元的运行时用它；带自定义图元时用 [`tessellate_with`]。
+pub fn tessellate(
+    shape: &Shape2D,
+    transform: &Transform2D,
+    style: &Style2D,
+    tolerance: f32,
+) -> Result<Vec<Tessellation2D>, TessellateError> {
+    tessellate_with(shape, transform, style, tolerance, &CustomSpecs::EMPTY)
+}
+
+/// `Shape2D` → 三角化结果列表（带**具名规格注册表**）。
 ///
 /// - `transform`：图元本地点 → 输出空间的变换（在三角化**之前**应用于路径点，
 ///   使 lyon 在输出空间直接算出正确的法线/miter）；
@@ -376,23 +412,28 @@ fn subdivide_by_step(points: &[Vec2], step: f32, closed: bool) -> Vec<Vec2> {
 /// - `tolerance`：展平容差（输出空间单位），由 [`tolerance_for_scale`] 推导。
 ///
 /// `Group` 递归展开为多项；`Empty` 返回空列表。
-pub fn tessellate(
+/// `Custom` 的 `SpecId` 缺失 / 无几何 ⇒ **显式** [`TessellateError`]。
+pub fn tessellate_with(
     shape: &Shape2D,
     transform: &Transform2D,
     style: &Style2D,
     tolerance: f32,
-) -> Vec<Tessellation2D> {
+    specs: &CustomSpecs,
+) -> Result<Vec<Tessellation2D>, TessellateError> {
     match shape {
-        Shape2D::Empty => Vec::new(),
-        Shape2D::Group { children } => children
-            .iter()
-            .flat_map(|child| tessellate(child, transform, style, tolerance))
-            .collect(),
-        Shape2D::Custom(data) => tessellate_custom(data, transform, style, tolerance),
+        Shape2D::Empty => Ok(Vec::new()),
+        Shape2D::Group { children } => {
+            let mut out = Vec::new();
+            for child in children {
+                out.extend(tessellate_with(child, transform, style, tolerance, specs)?);
+            }
+            Ok(out)
+        }
+        Shape2D::Custom(data) => tessellate_custom(data, transform, style, tolerance, specs),
         _ => {
             let contours = contours_of(shape, transform, tolerance);
             if contours.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let mut out = Vec::new();
             if style.fill.is_some() {
@@ -405,7 +446,7 @@ pub fn tessellate(
                     out.push(t);
                 }
             }
-            out
+            Ok(out)
         }
     }
 }
@@ -416,8 +457,14 @@ fn tessellate_custom(
     transform: &Transform2D,
     style: &Style2D,
     tolerance: f32,
-) -> Vec<Tessellation2D> {
-    if let Some(to_triangles) = data.to_triangles {
+    specs: &CustomSpecs,
+) -> Result<Vec<Tessellation2D>, TessellateError> {
+    let Some(spec) = specs.get(&data.spec) else {
+        return Err(TessellateError::UnresolvedCustom {
+            spec: data.spec.to_string(),
+        });
+    };
+    if let Some(to_triangles) = spec.to_triangles {
         // 约定：`to_triangles` 产出**已应用 transform** 的三角形。
         let tris = to_triangles(data, transform);
         let mut vertices = Vec::with_capacity(tris.len() * 3);
@@ -434,24 +481,27 @@ fn tessellate_custom(
                 });
             }
         }
-        return vec![Tessellation2D {
+        return Ok(vec![Tessellation2D {
             vertices,
             indices,
             layout: tessellation_layout(),
             kind: TessKind::Fill,
-        }];
+        }]);
     }
-    if let Some(to_path) = data.to_path {
+    if let Some(to_path) = spec.to_path {
         // 约定：`to_path` 产出**已应用 transform** 的路径。
         let path = to_path(data, transform);
-        return tessellate(
+        return tessellate_with(
             &Shape2D::Path(path),
             &Transform2D::identity(),
             style,
             tolerance,
+            specs,
         );
     }
-    Vec::new()
+    Err(TessellateError::CustomWithoutGeometry {
+        spec: data.spec.to_string(),
+    })
 }
 
 fn tessellate_fill(contours: &[Contour]) -> Option<Tessellation2D> {
@@ -603,6 +653,19 @@ mod tests {
         Transform2D::identity()
     }
 
+    /// 测试专用包装：断言三角化成功（生产路径必须显式处理 `Err`）。
+    ///
+    /// 同名遮蔽 `super::tessellate`（glob 导入可被本地项遮蔽）—— 这样几十处
+    /// 既有断言无需逐个改写成 `.expect(..)`。
+    fn tessellate(
+        shape: &Shape2D,
+        transform: &Transform2D,
+        style: &Style2D,
+        tolerance: f32,
+    ) -> Vec<Tessellation2D> {
+        super::tessellate(shape, transform, style, tolerance).expect("tessellate 失败")
+    }
+
     /// **S2 白名单（G4 的配套防线）**：`Shape2D` 的每个变体都必须产生几何，
     /// 或**显式**列入本测试的空几何白名单（当前仅 `Empty`）。
     ///
@@ -611,6 +674,8 @@ mod tests {
     /// 任何变体接线退化都会在这里变红（新增变体仍需人工补到此列表）。
     #[test]
     fn every_shape2d_variant_produces_geometry_or_is_whitelisted() {
+        use crate::shape::{CustomSpec, SpecId};
+
         fn custom_path(_: &CustomShapeData, transform: &Transform2D) -> Path2D {
             Path2D::from_polyline(
                 &[
@@ -622,16 +687,19 @@ mod tests {
             )
         }
 
+        static SPECS: &[CustomSpec] =
+            &[CustomSpec::new("test.triangle").with_path(custom_path)];
+        let specs = CustomSpecs::new(SPECS);
+
         let poly = vec![
             Vec2::ZERO,
             Vec2::new(1.0, 0.0),
             Vec2::new(1.0, 1.0),
         ];
         let custom = CustomShapeData::new(
-            std::any::TypeId::of::<u8>(),
+            SpecId::new("test.triangle"),
             Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
-        )
-        .with_to_path(custom_path);
+        );
 
         let cases: Vec<(&str, Shape2D, bool)> = vec![
             (
@@ -698,7 +766,9 @@ mod tests {
                 style_stroke(1.0)
             };
             assert!(
-                !tessellate(&shape, &identity(), &style, 0.05).is_empty(),
+                !tessellate_with(&shape, &identity(), &style, 0.05, &specs)
+                    .expect("变体必须可三角化")
+                    .is_empty(),
                 "Shape2D::{name} 没有产生几何（tessellate 漏接线）"
             );
         }
@@ -1416,20 +1486,40 @@ mod tests {
 
     // ── Custom 降级钩子 ───────────────────────────────────────────────────
 
+    use crate::shape::{CustomSpec, SpecId};
+
+    fn triangle_tris(_: &CustomShapeData, _: &Transform2D) -> Vec<Triangle2D> {
+        vec![Triangle2D::new(
+            Vec2::ZERO,
+            Vec2::new(2.0, 0.0),
+            Vec2::new(0.0, 2.0),
+        )]
+    }
+
+    fn short_path(_: &CustomShapeData, _: &Transform2D) -> Path2D {
+        Path2D::from_polyline(&[Vec2::ZERO, Vec2::new(4.0, 0.0)], false)
+    }
+
+    static TRIANGLE_SPECS: &[CustomSpec] =
+        &[CustomSpec::new("test.tris").with_triangles(triangle_tris)];
+    static PATH_SPECS: &[CustomSpec] = &[CustomSpec::new("test.path").with_path(short_path)];
+    static EMPTY_SPECS: &[CustomSpec] = &[CustomSpec::new("test.empty")];
+
     #[test]
     fn custom_to_triangles_is_adopted() {
         let data = CustomShapeData::new(
-            std::any::TypeId::of::<u32>(),
+            SpecId::new("test.tris"),
             Rect2D::new(Vec2::ZERO, Vec2::new(2.0, 2.0)),
+        );
+        let out = tessellate_with(
+            &Shape2D::Custom(data),
+            &identity(),
+            &style_fill(),
+            0.05,
+            &CustomSpecs::new(TRIANGLE_SPECS),
         )
-        .with_to_triangles(|_, _| {
-            vec![Triangle2D::new(
-                Vec2::ZERO,
-                Vec2::new(2.0, 0.0),
-                Vec2::new(0.0, 2.0),
-            )]
-        });
-        let t = &tessellate(&Shape2D::Custom(data), &identity(), &style_fill(), 0.05)[0];
+        .expect("已注册规格");
+        let t = &out[0];
         assert_eq!(t.kind, TessKind::Fill);
         assert_eq!(t.indices.len(), 3);
         assert!((total_area(t, 0.0) - 2.0).abs() < 1e-5);
@@ -1438,26 +1528,60 @@ mod tests {
     #[test]
     fn custom_to_path_falls_back_to_path_tessellation() {
         let data = CustomShapeData::new(
-            std::any::TypeId::of::<u32>(),
+            SpecId::new("test.path"),
             Rect2D::new(Vec2::ZERO, Vec2::new(4.0, 4.0)),
-        )
-        .with_to_path(|_, _| Path2D::from_polyline(&[Vec2::ZERO, Vec2::new(4.0, 0.0)], false));
-        let out = tessellate(
+        );
+        let out = tessellate_with(
             &Shape2D::Custom(data),
             &identity(),
             &style_stroke(1.0),
             0.05,
-        );
+            &CustomSpecs::new(PATH_SPECS),
+        )
+        .expect("已注册规格");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, TessKind::Stroke);
     }
 
+    /// D1：未注册的 SpecId ⇒ **显式错误**并命名缺失项（不是静默空几何）。
     #[test]
-    fn custom_without_hooks_produces_nothing() {
+    fn unregistered_custom_is_an_explicit_error() {
         let data = CustomShapeData::new(
-            std::any::TypeId::of::<u32>(),
+            SpecId::new("test.missing"),
             Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
         );
-        assert!(tessellate(&Shape2D::Custom(data), &identity(), &style_fill(), 0.05).is_empty());
+        let error = tessellate_with(
+            &Shape2D::Custom(data),
+            &identity(),
+            &style_fill(),
+            0.05,
+            &CustomSpecs::EMPTY,
+        )
+        .expect_err("未注册必须报错");
+        assert!(
+            matches!(error, TessellateError::UnresolvedCustom { ref spec } if spec == "test.missing"),
+            "error = {error}"
+        );
+    }
+
+    /// 规格存在但没有几何函数 ⇒ 同样是显式错误。
+    #[test]
+    fn custom_spec_without_geometry_is_an_explicit_error() {
+        let data = CustomShapeData::new(
+            SpecId::new("test.empty"),
+            Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+        );
+        let error = tessellate_with(
+            &Shape2D::Custom(data),
+            &identity(),
+            &style_fill(),
+            0.05,
+            &CustomSpecs::new(EMPTY_SPECS),
+        )
+        .expect_err("无几何必须报错");
+        assert!(matches!(
+            error,
+            TessellateError::CustomWithoutGeometry { .. }
+        ));
     }
 }

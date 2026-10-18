@@ -74,7 +74,7 @@ pub struct AxesLine {
 }
 
 /// 轴对齐的坐标网格对象（网格线 + 坐标轴）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Axes2D {
     /// x 方向定义域（世界单位）；`refresh` 会与相机可见范围取交。
     pub x_range: (f32, f32),
@@ -86,6 +86,60 @@ pub struct Axes2D {
     pub grid_stroke: StrokeSolid,
     /// 坐标轴样式。
     pub axis_stroke: StrokeSolid,
+}
+
+/// **serde 表示**（XSB 硬约束：payload 不得含 NaN / Infinity）。
+///
+/// `∞` 是"无界定义域"的运行时表示，但 JSON 无法表达非有限浮点
+/// （`serde_json` 会把它写成 `null`，反序列化即失败）。这里把每一端显式编码为
+/// `Option<f32>`：`None` = 该端无界；`Some(v)` = 有限值。
+///
+/// 语义不变：解码时 min 侧 `None → -∞`、max 侧 `None → +∞`。
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Axes2DRepr {
+    x_range: (Option<f32>, Option<f32>),
+    y_range: (Option<f32>, Option<f32>),
+    tick: TickSpec,
+    grid_stroke: StrokeSolid,
+    axis_stroke: StrokeSolid,
+}
+
+fn encode_bound(value: f32) -> Option<f32> {
+    value.is_finite().then_some(value)
+}
+
+fn decode_min(value: Option<f32>) -> f32 {
+    value.unwrap_or(f32::NEG_INFINITY)
+}
+
+fn decode_max(value: Option<f32>) -> f32 {
+    value.unwrap_or(f32::INFINITY)
+}
+
+impl serde::Serialize for Axes2D {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let repr = Axes2DRepr {
+            x_range: (encode_bound(self.x_range.0), encode_bound(self.x_range.1)),
+            y_range: (encode_bound(self.y_range.0), encode_bound(self.y_range.1)),
+            tick: self.tick,
+            grid_stroke: self.grid_stroke.clone(),
+            axis_stroke: self.axis_stroke.clone(),
+        };
+        serde::Serialize::serialize(&repr, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Axes2D {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let repr = <Axes2DRepr as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(Self {
+            x_range: (decode_min(repr.x_range.0), decode_max(repr.x_range.1)),
+            y_range: (decode_min(repr.y_range.0), decode_max(repr.y_range.1)),
+            tick: repr.tick,
+            grid_stroke: repr.grid_stroke,
+            axis_stroke: repr.axis_stroke,
+        })
+    }
 }
 
 impl Default for Axes2D {
@@ -275,6 +329,31 @@ mod tests {
 
     fn camera(scale: f32, size: Vec2) -> Camera2D {
         Camera2D::new(Vec2::ZERO, scale, Rect2D::new(Vec2::ZERO, size))
+    }
+
+    /// XSB：无界定义域（±∞）必须能往返，且 JSON 里不出现非有限浮点。
+    #[test]
+    fn unbounded_range_roundtrips_without_non_finite_numbers() {
+        let axes = Axes2D::unbounded();
+        let json = serde_json::to_string(&axes).expect("序列化");
+        assert!(
+            !json.contains("inf") && !json.contains("Infinity"),
+            "payload 不得含非有限浮点：{json}"
+        );
+        let back: Axes2D = serde_json::from_str(&json).expect("反序列化");
+        assert_eq!(back.x_range, (f32::NEG_INFINITY, f32::INFINITY));
+        assert_eq!(back.y_range, (f32::NEG_INFINITY, f32::INFINITY));
+        assert_eq!(back.tick.min_px, axes.tick.min_px);
+    }
+
+    /// 有限定义域逐位往返。
+    #[test]
+    fn bounded_range_roundtrips_exactly() {
+        let axes = Axes2D::new((-10.0, 10.0), (-5.0, 5.0));
+        let json = serde_json::to_string(&axes).expect("序列化");
+        let back: Axes2D = serde_json::from_str(&json).expect("反序列化");
+        assert_eq!(back.x_range, (-10.0, 10.0));
+        assert_eq!(back.y_range, (-5.0, 5.0));
     }
 
     /// 步长自适应（迁移前 `unit = scale.max(10) / scale` 的语义）。

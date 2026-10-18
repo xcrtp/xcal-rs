@@ -30,3 +30,7 @@ derive_builder.workspace = true
 derive-new.workspace = true
 # 组件持久化：全部登记组件的 serde。
 serde.workspace = true
+
+[dev-dependencies]
+# Axes2D 无界定义域的 serde 往返用例（XSB）。
+serde_json.workspace = true

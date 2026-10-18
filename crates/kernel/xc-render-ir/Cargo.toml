@@ -19,3 +19,7 @@ license.workspace = true
 xc-notion = { path = "../xc-notion" }
 # 组件持久化：样式组件（StrokeSolid / FillSolid / Opacity）可 serde。
 serde.workspace = true
+
+[dev-dependencies]
+# `Shape2D` 可序列化的往返用例（XSB D1）。
+serde_json.workspace = true

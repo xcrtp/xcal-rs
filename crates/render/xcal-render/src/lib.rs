@@ -63,8 +63,8 @@ pub use draw::{
     visible_for,
 };
 pub use xc_render_ir::{
-    CustomShapeData, CustomTypeId, FillSolid, FillStyle, Opacity, ResolveStyle, Shape2D,
-    StrokeSolid, StrokeStyle, Style2D, ToShape2D,
+    CustomShapeData, CustomSpec, CustomSpecs, FillSolid, FillStyle, Opacity, ResolveStyle, Shape2D,
+    SpecId, StrokeSolid, StrokeStyle, Style2D, ToShape2D,
 };
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
@@ -103,8 +103,8 @@ pub use painter_2d::Painter2DTarget;
 
 // ─── S3-0：lyon 三角化适配层（纯 CPU，无 wgpu/egui 依赖） ────────────────
 pub use tessellate::{
-    REVEAL_STEP_PX, TessKind, Tessellation2D, Vertex2D, tessellate, tessellate_reveal,
-    tessellation_layout, tolerance_for_scale,
+    REVEAL_STEP_PX, TessKind, TessellateError, Tessellation2D, Vertex2D, tessellate,
+    tessellate_reveal, tessellate_with, tessellation_layout, tolerance_for_scale,
 };
 
 // ─── 顶点格式契约（纯数据，无 wgpu 依赖；翻译层在 xcal-render-backends） ──

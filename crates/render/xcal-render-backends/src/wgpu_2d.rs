@@ -823,7 +823,15 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..draw.style
             };
-            for tess in tessellate(&draw.shape, local, &style, tolerance) {
+            let tessellated = match tessellate(&draw.shape, local, &style, tolerance) {
+                Ok(items) => items,
+                // XSB D1：Custom 解析失败是**显式错误**并记录，不再静默产空几何。
+                Err(error) => {
+                    eprintln!("[xcal-render] 三角化失败，已跳过该绘制：{error}");
+                    continue;
+                }
+            };
+            for tess in tessellated {
                 if tess.vertices.is_empty() || tess.indices.is_empty() {
                     continue;
                 }
@@ -960,8 +968,20 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..item.style
             };
-            let from_tess = tessellate(&Shape2D::Path(from_path.clone()), local, &style, tolerance);
-            let to_tess = tessellate(&Shape2D::Path(to_path.clone()), local, &style, tolerance);
+            let from_tess = match tessellate(&Shape2D::Path(from_path.clone()), local, &style, tolerance) {
+                Ok(items) => items,
+                Err(error) => {
+                    eprintln!("[xcal-render] 形变 from 三角化失败，已跳过：{error}");
+                    continue;
+                }
+            };
+            let to_tess = match tessellate(&Shape2D::Path(to_path.clone()), local, &style, tolerance) {
+                Ok(items) => items,
+                Err(error) => {
+                    eprintln!("[xcal-render] 形变 to 三角化失败，已跳过：{error}");
+                    continue;
+                }
+            };
             // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
             //
             // ⚠️ **退化一侧的合成**（P5 实测修）：`from` 是"退化点"（全部点重合）时
@@ -1793,8 +1813,10 @@ mod tests {
             start: Vec2::new(0.0, 0.0),
             end: Vec2::new(30.0, 10.0),
         };
-        let thin = tessellate(&shape, &Transform2D::identity(), &stroke_style(2.0), 0.05);
-        let thick = tessellate(&shape, &Transform2D::identity(), &stroke_style(8.0), 0.05);
+        let thin = tessellate(&shape, &Transform2D::identity(), &stroke_style(2.0), 0.05)
+            .expect("三角化");
+        let thick = tessellate(&shape, &Transform2D::identity(), &stroke_style(8.0), 0.05)
+            .expect("三角化");
         assert_eq!(thin.len(), 1);
         assert_eq!(thick.len(), 1);
         let (a, b) = (&thin[0], &thick[0]);

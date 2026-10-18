@@ -5875,6 +5875,7 @@ dependencies = [
  "derive-new",
  "derive_builder",
  "serde",
+ "serde_json",
  "xc-macro",
  "xc-notion",
  "xc-render-ir",
@@ -5960,6 +5961,7 @@ name = "xc-render-ir"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "xc-notion",
 ]
 
@@ -6020,7 +6022,16 @@ dependencies = [
  "xcal-render",
  "xcal-render-backends",
  "xcal-scene",
+ "xcal-scene-bundle",
  "xcal-schedule",
+]
+
+[[package]]
+name = "xcal-compile"
+version = "0.1.0"
+dependencies = [
+ "xcal-app",
+ "xcal-scene-bundle",
 ]
 
 [[package]]
@@ -6168,6 +6179,16 @@ dependencies = [
  "xc-scene-contract",
  "xc-time",
  "xcal-schedule",
+]
+
+[[package]]
+name = "xcal-scene-bundle"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "xc-object",
+ "xcal-scene",
 ]
 
 [[package]]

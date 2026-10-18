@@ -11,6 +11,8 @@ path = "src/bin/xcal-render.rs"
 
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene" }
+# XSB 装配产物（格式 + 可还原性检查）。不依赖任何语言适配器。
+xcal-scene-bundle = { path = "../../scene/xcal-scene-bundle" }
 # Pod 机制 + 静态插件装配（src/assembly.rs）。
 xc-pod = { path = "../../pod/xc-pod" }
 xc-pod-binding = { path = "../../pod/xc-pod-binding" }

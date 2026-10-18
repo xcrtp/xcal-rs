@@ -4,74 +4,177 @@
 //
 // 设计要点：
 // - Shape2D 是"逻辑图元"枚举，后端可选择光栅化路径（triangulate / flatten）；
-// - Shape2D::Custom 是开放扩展点：宿主（xcal-egui / 插件）可携带自己的
-//   类型标识与几何降级函数（to_path / to_triangles），使 render 层无需
-//   为每个宿主图元增加变体即可统一处理裁剪/命中测试/离屏后端；
-// - 本模块不依赖 wgpu/egui，纯几何 + 函数指针。
+// - Shape2D::Custom 是开放扩展点：宿主（xcal-egui / 插件）通过**可寻址的 SpecId**
+//   引用一个具名几何规格，使 render 层无需为每个宿主图元增加变体即可统一处理
+//   裁剪 / 命中测试 / 离屏后端；
+// - 本模块不依赖 wgpu/egui，纯几何 + 可序列化的规格标识。
 //
 // M2：本文件自 `xcal-render/src/shape.rs` 迁入（渲染 IR 层）。
+// XSB：`CustomShapeData` 不再是"函数指针 + TypeId"，而是 `SpecId + bounds` ——
+// 图元必须可序列化，且不得包含匿名闭包（见 D1/D2）。
+//
 // ⚠️ 变体语义**冻结**：`Circle { center, radius }` 等扁平字段形态是后端
 // （wgpu_2d / tessellate）源级依赖的契约，改名 / 改形会连带改后端源码 —— 禁止。
 
+use std::borrow::Cow;
+
 use xc_notion::{Color32, MeasureSpace, Path2D, Rect2D, Transform2D, Triangle2D, Vec2};
 
-/// 自定义图元携带的类型标识（用于调试 / 宿主侧反查）。
-pub type CustomTypeId = std::any::TypeId;
-
-/// 自定义图元的几何降级数据。
+/// 自定义图元的**稳定规格标识**。
 ///
-/// 后端不认识的宿主图元（如节点编辑器的贝塞尔连接、图表符号）可通过
-/// 此结构向 render 层提供两种光栅化降级：
-/// - `to_path`：把图元展开为 [`Path2D`]（描边/填充后端通用）；
-/// - `to_triangles`：直接提供三角化结果（宿主已预三角化时可省一次展平）。
-#[derive(Clone)]
-pub struct CustomShapeData {
-    /// 宿主侧类型标识。
-    pub type_id: CustomTypeId,
-    /// 逻辑包围盒（用于裁剪 / 排序 / 视锥剔除）。
-    pub bounds: Rect2D,
-    /// 展开为路径（可选）。函数指针而非闭包：保证 Send + Sync + 'static，
-    /// 避免为每个图元做 boxed closure 分配。
+/// 为什么不是注册序号：编译器与回放端是两个独立二进制；若用序号，两侧注册顺序
+/// 稍有不同，同一个 ID 就会指向不同函数 ⇒ 画面错乱且不报错。
+///
+/// 构造：`SpecId::new("my.glyph")`（编译期常量）或 `SpecId::from_name(...)`
+/// （反序列化 / 动态来源）。序列化只写名字。
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SpecId(Cow<'static, str>);
+
+impl SpecId {
+    /// 编译期常量规格名（推荐）。
+    pub const fn new(name: &'static str) -> Self {
+        Self(Cow::Borrowed(name))
+    }
+
+    /// 运行期来源（反序列化等）。
+    pub fn from_name(name: impl Into<String>) -> Self {
+        Self(Cow::Owned(name.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl std::fmt::Display for SpecId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl serde::Serialize for SpecId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SpecId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(Self::from_name(name))
+    }
+}
+
+/// 一个自定义图元的**具名几何规格**（注册表条目）。
+///
+/// 这是函数指针唯一的合法归宿：它们住在**具名常量表**里，而不是每个图元实例里。
+/// 编译器与回放端各自链接同一张表 ⇒ 同名即同函数。
+pub struct CustomSpec {
+    /// 稳定规格名。
+    pub id: SpecId,
+    /// 展开为路径。
     pub to_path: Option<fn(&CustomShapeData, transform: &Transform2D) -> Path2D>,
-    /// 展开为三角形（可选；坐标已应用 transform）。
+    /// 直接三角化（坐标已应用 transform）。
     pub to_triangles: Option<fn(&CustomShapeData, transform: &Transform2D) -> Vec<Triangle2D>>,
 }
 
-impl std::fmt::Debug for CustomShapeData {
+impl CustomSpec {
+    /// 空规格（两种降级都未提供 ⇒ 解析时明确报错）。
+    pub const fn new(id: &'static str) -> Self {
+        Self {
+            id: SpecId::new(id),
+            to_path: None,
+            to_triangles: None,
+        }
+    }
+
+    pub const fn with_path(
+        mut self,
+        f: fn(&CustomShapeData, &Transform2D) -> Path2D,
+    ) -> Self {
+        self.to_path = Some(f);
+        self
+    }
+
+    pub const fn with_triangles(
+        mut self,
+        f: fn(&CustomShapeData, &Transform2D) -> Vec<Triangle2D>,
+    ) -> Self {
+        self.to_triangles = Some(f);
+        self
+    }
+
+    /// 该规格是否至少提供一种几何降级。
+    pub const fn has_geometry(&self) -> bool {
+        self.to_path.is_some() || self.to_triangles.is_some()
+    }
+}
+
+impl std::fmt::Debug for CustomSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CustomShapeData")
-            .field("type_id", &self.type_id)
-            .field("bounds", &self.bounds)
+        f.debug_struct("CustomSpec")
+            .field("id", &self.id)
             .field("to_path", &self.to_path.is_some())
             .field("to_triangles", &self.to_triangles.is_some())
             .finish()
     }
 }
 
+/// **注册表**：编译期生成的具名规格表（`static SPECS: &[CustomSpec]`）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CustomSpecs {
+    specs: &'static [CustomSpec],
+}
+
+impl CustomSpecs {
+    /// 空表（没有自定义图元的运行时）。
+    pub const EMPTY: Self = Self { specs: &[] };
+
+    pub const fn new(specs: &'static [CustomSpec]) -> Self {
+        Self { specs }
+    }
+
+    /// 按名字精确查找（**不做前缀 / 模糊匹配**）。
+    pub fn get(&self, id: &SpecId) -> Option<&'static CustomSpec> {
+        self.specs.iter().find(|spec| spec.id == *id)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.specs.is_empty()
+    }
+}
+
+/// 自定义图元的几何降级数据。
+///
+/// 只携带**可序列化**的载荷：规格名 + 包围盒。几何函数在
+/// [`CustomSpec`] 注册表里按名字查找。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CustomShapeData {
+    /// 具名几何规格。
+    pub spec: SpecId,
+    /// 逻辑包围盒（用于裁剪 / 排序 / 视锥剔除）。
+    pub bounds: Rect2D,
+}
+
 impl CustomShapeData {
-    /// 创建自定义图元降级数据（bounds 为必填，几何函数可选）。
-    pub fn new(type_id: CustomTypeId, bounds: Rect2D) -> Self {
+    /// 创建自定义图元降级数据（bounds 为必填）。
+    pub fn new(spec: impl Into<SpecId>, bounds: Rect2D) -> Self {
         Self {
-            type_id,
+            spec: spec.into(),
             bounds,
-            to_path: None,
-            to_triangles: None,
         }
     }
+}
 
-    /// 设置路径展开函数。
-    pub fn with_to_path(mut self, f: fn(&CustomShapeData, &Transform2D) -> Path2D) -> Self {
-        self.to_path = Some(f);
-        self
+impl From<&'static str> for SpecId {
+    fn from(name: &'static str) -> Self {
+        Self::new(name)
     }
+}
 
-    /// 设置三角化函数。
-    pub fn with_to_triangles(
-        mut self,
-        f: fn(&CustomShapeData, &Transform2D) -> Vec<Triangle2D>,
-    ) -> Self {
-        self.to_triangles = Some(f);
-        self
+impl From<String> for SpecId {
+    fn from(name: String) -> Self {
+        Self::from_name(name)
     }
 }
 
@@ -101,10 +204,10 @@ impl Default for Style2D {
     }
 }
 
-/// 2D 逻辑图元。
+/// 2D 逻辑图元（**可序列化**：XSB 产物的硬前提）。
 ///
 /// 所有坐标均为逻辑坐标（本地空间），由渲染层的 transform 统一映射。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Shape2D {
     /// 空图元（不产生任何绘制；用于占位/布局）。
@@ -125,7 +228,7 @@ pub enum Shape2D {
     Polygon { points: Vec<Vec2> },
     /// 图元分组（子图元列表；transform 作用于整组）。
     Group { children: Vec<Shape2D> },
-    /// 宿主自定义图元（通过 [`CustomShapeData`] 提供几何降级）。
+    /// 宿主自定义图元（按 [`SpecId`] 查注册表）。
     Custom(CustomShapeData),
 }
 
@@ -225,18 +328,40 @@ mod tests {
     #[test]
     fn test_custom_shape_bounds_and_debug() {
         let data = CustomShapeData::new(
-            std::any::TypeId::of::<u32>(),
+            "test.custom",
             Rect2D::from_min_size(Vec2::new(0.0, 0.0), Vec2::new(5.0, 5.0)),
-        )
-        .with_to_path(|_, t| {
-            let mut p = Path2D::new();
-            p.move_to(t.apply_point(Vec2::ZERO));
-            p
-        });
+        );
         let shape = Shape2D::Custom(data);
         let b = shape.bounds().unwrap();
         assert_eq!(b.size(), Vec2::new(5.0, 5.0));
         let dbg = format!("{shape:?}");
-        assert!(dbg.contains("Custom"));
+        assert!(dbg.contains("test.custom"));
+    }
+
+    /// XSB D1：`Shape2D` 全部变体可序列化，且 Custom 只写规格名。
+    #[test]
+    fn shape2d_is_serializable_and_custom_writes_spec_name() {
+        let shape = Shape2D::Custom(CustomShapeData::new(
+            "test.glyph",
+            Rect2D::from_min_size(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+        ));
+        let json = serde_json::to_string(&shape).expect("Shape2D 可序列化");
+        assert!(json.contains("test.glyph"), "json = {json}");
+        let back: Shape2D = serde_json::from_str(&json).expect("可反序列化");
+        assert_eq!(back, shape);
+    }
+
+    /// SpecId 按名字查表：未注册 ⇒ `None`（调用方必须显式报错）。
+    #[test]
+    fn custom_specs_lookup_is_exact() {
+        static SPECS: &[CustomSpec] = &[CustomSpec::new("a.b").with_path(|_, t| {
+            let mut p = Path2D::new();
+            p.move_to(t.apply_point(Vec2::ZERO));
+            p
+        })];
+        let specs = CustomSpecs::new(SPECS);
+        assert!(specs.get(&SpecId::new("a.b")).is_some());
+        assert!(specs.get(&SpecId::new("a.bc")).is_none());
+        assert!(CustomSpecs::EMPTY.get(&SpecId::new("a.b")).is_none());
     }
 }

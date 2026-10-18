@@ -34,6 +34,8 @@ use crate::pod::types::{
 
 /// 注入时使用的 Service 名（与 `LuaPod::requirements()` 对应）。
 pub const SERVICE_NAME: &str = "scene";
+/// Service 版本（写入 XSB Meta，用于可还原性检查）。
+pub const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 内部交接函数：把录制结果取走并重置（不是脚本可见 API）。
 pub const FINISH_PATH: &str = "xcal.scene::__finish";

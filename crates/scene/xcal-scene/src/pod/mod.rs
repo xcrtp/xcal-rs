@@ -19,8 +19,10 @@ mod scene_service;
 pub mod types;
 
 pub use api::{ContentApi, SceneApi};
-pub use content_service::{CONTENT_SERVICE_NAME, ContentServicePod, PathStore};
-pub use scene_service::{FINISH_PATH, RESET_PATH, SERVICE_NAME, SceneServicePod};
+pub use content_service::{
+    CONTENT_SERVICE_NAME, CONTENT_SERVICE_VERSION, ContentServicePod, PathStore,
+};
+pub use scene_service::{FINISH_PATH, RESET_PATH, SERVICE_NAME, SERVICE_VERSION, SceneServicePod};
 pub use types::*;
 
 use std::sync::Arc;

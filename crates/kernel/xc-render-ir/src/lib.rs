@@ -31,7 +31,7 @@ pub mod style;
 pub use degrade::ToShape2D;
 pub use layer::{LayerBlend, LayerId};
 pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
-pub use shape::{CustomShapeData, CustomTypeId, Shape2D, Style2D};
+pub use shape::{CustomShapeData, CustomSpec, CustomSpecs, Shape2D, SpecId, Style2D};
 pub use style::{
     FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,
     stroke_style_raw,

@@ -19,6 +19,7 @@ members = [
     "crates/graph/xc-node-schema",
     "crates/graph/xc-node-schema-macros",
     "crates/scene/xcal-scene",
+    "crates/scene/xcal-scene-bundle",
     "crates/pod/xc-pod-lua",
     "crates/pod/xc-pod-py",
     # 测试专用（publish = false）：集成测试 + 基准，不进 wasm gate、不被生产反向依赖。
@@ -32,6 +33,7 @@ members = [
     "crates/ui/xcal-node-egui-ui",
     "crates/app/xcal-app",
     "crates/app/xcal-gui",
+    "crates/app/xcal-compile",
 ]
 resolver = "2"
 

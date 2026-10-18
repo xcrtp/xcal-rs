@@ -94,13 +94,15 @@ pub fn language_from_path(path: &std::path::Path) -> Result<ScriptLanguage> {
     }
 }
 
-/// 场景来源：启动参数选定的内置场景，或 headless 指定的脚本。
+/// 场景来源：启动参数选定的内置场景、headless 指定的脚本，或 XSB 产物。
 enum SceneSource {
     Choice(SceneChoice),
     Script {
         source: String,
         language: ScriptLanguage,
     },
+    /// XSB 回放：已装配产物（纯数据），不经过任何脚本运行时。
+    Bundle(xcal_scene::scene_script::SceneScript),
 }
 
 /// **headless 装配入口**：脚本 → 与 GUI 完全相同的 Runtime。
@@ -118,6 +120,93 @@ pub fn build_script_runtime(
         // headless 脚本 = 完整作品：不叠加 demo3d。
         false,
     )
+}
+
+/// 脚本编译结果（`xcal-compile` 的中间产物，全部是纯数据）。
+pub struct CompiledScript {
+    /// 装配产物（会写进 `.xsb` 的 payload）。
+    pub script: xcal_scene::scene_script::SceneScript,
+    /// 参与装配的能力版本（写入 Meta）。
+    pub capabilities: Vec<xcal_scene_bundle::Capability>,
+    /// 参与装配的 Pod 版本（写入 Meta）。
+    pub pods: Vec<xcal_scene_bundle::Pod>,
+    /// 源脚本的 SHA-256（诊断用，不进内容 hash）。
+    pub source_sha256: String,
+}
+
+/// **把脚本编译成装配产物**（不渲染、不需要 GPU）。
+///
+/// 与 `--script` / GUI 走**同一条装配路径**（`assembly::assemble` → `run_script`），
+/// 差别只在"拿到 SceneScript 后写盘"而不是立刻 commit。
+pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<CompiledScript> {
+    let engine = Arc::new(formula::build_engine());
+    let assembly = assembly::assemble(engine)
+        .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
+    let script = run_script_source(&assembly, source, language)?;
+    Ok(CompiledScript {
+        script,
+        capabilities: runtime_capabilities(),
+        pods: runtime_pods(),
+        source_sha256: xcal_scene_bundle::sha256::hex(&xcal_scene_bundle::sha256::sha256(
+            source.as_bytes(),
+        )),
+    })
+}
+
+/// 参与装配的能力版本（从 capability 的 `meta()` 读取，**不是手写常量**）。
+fn runtime_capabilities() -> Vec<xcal_scene_bundle::Capability> {
+    use xc_pod::Capability;
+
+    let scene_meta = <xcal_scene::pod::SceneApi<'static> as Capability>::meta();
+    let content_meta = <xcal_scene::pod::ContentApi<'static> as Capability>::meta();
+    // 名字取自能力签名（唯一真源），不另写字符串常量。
+    let scene_name = <xcal_scene::pod::SceneApi<'static> as Capability>::signatures()
+        .first()
+        .map(|s| s.namespace)
+        .unwrap_or("");
+    let content_name = <xcal_scene::pod::ContentApi<'static> as Capability>::signatures()
+        .first()
+        .map(|s| s.namespace)
+        .unwrap_or("");
+    vec![
+        xcal_scene_bundle::Capability::new(scene_name, scene_meta.version),
+        xcal_scene_bundle::Capability::new(content_name, content_meta.version),
+    ]
+}
+
+/// 参与装配的 Pod 版本（Service 常量）。
+fn runtime_pods() -> Vec<xcal_scene_bundle::Pod> {
+    vec![
+        xcal_scene_bundle::Pod::new(
+            xcal_scene::pod::SERVICE_NAME,
+            xcal_scene::pod::SERVICE_VERSION,
+        ),
+        xcal_scene_bundle::Pod::new(
+            xcal_scene::pod::CONTENT_SERVICE_NAME,
+            xcal_scene::pod::CONTENT_SERVICE_VERSION,
+        ),
+    ]
+}
+
+/// 当前运行时**能解释什么**（XSB 可还原性检查的"可用集"）。
+pub fn available_runtime_caps() -> xcal_scene_bundle::Available {
+    xcal_scene_bundle::Available::new(runtime_capabilities(), runtime_pods())
+}
+
+/// **headless 回放入口**：XSB 产物 → 与脚本路径**同一条** Runtime。
+///
+/// 顺序：可还原性检查（列全缺失项）→ 还原 `SceneScript` → 提交场景 → 建调度器。
+pub fn build_bundle_runtime(
+    render_ctx: RenderContext,
+    bundle: &xcal_scene_bundle::Bundle,
+) -> Result<Runtime> {
+    bundle
+        .check_restorable(&available_runtime_caps())
+        .map_err(|e| Error::InitializationError(e.to_string()))?;
+    let script = bundle
+        .script()
+        .map_err(|e| Error::InitializationError(format!("XSB payload 还原失败：{e}")))?;
+    build_runtime(render_ctx, SceneSource::Bundle(script), false)
 }
 
 /// **GUI 装配入口**：内置场景 → Runtime（带 app 自带的 3D demo）。
@@ -348,8 +437,30 @@ fn build_scene_source(
         ));
     }
 
+    // ── XSB 产物回放（纯数据，无脚本运行时）──
+    if let SceneSource::Bundle(script) = source {
+        let duration = script.duration();
+        eprintln!(
+            "[xcal-app] 场景 = XSB 产物（{} 个对象，{}s）",
+            script.len(),
+            duration
+        );
+        let recipe = script
+            .clone()
+            .commit(scene)
+            .map_err(|e| Error::InitializationError(format!("XSB commit 失败：{e}")))?;
+        let camera = find_camera2d(scene)?;
+        return Ok((
+            recipe.forest,
+            recipe.bindings,
+            camera,
+            GroupVisibility::default(),
+            duration,
+        ));
+    }
+
     let SceneSource::Choice(choice) = source else {
-        unreachable!("Script 分支已在上面返回")
+        unreachable!("Script / Bundle 分支已在上面返回")
     };
 
     match choice {
@@ -1115,12 +1226,71 @@ mod tests {
         );
     }
 
-    /// **S1 验收**：Fourier 的相机「推近 → 停留 → 拉回」三段绑定不得在段前互相覆盖。
+    /// **XSB 三路径同构**：`script` → `.xsb` → 还原，产物与直接脚本逐对象 / 逐绑定相等。
     ///
-    /// - t=4.0（推近前）⇒ 55；
-    /// - t=5.2（推近段内）⇒ 55..90；
-    /// - t=6.0（停留）⇒ 90；
-    /// - t=7.2（拉回后）⇒ 55。
+    /// 三条路径（默认 / `--script` / `--bundle`）共用 `build_runtime`；本用例锁死
+    /// "装配产物"这一层等价，防止 `.xsb` 引入新的双轨真源。
+    #[test]
+    fn bundle_roundtrip_matches_script_path() {
+        use xc_prerender::placeholder_engine;
+        use xcal_scene_bundle::{Bundle, MetaInput};
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 Pod 装配成功");
+        let script = assembly
+            .run_script(include_str!("../scripts/fourier.lua"))
+            .expect("Lua 傅里叶脚本执行成功");
+
+        let available = available_runtime_caps();
+        let bundle = Bundle::encode(
+            &script,
+            MetaInput {
+                capabilities: available.capabilities.clone(),
+                pods: available.pods.clone(),
+                downgrades: Vec::new(),
+                source_sha256: None,
+            },
+        )
+        .expect("编码 XSB");
+
+        let bytes = bundle.to_bytes();
+        let decoded = Bundle::from_bytes(&bytes).expect("解析 XSB");
+        decoded.check_restorable(&available).expect("可还原");
+        let restored = decoded.script().expect("还原 SceneScript");
+
+        // 最强口径：规范 JSON 逐字节相同。
+        assert_eq!(
+            script.to_json().expect("serialize"),
+            restored.to_json().expect("serialize"),
+            "还原后的装配产物必须与原始脚本完全一致"
+        );
+
+        let mut scene_a = Scene::new();
+        let mut scene_b = Scene::new();
+        let recipe_a = script.clone().commit(&mut scene_a).expect("commit a");
+        let recipe_b = restored.commit(&mut scene_b).expect("commit b");
+        let ids_a = fourier_ids(&scene_a);
+        let ids_b = fourier_ids(&scene_b);
+        assert_eq!(ids_a.len(), ids_b.len(), "对象数必须一致");
+        assert_eq!(
+            ids_a
+                .iter()
+                .map(|id| fourier_fingerprint(&scene_a, *id))
+                .collect::<Vec<_>>(),
+            ids_b
+                .iter()
+                .map(|id| fourier_fingerprint(&scene_b, *id))
+                .collect::<Vec<_>>(),
+            "逐对象组件指纹必须一致"
+        );
+        assert_eq!(
+            binding_rows(&recipe_a.forest, &recipe_a.bindings, &ids_a),
+            binding_rows(&recipe_b.forest, &recipe_b.bindings, &ids_b),
+            "时序 / 曲线 / target 必须一致"
+        );
+    }
+
+    /// **S4 验收**：同一 target 的多段绑定「推近 → 停留 → 拉回」有段语义。
     #[test]
     fn fourier_camera_push_pull_uses_segment_semantics() {
         use xc_object::Framing2D;

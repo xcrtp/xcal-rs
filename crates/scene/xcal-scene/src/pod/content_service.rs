@@ -29,6 +29,8 @@ use crate::pod::types::{Color, Formula, Path, PathList, Text};
 
 /// 注入时使用的 Service 名。
 pub const CONTENT_SERVICE_NAME: &str = "content";
+/// Service 版本（写入 XSB Meta，用于可还原性检查）。
+pub const CONTENT_SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// **内容路径表**：内容服务写入、场景服务读取的共享资源。
 ///
