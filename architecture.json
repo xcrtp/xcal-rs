@@ -6,8 +6,8 @@
       "name": "kernel",
       "path": "crates/kernel",
       "prefix": "xc-",
-      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
-      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
+      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated；xc-pod 家族提供语言无关的 capability 机制与绑定驱动",
+      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro", "xc-pod", "xc-pod-binding", "xc-pod-macro"]
     },
     {
       "name": "object",
@@ -40,8 +40,15 @@
       "name": "scene",
       "path": "crates/scene",
       "prefix": "xcal-",
-      "description": "场景层：ECS 场景数据（Scene / 组件）+ 场景 System + UI↔场景 domain 契约；不依赖任何渲染后端",
+      "description": "场景层：ECS 场景数据（Scene / 组件）+ 场景 System + UI↔场景 domain 契约 + Pod domain（SceneApi / ContentApi）；不依赖任何渲染后端",
       "crates": ["xcal-scene"]
+    },
+    {
+      "name": "script",
+      "path": "crates/script",
+      "prefix": "xc-",
+      "description": "语言适配器：Lua / Python 只依赖 kernel 的 xc-pod 家族，生产依赖不含任何 xcal-*；domain 能力由 App 注入",
+      "crates": ["xc-pod-lua", "xc-pod-py"]
     },
     {
       "name": "render",
@@ -88,6 +95,11 @@
       "rule": "NoGraphDomainTypes",
       "description": "crates/graph 层 crate 禁止引用领域类型（FunctionDef, AST, AnimationClip 等）",
       "enforced_by": "人工 review + grep 扫描"
+    },
+    {
+      "rule": "NoScriptDomainDependency",
+      "description": "crates/script 的语言适配器（xc-pod-lua / xc-pod-py）禁止依赖任何 xcal-*；domain 能力由 App 注入",
+      "enforced_by": "cargo check（反向依赖无法编译）+ cargo tree 抽查"
     },
     {
       "rule": "NoCycles",

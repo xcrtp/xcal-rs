@@ -8,6 +8,12 @@ graph TD
     xc-object --> xc-notion
     xc-object --> xc-render-ir
     xc-object --> xc-scene-contract
+    xc-pod-binding --> xc-pod
+    xc-pod-lua --> xc-pod
+    xc-pod-lua --> xc-pod-binding
+    xc-pod-py --> xc-pod
+    xc-pod-py --> xc-pod-binding
+    xc-pod-py --> xc-pod-macro
     xc-prerender --> xc-content
     xc-prerender --> xc-notion
     xc-render-ir --> xc-notion
@@ -18,6 +24,10 @@ graph TD
     xcal-app --> xc-macro
     xcal-app --> xc-notion
     xcal-app --> xc-object
+    xcal-app --> xc-pod
+    xcal-app --> xc-pod-binding
+    xcal-app --> xc-pod-lua
+    xcal-app --> xc-pod-py
     xcal-app --> xc-prerender
     xcal-app --> xcal-egui
     xcal-app --> xcal-render
@@ -46,13 +56,18 @@ graph TD
     xcal-render --> xc-scene-contract
     xcal-render --> xc-vertex
     xcal-render --> xcal-scene
+    xcal-render --> xcal-schedule
     xcal-render-backends --> xc-notion
     xcal-render-backends --> xc-object
     xcal-render-backends --> xcal-render
     xcal-render-backends --> xcal-scene
+    xcal-scene --> xc-content
     xcal-scene --> xc-macro
     xcal-scene --> xc-notion
     xcal-scene --> xc-object
+    xcal-scene --> xc-pod
+    xcal-scene --> xc-pod-macro
+    xcal-scene --> xc-prerender
     xcal-scene --> xc-render-ir
     xcal-scene --> xc-scene-contract
     xcal-scene --> xc-time

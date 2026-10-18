@@ -8,19 +8,21 @@
 
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
-| kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；可含通用能力领域，如几何、排版）|
+| kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；含通用能力领域，如几何、排版、Pod 机制）；`xc-pod-lua` / `xc-pod-py` 不在此层 |
 | object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
 | graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
 | schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
-| scene  | `crates/scene/` | `xcal-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 |
+| scene  | `crates/scene/` | `xcal-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 + Pod domain（`SceneApi` / `ContentApi`）|
+| script | `crates/script/` | `xc-` | 语言适配器（`xc-pod-lua` / `xc-pod-py`）：只依赖 kernel 的 `xc-pod` 家族，生产依赖**不含任何 `xcal-*`**；domain 能力由 App 注入 |
 | render | `crates/render/` | `xcal-` | 渲染抽象（trait / 队列 / 三角化）+ 具体后端 |
 | ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 |
 | app    | `crates/app/`    | `xcal-` | 组装 / 可执行 |
 
 ## 依赖图
 
-依赖方向自上而下：`kernel → object / graph → schedule → scene → render → ui → app`，反向禁止。
-（`schedule` 无内部依赖，是通用底座；`render` / `ui` / `app` 亦可直接依赖 `kernel` / `object` / `graph`。）
+依赖方向自上而下：`kernel → object / graph / script → schedule → scene → render → ui → app`，反向禁止。
+（`schedule` 无内部依赖，是通用底座；`script` 只依赖 kernel 的 `xc-pod` 家族、不依赖 scene；
+`render` / `ui` / `app` 亦可直接依赖 `kernel` / `object` / `graph`。）
 
 ```mermaid
 graph TD
@@ -34,6 +36,9 @@ graph TD
         xc_vertex["xc-vertex"]
         xc_resource["xc-resource"]
         xc_macro["xc-macro"]
+        xc_pod["xc-pod"]
+        xc_pod_binding["xc-pod-binding"]
+        xc_pod_macro["xc-pod-macro"]
     end
 
     subgraph object[crates/object]
@@ -54,6 +59,11 @@ graph TD
 
     subgraph scene[crates/scene]
         xcal_scene["xcal-scene"]
+    end
+
+    subgraph script[crates/script]
+        xc_pod_lua["xc-pod-lua"]
+        xc_pod_py["xc-pod-py"]
     end
 
     subgraph render[crates/render]
@@ -85,6 +95,14 @@ graph TD
     xc_prerender --> xc_notion
     xc_time --> xc_notion
 
+    %% kernel：Pod 机制 / 绑定驱动 / proc-macro
+    xc_pod_binding --> xc_pod
+    xc_pod_py --> xc_pod
+    xc_pod_py --> xc_pod_binding
+    xc_pod_py --> xc_pod_macro
+    xc_pod_lua --> xc_pod
+    xc_pod_lua --> xc_pod_binding
+
     %% object → kernel（场景对象层只依赖 kernel）
     xc_object --> xc_notion
     xc_object --> xc_render_ir
@@ -103,6 +121,10 @@ graph TD
     xcal_scene --> xc_notion
     xcal_scene --> xc_time
     xcal_scene --> xc_macro
+    xcal_scene --> xc_content
+    xcal_scene --> xc_prerender
+    xcal_scene --> xc_pod
+    xcal_scene --> xc_pod_macro
     xcal_scene --> xc_object
     xcal_scene --> xc_render_ir
     xcal_scene --> xc_scene_contract
@@ -148,6 +170,10 @@ graph TD
     xcal_app --> xc_prerender
     xcal_app --> xc_notion
     xcal_app --> xc_object
+    xcal_app --> xc_pod
+    xcal_app --> xc_pod_binding
+    xcal_app --> xc_pod_lua
+    xcal_app --> xc_pod_py
 ```
 
 ## 合规校验
@@ -157,41 +183,46 @@ graph TD
 | NoReverseDependency | ✅ 通过 | 无 xc-* → xcal-* / egui / wgpu 生产依赖 |
 | NoAppDependency | ✅ 通过 | 无 xcal-* crate 依赖 xcal-app |
 | NoGraphDomainTypes | ✅ 通过 | crates/graph 无领域类型引用 |
+| NoScriptDomainDependency | ✅ 通过 | `crates/script` 的生产依赖不含任何 `xcal-*`；domain 由 App 注入 |
 | NoCycles | ✅ 通过 | 生产依赖为 DAG（dev-deps 不计入） |
 
-**依赖分析（cargo-workspace-analyzer 输出；本次数据由 `cargo metadata` 等价重算，见文末说明）：**
+**依赖分析（2026-10-18 按 `cargo metadata` 等价重算，仅生产依赖、dev-deps 不计；见文末说明）：**
 
-> **W2 复核**：本表与上面的 mermaid 边集**都已同 Cargo.toml 程序化比对**过一遍
-> （解析每个 `[dependencies]`，dev-deps 不计入），修掉两处漂移：
-> `xcal-render` FanOut 8 → **9**（`xcal-schedule` / `xc-scene-contract` 两条边此前漏画）、
-> `xcal-schedule` FanIn 3 → **4**（同一漏边的另一侧）。
+> 本次复核把脚本层与 `xc-pod` 家族一并纳入：mermaid **73 条 ⇔ Cargo.toml 73 条**，
+> 零缺零余；FanIn/FanOut 由 24 行扩为 **29 行**。
+> 此前的 W2 复核（8 条漏边修复）仍有效，本表是在其基础上的全量重算。
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xcal-app | 0 | 10 | 1.00 |
+| xcal-app | 0 | 14 | 1.00 |
 | xcal-node-egui-ui | 0 | 3 | 1.00 |
 | xc-graph-eval | 0 | 1 | 1.00 |
 | xcal-egui | 1 | 7 | 0.88 |
 | xcal-render | 3 | 9 | 0.75 |
-| xcal-node-egui | 1 | 2 | 0.67 |
-| xc-node-schema | 1 | 2 | 0.67 |
-| xcal-node-editor | 1 | 2 | 0.67 |
-| xc-prerender | 1 | 2 | 0.67 |
+| xc-pod-py | 1 | 3 | 0.75 |
+| xcal-scene | 4 | 11 | 0.73 |
 | xcal-render-backends | 2 | 4 | 0.67 |
-| xcal-scene | 4 | 7 | 0.64 |
+| xc-node-schema | 1 | 2 | 0.67 |
+| xc-pod-lua | 1 | 2 | 0.67 |
+| xcal-node-editor | 1 | 2 | 0.67 |
+| xcal-node-egui | 1 | 2 | 0.67 |
+| xc-prerender | 2 | 2 | 0.50 |
 | xc-graph-algo | 1 | 1 | 0.50 |
 | xc-time | 1 | 1 | 0.50 |
 | xc-object | 5 | 4 | 0.44 |
 | xc-scene-contract | 3 | 2 | 0.40 |
-| xc-content | 3 | 1 | 0.25 |
+| xc-pod-binding | 3 | 1 | 0.25 |
+| xc-content | 4 | 1 | 0.20 |
 | xc-render-ir | 4 | 1 | 0.20 |
-| xcal-schedule | 4 | 0 | 0.00 |
-| xc-vertex | 1 | 0 | 0.00 |
-| xc-resource | 1 | 0 | 0.00 |
-| xc-node-schema-macros | 1 | 0 | 0.00 |
-| xc-node | 6 | 0 | 0.00 |
-| xc-notion | 11 | 0 | 0.00 |
 | xc-macro | 4 | 0 | 0.00 |
+| xc-node | 6 | 0 | 0.00 |
+| xc-node-schema-macros | 1 | 0 | 0.00 |
+| xc-notion | 11 | 0 | 0.00 |
+| xc-pod | 5 | 0 | 0.00 |
+| xc-pod-macro | 2 | 0 | 0.00 |
+| xc-resource | 1 | 0 | 0.00 |
+| xc-vertex | 1 | 0 | 0.00 |
+| xcal-schedule | 4 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -204,11 +235,11 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 **每个 Phase 的系统**（`xcal-app::App::new` 的装配）
 
 ```
-Input:         DirectorAdvance · CameraInput
+Input:         DirectorAdvance · CameraDrive · CameraInput
 LogicUpdate:   TimeControl · ParamPanel
 SceneSync:     BindingApply
 Prepare:       AxesRefresh · FunctionGraphRefresh
-RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D) · ContentTextureRecord · MorphRecord
+RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D) · ContentTextureRecord · MorphRecord · RevealRecord
 FrameEnd:      —（内容提交由 host.present 承担；
                  面板 chrome 与 ViewRect 由 host.begin_frame 在 run_frame 前写入）
 ```
@@ -436,10 +467,10 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | `Parent` 父子变换累乘 System | 契约层 `xc_scene_contract::Parent` / `Children` | 类型与 `Scene::attach` 已就位，**零生产消费方**（父子变换尚未累乘） | 做相机跟随 / 对象整体变换时 |
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
-| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：**W4 后实测 152 行**（行计数）`glam::` 直接引用未收敛，其中 `xcal-scene` **归零**（仅剩 2 行**说明性注释**：`types.rs` 的历史沿革 + `transform.rs` 的"翻转只有一份"约定）；其余分布在 9 个 crate（`xcal-render-backends` 55 / `xcal-app` 39 / 节点编辑器系列 17 / `xcal-render` 15 / `xc-notion` 定义侧 5 / `xcal-egui` 5 / `xc-time` 7 / 场景层注释 2 / …） | 分阶段收敛（**不新增** + 场景层已清零）；不阻塞任何功能 |
-| 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6352 行 + UI 4469 行 ≈ 10821 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
+| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：**2026-10-18 实测 `*.rs` 中 189 处**（含 README 共 198 处）`glam::` 直接引用未收敛，其中 `xcal-scene` **归零**（仅剩 2 行**说明性注释**：`types.rs` 的历史沿革 + `transform.rs` 的"翻转只有一份"约定）；主要分布：`xcal-app` 73 / `xcal-render-backends` 55 / `xcal-render` 24 / 节点编辑器系列 17 / `xc-time` 7 / `xc-notion` 定义侧 6 / `xcal-egui` 5 / 场景层注释 2 | 分阶段收敛（**不新增** + 场景层已清零）；不阻塞任何功能 |
+| 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
 | 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
-| `formula.rs` 归位（421 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
+| `formula.rs` 归位（632 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
 | 非原生 Pod 的 `FunctionX2Y` 适配器 | `xcal-scene::math_pod` | **C3 已消费（2026-10-17）**：第一个非原生 Pod（Lua / `xc-pod-lua`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xc-pod-lua` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
 
@@ -474,11 +505,12 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 它是 `xc-pod` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
 > `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
 > 经 erased `Pod::call("xcal.script::run")`），**不参与每帧采样**。
-> 依赖图 / FanIn-FanOut 表**尚未包含** `xc-pod` / `xc-pod-macro` / `xc-pod-binding` /
-> `xc-pod-lua` / `xc-pod-py`（`cargo-workspace-analyzer` 仍不可用；按既有纪律不手改自动产物）。
-> 实际边（`cargo metadata` 口径，D 线后）：`xcal-scene → xc-pod`（`math_pod`）、
+> 依赖图 / FanIn-FanOut 表**已包含** `xc-pod` / `xc-pod-macro` / `xc-pod-binding` /
+> `xc-pod-lua` / `xc-pod-py`（2026-10-18 按 `cargo metadata` 口径重算，见文末备注）。
+> 实际边：`xcal-scene → xc-pod / xc-pod-macro`（`math_pod`）、
 > `xc-pod-lua → xc-pod / xc-pod-binding / mlua`、`xc-pod-py → xc-pod / xc-pod-binding /
-> xc-pod-macro / pyo3`；**两条语言边都不含 `xcal-*`**。工具恢复后一并重算。
+> xc-pod-macro / pyo3`；`xcal-app → xc-pod / xc-pod-binding / xc-pod-lua / xc-pod-py`；
+> **两条语言边都不含 `xcal-*`**。
 >
 > **Pod 类型系统与绑定生成（2026-10-17，V 线）**：`xc-pod` 从"字符串签名"升级为
 > **类型描述 IDL**：
@@ -488,7 +520,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   不引用（`math_pod` / `xc-time` 中 `PodValue|TypeSpec` 命中数为 0）；
 > - `#[derive(PodType)]`：一处定义生成 schema + 双向转换 + `IntoPodTypeName`；
 > - `#[capability(bindings)]`：生成 `FnIo` + 类型擦除 trampoline（`calls()`）；
-> - `xcal-script`：Lua 绑定与文档由 `calls()` + `TypeSpec` **自动生成**
+> - `xc-pod-lua`（D 线前为 `xcal-script`）：Lua 绑定与文档由 `calls()` + `TypeSpec` **自动生成**
 >   （`Circle { ... }` / `Curve.Phase { ... }` 构造器），手写胶水只剩宿主落点转换；
 > - `SceneApi` 升至 v2：4 个曲线函数 → `Curve` 枚举、`rgba:u32` → `Color` 结构体，
 >   共 10 个函数。**未开启 `bindings` 的 capability 不受影响**（`calls()` 默认空）。
@@ -518,7 +550,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **B3 Broker**：`xc-pod::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
 >   依赖边 = `requires.service → provides`；`A → B → A` 在注入前即报 `BrokerError::Cycle`
 >   （含参与链），不会构造 `Arc` 互持。每次装配打印一次报告（顺序 / 边 / 注入 / optional 缺失）；
-> - **B4 Python（feature 门控）**：`xcal-py` 用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
+> - **B4 Python（feature 门控）**：`xc-pod-py`（B4 时名 `xcal-py`）用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
 >   Python 侧经注入的 `scene.*` 建对象（通用绑定驱动 + `PyCodec`）；Lua 侧 `python.*` 表由
 >   同一套绑定生成。feature 关闭时 `cargo test --workspace` 不引入 pyo3；
 > - **optional 首次有消费方**：`python` 能力以 optional 需求注册 —— 无 Python 时装配通过、
@@ -556,6 +588,18 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   脚本可 `import xcal.scene` / `from xcal import scene, Circle`；
 > - 多 `PyPod` 实例使用**唯一模块名**（`PyImport_ExecCodeModuleEx` 会复用同名模块，
 >   否则实例间会共享 globals），并对 `sys.modules` 的安装 + 执行加锁串行化。
+>
+> **备注（2026-10-18，脚本层与 Pod 入图）**：按 `cargo metadata`（仅生产依赖，
+> `kind != dev`）全量重算，内部依赖边 **59 → 73（+14）**：
+> - 新增 `xc-pod-binding → xc-pod`；`xc-pod-lua → xc-pod / xc-pod-binding`；
+>   `xc-pod-py → xc-pod / xc-pod-binding / xc-pod-macro`；
+> - 补齐 `xcal-scene → xc-content / xc-prerender / xc-pod / xc-pod-macro`；
+> - 补齐 `xcal-app → xc-pod / xc-pod-binding / xc-pod-lua / xc-pod-py`；
+> - FanIn/FanOut 表由 24 行扩为 **29 行**（新增 `xc-pod` 5/0、`xc-pod-macro` 2/0、
+>   `xc-pod-binding` 3/1、`xc-pod-lua` 1/2、`xc-pod-py` 1/3；`xc-notion` FanIn 11、
+>   `xcal-scene` FanOut 11、`xcal-app` FanOut 14）；
+> - 程序化比对结果：mermaid **73 条 ⇔ Cargo.toml 73 条**，零缺零余。
+>   工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
 ### cargo-archtest 适配状态
 
