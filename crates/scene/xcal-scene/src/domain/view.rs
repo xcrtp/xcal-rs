@@ -6,45 +6,16 @@
 // `ContentHandle` 刻意保持不透明——内容的具体形态是 S3 统一管线的职责，
 // B 不阻塞 S3，S3 也不用等 B。
 
-use crate::scene::components::TextureHandle;
+use xc_object::Camera2D;
+
 use crate::types::Color32;
-use xc_object::{Camera2D, Camera3D};
 
-/// 图层唯一标识。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LayerId(pub u32);
-
-/// 图层类型：一个视口 + 其相机。
-///
-/// 保留 2D/3D 两个分支（2D 走 CPU 录制、3D 走 GPU 回调是短期事实），但：
-/// - 变体里**只放相机数据**，不内联任何相机控制器逻辑（控制器消费
-///   `CameraCommand`，是纯函数，见 xcal-egui 相机控制器 / 未来 3D 控制器）；
-/// - `camera` 字段是相机统一的**接缝点**：统一后 `Camera2D` 收敛为
-///   `Camera3D + Orthographic` 的薄壳（对外仍暴露 center/scale 语义），
-///   本枚举与 LayerDescriptor 均无需改动。相机构造的唯一出处是
-///   `AppCamera::to_camera_2d`（UI 侧），不要在各处硬编码 `Camera2D::new`。
-#[derive(Debug, Clone, Copy)]
-pub enum LayerKind {
-    Viewport2D {
-        camera: Camera2D,
-    },
-    Viewport3D {
-        camera: Camera3D,
-    },
-    /// 内容纹理层（S3-3）：渲染到**独立纹理**，供 3D 材质采样。
-    ///
-    /// 与视口层的区别：不绑定屏幕视口，绑定一张固定尺寸纹理。
-    ContentTexture {
-        /// 内容相机：`rect` 为**纹理矩形**（决定世界 → 纹理坐标的映射）。
-        camera: Camera2D,
-        /// 纹理尺寸（物理像素）。
-        size_px: [u32; 2],
-        /// 该层渲染到的纹理句柄；3D 材质用**同一句柄**引用它。
-        texture: TextureHandle,
-        /// 是否参与合成。默认 `false`（仅作纹理源）；`true` 用于调试直视纹理。
-        composite: bool,
-    },
-}
+// S2：合成概念已下沉。
+// - `LayerId` / `LayerBlend` / `TextureHandle` → `xc-render-ir`
+// - `LayerKind`（含相机）→ `xc-object`
+// 此处 re-export 是过渡期 shim，保持 `xcal_scene::domain::*` 路径不变。
+pub use xc_object::LayerKind;
+pub use xc_render_ir::{LayerBlend, LayerId, TextureHandle};
 
 /// 内容来源句柄（不透明；S3 统一管线后指向 RenderQueue 的分片）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,29 +32,6 @@ impl ContentHandle {
     pub fn id(&self) -> u64 {
         self.0
     }
-}
-
-/// 图层与下层的混合方式（S3-2 合成器）。
-///
-/// 只声明语义，具体 wgpu 混合状态属于后端（`xcal-render-backends`）：
-/// - [`Opaque`](Self::Opaque) → `BlendState::REPLACE`（该层完全覆盖下层，
-///   要求图层纹理本身不透明）；
-/// - [`Alpha`](Self::Alpha) → 预乘 alpha（`src: One, dst: OneMinusSrcAlpha`）；
-/// - [`Additive`](Self::Additive) → `src: One, dst: One`（发光/高亮）。
-///
-/// `Default` 是 `Opaque`（"等价于当前行为"的语义默认），但**当前 2D/3D 图层
-/// 的纹理都是透明底**（背景已外移到合成器清屏，见 S3-2 §1.1），
-/// 因此 `build_scene_view` 显式声明为 `Alpha`——用 `Opaque` 的 REPLACE
-/// 会把图层外的透明像素写进主 pass，抹掉下层与背景。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum LayerBlend {
-    /// 不透明覆盖（默认；等价于当前行为）。
-    #[default]
-    Opaque,
-    /// 预乘 alpha 混合（图层纹理 alpha 参与）。
-    Alpha,
-    /// 加法混合（发光/高亮效果）。
-    Additive,
 }
 
 /// 一个图层的声明：ID + 类型 + 内容句柄 + 混合参数。

@@ -62,8 +62,7 @@ use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xcal_render::{
     GpuHandle, RenderBackend3D, RenderLayer, RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
-use xcal_scene::domain::LayerId;
-use xcal_scene::scene::components::{PrimitiveTopology, ShaderVariant, UvProjection};
+use xc_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + vec4 color，纹理 = 颜色调制。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");

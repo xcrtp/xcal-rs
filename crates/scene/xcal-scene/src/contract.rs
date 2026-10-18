@@ -55,10 +55,11 @@ use xc_render_ir::{FillSolid, Opacity, StrokeSolid};
 /// [`Scene`]（`spawn_dyn` 的宿主）与载荷类型 [`Components`] **没有对外路径**
 /// ⇒ 装配层无法走"经 `add_known` 登记表"的动态创建入口。二者在此补发。
 pub use xc_scene_contract::{
-    Component, Components, Group, GroupId, GroupVisibility, Name, ObjectId, Parent, Scene,
-    SceneRead, Visibility, VisibilityTag,
+    Component, Components, Group, GroupId, GroupVisibility, LifetimeTracked, Name, ObjectId, Parent,
+    Scene, SceneRead, Visibility, VisibilityTag,
 };
 
+use crate::composer::Composer;
 use crate::domain::CameraMode;
 use crate::scene::components::{ContentTextureItem, MorphShape, PhaseAnim, Reveal};
 
@@ -245,7 +246,8 @@ macro_rules! known_component_table {
                    Camera2D, Camera3D, Projection, Framing2D, CameraMode, FpsView,
                    StrokeSolid, FillSolid,
                    Axes2D, AxesLine, FunctionGraph,
-                   PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent;
+                   PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent,
+                   LifetimeTracked, Composer;
             manual:
         }
     };
@@ -615,6 +617,8 @@ mod tests {
         );
         assert_eq!(known_type_name::<Reveal>(), Some("Reveal"));
         assert_eq!(known_type_name::<Parent>(), Some("Parent"));
+        assert_eq!(known_type_name::<LifetimeTracked>(), Some("LifetimeTracked"));
+        assert_eq!(known_type_name::<Composer>(), Some("Composer"));
 
         #[derive(Clone)]
         struct NotRegistered;
@@ -676,8 +680,10 @@ mod tests {
             Box::new(ContentTextureItem),
             Box::new(Reveal::new(xc_notion::Path2D::new())),
             Box::new(Parent(ObjectId::DANGLING)),
+            Box::new(LifetimeTracked),
+            Box::new(Composer::default()),
         ];
-        assert_eq!(samples.len(), 27, "登记表当前应为 27 个类型");
+        assert_eq!(samples.len(), 29, "登记表当前应为 29 个类型");
 
         for (i, c) in samples.iter().enumerate() {
             let cloned =

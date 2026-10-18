@@ -10,6 +10,7 @@
 pub mod animation;
 pub mod authored;
 pub mod camera_input;
+pub mod composer;
 pub mod content;
 pub mod contract;
 pub mod deferred;
@@ -17,6 +18,7 @@ pub mod director_state;
 pub mod domain;
 pub mod driver;
 pub mod errors;
+pub mod lifetime;
 pub mod math_pod;
 pub mod persist;
 pub mod pod;
@@ -34,12 +36,16 @@ pub use animation::{
 pub use camera_input::{
     CameraInputSystem, apply_command_2d, apply_command_3d, apply_fps, apply_orbit, apply_pan_zoom,
 };
+pub use composer::{Composer, ComposerQueue, ComposerSystem, full_recompute};
 pub use deferred::{
     DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicObjects, ReplaySystem,
 };
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
 pub use driver::{DriverCommand, DriverEvent, DriverPod};
 pub use errors::Error;
+pub use lifetime::{
+    LifetimeEvent, LifetimeEventKind, LifetimeEvents, LifetimeFlushSystem, LifetimeTracker,
+};
 pub use math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};
 pub use scene::{Scene, comp, components, primitives};

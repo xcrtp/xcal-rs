@@ -6,11 +6,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xcal-scene = { path = "../../scene/xcal-scene", default-features = false }
 xcal-render = { path = "../xcal-render", default-features = false }
 xc-notion = { path = "../../kernel/xc-notion" }
 # 场景对象层：相机与图元（Camera2D / Camera3D / Projection / Rect / …）的定义在此。
 xc-object = { path = "../../object/xc-object" }
+# S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖 xcal-scene。
+xc-render-ir = { path = "../../kernel/xc-render-ir" }
 
 glam.workspace = true
 thiserror.workspace = true
@@ -24,6 +25,8 @@ egui = { workspace = true, optional = true }
 egui-wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+# 仅测试：像素级用例要构造真实 ECS 场景（生产边不得依赖 xcal-scene，见 S2 CI 规则）。
+xcal-scene = { path = "../../scene/xcal-scene", default-features = false }
 egui.workspace = true
 eframe.workspace = true
 egui-wgpu.workspace = true

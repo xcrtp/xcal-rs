@@ -79,6 +79,29 @@ jobs:
           echo "OK: crates/pod 的生产依赖不含任何 xcal-*"
         shell: bash
 
+      - name: Render backends do not depend on scene (S2)
+        run: |
+          cargo metadata --format-version 1 --no-deps > metadata.json
+          # S2：图层合成概念（Layer*）与 3D 渲染描述符已下沉 xc-render-ir / xc-object。
+          # `xcal-render-backends` 的**生产依赖边**不得再出现 `xcal-scene`
+          # （dev 边仅测试使用，不计入）。
+          jq -r '
+            .packages[]
+            | select(.name == "xcal-render-backends")
+            | .name as $n
+            | .dependencies[]
+            | select(.kind != "dev")
+            | select(.name == "xcal-scene")
+            | "\($n) -> \(.name)"
+          ' metadata.json > backends-violations.txt
+          if [ -s backends-violations.txt ]; then
+            echo "xcal-render-backends 的生产依赖边中出现了 xcal-scene（违反 S2 分层规则）："
+            cat backends-violations.txt
+            exit 1
+          fi
+          echo "OK: xcal-render-backends 的生产依赖不含 xcal-scene"
+        shell: bash
+
       - name: Workspace Analyzer (cycles + DAG)
         run: |
           # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边

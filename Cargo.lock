@@ -6128,6 +6128,7 @@ dependencies = [
  "wgpu",
  "xc-notion",
  "xc-object",
+ "xc-render-ir",
  "xcal-render",
  "xcal-scene",
 ]

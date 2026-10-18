@@ -19,7 +19,7 @@ use wgpu::util::DeviceExt as _;
 use xcal_render::{
     AaModel, CacheStrategy, POST_UNIFORM_SIZE, PostFilterChain, Vertex2D, VertexLayout,
 };
-use xcal_scene::domain::LayerBlend;
+use xc_render_ir::LayerBlend;
 
 use crate::gpu_util::bytes_of;
 use crate::vertex_layout::to_wgpu;

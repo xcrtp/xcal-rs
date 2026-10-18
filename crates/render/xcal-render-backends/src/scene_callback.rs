@@ -25,7 +25,8 @@
 // （`HashMap<LayerId, ..>`），本帧**同类图层不再有数量上限**——这是 S3-3
 // （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
-use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
+use xc_object::LayerKind;
+use xc_render_ir::{LayerBlend, LayerId};
 use xcal_render::{DrawQueue, DrawQueue3D, MorphItem, PostFilterChain, RevealItem, Viewport};
 use xcal_render::draw_queue_3d::{LineDraw, MeshDraw};
 use xc_notion::{Rect2D, Vec2 as GeoVec2};

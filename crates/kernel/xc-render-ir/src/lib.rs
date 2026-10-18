@@ -23,10 +23,14 @@
 // （相机在场景对象层，IR 层认识它会成环）。
 
 pub mod degrade;
+pub mod layer;
+pub mod mesh;
 pub mod shape;
 pub mod style;
 
 pub use degrade::ToShape2D;
+pub use layer::{LayerBlend, LayerId};
+pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
 pub use shape::{CustomShapeData, CustomTypeId, Shape2D, Style2D};
 pub use style::{
     FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,

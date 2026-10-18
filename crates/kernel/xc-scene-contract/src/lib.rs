@@ -24,6 +24,7 @@
 
 pub mod descriptor;
 pub mod id;
+pub mod lifetime;
 pub mod organize;
 pub mod relation;
 pub mod scene;
@@ -33,6 +34,7 @@ pub use descriptor::{
     apply_stroke_desc, theme_style,
 };
 pub use id::ObjectId;
+pub use lifetime::LifetimeTracked;
 pub use organize::{Group, GroupId, GroupVisibility, Name, Visibility, VisibilityTag};
 pub use relation::{Children, Parent};
 pub use scene::{Component, Components, Scene, SceneRead};

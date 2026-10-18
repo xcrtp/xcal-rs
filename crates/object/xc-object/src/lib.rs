@@ -28,6 +28,7 @@ pub mod axes;
 pub mod camera;
 pub mod content_texture;
 pub mod graph;
+pub mod layer;
 pub mod placement;
 pub mod primitives;
 pub mod zorder;
@@ -40,6 +41,7 @@ pub use camera::{
 };
 pub use content_texture::{CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH};
 pub use graph::{CONTENT_Z, FunctionGraph};
+pub use layer::{LayerBlend, LayerId, LayerKind, TextureHandle};
 pub use placement::Transform;
 pub use primitives::{Arrow, Circle, Line, Path, Rect};
 pub use zorder::ZOrder;

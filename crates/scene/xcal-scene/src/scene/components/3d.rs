@@ -18,26 +18,9 @@
 
 use crate::types::{Color32, Vec2, Vec3};
 
-/// 3D 图元拓扑方式。
-///
-/// 决定索引/顶点在管线中如何解释为图元。
-///
-/// # Example
-/// ```rust
-/// use xcal_scene::scene::components::PrimitiveTopology;
-///
-/// assert_eq!(PrimitiveTopology::Triangles as u8, PrimitiveTopology::Triangles as u8);
-/// assert_ne!(PrimitiveTopology::Lines, PrimitiveTopology::Points);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PrimitiveTopology {
-    /// 三角形列表：每 3 个顶点构成一个三角形。
-    Triangles,
-    /// 线段列表：每 2 个顶点构成一条线段。
-    Lines,
-    /// 点列表：每个顶点一个点。
-    Points,
-}
+// S2：3D 渲染描述符已下沉 `xc-render-ir`（渲染 IR 层）；此处 re-export
+// 保持 `xcal_scene::scene::components::*` 路径不变。
+pub use xc_render_ir::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
 
 /// 分配进程内唯一的几何 id。
 fn next_geometry_id() -> u64 {
@@ -134,61 +117,6 @@ impl MeshGeometry {
         self.version += 1;
         self.version
     }
-}
-
-/// 纹理句柄：不透明标识符，仅用于在资源层定位纹理。
-///
-/// 句柄本身不持有 GPU 资源，具体纹理由后端按 id 解析。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TextureHandle(u64);
-
-impl TextureHandle {
-    /// 以给定 id 构造句柄。
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    /// 句柄 id。
-    pub fn id(&self) -> u64 {
-        self.0
-    }
-}
-
-/// 无 UV 几何的兜底 UV 投影策略。
-///
-/// 几何自带真实 UV（[`MeshGeometry::uvs`]）时应忽略本策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum UvProjection {
-    /// 沿主视轴平面投影（默认）。
-    #[default]
-    Planar,
-    /// 球面投影。
-    Spherical,
-    /// 三平面投影。
-    Triplanar,
-}
-
-/// 3D 着色变体：选择片元着色方程（即"风格"）。
-///
-/// 这是**纯数据声明**——只表达"想要哪种着色"，不引用 wgpu/egui。渲染后端按它
-/// 查表选中一条**已预建**的 pipeline（wgpu 不允许运行时改变 bind group 布局，
-/// 故着色可插拔只能"预建变体 + 查表"，见后端 `WgpuBackend3D::pipelines`）。
-///
-/// # 新增风格的步骤（三处同步）
-/// 1. 在此加一个变体；
-/// 2. 在后端 shader（cube.wgsl）中加一个对应的 `@fragment` 入口（`fs_*`）；
-/// 3. 在后端 pipeline 表里加一条 `(topology, variant)` 预建条目。
-///
-/// 三者缺一则该变体查不到 pipeline（后端 `debug_assert` 并回退到
-/// [`ShaderVariant::Lambert`]，不会让画面消失）。同一几何切换变体只改数据，
-/// **不改 shader 源码** —— 这正是本枚举存在的意义。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum ShaderVariant {
-    /// 无光照：`color * tex`（加光前的行为；体素 / UI 风格常用）。
-    Flat,
-    /// 朗伯漫反射（当前默认行为）。
-    #[default]
-    Lambert,
 }
 
 /// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影 + 着色变体。

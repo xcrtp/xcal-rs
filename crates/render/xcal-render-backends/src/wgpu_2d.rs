@@ -40,7 +40,7 @@ use xcal_render::{
     RevealItem, Shape2D, Style2D, TessKind, Tessellation2D, Vertex2D, VertexInputDesc,
     VertexLayout, hash_bytes, tessellate, tessellate_reveal, tolerance_for_scale,
 };
-use xcal_scene::domain::LayerId;
+use xc_render_ir::LayerId;
 
 use crate::gpu_util::{UniformArena, bytes_of};
 use crate::vertex_layout::{to_wgpu, to_wgpu_buffers};

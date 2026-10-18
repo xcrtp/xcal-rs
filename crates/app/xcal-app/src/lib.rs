@@ -35,7 +35,8 @@ use xcal_scene::domain::{ContentTextureSpec, InputEvents};
 use xcal_scene::errors::Error;
 use xcal_scene::scene::components::TextureHandle;
 use xcal_scene::{
-    ClockForest, ClockNode, Curve, DeferredCommands, DriverPod, DynamicObjects, SeekKind, TimeState,
+    ClockForest, ClockNode, ComposerQueue, Curve, DeferredCommands, DriverPod, DynamicObjects,
+    LifetimeEvents, LifetimeTracker, SeekKind, TimeState,
 };
 use xcal_schedule::resource::Resources;
 use xcal_schedule::scheduler::Scheduler;
@@ -331,6 +332,11 @@ fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runti
     resources.insert(DeferredCommands::new());
     // P6/B4：运行时创建对象台账（重播清理用）。
     resources.insert(DynamicObjects::new());
+    // S1：生命周期事件的差集状态与最近批次（opt-in：只有 LifetimeTracked 对象进集合）。
+    resources.insert(LifetimeTracker::new());
+    resources.insert(LifetimeEvents::new());
+    // S3：合成器的派生态（相机无关内容索引；无 Composer 时保持空）。
+    resources.insert(ComposerQueue::new());
 
     let mut scheduler = Scheduler::new(world, resources);
     register_systems(&mut scheduler, cam2d_bindings, orbit_binding);

@@ -17,8 +17,10 @@ use xcal_schedule::scheduler::{Phase, Scheduler};
 
 use crate::animation::{Binding, BindingApplySystem, CameraDriveSystem};
 use crate::camera_input::CameraInputSystem;
+use crate::composer::ComposerSystem;
 use crate::deferred::{DeferredApplySystem, ReplaySystem};
 use crate::director_state::DirectorAdvanceSystem;
+use crate::lifetime::LifetimeFlushSystem;
 
 /// 注册场景侧全部 System。
 ///
@@ -45,7 +47,14 @@ pub fn register_systems(
     // P6/B4：重播清理 —— 运行时创建的对象在重播时销毁（`Prepare`，在录制之前；
     // 该相位当前无其它 Resource 写者）。
     scheduler.add_system(Phase::Prepare, ReplaySystem);
+    // S3：合成器在 `Prepare` 消费**上一帧末**的生命周期批次，并在本帧 `RenderCommit`
+    // 之前更新派生态。同一相位内不得读写同一资源（静态检查），而 FrameEnd 已是最后一
+    // 个相位 ⇒ 这是"事件 → 派生队列"唯一无冲突的接线点；对渲染而言没有额外延迟
+    // （延迟创建的对象的生效帧本来就是下一帧）。
+    scheduler.add_system(Phase::Prepare, ComposerSystem);
 
     // P6/B3：延迟命令应用 —— 帧末统一应用（避免录制遍历中删对象）。
     scheduler.add_system(Phase::FrameEnd, DeferredApplySystem);
+    // S1：生命周期事件必须在**删除生效之后**求差 ⇒ 注册在 DeferredApply 之后。
+    scheduler.add_system(Phase::FrameEnd, LifetimeFlushSystem);
 }

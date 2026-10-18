@@ -3,10 +3,18 @@
 // WGPU 渲染上下文（具体后端层）：device/queue/target_format 句柄。
 // - headless 构造仅依赖 wgpu + pollster（feature = "wgpu"）；
 // - from_render_state 从 egui_wgpu::RenderState 提取（feature = "egui-wgpu"）。
+//
+// S2：错误类型本地下沉 —— 后端不再依赖 `xcal-scene::errors::Error`。
 
-use xcal_scene::errors::Error;
+/// 渲染上下文构造错误（S2：本层自有的最小错误集）。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RenderContextError {
+    /// 无可用 GPU / 设备创建失败。
+    #[error("Initialization error: {0}")]
+    Initialization(String),
+}
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, RenderContextError>;
 
 /// headless 构造的默认目标格式。
 pub const DEFAULT_TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -46,12 +54,16 @@ impl RenderContext {
                     ..Default::default()
                 })
                 .await
-                .map_err(|e| Error::InitializationError(format!("No suitable GPU adapter: {e}")))?;
+                .map_err(|e| {
+                    RenderContextError::Initialization(format!("No suitable GPU adapter: {e}"))
+                })?;
 
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor::default())
                 .await
-                .map_err(|e| Error::InitializationError(format!("Request device failed: {e}")))?;
+                .map_err(|e| {
+                    RenderContextError::Initialization(format!("Request device failed: {e}"))
+                })?;
 
             Ok(Self {
                 device,
@@ -171,10 +183,9 @@ mod tests {
             Ok(ctx) => {
                 assert_eq!(ctx.target_format, DEFAULT_TARGET_FORMAT);
             }
-            Err(Error::InitializationError(_)) => {
+            Err(RenderContextError::Initialization(_)) => {
                 // 无 GPU 环境可接受
             }
-            Err(e) => panic!("unexpected error variant: {e:?}"),
         }
     }
 }
