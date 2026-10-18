@@ -1,25 +1,29 @@
-//! 序列帧导出示例（B 线）。
+//! 序列帧导出示例（与 GUI / `xcal-render` 共用 **Driver pod** 推进）。
 //!
 //! ```text
 //! cargo run -p xcal-app --example export_frames -- \
-//!     --out export/frames --frames 60 --fps 30 --size 640x480
+//!     [--script crates/app/xcal-app/scripts/storyboard.lua] \
+//!     [--out export/frames] [--frames N] [--fps F] [--size WxH]
 //! ```
 //!
-//! 场景里的函数**来自 `xc-pod`**（`xcal_scene::builtin_f32`），这是 A 线的
-//! 生产消费方；导出的每一帧都经 `render_frame_headless`（与实时画面同一份帧体）。
+//! # 为什么不再手写帧循环
 //!
-//! 无 GPU 适配器时明确报错退出（导出无法在无 GPU 环境完成）。
+//! 旧版本每帧手动 `graph.refresh(...)` / `scene.set(...)`：它能导出是因为那个场景的
+//! 动画是手写的。脚本产出的动画全在 `SceneRecipe` 里，**不走调度器就一动不动**。
+//! 现在每帧只发一条 `Advance(dt)` 命令，渲染回调由
+//! `EguiSceneHost::build_render_callback` 生成 —— 与 GUI 是同一份帧体。
+//!
+//! 无 GPU 适配器时明确报错退出。
 
 use std::path::PathBuf;
 
+use xc_notion::{Rect2D, Vec2};
 use xcal_app::export::{ExportSpec, export_sequence};
-use xcal_render::{DrawQueue, DrawQueue3D, PostFilterChain, StrokeSolid, record_scene};
-use xcal_render_backends::{RenderContext, SceneCompositorCallback, SceneLayer};
-use xcal_scene::contract::{Scene as _, WorldView};
-use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
-use xcal_scene::scene::Scene;
-use xc_notion::{Rect2D, Sampler1D, Vec2};
-use xc_object::{Camera2D, Circle, FunctionGraph};
+use xcal_app::{build_script_runtime, language_from_path};
+use xcal_egui::EguiSceneHost;
+use xcal_render::{DrawQueue, DrawQueue3D, PostFilterChain, ViewRect};
+use xcal_render_backends::{RenderContext, SceneCompositorCallback};
+use xcal_scene::DriverCommand;
 
 fn arg(name: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -33,17 +37,17 @@ fn main() {
     if std::env::args().any(|a| a == "--help" || a == "-h") {
         println!(
             "用法：cargo run -p xcal-app --example export_frames -- \
-             [--out DIR] [--frames N] [--fps F] [--size WxH]"
+             [--script PATH] [--out DIR] [--frames N] [--fps F] [--size WxH]"
         );
         return;
     }
 
+    let script = PathBuf::from(
+        arg("--script").unwrap_or_else(|| "crates/app/xcal-app/scripts/storyboard.lua".to_string()),
+    );
     let out = arg("--out")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("export/frames"));
-    let frames: u32 = arg("--frames")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(60);
     let fps: f64 = arg("--fps").and_then(|v| v.parse().ok()).unwrap_or(30.0);
     let (width, height) = arg("--size")
         .and_then(|v| {
@@ -60,28 +64,38 @@ fn main() {
         }
     };
 
-    // ── 场景：一条函数图像（来自 Pod）+ 一个运动的圆 + 固定相机 ──────────
-    let mut scene = Scene::new();
-    let camera = Camera2D::new(
-        Vec2::ZERO,
-        60.0,
-        Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
-    );
+    let source = match std::fs::read_to_string(&script) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("读取脚本 {} 失败：{e}", script.display());
+            std::process::exit(1);
+        }
+    };
+    let language = match language_from_path(&script) {
+        Ok(language) => language,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let runtime = match build_script_runtime(ctx.clone(), source, language) {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("装配失败：{e}");
+            std::process::exit(1);
+        }
+    };
 
-    // **A 线**：函数体由 `xc-pod` 提供（`xcal_scene::builtin_f32`），
-    // 不是 `xc-notion` 里那份"不依赖 Pod"的静态兜底。
-    let func = xcal_scene::builtin_f32("xcal.math.sin").expect("内置函数已注册进 math Pod");
-    let graph = FunctionGraph::new(func, Sampler1D::new(-3.0f32, 3.0, 0.02));
-    let graph_id = graph
-        .build(&mut scene, StrokeSolid::new(2.0, (255, 255, 255, 255)))
-        .expect("FunctionGraph 的组件均已登记");
+    runtime.driver.with_scheduler_mut(|scheduler| {
+        scheduler.resources_mut().insert(ViewRect {
+            rect: Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
+        });
+    });
 
-    let circle_id = scene
-        .spawn_dyn(vec![
-            Box::new(Circle::new((0.0, 0.0), 0.8)),
-            Box::new(StrokeSolid::new(3.0, (80, 220, 255, 255))),
-        ])
-        .expect("Circle / StrokeSolid 均已登记");
+    let frames: u32 = arg("--frames")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| (runtime.duration * fps).ceil().max(1.0) as u32);
+    let dt = 1.0 / fps as f32;
 
     let mut spec = ExportSpec::new(&out);
     spec.width = width;
@@ -90,39 +104,42 @@ fn main() {
     spec.frames = frames;
 
     println!(
-        "导出 {frames} 帧到 {}（{}×{} @ {fps} fps）…",
+        "导出 {frames} 帧到 {}（{}×{} @ {fps} fps，时长 {:.3}s）…",
         out.display(),
         width,
-        height
+        height,
+        runtime.duration
     );
 
-    let report = export_sequence(&ctx, &spec, |i| {
-        let t = i as f64 / fps;
+    let report = export_sequence(&ctx, &spec, |_i| {
+        // 与 GUI 同一条命令：固定 dt。
+        runtime.driver.submit(DriverCommand::Advance { dt }).wait();
 
-        // 每帧推进画面：函数相位 + 圆的轨迹（保证帧内容确实在变）。
-        graph.refresh(&mut scene, graph_id, (t * 2.0) as f32);
-        let cx = 2.5 * (t as f32 * 1.7).cos();
-        let cy = 1.2 * (t as f32 * 2.3).sin();
-        scene.set(circle_id, Circle::new((cx, cy), 0.8));
+        let callback = runtime
+            .driver
+            .with_scheduler(|scheduler| {
+                let view =
+                    EguiSceneHost::build_scene_view(scheduler.world(), scheduler.resources());
+                EguiSceneHost::build_render_callback(&view, scheduler.resources())
+            })
+            .unwrap_or_else(|| {
+                SceneCompositorCallback::new(
+                    Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
+                    Vec::new(),
+                    &DrawQueue::new(),
+                    &DrawQueue3D::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    PostFilterChain::default(),
+                )
+            });
 
-        let mut queue = DrawQueue::new();
-        record_scene(&WorldView::new(scene.world()), &camera, &mut queue);
-
-        SceneCompositorCallback::new(
-            Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
-            vec![SceneLayer {
-                id: LayerId(0),
-                kind: LayerKind::Viewport2D { camera },
-                blend: LayerBlend::Alpha,
-                opacity: 1.0,
-            }],
-            &queue,
-            &DrawQueue3D::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            PostFilterChain::default(),
-        )
+        // 帧末清理（与宿主 `end_frame` 同口径）。
+        runtime.driver.with_scheduler_mut(|scheduler| {
+            EguiSceneHost::end_frame(scheduler.resources_mut());
+        });
+        callback
     })
     .unwrap_or_else(|e| {
         eprintln!("导出失败：{e}");
@@ -135,7 +152,4 @@ fn main() {
         report.avg_render_ms(),
         report.avg_encode_ms()
     );
-    if let Some(first) = report.files.first() {
-        println!("示例帧：{}", first.display());
-    }
 }

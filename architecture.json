@@ -6,8 +6,34 @@
       "name": "kernel",
       "path": "crates/kernel",
       "prefix": "xc-",
-      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated；xc-pod 家族提供语言无关的 capability 机制与绑定驱动",
-      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro", "xc-pod", "xc-pod-binding", "xc-pod-macro"]
+      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
+      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
+    },
+    {
+      "name": "pod",
+      "path": "crates/pod",
+      "prefix": "xc-",
+      "description": "领域无关的 Pod 层。核心组（xc-pod / xc-pod-binding / xc-pod-macro）平台无关、必须过 wasm gate；语言适配器组（xc-pod-lua / xc-pod-py）依赖 mlua / pyo3，不得进 wasm gate。xc-pod-tests 是测试专用 crate（publish = false，不进 wasm gate、不被生产依赖）。全部生产依赖均不含任何 xcal-*",
+      "crates": ["xc-pod", "xc-pod-binding", "xc-pod-macro", "xc-pod-lua", "xc-pod-py", "xc-pod-tests"],
+      "subgroups": [
+        {
+          "name": "core",
+          "crates": ["xc-pod", "xc-pod-binding", "xc-pod-macro"],
+          "wasm_gate": true
+        },
+        {
+          "name": "language-adapters",
+          "crates": ["xc-pod-lua", "xc-pod-py"],
+          "wasm_gate": false,
+          "reason": "mlua 需要 C 工具链；pyo3 需要系统 Python"
+        },
+        {
+          "name": "tests",
+          "crates": ["xc-pod-tests"],
+          "wasm_gate": false,
+          "reason": "测试 / 基准专用（publish = false）；被它依赖不等于生产边"
+        }
+      ]
     },
     {
       "name": "object",
@@ -42,13 +68,6 @@
       "prefix": "xcal-",
       "description": "场景层：ECS 场景数据（Scene / 组件）+ 场景 System + UI↔场景 domain 契约 + Pod domain（SceneApi / ContentApi）；不依赖任何渲染后端",
       "crates": ["xcal-scene"]
-    },
-    {
-      "name": "script",
-      "path": "crates/script",
-      "prefix": "xc-",
-      "description": "语言适配器：Lua / Python 只依赖 kernel 的 xc-pod 家族，生产依赖不含任何 xcal-*；domain 能力由 App 注入",
-      "crates": ["xc-pod-lua", "xc-pod-py"]
     },
     {
       "name": "render",
@@ -97,9 +116,9 @@
       "enforced_by": "人工 review + grep 扫描"
     },
     {
-      "rule": "NoScriptDomainDependency",
-      "description": "crates/script 的语言适配器（xc-pod-lua / xc-pod-py）禁止依赖任何 xcal-*；domain 能力由 App 注入",
-      "enforced_by": "cargo check（反向依赖无法编译）+ cargo tree 抽查"
+      "rule": "NoPodDomainDependency",
+      "description": "crates/pod 下任一 crate（含两个语言适配器与测试 crate）的生产依赖边中不得出现任何 xcal-*；dev 边不计入",
+      "enforced_by": "CI: cargo metadata 扫描 crates/pod/* 的生产依赖"
     },
     {
       "rule": "NoCycles",

@@ -656,16 +656,38 @@ impl EguiSceneHost {
             egui::Color32::from_rgba_unmultiplied(bg.r, bg.g, bg.b, bg.a),
         );
 
+        let Some(callback) = Self::build_render_callback(view, res) else {
+            return;
+        };
+        painter.add(egui::epaint::Shape::Callback(
+            egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
+        ));
+    }
+
+    /// 从本帧视图与资源构造**唯一**合成回调（不含任何 egui 调用）。
+    ///
+    /// GUI（[`Self::present`]）与 headless 导出（`xcal-app` 的图像序列 / ffmpeg 管道）
+    /// 共用同一份构造逻辑 —— 导出路径与实时路径的帧体因此不可能分叉。
+    /// 返回 `None` 表示本帧没有图层（只画背景）。
+    pub fn build_render_callback(
+        view: &SceneView,
+        res: &Resources,
+    ) -> Option<SceneCompositorCallback> {
+        let view_rect = res
+            .get::<ViewRect>()
+            .map(|v| v.rect)
+            .unwrap_or_else(|| ViewRect::default().rect);
+
+        // 无图层时不注册回调（与 S4.1 前"无 GPU 图层则不加回调"一致）。
+        if view.layers.is_empty() {
+            return None;
+        }
+
         // 图层顺序开关（UI 状态）。缺省与 `UiConfig::default()` 一致（不翻转）。
         let flip = res
             .get::<UiConfig>()
             .map(|c| c.flip_layer_order)
             .unwrap_or(false);
-
-        // 无图层时不注册回调（与 S4.1 前"无 GPU 图层则不加回调"一致）。
-        if view.layers.is_empty() {
-            return;
-        }
 
         // 按有效序收集全部图层声明。S4.1 后所有 `LayerKind` 都走 GPU，
         // 故不再需要"逐层判断是否 GPU"，回调固定落在有效序起点。
@@ -674,7 +696,7 @@ impl EguiSceneHost {
         } else {
             (0..view.layers.len()).collect()
         };
-        let mut gpu_specs: Vec<SceneLayer> = order
+        let gpu_specs: Vec<SceneLayer> = order
             .iter()
             .map(|&idx| {
                 let layer = &view.layers[idx];
@@ -690,10 +712,7 @@ impl EguiSceneHost {
         // 视口矩形（egui points）：GPU 回调的渲染区域（离屏 / 合成都在此范围内）。
         let viewport = Rect2D::new(view_rect.min, view_rect.max);
 
-        let (Some(queue_2d), Some(queue_3d)) = (res.get::<DrawQueue>(), res.get::<DrawQueue3D>())
-        else {
-            return;
-        };
+        let (queue_2d, queue_3d) = (res.get::<DrawQueue>()?, res.get::<DrawQueue3D>()?);
         // 内容纹理层快照（S3-3）：单份 `ContentTextureQueue` → 关联到
         // 唯一的 `ContentTexture` 图层 id（单层约束见 `ContentTextureSpec`）。
         let content: Vec<(LayerId, Vec<Recorded2D>)> = res
@@ -723,19 +742,16 @@ impl EguiSceneHost {
             .get::<PostFilterChain>()
             .cloned()
             .unwrap_or_default();
-        let callback = SceneCompositorCallback::new(
+        Some(SceneCompositorCallback::new(
             viewport,
-            std::mem::take(&mut gpu_specs),
+            gpu_specs,
             queue_2d,
             queue_3d,
             content,
             morphs,
             reveals,
             filters,
-        );
-        painter.add(egui::epaint::Shape::Callback(
-            egui_wgpu::Callback::new_paint_callback(egui_rect, callback),
-        ));
+        ))
     }
 }
 

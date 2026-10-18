@@ -13,6 +13,7 @@ pub mod contract;
 pub mod deferred;
 pub mod director_state;
 pub mod domain;
+pub mod driver;
 pub mod errors;
 pub mod math_pod;
 pub mod persist;
@@ -34,6 +35,7 @@ pub use deferred::{
     DeferredApplySystem, DeferredCmd, DeferredCommands, DynamicObjects, ReplaySystem,
 };
 pub use director_state::{DirectorAdvanceSystem, DirectorState};
+pub use driver::{DriverCommand, DriverEvent, DriverPod};
 pub use errors::Error;
 pub use math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};

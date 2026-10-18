@@ -40,9 +40,10 @@ jobs:
       # 例外：`xc-pod-macro` 是 proc-macro crate（永远 host 编译，不产出 wasm 目标），
       # 因此**不加入**本列表，这不是遗漏。
       # 注意：语言适配器 `xc-pod-lua` / `xc-pod-py` **不在此列，勿加** ——
-      # mlua 需要 C 工具链、pyo3 需要系统 Python；它们属于 crates/script/。
-      # 名字里的 `xc-pod-` 只是前缀：pod 系列同时含 kernel 层
-      # （xc-pod / xc-pod-binding / xc-pod-macro）与 script 层适配器。
+      # mlua 需要 C 工具链、pyo3 需要系统 Python；它们属于 `crates/pod/` 的
+      # **语言适配器组**（平台相关），与同一目录下的核心组（平台无关）判据不同。
+      # 名字里的 `xc-pod-` 只是前缀：pod 层同时含核心组
+      # （xc-pod / xc-pod-binding / xc-pod-macro）与语言适配器组。
       - name: Kernel wasm gate
         run: |
           rustup target add wasm32-unknown-unknown
@@ -50,6 +51,32 @@ jobs:
             echo "== $c (wasm32-unknown-unknown) =="
             cargo check -p "$c" --target wasm32-unknown-unknown || exit 1
           done
+        shell: bash
+
+      # 结构性判据：`crates/pod/` 下任一 crate 的**生产依赖边**中不得出现任何 `xcal-*`。
+      # 这把「领域无关、可独立演进」从口号变成 CI 会拦的规则（覆盖全部 5 个 pod crate，
+      # 含两个语言适配器）。dev 边（测试用 mini domain pod）不计入。
+      - name: Pod layer is domain-agnostic
+        run: |
+          cargo metadata --format-version 1 --no-deps > metadata.json
+          # 用 crate 名精确圈定 pod 层（新增 pod crate 必须加入此列表）；
+          # 依赖名的 `xcal-` 前缀是领域层的唯一判据。dev 边（kind = "dev"）不计入。
+          jq -r '
+            .packages[]
+            | select(.name | IN("xc-pod", "xc-pod-binding", "xc-pod-macro",
+                                "xc-pod-lua", "xc-pod-py", "xc-pod-tests"))
+            | .name as $n
+            | .dependencies[]
+            | select(.kind != "dev")
+            | select(.name | startswith("xcal-"))
+            | "\($n) -> \(.name)"
+          ' metadata.json > pod-violations.txt
+          if [ -s pod-violations.txt ]; then
+            echo "crates/pod 的生产依赖边中出现了 xcal-*（违反领域无关规则）："
+            cat pod-violations.txt
+            exit 1
+          fi
+          echo "OK: crates/pod 的生产依赖不含任何 xcal-*"
         shell: bash
 
       - name: Workspace Analyzer (cycles + DAG)

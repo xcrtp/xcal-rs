@@ -23,9 +23,14 @@ crates/
 │   ├── xc-vertex           顶点格式契约（VertexLayout / AaModel / CacheStrategy，无 wgpu 依赖）
 │   ├── xc-resource         GPU 资源契约与缓存（ResourceKey / ResourceCache / GpuHandle，纯 std）
 │   ├── xc-macro            Transform2DInto 派生宏
+│
+├── pod/             # 领域无关的 Pod 层（生产依赖不含任何 xcal-*）
 │   ├── xc-pod              Pod 机制（capability 协商 / 不透明句柄 / Injector / Broker）
 │   ├── xc-pod-binding      语言无关绑定驱动（BindingPlan / ValueCodec / JSON 文档）
-│   └── xc-pod-macro        #[capability] 与 #[derive(PodType)] 过程宏
+│   ├── xc-pod-macro        #[capability] 与 #[derive(PodType)] 过程宏
+│   ├── xc-pod-lua          Lua 适配器（mlua，解释器 vendored）：装配期脚本 → SceneScript
+│   ├── xc-pod-py           Python 适配器（pyo3，feature 门控）：装配期批量能力 + .pyi 导出
+│   └── xc-pod-tests        集成测试 + 基准（publish = false；mini pod / topic / Ord / flush）
 │
 ├── object/          # 场景对象层（只依赖 kernel）
 │   └── xc-object           图元 newtype / 相机 / 变换 / 装配对象（Axes2D · FunctionGraph）
@@ -42,10 +47,6 @@ crates/
 │
 ├── scene/           # 场景层
 │   └── xcal-scene          ECS 场景数据 + 场景 System + domain 契约 + Pod domain（SceneApi / ContentApi）
-│
-├── script/          # 语言适配器（生产依赖不含任何 xcal-*）
-│   ├── xc-pod-lua          Lua 适配器（mlua，解释器 vendored）：装配期脚本 → SceneScript
-│   └── xc-pod-py           Python 适配器（pyo3，feature 门控）：装配期批量能力 + .pyi 导出
 │
 ├── render/          # 渲染抽象与具体后端
 │   ├── xcal-render         2D/3D 渲染抽象（Painter / DrawQueue / Shape2D / RenderLayer）
@@ -65,8 +66,10 @@ crates/
 - `xc-*` crate 不得依赖任何 `xcal-*` crate 或 egui/wgpu
 - `xcal-*` crate 可依赖 `xc-*`，但不得依赖 `xcal-app`
 - `xcal-app` 可依赖一切，是唯一组装入口
-- 语言适配器（`xc-pod-lua` / `xc-pod-py`）属于 `xc-*`，**生产依赖不含任何 `xcal-*`**；
+- 语言适配器（`xc-pod-lua` / `xc-pod-py`）属于 `crates/pod/` 的语言适配器组，**生产依赖不含任何 `xcal-*`**；
   domain 能力由 App 通过 `register_capability::<SceneApi>(..)` 注入
+- `crates/pod/` 的核心组（`xc-pod` / `xc-pod-binding` / `xc-pod-macro`）平台无关，必须过 wasm gate；
+  语言适配器组（mlua / pyo3）**不在** wasm gate 名单内（CI 注释已注明原因）
 
 ## Crate 一览
 
@@ -81,9 +84,9 @@ crates/
 | `xc-vertex` | kernel | 顶点格式契约（VertexLayout / VertexAttrib / AaModel / CacheStrategy；无 wgpu 依赖，可序列化） |
 | `xc-resource` | kernel | GPU 资源契约与缓存（GpuResourceId / GpuHandle / ResourceKey / ResourceCache / DeferredDestroyer） |
 | `xc-macro` | kernel | `Transform2DInto` 派生过程宏 |
-| `xc-pod` | kernel | Pod 机制：capability 协商（typed 句柄）/ 不透明句柄 / Injector / Broker（需求校验、拓扑、环检测、注入） |
-| `xc-pod-binding` | kernel | 语言无关绑定驱动：`BindingPlan` / `ValueCodec` + `invoke` / JSON 文档真源；只依赖 `xc-pod` |
-| `xc-pod-macro` | kernel | `#[capability]` 与 `#[derive(PodType)]` 过程宏（`xc-pod` 保持零依赖） |
+| `xc-pod` | pod | Pod 机制：capability 协商（typed 句柄）/ 不透明句柄 / Injector / Broker（需求校验、拓扑、环检测、注入） |
+| `xc-pod-binding` | pod | 语言无关绑定驱动：`BindingPlan` / `ValueCodec` + `invoke` / JSON 文档真源；只依赖 `xc-pod` |
+| `xc-pod-macro` | pod | `#[capability]` 与 `#[derive(PodType)]` 过程宏（`xc-pod` 保持零依赖） |
 | `xc-object` | object | 场景对象层：图元 newtype / 相机 / 摆放 / 装配对象（`Axes2D` / `FunctionGraph`）；只依赖 kernel |
 | `xc-node` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `xc-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
@@ -92,8 +95,9 @@ crates/
 | `xc-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
 | `xcal-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs |
 | `xcal-scene` | scene | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply）+ domain 契约 + Pod domain（`SceneApi` / `ContentApi`）；依赖 `xcal-schedule` |
-| `xc-pod-lua` | script | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `xcal-*` |
-| `xc-pod-py` | script | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |
+| `xc-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `xcal-*` |
+| `xc-pod-py` | pod（语言适配器组） | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |
+| `xc-pod-tests` | pod（测试组） | 集成测试 + 基准（`publish = false`）：mini pod、topic 扇出、逻辑时序、flush、Lua/Python 对称性 |
 | `xcal-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape2D / RenderLayer / Viewport）+ 录制 System |
 | `xcal-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback） |
 | `xcal-egui` | ui | egui UI overlay System（控制面板 / 网格 / 相机输入 / **TimeControlSystem 时间控制**） |
@@ -176,6 +180,10 @@ cargo run -p xcal-app -- --python          # Python（需系统 Python）
 
 # 能力测试 demo（Name / Group / Visibility / Opacity）
 cargo run -p xcal-app -- --demo
+
+# headless：脚本直接渲到 mp4（默认 ffmpeg 管道；--frames DIR 走序列帧）
+cargo run -p xcal-app --bin xcal-render -- \
+    crates/app/xcal-app/scripts/storyboard.lua --out out/storyboard.mp4 --fps 30 --size 640x480
 
 # placeholder 兜底（关闭 Typst；同时关闭 Python）
 cargo run -p xcal-app --no-default-features

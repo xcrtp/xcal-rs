@@ -12,9 +12,9 @@ xc-notion = { path = "../../kernel/xc-notion" }
 xc-object = { path = "../../object/xc-object" }
 # Pod（A 线）：内置数学函数以 `RegistryPod` 为唯一来源 —— xcal-scene 是
 # `xc-pod` 的**第一个生产消费方**（`math_pod` 模块）。xc-notion 仍不依赖 xc-pod。
-xc-pod = { path = "../../kernel/xc-pod" }
+xc-pod = { path = "../../pod/xc-pod" }
 # `TargetKind` 的 schema：target 枚举是持久化表与脚本绑定的**唯一真源**。
-xc-pod-macro = { path = "../../kernel/xc-pod-macro" }
+xc-pod-macro = { path = "../../pod/xc-pod-macro" }
 # 渲染 IR（样式组件）：ECS 里存的 `StrokeSolid` / `FillSolid` 组件来自此处。
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
 # 契约层（M3-7/M3-8）：本层为 `xc_scene_contract::Scene` 提供 hecs 实现，

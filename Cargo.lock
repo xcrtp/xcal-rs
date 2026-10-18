@@ -5884,6 +5884,9 @@ dependencies = [
 [[package]]
 name = "xc-pod"
 version = "0.1.0"
+dependencies = [
+ "xc-pod-macro",
+]
 
 [[package]]
 name = "xc-pod-binding"
@@ -5921,6 +5924,19 @@ dependencies = [
  "xc-pod",
  "xc-pod-binding",
  "xc-pod-macro",
+]
+
+[[package]]
+name = "xc-pod-tests"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "serde_json",
+ "xc-pod",
+ "xc-pod-binding",
+ "xc-pod-lua",
+ "xc-pod-macro",
+ "xc-pod-py",
 ]
 
 [[package]]

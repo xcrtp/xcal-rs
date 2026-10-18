@@ -40,6 +40,9 @@ pub struct HealthOverlay {
     entities: usize,
     systems: usize,
     draw_calls: usize,
+    /// Driver 事件订阅结果（`FrameFinished`）：已完成帧数与帧末全局时间。
+    driver_frames: u32,
+    driver_t: f32,
 }
 
 impl Default for HealthOverlay {
@@ -85,7 +88,15 @@ impl HealthOverlay {
             entities: 0,
             systems: 0,
             draw_calls: 0,
+            driver_frames: 0,
+            driver_t: 0.0,
         }
+    }
+
+    /// 写入事件订阅方的进度（App 的 `FrameProgress` 收到的 `FrameFinished`）。
+    pub fn set_progress(&mut self, frames: u32, t: f32) {
+        self.driver_frames = frames;
+        self.driver_t = t;
     }
 
     pub fn toggle(&mut self) {
@@ -156,6 +167,10 @@ impl HealthOverlay {
                 ui.label(format!("Entities: {}", self.entities));
                 ui.label(format!("Systems: {}", self.systems));
                 ui.label(format!("Draw calls: {}", self.draw_calls));
+                ui.label(format!(
+                    "Driver: frame {} @ t = {:.3}s",
+                    self.driver_frames, self.driver_t
+                ));
                 ui.label(format!("Mem(est): {:.2} MB", self.memory_estimate_mb()));
                 ui.separator();
                 ui.label(egui::RichText::new("F1 关闭面板 · F10 导出 World 快照 JSON").weak());

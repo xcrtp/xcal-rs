@@ -1,0 +1,26 @@
+[package]
+name = "xc-pod-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Pod 层集成测试与基准（不进 wasm gate、不参与发布、不被任何生产 crate 依赖）"
+
+# 这是**测试专用** crate：
+# - 同时依赖核心组（xc-pod / xc-pod-macro / xc-pod-binding）与两个语言适配器；
+# - 任何生产 crate 都不得反向依赖它（没有消费方，也不应出现）。
+[dependencies]
+xc-pod = { path = "../xc-pod" }
+xc-pod-macro = { path = "../xc-pod-macro" }
+xc-pod-binding = { path = "../xc-pod-binding" }
+xc-pod-lua = { path = "../xc-pod-lua" }
+# Python 侧必须真的跑起来（本机 Python 见交付说明的环境变量）。
+xc-pod-py = { path = "../xc-pod-py", features = ["python"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "pod_bench"
+harness = false

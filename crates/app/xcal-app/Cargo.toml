@@ -9,15 +9,20 @@ license.workspace = true
 name = "xcal-app"
 path = "src/main.rs"
 
+# headless 薄壳（脚本 → mp4 / 序列帧）。真二进制，不是 example。
+[[bin]]
+name = "xcal-render"
+path = "src/bin/xcal-render.rs"
+
 [dependencies]
 xcal-scene = { path = "../../scene/xcal-scene" }
 # Pod 机制 + 静态插件装配（src/assembly.rs）。
-xc-pod = { path = "../../kernel/xc-pod" }
-xc-pod-binding = { path = "../../kernel/xc-pod-binding" }
+xc-pod = { path = "../../pod/xc-pod" }
+xc-pod-binding = { path = "../../pod/xc-pod-binding" }
 # Lua 适配器（纯语言层）：`--script` 用 Lua 编排最小分镜。
-xc-pod-lua = { path = "../../script/xc-pod-lua" }
+xc-pod-lua = { path = "../../pod/xc-pod-lua" }
 # Python 适配器：只在 feature = "python" 时引入，默认构建不受 pyo3 影响。
-xc-pod-py = { path = "../../script/xc-pod-py", optional = true }
+xc-pod-py = { path = "../../pod/xc-pod-py", optional = true }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xcal-render = { path = "../../render/xcal-render" }

@@ -77,6 +77,8 @@ pub enum ExportError {
     Png { path: PathBuf, message: String },
     /// 回读像素数与 `width * height * 4` 不符。
     BadPixelCount { expected: usize, actual: usize },
+    /// 目标格式没有已知的 ffmpeg 像素格式（**不静默猜测**）。
+    UnsupportedFormat { format: String },
 }
 
 impl fmt::Display for ExportError {
@@ -88,6 +90,9 @@ impl fmt::Display for ExportError {
             }
             Self::BadPixelCount { expected, actual } => {
                 write!(f, "像素数量不符：期望 {expected}，实际 {actual}")
+            }
+            Self::UnsupportedFormat { format } => {
+                write!(f, "目标纹理格式 `{format}` 没有已知的 ffmpeg 像素格式")
             }
         }
     }
@@ -172,6 +177,21 @@ where
     }
 
     Ok(report)
+}
+
+/// 目标纹理格式 → ffmpeg `-pix_fmt`（**查询**，不得硬编码：格式一变颜色就错且不报错）。
+///
+/// `Bgra8*` 可直接喂 ffmpeg（零通道交换）；`Rgba8*` 同理。
+pub fn target_pix_fmt(ctx: &RenderContext) -> Result<&'static str, ExportError> {
+    use wgpu::TextureFormat;
+
+    match ctx.target_format() {
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok("bgra"),
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok("rgba"),
+        other => Err(ExportError::UnsupportedFormat {
+            format: format!("{other:?}"),
+        }),
+    }
 }
 
 /// 把回读像素转成 PNG 用的 RGBA8（按目标格式做通道交换；alpha 原样）。

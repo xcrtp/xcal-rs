@@ -1,0 +1,18 @@
+[package]
+name = "xc-pod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Pod 统一抽象：不透明状态机 + capability 协商 + 函数集合（零依赖 Pod 层核心 crate）"
+
+# 依赖铁律：xc-pod 在 `crates/pod/` 的**核心组**
+#   ❌ hecs / egui / wgpu / 任何 xcal-* / 任何外部依赖 —— 绝对禁止（纯 std，必须能编译到 wasm32）。
+#   需要 proc-macro 的 `#[capability]` 留在独立的 xc-pod-macro（Rust 硬性要求）。
+#   `xc-pod` 不得依赖 `xc-node`：类型名机制与 `xc-node::TypeTag::type_name()` 形态同构，
+#   但零依赖约束下只能内建（见 §6 交付说明）。
+
+[dev-dependencies]
+# 仅 doctest：用 `#[derive(PodType)]` 证明「事件不能当命令提交」是**编译错误**。
+# dev 边不计入生产依赖图（CI 的领域无关规则只看生产边）。
+xc-pod-macro = { path = "../xc-pod-macro" }

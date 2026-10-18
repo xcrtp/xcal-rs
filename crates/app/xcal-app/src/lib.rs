@@ -9,8 +9,12 @@
 // P5（本轮内容目标）：**首个数学动画原型**的六条分镜在
 // [`storyboard::build`] 里被**声明**出来（而不是手工 spawn 一堆实体 + 手写 offset）。
 
+use std::any::Any;
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Instant;
+
+use xc_pod::{Capability, EventSink, FunctionId, Pod, PodError, PodId, QualifiedName};
 
 use xc_notion::{Rect2D, SurfaceFn};
 use xc_object::{
@@ -28,7 +32,7 @@ use xcal_render::{
 use xcal_render_backends::RenderContext;
 pub use xcal_scene::Result;
 use xcal_scene::animation::CameraEye;
-use xcal_scene::animation::{Binding, BindingApplySystem};
+use xcal_scene::animation::{Binding, BindingApplySystem, BindingTable};
 use xcal_scene::camera_input::CameraInputSystem;
 use xcal_scene::contract::{GroupVisibility, SceneRead, object_id_of};
 use xcal_scene::director_state::{DirectorAdvanceSystem, DirectorState};
@@ -38,8 +42,8 @@ use xcal_scene::scene::components::{ContentTextureItem, Material3D, TextureHandl
 use xcal_scene::scene::primitives::{parametric_surface, wireframe_cube};
 use xcal_scene::types::Color32;
 use xcal_scene::{
-    ClockNode, Curve, DeferredApplySystem, DeferredCommands, DynamicObjects, ReplaySystem,
-    SeekKind, TimeState,
+    ClockForest, ClockNode, Curve, DeferredApplySystem, DeferredCommands, DriverCommand,
+    DriverEvent, DriverPod, DynamicObjects, ReplaySystem, SeekKind, TimeState,
 };
 use xcal_schedule::resource::Resources;
 use xcal_schedule::scheduler::{Phase, Scheduler};
@@ -84,12 +88,142 @@ pub enum SceneChoice {
 }
 
 pub struct App {
-    scheduler: Scheduler,
+    /// 场景推进器（GUI 与 headless 共用同一条命令路径）。
+    driver: Arc<DriverPod>,
+    /// 事件订阅方：只观测 `FrameFinished`（进度条 / health overlay）。
+    progress: Arc<FrameProgress>,
     render_ctx: RenderContext,
     health: HealthOverlay,
     /// 墙钟时间基准：每帧用 Instant::now() - last_frame 算 dt，
     /// 不依赖渲染帧间隔（帧率波动、卡顿都不影响 Director 时间流速）。
     last_frame: Instant,
+}
+
+/// 事件订阅方：提供 `EventSink<DriverEvent>`，只记录 `FrameFinished`。
+///
+/// 这是「App 订阅事件」的落点：不碰命令队列、不推进时间，只做观测。
+struct FrameProgress {
+    id: PodId,
+    functions: Vec<QualifiedName>,
+    on_event: fn(&dyn Pod, DriverEvent),
+    frames: Cell<u32>,
+    time: Cell<f32>,
+}
+
+impl FrameProgress {
+    fn new() -> Self {
+        Self {
+            id: PodId::next(),
+            functions: vec![
+                <EventSink<'static, DriverEvent> as Capability<'static>>::signatures()[0]
+                    .qualified(),
+            ],
+            on_event: Self::record,
+            frames: Cell::new(0),
+            time: Cell::new(0.0),
+        }
+    }
+
+    fn record(pod: &dyn Pod, event: DriverEvent) {
+        let this = pod
+            .as_any()
+            .downcast_ref::<Self>()
+            .expect("on_event 只由 FrameProgress 提供");
+        if let DriverEvent::FrameFinished { frame, t } = event {
+            this.frames.set(frame);
+            this.time.set(t);
+        }
+    }
+
+    fn frames(&self) -> u32 {
+        self.frames.get()
+    }
+
+    fn time(&self) -> f32 {
+        self.time.get()
+    }
+}
+
+impl Pod for FrameProgress {
+    fn id(&self) -> PodId {
+        self.id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn functions(&self) -> &[QualifiedName] {
+        &self.functions
+    }
+
+    fn resolve(&self, name: &QualifiedName) -> Option<&(dyn Any + Send + Sync)> {
+        (*name == self.functions[0]).then_some(&self.on_event as &(dyn Any + Send + Sync))
+    }
+
+    fn call(
+        &self,
+        id: FunctionId,
+        _args: &[&dyn Any],
+    ) -> std::result::Result<Box<dyn Any>, PodError> {
+        Err(PodError::CallFailed(format!(
+            "FrameProgress 不支持类型擦除调用（{id}）"
+        )))
+    }
+}
+
+/// 一次装配的产物：**GUI 与 headless 共用**。
+pub struct Runtime {
+    /// 命令驱动的场景推进器。
+    pub driver: Arc<DriverPod>,
+    /// 渲染上下文（headless 由调用方创建后传入）。
+    pub render_ctx: RenderContext,
+    /// 动画时长（秒）：脚本取 `SceneScript::duration()`，硬编码场景取最晚绑定结束时间。
+    pub duration: f64,
+}
+
+/// 脚本语言（headless 按扩展名推断）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptLanguage {
+    /// `.lua`（`xc-pod-lua`，始终可用）。
+    Lua,
+    /// `.py`（`xc-pod-py`，需要 `python` feature）。
+    Python,
+}
+
+/// 按文件扩展名推断脚本语言（`.lua` / `.py`；其他 ⇒ 明确错误）。
+pub fn language_from_path(path: &std::path::Path) -> Result<ScriptLanguage> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("lua") => Ok(ScriptLanguage::Lua),
+        Some("py") => Ok(ScriptLanguage::Python),
+        other => Err(Error::InitializationError(format!(
+            "不支持的脚本扩展名：{other:?}（只支持 .lua / .py）"
+        ))),
+    }
+}
+
+/// 场景来源：启动参数选定的内置场景，或 headless 指定的脚本。
+enum SceneSource {
+    Choice(SceneChoice),
+    Script {
+        source: String,
+        language: ScriptLanguage,
+    },
+}
+
+/// **headless 装配入口**：脚本 → 与 GUI 完全相同的 Runtime。
+pub fn build_script_runtime(
+    render_ctx: RenderContext,
+    source: impl Into<String>,
+    language: ScriptLanguage,
+) -> Result<Runtime> {
+    build_runtime(
+        render_ctx,
+        SceneSource::Script {
+            source: source.into(),
+            language,
+        },
+    )
 }
 
 /// 2D 相机的**语义判据**：场景里唯一带 `Framing2D` 的对象。
@@ -180,9 +314,7 @@ impl App {
         Self::new_with_scene(ctx, SceneChoice::Storyboard)
     }
 
-    /// 按 [`SceneChoice`] 装配 App（**唯一的装配入口**）。
-    // 体检第 9 项（观察，暂不改）：本函数约 311 行，后续可按
-    // 「字体/主题 → 渲染后端 → 场景系统 → 面板」四段抽成私有方法。
+    /// 按 [`SceneChoice`] 装配 App（GUI 入口）。
     pub fn new_with_scene(ctx: &eframe::CreationContext, choice: SceneChoice) -> Result<Self> {
         // 宿主字体（平台相关）：候选路径 + `XCAL_CJK_FONT`；找不到只提示、不中止。
         if EguiSceneHost::install_cjk_font(&ctx.egui_ctx).is_none() {
@@ -204,7 +336,46 @@ impl App {
             xcal_render_backends::install_standard_backends(&rs)
         };
 
-        let mut scene = Scene::new();
+        let runtime = build_runtime(render_ctx, SceneSource::Choice(choice))?;
+        // App 订阅事件：进度只观测 `FrameFinished`（不碰命令队列）。
+        let progress = Arc::new(FrameProgress::new());
+        let sink: Arc<dyn Pod> = Arc::clone(&progress) as Arc<dyn Pod>;
+        runtime.driver.attach_sink(sink);
+        Ok(Self {
+            driver: runtime.driver,
+            progress,
+            render_ctx: runtime.render_ctx,
+            health: HealthOverlay::new(),
+            last_frame: Instant::now(),
+        })
+    }
+
+    /// 本帧渲染上下文。
+    pub fn render_context(&self) -> RenderContext {
+        self.render_ctx.clone()
+    }
+
+    /// 场景推进器句柄（测试 / headless 与 GUI 共用同一条命令路径）。
+    pub fn driver(&self) -> Arc<DriverPod> {
+        Arc::clone(&self.driver)
+    }
+
+    /// 调亮 UI 文字颜色：默认 dark theme 的 weak_text_color 偏灰，
+    /// 把 hint / inactive 都提亮。
+    fn setup_visuals(ctx: &egui::Context) {
+        let mut visuals = egui::Visuals::dark();
+        visuals.weak_text_color = Some(egui::Color32::from_rgb(210, 210, 210));
+        visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_rgb(200, 200, 200);
+        ctx.set_visuals(visuals);
+    }
+}
+
+/// **唯一的场景装配实现**：GUI 与 headless 走同一条路径。
+///
+/// 分叉点只允许在"渲染上下文怎么来"（`eframe` vs headless wgpu）与
+/// "每帧 dt 怎么来"（墙钟 vs 固定 `1/fps`）——场景、系统图、Driver pod 完全相同。
+fn build_runtime(render_ctx: RenderContext, source: SceneSource) -> Result<Runtime> {
+    let mut scene = Scene::new();
 
         // ── 3D 场景：白色线框立方体 ──────────────────────────────
         // 几何以 `Arc` 持有：SceneRecord3DSystem 直接复用引用（Arc::clone），
@@ -309,92 +480,8 @@ impl App {
         // ── 2D 场景：分镜 / 能力 demo（启动参数切换，见 `SceneChoice`）────────
         // 两个场景产出**同形的三样东西**：时钟树 + 绑定表 + 主 2D 相机句柄；
         // demo 额外产出一个"待插入的组级开关"（N2 的组控制）。
-        let (forest2d, bindings2d, camera2d_handle, group_visibility) = match choice {
-            SceneChoice::Storyboard => {
-                // 分镜脚本在 `storyboard.rs`：声明式地表达"先…再…"，编译成
-                // `ClockNode + Binding`（求值层零改动）。
-                let sb = storyboard::build(&mut scene, &engine);
-                (
-                    sb.forest,
-                    sb.bindings,
-                    sb.camera,
-                    GroupVisibility::default(),
-                )
-            }
-            SceneChoice::CapabilityDemo => {
-                // N 线能力测试 demo：最小场景（两条曲线 + 一个对照组）。
-                // 默认**不隐藏任何组**（全可见）⇒ 看得见 `cos` 淡出（N4）；
-                // 组控制（N2）由 `capability_demo` 的测试与 GPU 用例证明。
-                eprintln!(
-                    "[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）"
-                );
-                let d = capability_demo::build(&mut scene);
-                (d.forest, d.bindings, d.camera, d.group_visibility)
-            }
-            SceneChoice::ScriptStoryboard => {
-                // 全部 6 个镜头由 **Lua 脚本**编排（装配期一次）。App 显式声明
-                // 节点（scene / content / lua），Broker 负责校验、排序与注入。
-                // 与硬编码版的等价性由 `xcal-app` 的 `script_storyboard_matches_hardcoded` 锁定。
-                let assembly = assembly::assemble(Arc::clone(&engine))
-                    .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
-                let script = assembly
-                    .run_script(assembly::STORYBOARD_LUA)
-                    .map_err(|e| Error::InitializationError(format!("Lua 分镜执行失败：{e}")))?;
-                eprintln!(
-                    "[xcal-app] 场景 = Lua 脚本分镜（{} 个对象，{}s）",
-                    script.len(),
-                    script.duration()
-                );
-                let recipe = script
-                    .commit(&mut scene)
-                    .map_err(|e| Error::InitializationError(format!("脚本 commit 失败：{e}")))?;
-                // **不能假设第 0 个句柄是相机**：脚本先建坐标轴容器。
-                let camera = find_camera2d(&scene)?;
-                (
-                    recipe.forest,
-                    recipe.bindings,
-                    camera,
-                    GroupVisibility::default(),
-                )
-            }
-            SceneChoice::PythonStoryboard => {
-                #[cfg(not(feature = "python"))]
-                {
-                    return Err(Error::InitializationError(
-                        "Python 适配器未启用（编译时关闭了 python feature）".to_string(),
-                    ));
-                }
-                #[cfg(feature = "python")]
-                {
-                    // 同一分镜由 **Python 脚本**编排。与硬编码版的等价性由
-                    // `python_storyboard_matches_hardcoded` 锁定。
-                    let assembly = assembly::assemble(Arc::clone(&engine)).map_err(|e| {
-                        Error::InitializationError(format!("脚本 Pod 装配失败：{e}"))
-                    })?;
-                    let script = assembly
-                        .run_python_script(assembly::STORYBOARD_PY)
-                        .map_err(|e| {
-                            Error::InitializationError(format!("Python 分镜执行失败：{e}"))
-                        })?;
-                    eprintln!(
-                        "[xcal-app] 场景 = Python 脚本分镜（{} 个对象，{}s）",
-                        script.len(),
-                        script.duration()
-                    );
-                    let recipe = script.commit(&mut scene).map_err(|e| {
-                        Error::InitializationError(format!("脚本 commit 失败：{e}"))
-                    })?;
-                    // 与 Lua 版相同：不能假设第 0 个句柄是相机。
-                    let camera = find_camera2d(&scene)?;
-                    (
-                        recipe.forest,
-                        recipe.bindings,
-                        camera,
-                        GroupVisibility::default(),
-                    )
-                }
-            }
-        };
+        let (forest2d, bindings2d, camera2d_handle, group_visibility, script_duration) =
+            build_scene_source(&mut scene, &engine, &source)?;
 
         let world = scene.into_world();
 
@@ -435,6 +522,13 @@ impl App {
             seek_kind: SeekKind::O1,
         };
         bindings.add(orbit_binding.clone());
+
+        // 时长：脚本给的是显式 `duration()`；硬编码场景取最晚绑定结束时间。
+        let duration = if script_duration > 0.0 {
+            script_duration
+        } else {
+            forest_duration(&forest, &bindings)
+        };
 
         let mut resources = Resources::new();
         // P1-1：相机状态**不再是 Resource** —— 场景里有一个 2D 相机对象，
@@ -489,26 +583,164 @@ impl App {
         let mut scheduler = Scheduler::new(world, resources);
         register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
 
-        Ok(Self {
-            scheduler,
+        Ok(Runtime {
+            driver: Arc::new(DriverPod::new(scheduler)),
             render_ctx,
-            health: HealthOverlay::new(),
-            last_frame: Instant::now(),
+            duration,
         })
     }
 
-    pub fn render_context(&self) -> RenderContext {
-        self.render_ctx.clone()
+/// 场景来源 → 时钟树 / 绑定表 / 2D 相机 / 组开关 / 脚本时长。
+///
+/// 抽象出来是为了让 GUI（`SceneChoice`）与 headless（任意脚本路径）**共用**
+/// 同一条装配路径：两者都落到同一组 `ClockNode + Binding`。
+fn build_scene_source(
+    scene: &mut Scene,
+    engine: &Arc<xc_prerender::InMemoryEngine>,
+    source: &SceneSource,
+) -> Result<(
+    ClockForest,
+    BindingTable,
+    Camera2DHandle,
+    GroupVisibility,
+    f64,
+)> {
+    // ── 任意脚本（headless）──
+    if let SceneSource::Script {
+        source,
+        language,
+    } = source
+    {
+        let assembly = assembly::assemble(Arc::clone(engine))
+            .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
+        let script = run_script_source(&assembly, source, *language)?;
+        eprintln!(
+            "[xcal-app] 场景 = 脚本分镜（{} 个对象，{}s）",
+            script.len(),
+            script.duration()
+        );
+        let duration = script.duration();
+        let recipe = script
+            .commit(scene)
+            .map_err(|e| Error::InitializationError(format!("脚本 commit 失败：{e}")))?;
+        // **不能假设第 0 个句柄是相机**：脚本先建坐标轴容器。
+        let camera = find_camera2d(scene)?;
+        return Ok((
+            recipe.forest,
+            recipe.bindings,
+            camera,
+            GroupVisibility::default(),
+            duration,
+        ));
     }
 
-    /// 调亮 UI 文字颜色：默认 dark theme 的 weak_text_color 偏灰，
-    /// 把 hint / inactive 都提亮。
-    fn setup_visuals(ctx: &egui::Context) {
-        let mut visuals = egui::Visuals::dark();
-        visuals.weak_text_color = Some(egui::Color32::from_rgb(210, 210, 210));
-        visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_rgb(200, 200, 200);
-        ctx.set_visuals(visuals);
+    let SceneSource::Choice(choice) = source else {
+        unreachable!("Script 分支已在上面返回")
+    };
+
+    match choice {
+        SceneChoice::Storyboard => {
+            // 分镜脚本在 `storyboard.rs`：声明式地表达"先…再…"，编译成
+            // `ClockNode + Binding`（求值层零改动）。
+            let sb = storyboard::build(scene, engine.as_ref());
+            Ok((
+                sb.forest,
+                sb.bindings,
+                sb.camera,
+                GroupVisibility::default(),
+                0.0,
+            ))
+        }
+        SceneChoice::CapabilityDemo => {
+            // N 线能力测试 demo：最小场景（两条曲线 + 一个对照组）。
+            // 默认**不隐藏任何组**（全可见）⇒ 看得见 `cos` 淡出（N4）。
+            eprintln!(
+                "[xcal-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）"
+            );
+            let d = capability_demo::build(scene);
+            Ok((
+                d.forest,
+                d.bindings,
+                d.camera,
+                d.group_visibility,
+                0.0,
+            ))
+        }
+        SceneChoice::ScriptStoryboard => {
+            // 全部 6 个镜头由 **Lua 脚本**编排（装配期一次）。App 显式声明
+            // 节点（scene / content / lua），Broker 负责校验、排序与注入。
+            build_scene_source(
+                scene,
+                engine,
+                &SceneSource::Script {
+                    source: assembly::STORYBOARD_LUA.to_string(),
+                    language: ScriptLanguage::Lua,
+                },
+            )
+        }
+        SceneChoice::PythonStoryboard => {
+            #[cfg(not(feature = "python"))]
+            {
+                Err(Error::InitializationError(
+                    "Python 适配器未启用（编译时关闭了 python feature）".to_string(),
+                ))
+            }
+            #[cfg(feature = "python")]
+            {
+                // 同一分镜由 **Python 脚本**编排。与硬编码版的等价性由
+                // `python_storyboard_matches_hardcoded` 锁定。
+                build_scene_source(
+                    scene,
+                    engine,
+                    &SceneSource::Script {
+                        source: assembly::STORYBOARD_PY.to_string(),
+                        language: ScriptLanguage::Python,
+                    },
+                )
+            }
+        }
     }
+}
+
+/// 执行脚本（语言由 [`ScriptLanguage`] 决定；Python 未启用 ⇒ 明确报错）。
+fn run_script_source(
+    assembly: &assembly::PodAssembly,
+    source: &str,
+    language: ScriptLanguage,
+) -> Result<xcal_scene::scene_script::SceneScript> {
+    match language {
+        ScriptLanguage::Lua => assembly
+            .run_script(source)
+            .map_err(|e| Error::InitializationError(format!("Lua 分镜执行失败：{e}"))),
+        ScriptLanguage::Python => {
+            #[cfg(not(feature = "python"))]
+            {
+                let _ = (assembly, source);
+                Err(Error::InitializationError(
+                    "Python 适配器未启用（编译时关闭了 python feature）".to_string(),
+                ))
+            }
+            #[cfg(feature = "python")]
+            {
+                assembly
+                    .run_python_script(source)
+                    .map_err(|e| Error::InitializationError(format!("Python 分镜执行失败：{e}")))
+            }
+        }
+    }
+}
+
+/// 动画时长 = 最晚结束的绑定（`local_offset + span.1`）；无绑定 ⇒ 0。
+fn forest_duration(forest: &ClockForest, bindings: &BindingTable) -> f64 {
+    bindings
+        .bindings
+        .iter()
+        .filter_map(|binding| {
+            let node = forest.get(binding.clock)?;
+            let (_, end) = node.span?;
+            Some(node.local_offset + end)
+        })
+        .fold(0.0, f64::max)
 }
 
 impl eframe::App for App {
@@ -523,45 +755,62 @@ impl eframe::App for App {
         // 1. 场景 → UI：构建本帧视图声明（2D/3D 图层 + 相机）。
         //    相机取上一帧末状态——视口事件换算对该滞后不敏感
         //    （缩放因子/平移量只依赖 scale，不依赖 rect）。
-        let view =
-            EguiSceneHost::build_scene_view(self.scheduler.world(), self.scheduler.resources());
+        let driver = Arc::clone(&self.driver);
+        let view = driver
+            .with_scheduler(|scheduler| {
+                EguiSceneHost::build_scene_view(scheduler.world(), scheduler.resources())
+            });
 
         // 2. UI → 场景：收集输入事件、绘制面板 chrome、写 ViewRect。
-        //    必须在 run_frame 之前：System 消费 InputEvents，Axes/FunctionGraph
+        //    必须在推进之前：System 消费 InputEvents，Axes/FunctionGraph
         //    刷新当帧读 ViewRect。
-        EguiSceneHost::begin_frame(ui, &view, self.scheduler.resources_mut());
+        driver.with_scheduler_mut(|scheduler| {
+            EguiSceneHost::begin_frame(ui, &view, scheduler.resources_mut());
+        });
 
-        self.scheduler.run_frame(dt);
+        // 3. **命令推进**：GUI 与 headless 共用同一条 `Advance(dt)` 命令。
+        //    墙钟只决定 dt；推进语义完全由 Driver pod 负责。
+        let _receipt = driver.submit(DriverCommand::Advance { dt });
 
-        // 3. 内容提交：2D 队列 + 3D 队列 → painter（原 RenderSubmit 职责）。
-        EguiSceneHost::present(ui, &view, self.scheduler.resources_mut());
+        // 4. 内容提交：2D 队列 + 3D 队列 → painter（原 RenderSubmit 职责）。
+        driver.with_scheduler_mut(|scheduler| {
+            EguiSceneHost::present(ui, &view, scheduler.resources_mut());
+        });
 
         // ── 可观测性：F1 切换 health overlay，F10 导出 World 快照 ──
         if ui.input(|i| i.key_pressed(egui::Key::F1)) {
             self.health.toggle();
         }
         if ui.input(|i| i.key_pressed(egui::Key::F10)) {
-            let tick = self.scheduler.tick();
-            match self.health.dump_snapshot(
-                self.scheduler.world(),
-                self.scheduler.resources(),
-                tick,
-            ) {
+            let (tick, result) = driver.with_scheduler(|scheduler| {
+                let tick = scheduler.tick();
+                let result = self
+                    .health
+                    .dump_snapshot(scheduler.world(), scheduler.resources(), tick);
+                (tick, result)
+            });
+            match result {
                 Ok(path) => tracing::info!(tick, path = %path.display(), "world snapshot exported"),
                 Err(e) => tracing::error!(%e, tick, "snapshot export failed"),
             }
         }
-        let draw_calls = EguiSceneHost::draw_call_count(self.scheduler.resources());
-        self.health.update(
-            dt,
-            self.scheduler.frame_report(),
-            self.scheduler.world().len() as usize,
-            draw_calls,
-        );
+        driver.with_scheduler(|scheduler| {
+            let draw_calls = EguiSceneHost::draw_call_count(scheduler.resources());
+            self.health.update(
+                dt,
+                scheduler.frame_report(),
+                scheduler.world().len() as usize,
+                draw_calls,
+            );
+        });
+        self.health
+            .set_progress(self.progress.frames(), self.progress.time());
         self.health.show(ui);
 
         // 帧末：清空已被 present 消费的 2D 队列（帧管理归 host）。
-        EguiSceneHost::end_frame(self.scheduler.resources_mut());
+        driver.with_scheduler_mut(|scheduler| {
+            EguiSceneHost::end_frame(scheduler.resources_mut());
+        });
 
         // egui 默认事件驱动，无鼠标/键盘事件时不调度 ui()，导致
         // TimeState.elapsed 停止增长、动画卡住。动画引擎需持续重绘，每帧请求下一帧。
