@@ -40,6 +40,8 @@
 // 装配时写 [`handle_ref(h)`](handle_ref)，`commit` / `append` 在[**唯一改写点**](resolve_component_refs)
 // 里统一解析 / 偏移。新增"携带句柄引用的组件"只需在那个函数里加一条 —— 不散落。
 
+use std::sync::Arc;
+
 use xc_scene_contract::{
     Components, ObjectId, Parent, Scene as SceneContract, Visibility, VisibilityTag,
 };
@@ -175,6 +177,32 @@ impl SceneEncoder {
         };
         self.timeline.parallel_pending(curve, make, handle.0);
         true
+    }
+
+    /// 按**构造器函数**录一段动画（S3：Transform 通道用）。
+    ///
+    /// 与 [`SceneEncoder::animate_named`] 的差别只在目标来源：调用方已持有
+    /// `fn(ObjectId) -> Arc<dyn Target>`（通道已闭包在函数里），不必再查字符串表。
+    pub fn animate_with(
+        &mut self,
+        handle: Handle,
+        make: fn(ObjectId) -> Arc<dyn crate::animation::Target>,
+        curve: Curve,
+        dur: f64,
+    ) -> &mut Self {
+        self.timeline.play_pending(curve, make, handle.0, dur);
+        self
+    }
+
+    /// [`SceneEncoder::animate_with`] 的"与上一段同区间"版本。
+    pub fn parallel_with(
+        &mut self,
+        handle: Handle,
+        make: fn(ObjectId) -> Arc<dyn crate::animation::Target>,
+        curve: Curve,
+    ) -> &mut Self {
+        self.timeline.parallel_pending(curve, make, handle.0);
+        self
     }
 
     /// 推进时序游标（不产生节点）。

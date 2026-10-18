@@ -40,8 +40,26 @@ impl System for BindingApplySystem {
 
         // 目标层**不认识 hecs**：把世界包成契约层适配器再派发，
         // `apply` 内部只走契约方法（`Scene::get_mut`）。
+        //
+        // S1（G1）：多段绑定必须按段起点升序应用，且**段前不写**。
+        // - 段前不写：后段不会用 `from` 初值覆盖前段/初始状态；
+        // - 升序 + 稳定排序：同一段内 `parallel` 保持声明顺序（同字段冲突时后者胜，
+        //   行为确定，不依赖 HashMap 遍历顺序）；
+        // - 段后照常写：`Hold` 求值已钳到末值，写它即冻结。
+        let mut order: Vec<usize> = (0..table.bindings.len()).collect();
+        order.sort_by(|&a, &b| {
+            forest
+                .start_offset(table.bindings[a].clock)
+                .partial_cmp(&forest.start_offset(table.bindings[b].clock))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         let mut scene = WorldScene::new(&mut *ctx.world);
-        for b in &table.bindings {
+        for index in order {
+            let b = &table.bindings[index];
+            if forest.is_before_start(b.clock, t_global) {
+                continue;
+            }
             let lt = forest.eval_local(b.clock, t_global);
             let value: AnimValue = b.curve.sample(lt);
             // 目标自己负责"类型匹配 + 写组件"（不符则跳过本帧，不 panic）。
@@ -189,6 +207,107 @@ mod tests {
         assert!((radius - 1.0).abs() < 1e-5);
     }
 
+    /// **S1 / G1**：后段的 `from` 初值不得从第 0 帧覆盖前段。
+    ///
+    /// 两段 `Const`（55 → 170），中间 `wait`：
+    /// - t=0.5：第一段 → 55；
+    /// - t=1.5：第二段尚未开始 ⇒ **不写**，保持 55（修复前是 170）；
+    /// - t=2.5：第二段段内 → 170。
+    #[test]
+    fn later_segment_is_not_written_before_start() {
+        use crate::animation::target::Camera2DFraming;
+        use crate::animation::timeline::Timeline;
+        use xc_object::Framing2D;
+        use xc_time::AnimValue;
+
+        let mut world = World::new();
+        let entity = world.spawn((Framing2D::default(),));
+        let id = crate::contract::object_id_of(entity);
+
+        let mut tl = Timeline::new();
+        tl.play(
+            Curve::Const(AnimValue::Scalar(55.0)),
+            Camera2DFraming { id },
+            1.0,
+        );
+        tl.wait(1.0);
+        tl.play(
+            Curve::Const(AnimValue::Scalar(170.0)),
+            Camera2DFraming { id },
+            1.0,
+        );
+
+        let mut forest = XcClockForest::new();
+        let mut table = BindingTable::new();
+        tl.compile(&mut forest, &mut table);
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.0 });
+        resources.insert(forest);
+        resources.insert(table);
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::SceneSync, BindingApplySystem);
+        sched.init_resources();
+
+        let scale_at = |sched: &mut Scheduler, t: f32| -> f32 {
+            sched
+                .resources_mut()
+                .get_mut::<TimeState>()
+                .unwrap()
+                .elapsed = t;
+            sched.run_frame(0.0);
+            sched.world().get::<&Framing2D>(entity).unwrap().scale
+        };
+        assert_eq!(scale_at(&mut sched, 0.5), 55.0, "第一段");
+        assert_eq!(
+            scale_at(&mut sched, 1.5),
+            55.0,
+            "第二段段前不得写入 170（G1）"
+        );
+        assert_eq!(scale_at(&mut sched, 2.5), 170.0, "第二段段内");
+    }
+
+    /// **S1 边界（§2.3）**：同段 `parallel` 写同一字段时，后声明者胜（稳定排序）。
+    #[test]
+    fn same_start_same_field_last_declaration_wins() {
+        use crate::animation::target::Camera2DFraming;
+        use crate::animation::timeline::Timeline;
+        use xc_object::Framing2D;
+        use xc_time::AnimValue;
+
+        let mut world = World::new();
+        let entity = world.spawn((Framing2D::default(),));
+        let id = crate::contract::object_id_of(entity);
+
+        let mut tl = Timeline::new();
+        tl.play(
+            Curve::Const(AnimValue::Scalar(10.0)),
+            Camera2DFraming { id },
+            1.0,
+        );
+        tl.parallel(
+            Curve::Const(AnimValue::Scalar(20.0)),
+            Camera2DFraming { id },
+        );
+
+        let mut forest = XcClockForest::new();
+        let mut table = BindingTable::new();
+        tl.compile(&mut forest, &mut table);
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.5 });
+        resources.insert(forest);
+        resources.insert(table);
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::SceneSync, BindingApplySystem);
+        sched.init_resources();
+        sched.run_frame(0.0);
+
+        assert_eq!(sched.world().get::<&Framing2D>(entity).unwrap().scale, 20.0);
+    }
+
     /// **T1 验收 5**：`Timeline` 驱动 `TransformValue` —— 段内插值、段外冻结（`Hold`）。
     #[test]
     fn timeline_drives_transform_value_with_hold() {
@@ -209,7 +328,7 @@ mod tests {
             interpolation: Interp::Linear,
         };
         let mut tl = Timeline::new();
-        tl.play(curve, TransformValue { id }, 2.0);
+        tl.play(curve, TransformValue::auto(id), 2.0);
 
         let mut forest = XcClockForest::new();
         let mut table = BindingTable::new();
@@ -364,9 +483,9 @@ mod tests {
                 AnimValue::Vec2(vec2(0.0, 0.0)),
                 AnimValue::Vec2(vec2(2.0, 4.0)),
             ),
-            Arc::new(TransformValue {
-                id: crate::contract::object_id_of(transform),
-            }),
+            Arc::new(TransformValue::auto(
+                crate::contract::object_id_of(transform),
+            )),
         );
 
         let mut resources = Resources::new();

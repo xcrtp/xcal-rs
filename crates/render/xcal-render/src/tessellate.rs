@@ -603,6 +603,110 @@ mod tests {
         Transform2D::identity()
     }
 
+    /// **S2 白名单（G4 的配套防线）**：`Shape2D` 的每个变体都必须产生几何，
+    /// 或**显式**列入本测试的空几何白名单（当前仅 `Empty`）。
+    ///
+    /// 为什么需要它：`Shape2D` 是 `#[non_exhaustive]`，`contours_of` 的兜底分支
+    /// `_ => Vec::new()` 会让"漏接线"变成静默空白。本用例把当前全部变体钉住 ——
+    /// 任何变体接线退化都会在这里变红（新增变体仍需人工补到此列表）。
+    #[test]
+    fn every_shape2d_variant_produces_geometry_or_is_whitelisted() {
+        fn custom_path(_: &CustomShapeData, transform: &Transform2D) -> Path2D {
+            Path2D::from_polyline(
+                &[
+                    transform.apply_point(Vec2::ZERO),
+                    transform.apply_point(Vec2::new(1.0, 0.0)),
+                    transform.apply_point(Vec2::new(0.0, 1.0)),
+                ],
+                true,
+            )
+        }
+
+        let poly = vec![
+            Vec2::ZERO,
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 1.0),
+        ];
+        let custom = CustomShapeData::new(
+            std::any::TypeId::of::<u8>(),
+            Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0)),
+        )
+        .with_to_path(custom_path);
+
+        let cases: Vec<(&str, Shape2D, bool)> = vec![
+            (
+                "Circle",
+                Shape2D::Circle {
+                    center: Vec2::new(0.5, 0.5),
+                    radius: 0.5,
+                },
+                true,
+            ),
+            (
+                "Ellipse",
+                Shape2D::Ellipse {
+                    center: Vec2::new(0.5, 0.5),
+                    rx: 0.5,
+                    ry: 0.25,
+                },
+                true,
+            ),
+            (
+                "Rect",
+                Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0))),
+                true,
+            ),
+            (
+                "Line",
+                Shape2D::Line {
+                    start: Vec2::ZERO,
+                    end: Vec2::new(1.0, 1.0),
+                },
+                false,
+            ),
+            (
+                "Polyline",
+                Shape2D::Polyline {
+                    points: poly.clone(),
+                },
+                false,
+            ),
+            ("Polygon", Shape2D::Polygon { points: poly.clone() }, true),
+            (
+                "Path",
+                Shape2D::Path(Path2D::from_polyline(&poly, true)),
+                true,
+            ),
+            (
+                "Group",
+                Shape2D::Group {
+                    children: vec![Shape2D::Circle {
+                        center: Vec2::new(0.5, 0.5),
+                        radius: 0.5,
+                    }],
+                },
+                true,
+            ),
+            ("Custom", Shape2D::Custom(custom), true),
+        ];
+
+        for (name, shape, closed) in cases {
+            // 开放折线只能描边；闭合形状用填充（两者都走同一条 tessellate 分派）。
+            let style = if closed {
+                style_fill()
+            } else {
+                style_stroke(1.0)
+            };
+            assert!(
+                !tessellate(&shape, &identity(), &style, 0.05).is_empty(),
+                "Shape2D::{name} 没有产生几何（tessellate 漏接线）"
+            );
+        }
+
+        // 白名单：Empty 是唯一的"合法空几何"。
+        assert!(tessellate(&Shape2D::Empty, &identity(), &style_fill(), 0.05).is_empty());
+    }
+
     fn dist_to_polyline(p: Vec2, poly: &[Vec2]) -> f32 {
         let mut best = f32::INFINITY;
         for w in poly.windows(2) {

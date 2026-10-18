@@ -244,6 +244,9 @@ fn build_runtime(
     }
     resources.insert(TimeState::default());
     resources.insert(UiConfig::default());
+    // S5：父子变换累乘的派生态（每帧由 TransformHierarchySystem 重建）。
+    resources.insert(xcal_scene::WorldTransforms::default());
+    resources.insert(xcal_scene::TransformHierarchyError::default());
     resources.insert(ViewRect::default());
     resources.insert(InputEvents::default());
     resources.insert(DrawQueue::new());
@@ -874,6 +877,60 @@ mod tests {
         ids
     }
 
+    /// Fourier 作品的对象全集（含纯层级节点 / 圆点 / Name / Parent）。
+    fn fourier_ids(scene: &Scene) -> Vec<xcal_scene::contract::ObjectId> {
+        use xc_object::{Arrow, Axes2D, Circle, Framing2D, Path as ObjectPath, Transform};
+        use xcal_scene::contract::{Name, ObjectId, SceneRead};
+        use xcal_scene::scene::components::Reveal;
+
+        let mut ids: Vec<ObjectId> = Vec::new();
+        scene.for_each::<Axes2D>(|id, _| ids.push(id));
+        scene.for_each::<Framing2D>(|id, _| ids.push(id));
+        scene.for_each::<Reveal>(|id, _| ids.push(id));
+        scene.for_each::<ObjectPath>(|id, _| ids.push(id));
+        scene.for_each::<Arrow>(|id, _| ids.push(id));
+        scene.for_each::<Circle>(|id, _| ids.push(id));
+        scene.for_each::<Name>(|id, _| ids.push(id));
+        scene.for_each::<Transform>(|id, _| ids.push(id));
+        ids.sort_by_key(|id| id.index);
+        ids.dedup();
+        ids
+    }
+
+    /// Fourier 作品的逐组件指纹（在通用指纹上补 Circle / Name / Parent / Opacity）。
+    fn fourier_fingerprint(
+        scene: &Scene,
+        id: xcal_scene::contract::ObjectId,
+    ) -> String {
+        use xc_object::Circle;
+        use xcal_scene::contract::{Name, Parent, SceneRead};
+        use xcal_render::Opacity;
+
+        let mut parts = vec![object_fingerprint(scene, id)];
+        if let Some(text) = scene.with::<Circle, _>(id, |c| {
+            format!(
+                "circle({},{},{})",
+                qf(c.0.center.x),
+                qf(c.0.center.y),
+                qf(c.0.radius)
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Name, _>(id, |n| format!("name({})", n.0)) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Parent, _>(id, |p| {
+            format!("parent({},{})", p.0.index, p.0.generation)
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Opacity, _>(id, |o| format!("opacity({})", qf(o.0))) {
+            parts.push(text);
+        }
+        parts.join("|")
+    }
+
     fn binding_rows(
         forest: &ClockForest,
         bindings: &BindingTable,
@@ -1020,8 +1077,8 @@ mod tests {
         let recipe_lua = lua.commit(&mut scene_lua).expect("Lua commit");
         let recipe_py = py.commit(&mut scene_py).expect("Python commit");
 
-        let ids_lua = storyboard_ids(&scene_lua);
-        let ids_py = storyboard_ids(&scene_py);
+        let ids_lua = fourier_ids(&scene_lua);
+        let ids_py = fourier_ids(&scene_py);
         assert_eq!(ids_lua.len(), ids_py.len(), "对象数必须一致");
         assert_eq!(
             recipe_lua.handles.len(),
@@ -1036,11 +1093,11 @@ mod tests {
 
         let fingerprints_lua: Vec<String> = ids_lua
             .iter()
-            .map(|id| object_fingerprint(&scene_lua, *id))
+            .map(|id| fourier_fingerprint(&scene_lua, *id))
             .collect();
         let fingerprints_py: Vec<String> = ids_py
             .iter()
-            .map(|id| object_fingerprint(&scene_py, *id))
+            .map(|id| fourier_fingerprint(&scene_py, *id))
             .collect();
         assert_eq!(
             fingerprints_lua, fingerprints_py,
@@ -1055,6 +1112,127 @@ mod tests {
             "[fourier] 对象 {} / 绑定 {} / 时长 {duration:.3}s",
             fingerprints_lua.len(),
             rows_lua.len()
+        );
+    }
+
+    /// **S1 验收**：Fourier 的相机「推近 → 停留 → 拉回」三段绑定不得在段前互相覆盖。
+    ///
+    /// - t=4.0（推近前）⇒ 55；
+    /// - t=5.2（推近段内）⇒ 55..90；
+    /// - t=6.0（停留）⇒ 90；
+    /// - t=7.2（拉回后）⇒ 55。
+    #[test]
+    fn fourier_camera_push_pull_uses_segment_semantics() {
+        use xc_object::Framing2D;
+        use xc_prerender::placeholder_engine;
+        use xcal_scene::animation::BindingApplySystem;
+        use xcal_schedule::resource::Resources;
+        use xcal_schedule::scheduler::{Phase, Scheduler};
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 Pod 装配成功");
+        let script = assembly
+            .run_script(include_str!("../scripts/fourier.lua"))
+            .expect("Lua 傅里叶脚本执行成功");
+        let mut scene = Scene::new();
+        let recipe = script.commit(&mut scene).expect("commit");
+
+        let world = scene.into_world();
+
+        let mut resources = Resources::new();
+        resources.insert(TimeState { elapsed: 0.0 });
+        resources.insert(recipe.forest);
+        resources.insert(recipe.bindings);
+
+        let mut sched = Scheduler::new(world, resources);
+        sched.add_system(Phase::SceneSync, BindingApplySystem);
+        sched.init_resources();
+
+        let scale_at = |sched: &mut Scheduler, t: f32| -> f32 {
+            sched
+                .resources_mut()
+                .get_mut::<TimeState>()
+                .unwrap()
+                .elapsed = t;
+            sched.run_frame(0.0);
+            sched
+                .world()
+                .query::<&Framing2D>()
+                .iter()
+                .next()
+                .unwrap()
+                .scale
+        };
+
+        assert!(
+            (scale_at(&mut sched, 4.0) - 55.0).abs() < 1e-3,
+            "推近前必须是全景"
+        );
+        let mid = scale_at(&mut sched, 5.2);
+        assert!(mid > 55.0 && mid < 90.0, "推近段内应介于 55..90，实际 {mid}");
+        assert!(
+            (scale_at(&mut sched, 6.0) - 90.0).abs() < 1e-3,
+            "停留期在 90"
+        );
+        assert!(
+            (scale_at(&mut sched, 7.2) - 55.0).abs() < 1e-3,
+            "拉回后回到全景"
+        );
+    }
+
+    /// **S4 验收**：`Curve.Keyframes` / `ScalarKey` / `KeyframeInterp` 在两侧语言都可构造。
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_keyframes_curve_matches_lua() {
+        use xc_prerender::placeholder_engine;
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 Pod 装配成功");
+        let lua_source = r#"
+local o = scene.spawn({ Transform { x = 0.0, y = 0.0, z = 0.0 } })
+scene.animate(o, scene.clip_transform(TransformChannel.Rotation, Curve.Keyframes {
+    keys = {
+        ScalarKey { t = 0.0, value = 0.0 },
+        ScalarKey { t = 1.0, value = 1.5 },
+    },
+    interpolation = KeyframeInterp.Linear,
+}), 1.0)
+"#;
+        let py_source = r#"
+o = scene.spawn([Transform(x=0.0, y=0.0, z=0.0)])
+scene.animate(o, scene.clip_transform(TransformChannel.Rotation, Curve.Keyframes(
+    keys=[
+        ScalarKey(t=0.0, value=0.0),
+        ScalarKey(t=1.0, value=1.5),
+    ],
+    interpolation=KeyframeInterp.Linear,
+)), 1.0)
+"#;
+        let lua = assembly.run_script(lua_source).expect("Lua Keyframes 脚本");
+        let py = assembly
+            .run_python_script(py_source)
+            .expect("Python Keyframes 脚本");
+        assert_eq!(lua.duration(), py.duration());
+
+        let mut scene_lua = Scene::new();
+        let mut scene_py = Scene::new();
+        let recipe_lua = lua.commit(&mut scene_lua).expect("Lua commit");
+        let recipe_py = py.commit(&mut scene_py).expect("Python commit");
+        let ids_lua = fourier_ids(&scene_lua);
+        let ids_py = fourier_ids(&scene_py);
+        assert_eq!(
+            ids_lua
+                .iter()
+                .map(|id| fourier_fingerprint(&scene_lua, *id))
+                .collect::<Vec<_>>(),
+            ids_py
+                .iter()
+                .map(|id| fourier_fingerprint(&scene_py, *id))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            binding_rows(&recipe_lua.forest, &recipe_lua.bindings, &ids_lua),
+            binding_rows(&recipe_py.forest, &recipe_py.bindings, &ids_py)
         );
     }
 

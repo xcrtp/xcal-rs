@@ -48,6 +48,7 @@ use xcal_scene::domain::ContentTextureSpec;
 use xcal_scene::scene::components::{
     ContentTextureItem, Material3D, MeshGeometry, MorphShape, Reveal,
 };
+use xcal_scene::transform_hierarchy::WorldTransforms;
 use xcal_schedule::context::ExecutorContext;
 use xcal_schedule::system::System;
 
@@ -55,7 +56,7 @@ use xc_object::{Camera2DHandle, Path, Transform};
 
 use crate::draw::{
     ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
-    push_reveal_item, record_path_stroke, record_scene_tagged, visible_for,
+    push_reveal_item, record_path_stroke, record_scene_tagged_with, visible_for,
 };
 use crate::draw_queue_3d::DrawQueue3D;
 use crate::view_rect::ViewRect;
@@ -82,7 +83,7 @@ fn resolve_camera(
 pub struct SceneRecordSystem;
 impl System for SceneRecordSystem {
     // N5：`GroupVisibility` 进入 Read（组级开关；缺席 ⇒ 默认空 ⇒ 所有组可见）。
-    type Reads = (ViewRect, Camera2DHandle, GroupVisibility);
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility, WorldTransforms);
     type Writes = (DrawQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -94,6 +95,8 @@ impl System for SceneRecordSystem {
         // 组级开关是可缺席资源 ⇒ 缺席按默认（空集 = 所有组可见）处理。
         let camera_tag = ctx.get::<Camera2DHandle>().map(|h| h.0);
         let groups = ctx.get::<GroupVisibility>().cloned().unwrap_or_default();
+        // S5：父子累乘后的世界仿射（资源很小；clone 一次以解开与 world 的借用）。
+        let worlds = ctx.get::<WorldTransforms>().cloned();
         let Some(camera) = resolve_camera(ctx, rect) else {
             return;
         };
@@ -101,9 +104,16 @@ impl System for SceneRecordSystem {
         // 同时需要 &hecs::World（不可变）与 &mut DrawQueue；
         // 通过 split-borrow 辅助 API 在闭包内同时持有两个引用。
         ctx.with_world_and_resource_mut::<DrawQueue, _>(|world, queue| {
-            // `record_scene_tagged` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
+            // `record_scene_tagged_with` 只吃契约层 `SceneRead`；hecs 侧经只读适配器
             // `WorldView` 接入 —— 渲染管线不认识 hecs（不可变借用，渲染只需要读）。
-            record_scene_tagged(&WorldView::new(world), &camera, camera_tag, &groups, queue);
+            record_scene_tagged_with(
+                &WorldView::new(world),
+                &camera,
+                camera_tag,
+                &groups,
+                worlds.as_ref(),
+                queue,
+            );
         });
     }
 }
@@ -180,7 +190,7 @@ impl System for MorphRecordSystem {
 pub struct RevealRecordSystem;
 impl System for RevealRecordSystem {
     // N5：与 `SceneRecordSystem` / `MorphRecordSystem` 同口径。
-    type Reads = (ViewRect, Camera2DHandle, GroupVisibility);
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility, WorldTransforms);
     type Writes = (RevealQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -190,6 +200,7 @@ impl System for RevealRecordSystem {
             .unwrap_or_else(|| ViewRect::default().rect);
         let camera_tag = ctx.get::<Camera2DHandle>().map(|h| h.0);
         let groups = ctx.get::<GroupVisibility>().cloned().unwrap_or_default();
+        let worlds = ctx.get::<WorldTransforms>().cloned();
         let Some(camera) = resolve_camera(ctx, rect) else {
             return;
         };
@@ -202,9 +213,19 @@ impl System for RevealRecordSystem {
                 if !visible_for(&scene, id, camera_tag, &groups) {
                     return;
                 }
+                // S2（G4）+ S5：Reveal 消费**世界**变换（世界累乘优先，缺席回退 local）。
+                let local = scene.with::<xc_object::Transform, _>(id, |tr| tr.to_affine2d());
+                let transform = worlds
+                    .as_ref()
+                    .and_then(|w| w.get(id).copied())
+                    .or(local);
+                let path = match transform {
+                    Some(transform) => reveal.path.transformed(&transform),
+                    None => reveal.path.clone(),
+                };
                 push_reveal_item(
                     queue,
-                    &reveal.path,
+                    &path,
                     reveal.start,
                     reveal.end,
                     stroke,
@@ -356,6 +377,45 @@ mod tests {
         // 世界原点 → 视口中心 (400, 300)；半径 1 世界单位 × 40 = 40px。
         assert!((center.x - 400.0).abs() < 1e-3 && (center.y - 300.0).abs() < 1e-3);
         assert!((*radius - 40.0).abs() < 1e-3, "radius = {radius}");
+    }
+
+    /// **S2（G4）**：`Reveal` 必须消费逐对象 `Transform`（与 SceneRecord 同口径）。
+    #[test]
+    fn reveal_record_consumes_transform() {
+        use crate::draw::RevealQueue;
+        use xc_notion::Vec3;
+
+        let (mut world, handle) = world_with_camera(Framing2D::new(Vec2::ZERO, 40.0));
+        let path = Path2D::from_polyline(&[Vec2::ZERO, Vec2::new(1.0, 0.0)], false);
+        world.spawn((
+            Reveal::new(path),
+            StrokeSolid::new(2.0, (255, 0, 0, 255)),
+            xc_object::Transform {
+                position: Vec3::new(1.0, 0.0, 0.0),
+                ..xc_object::Transform::default()
+            },
+        ));
+
+        let mut res = resources_with(Rect2D::new(Vec2::ZERO, Vec2::new(800.0, 600.0)), handle);
+        res.insert(RevealQueue::default());
+
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, RevealRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let queue = sched.resources().get::<RevealQueue>().unwrap();
+        assert_eq!(queue.0.len(), 1);
+        let mut pts = Vec::new();
+        for cmd in &queue.0[0].path.commands {
+            if let PathCommand::MoveTo(p) | PathCommand::LineTo(p) = cmd {
+                pts.push(*p);
+            }
+        }
+        assert_eq!(pts.len(), 2);
+        // 世界 (0,0) + Transform (1,0) ⇒ 屏幕 (440,300)；世界 (1,0) ⇒ (480,300)。
+        assert!((pts[0].x - 440.0).abs() < 1e-3, "p0 = {:?}", pts[0]);
+        assert!((pts[1].x - 480.0).abs() < 1e-3, "p1 = {:?}", pts[1]);
     }
 
     /// 句柄失效（无相机对象）⇒ 不录任何东西（不 panic）。

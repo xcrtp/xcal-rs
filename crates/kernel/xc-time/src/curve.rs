@@ -114,6 +114,16 @@ pub enum Curve {
         speed: f32,
         initial_angle: f32,
     },
+    /// **2D 公转**（S4）：`(r cosθ, r sinθ, 0)`，`θ = speed * t + initial_angle`。
+    ///
+    /// 为什么不复用 [`Curve::Orbit`]：3D `Orbit` 的基向量是 `+Z` 且绕任意轴旋转，
+    /// 投影到 XY 平面会退化（轴与基向量同向时甚至恒为零）。2D 需要的是**固定平面**
+    /// 上的圆，故单列一个纯函数变体；3D 语义与 3D 相机 demo 逐位不变。
+    Orbit2D {
+        radius: f32,
+        speed: f32,
+        initial_angle: f32,
+    },
     /// 相位（线性 f(t) = t * omega）—— 供 FunctionX2Y 水平滑动
     Phase {
         omega: f32,
@@ -182,6 +192,18 @@ impl Curve {
                     + axis.cross(base) * sin_a
                     + axis * axis.dot(base) * (1.0 - cos_a);
                 AnimValue::Vec3(rotated)
+            }
+            Curve::Orbit2D {
+                radius,
+                speed,
+                initial_angle,
+            } => {
+                let angle = (*speed as f64) * t + (*initial_angle as f64);
+                AnimValue::Vec3(Vec3::new(
+                    *radius * angle.cos() as f32,
+                    *radius * angle.sin() as f32,
+                    0.0,
+                ))
             }
             Curve::Phase { omega } => {
                 AnimValue::Scalar((*omega as f32) * t as f32)
@@ -308,6 +330,20 @@ mod tests {
         for t in [0.0, -100.0, 1e6] {
             assert_eq!(curve.sample(t).scalar(), 42.0);
         }
+    }
+
+    #[test]
+    fn orbit2d_is_a_circle_in_xy_plane() {
+        let curve = Curve::Orbit2D {
+            radius: 2.0,
+            speed: 1.0,
+            initial_angle: 0.0,
+        };
+        assert_eq!(curve.sample(0.0).vec3(), Vec3::new(2.0, 0.0, 0.0));
+        let quarter = curve.sample(std::f64::consts::FRAC_PI_2).vec3();
+        assert!((quarter.x - 0.0).abs() < 1e-5, "x = {}", quarter.x);
+        assert!((quarter.y - 2.0).abs() < 1e-5, "y = {}", quarter.y);
+        assert_eq!(quarter.z, 0.0, "2D 轨道必须留在 XY 平面");
     }
 
     #[test]

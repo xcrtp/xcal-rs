@@ -5,7 +5,8 @@
 //   `TypeSpec` + 双向转换 + `IntoPodTypeName`；
 // - 宿主侧 Service 把它们的值转成场景原语（`xc_object` / `xc_time` …）。
 
-use crate::{AnimValue, Curve as NativeCurve, Interp};
+use crate::animation::target::TransformChannel as NativeTransformChannel;
+use crate::{AnimValue, Curve as NativeCurve, Interp as NativeInterp};
 use xc_pod::Handle;
 use xc_pod_macro::PodType;
 
@@ -58,6 +59,59 @@ pub struct Camera2D {
 pub struct Reveal {
     pub points: Vec<Vec2>,
     pub closed: bool,
+}
+
+/// **静态折线**（S2）：构造时即 `start=0, end=1` 的可见 `Reveal`。
+///
+/// 它复用 `Reveal` 的组件与录制路径（含 S2 的 Transform 折算），
+/// 只是**初态可见**；仍可继续用 `Target.RevealRange` 做二次书写。
+#[derive(Clone, Debug, PartialEq, PodType)]
+#[pod_type(name = "xcal.Polyline")]
+pub struct Polyline {
+    pub points: Vec<Vec2>,
+    pub closed: bool,
+}
+
+/// 父对象引用（S5）：声明期用脚本句柄，`commit` 时解析成 `ObjectId`。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "xcal.Parent")]
+pub struct Parent {
+    pub parent: Handle,
+}
+
+/// 对象名（便于排查 / 文本组父对象）。
+#[derive(Clone, Debug, PartialEq, PodType)]
+#[pod_type(name = "xcal.Name")]
+pub struct Name {
+    pub value: String,
+}
+
+/// 对象级不透明度（S6）：`0` 全透明 … `1` 完全不透明。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "xcal.Opacity")]
+pub struct Opacity {
+    pub value: f32,
+}
+
+/// Transform 的写入通道（S3）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "xcal.TransformChannel")]
+pub enum TransformChannel {
+    Auto,
+    Position,
+    Rotation,
+    Scale,
+}
+
+impl TransformChannel {
+    pub fn to_native(self) -> NativeTransformChannel {
+        match self {
+            Self::Auto => NativeTransformChannel::Auto,
+            Self::Position => NativeTransformChannel::Position,
+            Self::Rotation => NativeTransformChannel::Rotation,
+            Self::Scale => NativeTransformChannel::Scale,
+        }
+    }
 }
 
 /// 线样式（**纯值**；与组件 `Stroke` 分开，避免"类型构造器返回句柄"的歧义）。
@@ -177,11 +231,36 @@ pub struct Text {
     pub y: f32,
 }
 
-/// 曲线：**一个枚举的五个变体**（取代 sin / phase / constant / ramp / ramp2 五个函数）。
+/// 标量关键帧（S4）：`t` 是段内局部时间（秒），`value` 是标量。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "xcal.ScalarKey")]
+pub struct ScalarKey {
+    pub t: f64,
+    pub value: f32,
+}
+
+/// 关键帧插值方式（S4）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "xcal.KeyframeInterp")]
+pub enum KeyframeInterp {
+    Linear,
+    Step,
+}
+
+impl KeyframeInterp {
+    pub fn to_native(self) -> NativeInterp {
+        match self {
+            Self::Linear => NativeInterp::Linear,
+            Self::Step => NativeInterp::Step,
+        }
+    }
+}
+
+/// 曲线：脚本侧的统一枚举（取代 sin / phase / constant / ramp / ramp2 五个函数）。
 ///
 /// `dur` 用 `f64`：段内关键帧时间与 `Timeline` 的 `duration` 同精度，
 /// 否则 `1/N` 这类时长在 f32 上会与手写分镜差一个 ulp。
-#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[derive(Clone, Debug, PartialEq, PodType)]
 #[pod_type(name = "xcal.Curve")]
 pub enum Curve {
     Const { value: f32 },
@@ -189,26 +268,92 @@ pub enum Curve {
     Phase { omega: f32 },
     Ramp { from: f32, to: f32, dur: f64 },
     Ramp2 { from: Vec2, to: Vec2, dur: f64 },
+    /// **2D 公转**（S4）：`r * (cos θ, sin θ)`，`θ = speed * t + initial_angle`。
+    Orbit { radius: f32, speed: f32, initial_angle: f32 },
+    /// **标量关键帧**（S4）：段内 `t` → 值，按 `interpolation` 插值。
+    Keyframes { keys: Vec<ScalarKey>, interpolation: KeyframeInterp },
 }
 
 impl Curve {
     /// 绑定层的曲线 → 场景层的曲线（装配期一次）。
-    pub fn to_native(self) -> NativeCurve {
+    pub fn to_native(&self) -> NativeCurve {
         match self {
-            Curve::Const { value } => NativeCurve::Const(AnimValue::Scalar(value)),
-            Curve::Sin { base, amp, omega } => NativeCurve::Sin { base, amp, omega },
-            Curve::Phase { omega } => NativeCurve::Phase { omega },
+            Curve::Const { value } => NativeCurve::Const(AnimValue::Scalar(*value)),
+            Curve::Sin { base, amp, omega } => NativeCurve::Sin {
+                base: *base,
+                amp: *amp,
+                omega: *omega,
+            },
+            Curve::Phase { omega } => NativeCurve::Phase { omega: *omega },
             Curve::Ramp { from, to, dur } => NativeCurve::Keyframes {
-                keys: vec![(0.0, AnimValue::Scalar(from)), (dur, AnimValue::Scalar(to))],
-                interpolation: Interp::Linear,
+                keys: vec![
+                    (0.0, AnimValue::Scalar(*from)),
+                    (*dur, AnimValue::Scalar(*to)),
+                ],
+                interpolation: NativeInterp::Linear,
             },
             Curve::Ramp2 { from, to, dur } => NativeCurve::Keyframes {
                 keys: vec![
                     (0.0, AnimValue::Vec2(xc_notion::Vec2::new(from.x, from.y))),
-                    (dur, AnimValue::Vec2(xc_notion::Vec2::new(to.x, to.y))),
+                    (*dur, AnimValue::Vec2(xc_notion::Vec2::new(to.x, to.y))),
                 ],
-                interpolation: Interp::Linear,
+                interpolation: NativeInterp::Linear,
             },
+            Curve::Orbit {
+                radius,
+                speed,
+                initial_angle,
+            } => NativeCurve::Orbit2D {
+                radius: *radius,
+                speed: *speed,
+                initial_angle: *initial_angle,
+            },
+            Curve::Keyframes { keys, interpolation } => NativeCurve::Keyframes {
+                keys: keys
+                    .iter()
+                    .map(|key| (key.t, AnimValue::Scalar(key.value)))
+                    .collect(),
+                interpolation: interpolation.to_native(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn script_orbit_maps_to_2d_orbit() {
+        let native = Curve::Orbit {
+            radius: 2.0,
+            speed: 1.0,
+            initial_angle: 0.0,
+        }
+        .to_native();
+        assert!(matches!(native, NativeCurve::Orbit2D { radius, .. } if radius == 2.0));
+    }
+
+    #[test]
+    fn script_keyframes_map_to_scalar_keyframes() {
+        let native = Curve::Keyframes {
+            keys: vec![
+                ScalarKey { t: 0.0, value: 0.0 },
+                ScalarKey { t: 1.0, value: 2.0 },
+            ],
+            interpolation: KeyframeInterp::Step,
+        }
+        .to_native();
+        match native {
+            NativeCurve::Keyframes {
+                keys,
+                interpolation,
+            } => {
+                assert_eq!(keys.len(), 2);
+                assert_eq!(keys[1].1.scalar(), 2.0);
+                assert!(matches!(interpolation, NativeInterp::Step));
+            }
+            other => panic!("期望 Keyframes，实际 {other:?}"),
         }
     }
 }

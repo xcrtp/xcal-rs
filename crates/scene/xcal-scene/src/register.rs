@@ -23,6 +23,7 @@ use crate::director_state::DirectorAdvanceSystem;
 use crate::geometry::{AxesRefreshSystem, FunctionGraphRefreshSystem};
 use crate::input::{ParamPanelSystem, TimeControlSystem};
 use crate::lifetime::LifetimeFlushSystem;
+use crate::transform_hierarchy::TransformHierarchySystem;
 
 /// 注册场景侧全部 System。
 ///
@@ -63,6 +64,8 @@ pub fn register_systems(
     // S0：UI 输入的**场景侧**消费者（从 xcal-egui 归位；面板 chrome 仍在 UI 层）。
     scheduler.add_system(Phase::LogicUpdate, TimeControlSystem);
     scheduler.add_system(Phase::LogicUpdate, ParamPanelSystem);
+    // S5：父子变换累乘（BindingApply 写入 local 之后、录制之前）。
+    scheduler.add_system(Phase::Prepare, TransformHierarchySystem);
     // S0：场景几何刷新（从 xcal-egui 归位；几何算法在对象层）。
     scheduler.add_system(Phase::Prepare, AxesRefreshSystem);
     scheduler.add_system(Phase::Prepare, FunctionGraphRefreshSystem);

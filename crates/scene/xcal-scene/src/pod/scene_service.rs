@@ -14,20 +14,22 @@ use std::sync::{Mutex, MutexGuard};
 use crate::Curve as NativeCurve;
 use crate::animation::TargetKind;
 use crate::scene::components::Reveal as NativeReveal;
-use crate::scene_script::{Handle as ScriptHandle, SceneEncoder, SceneScript};
+use crate::scene_script::{
+    Handle as ScriptHandle, SceneEncoder, SceneScript, handle_ref,
+};
 use xc_notion::{Color32, Vec2 as NotionVec2, Vec3 as NotionVec3};
 use xc_object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Circle as NativeCircle, Framing2D,
     Path as NativePath, TickSpec, Transform as NativeTransform,
 };
 use xc_pod::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
-use xc_render_ir::{FillSolid, MeasureSpace, StrokeSolid};
-use xc_scene_contract::Components;
+use xc_render_ir::{FillSolid, MeasureSpace, Opacity as NativeOpacity, StrokeSolid};
+use xc_scene_contract::{Components, Name as NativeName, Parent as NativeParent};
 
 use crate::pod::content_service::PathStore;
 use crate::pod::types::{
-    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, LineStyle, Path, PathShape, Reveal, RevealPath,
-    Stroke, Transform,
+    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, LineStyle, Name, Opacity, Parent, Path, PathShape,
+    Polyline, Reveal, RevealPath, Stroke, Transform, TransformChannel,
 };
 
 /// 注入时使用的 Service 名（与 `LuaPod::requirements()` 对应）。
@@ -38,11 +40,38 @@ pub const FINISH_PATH: &str = "xcal.scene::__finish";
 /// 内部交接函数：丢弃上一轮录制状态（每次 `run` 前调用）。
 pub const RESET_PATH: &str = "xcal.scene::__reset";
 
-/// 一个"动画动作"：**目标枚举** + 已转换的曲线。
+/// 一个"动画动作"：**目标**（枚举或 Transform 通道）+ 已转换的曲线。
 #[derive(Clone)]
 struct Clip {
-    target: TargetKind,
+    target: ClipTarget,
     curve: NativeCurve,
+}
+
+/// 脚本侧动作目标的两种来源。
+#[derive(Clone, Copy)]
+enum ClipTarget {
+    /// 既有集中枚举（CircleRadius / Phase / … / TransformValue(Auto)）。
+    Kind(TargetKind),
+    /// S3：显式 Transform 通道。
+    Transform(TransformChannel),
+}
+
+impl ClipTarget {
+    fn make(self) -> fn(xc_scene_contract::ObjectId) -> std::sync::Arc<dyn crate::animation::Target> {
+        use crate::animation::target::{
+            make_transform_auto, make_transform_position, make_transform_rotation,
+            make_transform_scale,
+        };
+        match self {
+            ClipTarget::Kind(kind) => kind.ctor(),
+            ClipTarget::Transform(channel) => match channel {
+                TransformChannel::Auto => make_transform_auto,
+                TransformChannel::Position => make_transform_position,
+                TransformChannel::Rotation => make_transform_rotation,
+                TransformChannel::Scale => make_transform_scale,
+            },
+        }
+    }
 }
 
 /// Service 的全部可变状态（`Pod` 只有 `&self` ⇒ 内部可变性）。
@@ -144,6 +173,15 @@ impl SceneServicePod {
             "xc_pod.Handle",
             scene_reveal,
         );
+        registry.register_fn1_named::<Polyline, Handle>(
+            "xcal.scene::polyline",
+            "xcal.Polyline",
+            "xc_pod.Handle",
+            scene_polyline,
+        );
+        registry.register_fn1::<Parent, Handle>("xcal.scene::parent", scene_parent);
+        registry.register_fn1::<Name, Handle>("xcal.scene::name", scene_name);
+        registry.register_fn1::<Opacity, Handle>("xcal.scene::opacity", scene_opacity);
         registry.register_fn1_named::<Axes2D, Handle>(
             "xcal.scene::axes2d",
             "xcal.Axes2D",
@@ -187,6 +225,10 @@ impl SceneServicePod {
 
         // ── 动画：目标枚举 + 曲线枚举 ───────────────────────────────────
         registry.register_fn2::<TargetKind, Curve, Handle>("xcal.scene::clip", scene_clip);
+        registry.register_fn2::<TransformChannel, Curve, Handle>(
+            "xcal.scene::clip_transform",
+            scene_clip_transform,
+        );
         registry.register_fn3_named::<Handle, Handle, f64, ()>(
             "xcal.scene::animate",
             "xc_pod.Handle",
@@ -354,6 +396,58 @@ fn scene_reveal(pod: &dyn Pod, reveal: Reveal) -> Handle {
         .insert(vec![Box::new(NativeReveal::new(path))])
 }
 
+fn scene_polyline(pod: &dyn Pod, polyline: Polyline) -> Handle {
+    let points: Vec<NotionVec2> = polyline
+        .points
+        .iter()
+        .map(|p| NotionVec2::new(p.x, p.y))
+        .collect();
+    let path = xc_notion::Path2D::from_polyline(&points, polyline.closed);
+    let mut reveal = NativeReveal::new(path);
+    // S2 / G13：静态折线**可见初态**。仍可再挂 `RevealRange` 做二次书写。
+    reveal.start = 0.0;
+    reveal.end = 1.0;
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(reveal)])
+}
+
+fn scene_parent(pod: &dyn Pod, parent: Parent) -> Handle {
+    let mut rec = service(pod).rec.borrow_mut();
+    // 脚本句柄 → Encoder 局部句柄（`handle_ref` 的编码空间）；非法句柄明确失败。
+    let resolved = match rec.objects.get(&parent.parent) {
+        Ok(handle) => Some(*handle),
+        Err(_) => {
+            rec.fail(format!("父对象句柄无效：{}", parent.parent));
+            None
+        }
+    };
+    match resolved {
+        Some(handle) => rec
+            .components
+            .insert(vec![Box::new(NativeParent(handle_ref(handle)))]),
+        None => rec.components.insert(Vec::new()),
+    }
+}
+
+fn scene_name(pod: &dyn Pod, name: Name) -> Handle {
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(NativeName(name.value))])
+}
+
+fn scene_opacity(pod: &dyn Pod, opacity: Opacity) -> Handle {
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(NativeOpacity::new(opacity.value))])
+}
+
 fn scene_axes2d(pod: &dyn Pod, axes: Axes2D) -> Handle {
     let axes = NativeAxes2D {
         x_range: (f32::NEG_INFINITY, f32::INFINITY),
@@ -455,7 +549,14 @@ fn scene_despawn(pod: &dyn Pod, object: Handle) {
 
 fn scene_clip(pod: &dyn Pod, target: TargetKind, curve: Curve) -> Handle {
     service(pod).rec.borrow_mut().clips.insert(Clip {
-        target,
+        target: ClipTarget::Kind(target),
+        curve: curve.to_native(),
+    })
+}
+
+fn scene_clip_transform(pod: &dyn Pod, channel: TransformChannel, curve: Curve) -> Handle {
+    service(pod).rec.borrow_mut().clips.insert(Clip {
+        target: ClipTarget::Transform(channel),
         curve: curve.to_native(),
     })
 }
@@ -472,7 +573,7 @@ fn scene_animate(pod: &dyn Pod, object: Handle, clip: Handle, duration: f64) {
         return;
     };
     rec.encoder
-        .animate_named(object, target.name(), curve, duration);
+        .animate_with(object, target.make(), curve, duration);
 }
 
 fn scene_parallel(pod: &dyn Pod, object: Handle, clip: Handle) {
@@ -486,7 +587,7 @@ fn scene_parallel(pod: &dyn Pod, object: Handle, clip: Handle) {
     let (Some(object), Some((target, curve))) = (object, clip) else {
         return;
     };
-    rec.encoder.parallel_named(object, target.name(), curve);
+    rec.encoder.parallel_with(object, target.make(), curve);
 }
 
 fn scene_wait(pod: &dyn Pod, seconds: f64) {

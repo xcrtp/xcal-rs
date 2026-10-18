@@ -129,6 +129,53 @@ impl ClockForest {
             .unwrap_or(global_t) // 节点不存在则 fallback 到全局时间
     }
 
+    /// 该节点在**全局时间轴**上的起始偏移（沿祖先链累加 `local_offset`）。
+    ///
+    /// 用途：多段绑定按 `start` 升序应用（S1）。时间轴编译出的节点都是根节点
+    /// （`parent = None`, `rate = 1`），此时它等于节点自己的 `local_offset`；
+    /// 嵌套时钟只做偏移累加（`rate != 1` 的全局换算不在本方法口径内）。
+    pub fn start_offset(&self, id: ClockId) -> f64 {
+        self.start_offset_recursive(id, &mut std::collections::HashSet::new())
+            .unwrap_or(0.0)
+    }
+
+    fn start_offset_recursive(
+        &self,
+        id: ClockId,
+        seen: &mut std::collections::HashSet<ClockId>,
+    ) -> Option<f64> {
+        if !seen.insert(id) {
+            return None;
+        }
+        let node = self.nodes.get(&id)?;
+        let parent = match node.parent {
+            Some(parent) => self.start_offset_recursive(parent, seen)?,
+            None => 0.0,
+        };
+        Some(parent + node.local_offset)
+    }
+
+    /// **段前判定（S1）**：`global_t` 是否早于该节点所在段的起点。
+    ///
+    /// 语义：`local_offset` 是在**父级本地时间**里的偏移；根节点父级即全局时间。
+    /// 只有带 `span` 的段节点才可能"尚未开始"；无 `span` 的常驻节点恒为 `false`。
+    ///
+    /// 为什么不在 `eval_local` 里改：`Hold` 的段前 clamp 是正确语义（段后冻结末值），
+    /// 要改的是"绑定应用侧不要写"。本方法让应用侧可判定，而不动求值层。
+    pub fn is_before_start(&self, id: ClockId, global_t: f64) -> bool {
+        let Some(node) = self.nodes.get(&id) else {
+            return false;
+        };
+        if node.span.is_none() {
+            return false;
+        }
+        let parent_local = match node.parent {
+            Some(parent) => self.eval_local(parent, global_t),
+            None => global_t,
+        };
+        parent_local < node.local_offset
+    }
+
     fn eval_local_recursive(
         &self,
         id: ClockId,
@@ -279,6 +326,42 @@ mod tests {
 
         assert!((forest.eval_local(id, 5.0) - (-5.0)).abs() < 1e-6);
         assert!((forest.eval_local(id, 10.0) - (-10.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn start_offset_and_before_start_for_timeline_nodes() {
+        let mut forest = ClockForest::new();
+        let mut first = ClockNode::new(None);
+        first.span = Some((0.0, 1.0));
+        first.mode = PlayMode::Hold;
+        let first = forest.insert(first).unwrap();
+
+        let mut second = ClockNode::new(None);
+        second.local_offset = 2.5;
+        second.span = Some((0.0, 1.0));
+        second.mode = PlayMode::Hold;
+        let second = forest.insert(second).unwrap();
+
+        assert_eq!(forest.start_offset(first), 0.0);
+        assert_eq!(forest.start_offset(second), 2.5);
+
+        assert!(!forest.is_before_start(first, 0.0));
+        assert!(forest.is_before_start(second, 2.499));
+        assert!(!forest.is_before_start(second, 2.5));
+        assert!(!forest.is_before_start(second, 9.0));
+    }
+
+    #[test]
+    fn start_offset_sums_nested_offsets() {
+        let mut forest = ClockForest::new();
+        let mut root = ClockNode::new(None);
+        root.local_offset = 1.5;
+        let root = forest.insert(root).unwrap();
+        let mut child = ClockNode::new(Some(root));
+        child.local_offset = 2.0;
+        let child = forest.insert(child).unwrap();
+
+        assert_eq!(forest.start_offset(child), 3.5);
     }
 
     #[test]

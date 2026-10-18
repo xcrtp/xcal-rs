@@ -11,8 +11,8 @@
 
 use crate::animation::TargetKind;
 use crate::pod::types::{
-    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, Formula, PathList, PathShape, Reveal, RevealPath,
-    Stroke, Text, Transform,
+    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, Formula, Name, Opacity, Parent, PathList,
+    PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform, TransformChannel,
 };
 use xc_pod::Handle;
 use xc_pod_macro::capability;
@@ -20,7 +20,7 @@ use xc_pod_macro::capability;
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(
     namespace = "xcal.scene",
-    version = "3",
+    version = "4",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -36,6 +36,18 @@ pub struct SceneApi<'a> {
 
     /// 构造书写动画组件（点表是 `Array<Vec2>`）。
     pub reveal: fn(&'a dyn Pod, reveal: Reveal) -> Handle,
+
+    /// 构造**静态折线**（S2：可见初态，仍可继续被 RevealRange 书写）。
+    pub polyline: fn(&'a dyn Pod, polyline: Polyline) -> Handle,
+
+    /// 父对象引用组件（S5：声明期句柄，commit 时解析）。
+    pub parent: fn(&'a dyn Pod, parent: Parent) -> Handle,
+
+    /// 对象名组件。
+    pub name: fn(&'a dyn Pod, name: Name) -> Handle,
+
+    /// 对象级不透明度组件（S6）。
+    pub opacity: fn(&'a dyn Pod, opacity: Opacity) -> Handle,
 
     /// 构造坐标网格组件（容器；几何由 `AxesRefreshSystem` 每帧生成）。
     pub axes2d: fn(&'a dyn Pod, axes: Axes2D) -> Handle,
@@ -63,6 +75,12 @@ pub struct SceneApi<'a> {
 
     /// 构造动画动作：**目标枚举** + **曲线枚举**（拼错在绑定层即报错）。
     pub clip: fn(&'a dyn Pod, target: TargetKind, curve: Curve) -> Handle,
+
+    /// 构造 **Transform 通道**动作（S3：Position / Rotation / Scale）。
+    ///
+    /// 与 `clip(Target.TransformValue, ...)` 的区别：显式指定写哪一列，
+    /// 因此 `Position` 与 `Rotation` 可以在 `parallel` 里并存。
+    pub clip_transform: fn(&'a dyn Pod, channel: TransformChannel, curve: Curve) -> Handle,
 
     /// 顺序播放一段动画（动作 + 时长，秒）。
     pub animate: fn(&'a dyn Pod, object: Handle, clip: Handle, duration: f64) -> (),

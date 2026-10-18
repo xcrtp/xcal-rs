@@ -520,6 +520,7 @@ fn record_group<S, A, B>(
     scale: f32,
     camera_tag: Option<ObjectId>,
     groups: &GroupVisibility,
+    worlds: Option<&xcal_scene::transform_hierarchy::WorldTransforms>,
     queue: &mut DrawQueue,
     z_default: f32,
 ) where
@@ -531,8 +532,13 @@ fn record_group<S, A, B>(
         if !visible_for(scene, id, camera_tag, groups) {
             return;
         }
-        // T1：逐对象摆放（缺席 ⇒ **保持原样** `*t`，保证"未使用新能力时逐位不变"）。
-        let world_t = match scene.with::<Transform, _>(id, |tr| tr.to_affine2d()) {
+        // S5：优先用父子累乘的**世界仿射**；缺席 WorldTransforms / 该对象 ⇒ local。
+        // 无 `Parent` 时 WorldTransforms 存的就是 local 的逐位拷贝 ⇒ 默认行为不变。
+        let local = scene.with::<Transform, _>(id, |tr| tr.to_affine2d());
+        let obj = worlds
+            .and_then(|w| w.get(id).copied())
+            .or(local);
+        let world_t = match obj {
             Some(obj) => obj.compose(*t),
             None => *t,
         };
@@ -593,24 +599,39 @@ pub fn record_scene_tagged<S: SceneRead>(
     groups: &GroupVisibility,
     queue: &mut DrawQueue,
 ) {
+    record_scene_tagged_with(scene, camera, camera_tag, groups, None, queue);
+}
+
+/// [`record_scene_tagged`] 的 **S5 版本**：额外消费父子累乘后的世界仿射。
+///
+/// `worlds = None` ⇒ 逐位等于旧行为（只用 local `Transform`）。
+/// `worlds = Some(..)` ⇒ 有世界仿射的对象用世界仿射，其余仍回退 local。
+pub fn record_scene_tagged_with<S: SceneRead>(
+    scene: &S,
+    camera: &Camera2D,
+    camera_tag: Option<ObjectId>,
+    groups: &GroupVisibility,
+    worlds: Option<&xcal_scene::transform_hierarchy::WorldTransforms>,
+    queue: &mut DrawQueue,
+) {
     // 内容对象的默认绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
     // 相机 → 屏幕的仿射（唯一降级点）。
     let t = camera.to_transform2d();
     let scale = camera.scale;
 
-    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Circle, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Path, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Path, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Circle, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Path, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Path, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
     // T2：箭头是**一等图元**，两种样式各一组（`FillSolid` ⇒ 实心箭头，`StrokeSolid` ⇒ 空心）。
     // 加在既有 7 组之后 ⇒ 同 `z` 下的绘制顺序向后追加，**不影响**已有对象之间的相对顺序
     // （`DrawQueue` 稳定排序）。
-    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
-    record_group::<S, Arrow, FillSolid>(scene, &t, scale, camera_tag, groups, queue, Z);
+    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
+    record_group::<S, Arrow, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z);
 }
 
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。

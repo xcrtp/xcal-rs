@@ -29,6 +29,7 @@ pub mod scene;
 pub mod scene_script;
 pub mod time_state;
 pub mod transform;
+pub mod transform_hierarchy;
 pub mod types;
 pub mod utils;
 
@@ -58,6 +59,9 @@ pub use scene_script::{
 };
 pub use time_state::TimeState;
 pub use transform::{Transform2D, Transform2DInto};
+pub use transform_hierarchy::{
+    TransformHierarchyError, TransformHierarchySystem, WorldTransforms,
+};
 pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
 pub use xc_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
 // 相机（M3-2）与摆放组件（M3-4）归场景对象层 `xc-object`：本层**不转发**，
