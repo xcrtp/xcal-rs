@@ -10,10 +10,10 @@
 // 给出明确的 `NotSyncPod` 错误，而不是静默降级。
 
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
@@ -33,6 +33,50 @@ static NEXT_MODULE: AtomicU64 = AtomicU64::new(1);
 /// `sys.modules` 里的 `xcal.*` 别名是进程级的；脚本执行期间必须串行，
 /// 否则两个 PyPod 会互相覆盖。锁在 GIL 内获取 ⇒ 不会与解释器锁形成死锁。
 static PY_RUN_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// 当前线程的 `py_run` 嵌套深度（**只用于重入探测**，不替代进程级锁）。
+    ///
+    /// 核实结论：当前没有任何 host capability 会回调 `PyPod::run` ——
+    /// `scene` / `content` 都是纯 Rust Service，`python.linspace` / `make_dot`
+    /// 只执行 Python 函数、不进入 `run`。因此本应在同一线程上恒为 0。
+    /// 这里把"应该不会"变成可验证：真出现重入时，debug 构建直接 panic。
+    static RUN_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// `py_run` 的执行守卫：进程级锁 + 同线程重入探测。
+struct RunGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl RunGuard {
+    fn acquire() -> Result<Self, PodError> {
+        let depth = RUN_DEPTH.with(Cell::get);
+        if depth > 0 {
+            debug_assert!(
+                false,
+                "py_run 重入：同一线程在脚本执行期间再次进入 run。\
+                 当前 host capability 不应回调 PyPod::run；若新增了这种回调路径，\
+                 需要把本守卫改成可重入或显式拒绝。"
+            );
+            return Err(PodError::CallFailed(format!(
+                "py_run 重入（当前线程嵌套深度 {depth}）：脚本执行期间不得再次进入 run"
+            )));
+        }
+
+        let lock = PY_RUN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        RUN_DEPTH.with(|depth| depth.set(1));
+        Ok(Self { _lock: lock })
+    }
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        RUN_DEPTH.with(|depth| depth.set(0));
+    }
+}
 
 // ─── Python 侧的值载体 ─────────────────────────────────────────────────
 
@@ -674,9 +718,9 @@ fn run_impl(pod: &dyn Pod, source: String) -> Result<Box<dyn Any>, PodError> {
     // 在模块自己的 globals 里执行：脚本能直接看到注入的 `scene` / `content` 与类型构造器。
     Python::attach(|py| -> PyResult<()> {
         // `sys.modules["xcal"]` 是进程级的：安装 + 执行必须原子（见 PY_RUN_LOCK）。
-        let _guard = PY_RUN_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // RunGuard 同时做同线程重入探测（当前不存在合法重入路径）。
+        let _run = RunGuard::acquire()
+            .map_err(|error| PyErr::new::<PyRuntimeError, _>(error.to_string()))?;
         install_modules(py, this)?;
         let module = this.module.bind(py);
         let globals = module.dict();
@@ -716,4 +760,36 @@ pub fn registered_python_names(pod: &PyPod) -> Vec<String> {
         .filter(|sig| pod.functions().contains(&sig.qualified()))
         .map(|sig| sig.name.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod run_guard_tests {
+    use super::*;
+
+    /// 顺序进入 / 退出是合法的（锁可重复获取）。
+    #[test]
+    fn sequential_runs_are_allowed() {
+        drop(RunGuard::acquire().expect("第一次进入"));
+        drop(RunGuard::acquire().expect("第二次进入"));
+    }
+
+    /// 同线程重入：debug 构建直接 panic（把"应该不会"变成可验证）。
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "py_run 重入")]
+    fn reentrant_run_panics_in_debug() {
+        let _outer = RunGuard::acquire().expect("外层进入");
+        let _inner = RunGuard::acquire();
+    }
+
+    /// release 构建没有 debug_assert，但仍给**明确错误**（不静默、不锁死）。
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn reentrant_run_returns_an_explicit_error_in_release() {
+        let _outer = RunGuard::acquire().expect("外层进入");
+        assert!(
+            RunGuard::acquire().is_err(),
+            "同线程重入必须返回明确错误"
+        );
+    }
 }
