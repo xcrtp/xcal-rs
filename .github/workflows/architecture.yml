@@ -2,9 +2,9 @@ name: Architecture
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, dev]
   # Allow manual trigger
   workflow_dispatch:
 
@@ -62,6 +62,15 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           cargo check -p xcal-scene-bundle --target wasm32-unknown-unknown
+        shell: bash
+
+      # S1：渲染后端是浏览器路径**唯一**需要改的 crate —— 必须能编到 wasm32。
+      # 默认 features = ["wgpu"]（webgpu backend）；`eframe`（egui 链）默认关闭，
+      # 故本步不会把 UI 依赖带进浏览器产物。
+      - name: Render backends wasm gate
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p xcal-render-backends --target wasm32-unknown-unknown
         shell: bash
 
       # 结构性判据：`crates/pod/` 下任一 crate 的**生产依赖边**中不得出现任何 `xcal-*`。
