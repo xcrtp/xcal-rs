@@ -310,8 +310,17 @@ impl Bundle {
         if container != CONTAINER_VERSION {
             return Err(BundleError::UnsupportedContainer { found: container });
         }
-        let payload_len = u64::from_le_bytes(bytes[8..16].try_into().unwrap()) as usize;
-        let meta_len = u64::from_le_bytes(bytes[16..24].try_into().unwrap()) as usize;
+        // 段长是 u64；**必须先转 usize 再参与分配/切片**。
+        // 32 位平台（wasm32）直接 `as usize` 会截断，巨大长度可能伪装成小值，
+        // 后面的长度校验就失去意义。
+        let payload_len = usize::try_from(u64::from_le_bytes(bytes[8..16].try_into().unwrap()))
+            .map_err(|_| BundleError::MalformedLayout {
+                detail: "payload 段长超出当前平台地址空间".to_string(),
+            })?;
+        let meta_len = usize::try_from(u64::from_le_bytes(bytes[16..24].try_into().unwrap()))
+            .map_err(|_| BundleError::MalformedLayout {
+                detail: "Meta 段长超出当前平台地址空间".to_string(),
+            })?;
         let total = HEADER_LEN
             .checked_add(payload_len)
             .and_then(|v| v.checked_add(meta_len))
@@ -590,5 +599,108 @@ mod tests {
         assert_eq!(recipe.handles.len(), 1);
         assert_eq!(recipe.bindings.bindings.len(), 1);
         assert_eq!(script.duration(), 2.0);
+    }
+
+    // J：不可信输入（上传预览）
+    //
+    // wasm panic ⇒ `unreachable` trap ⇒ 实例 abort ⇒ 页面白屏无提示。
+    // 开放上传后输入从"我们自己编的"变成"任意人的"：以下用例只断言
+    // **`from_bytes` 返回 Err、绝不 panic**（不要求具体错误种类时用 `is_err`）。
+
+    fn encoded_bytes() -> Vec<u8> {
+        Bundle::encode(&tiny_script(), meta_input())
+            .expect("encode")
+            .to_bytes()
+    }
+
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    #[test]
+    fn rejects_empty_bytes() {
+        assert!(matches!(
+            Bundle::from_bytes(&[]),
+            Err(BundleError::TooShort { len: 0 })
+        ));
+    }
+
+    /// 任意截断都必须显式失败（不能越界切片）。
+    #[test]
+    fn rejects_every_truncation_without_panic() {
+        let bytes = encoded_bytes();
+        for len in 0..bytes.len() {
+            assert!(
+                Bundle::from_bytes(&bytes[..len]).is_err(),
+                "截断到 {len} B 仍被接受"
+            );
+        }
+        Bundle::from_bytes(&bytes).expect("完整字节必须可读");
+    }
+
+    /// 长度字段被篡改成极大值：**先与剩余字节数比对，再分配**。
+    #[test]
+    fn rejects_huge_length_fields_without_allocating() {
+        let bytes = encoded_bytes();
+
+        let mut huge_payload = bytes.clone();
+        huge_payload[8..16].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            Bundle::from_bytes(&huge_payload),
+            Err(BundleError::MalformedLayout { .. })
+        ));
+
+        let mut huge_meta = bytes.clone();
+        huge_meta[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            Bundle::from_bytes(&huge_meta),
+            Err(BundleError::MalformedLayout { .. })
+        ));
+
+        // 32 位平台（wasm32）上 `as usize` 会截断这个值；必须走 try_from 拒绝。
+        let mut beyond_usize = bytes;
+        beyond_usize[8..16].copy_from_slice(&(u64::MAX / 2).to_le_bytes());
+        assert!(matches!(
+            Bundle::from_bytes(&beyond_usize),
+            Err(BundleError::MalformedLayout { .. })
+        ));
+    }
+
+    /// 版本字段非法 ⇒ 显式拒绝（不要"尽量猜着读"）。
+    #[test]
+    fn rejects_unsupported_container_version() {
+        let mut bytes = encoded_bytes();
+        bytes[4..6].copy_from_slice(&(CONTAINER_VERSION + 1).to_le_bytes());
+        assert!(matches!(
+            Bundle::from_bytes(&bytes),
+            Err(BundleError::UnsupportedContainer { .. })
+        ));
+    }
+
+    /// 随机字节 / 合法魔数 + 随机正文：**全部不得 panic**。
+    #[test]
+    fn arbitrary_bytes_never_panic() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for len in [
+            0usize, 1, 3, 4, 7, 8, 15, 16, 23, 24, 25, 48, 64, 128, 512, 4096,
+        ] {
+            for attempt in 0..64 {
+                let mut bytes = vec![0u8; len];
+                for byte in &mut bytes {
+                    *byte = xorshift(&mut state) as u8;
+                }
+                // 一半用例加合法魔数：让随机正文真正走到容器版本 / 段长分支。
+                if attempt % 2 == 0 && len >= 4 {
+                    bytes[0..4].copy_from_slice(MAGIC);
+                }
+                // 只验"不炸"；返回值不作断言。
+                let _ = Bundle::from_bytes(&bytes);
+            }
+        }
     }
 }

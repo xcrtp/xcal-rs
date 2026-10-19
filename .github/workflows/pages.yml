@@ -1,0 +1,95 @@
+name: Pages
+
+# Demo 集构建 + GitHub Pages 部署（独立 workflow）。
+#
+# 一次性手动前提：仓库 Settings → Pages → Source 选 **GitHub Actions**
+# （否则 deploy job 必然失败）。
+#
+# 铁律：本地与 CI 跑**同一个** `crates/web/xcal-web/build.ps1`
+# （ubuntu runner 预装 pwsh，不另写 bash 版，避免两套命令定义漂移）。
+# build.ps1 内部读 `scripts/demo/manifest.txt`，逐条编译并断言 payload hash。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  # wasm-pack 锁版本：CI 下载官方预编译二进制并缓存，避免每次 `cargo install` 从源码编译。
+  WASM_PACK_VERSION: "0.14.0"
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # 构建（PR 与 push 都跑；PR 只验证，不发版）。
+  demo:
+    name: wasm demo build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: demo
+
+      # wasm-pack 二进制缓存：锁版本 + 命中即跳过安装。
+      - name: Cache wasm-pack binary
+        id: wasm-pack-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+
+      - name: Install wasm-pack (prebuilt, pinned)
+        if: steps.wasm-pack-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/v${WASM_PACK_VERSION}/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /tmp
+          install -m 0755 "/tmp/wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl/wasm-pack" ~/.cargo/bin/wasm-pack
+        shell: bash
+
+      # wasm-pack 会下载与锁文件匹配的 wasm-bindgen CLI；缓存它避免每次联网下载。
+      - name: Cache wasm-bindgen CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/.wasm-pack
+          key: wasm-bindgen-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
+
+      - name: Build www/ (pkg + demo xsb + demos.json)
+        run: pwsh crates/web/xcal-web/build.ps1
+        shell: bash
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: crates/web/xcal-web/www
+
+  # 仅 push main 部署；PR 只做构建验证（避免每个 PR 发一版）。
+  deploy:
+    name: Deploy GitHub Pages
+    needs: demo
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

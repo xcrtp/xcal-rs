@@ -3,11 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>xcal-web · fourier</title>
+  <title>xcal-web · demo</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0b0b0d; color: #d7d7db; }
     body { display: flex; align-items: center; justify-content: center; font: 14px/1.5 system-ui, sans-serif; }
     #xcal-canvas { width: min(100vw, 1280px); height: auto; image-rendering: pixelated; background: #000; }
+    #xcal-toolbar { position: fixed; left: 12px; top: 12px; display: flex; gap: 10px; align-items: center;
+      padding: 6px 10px; background: rgba(0,0,0,.65); border: 1px solid #333; border-radius: 6px; }
+    #xcal-toolbar label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+    #xcal-toolbar select, #xcal-toolbar input { font: inherit; color: inherit; background: #17171a;
+      border: 1px solid #3a3a40; border-radius: 4px; padding: 2px 6px; }
+    #xcal-toolbar button, #xcal-toolbar a { font: inherit; color: inherit; background: #17171a;
+      border: 1px solid #3a3a40; border-radius: 4px; padding: 2px 8px; text-decoration: none; cursor: pointer; }
+    #xcal-toolbar button:disabled { opacity: .45; cursor: default; }
+    #xcal-toolbar a:hover, #xcal-toolbar button:not(:disabled):hover { border-color: #6a6a75; }
     #xcal-status { position: fixed; left: 12px; bottom: 12px; padding: 6px 10px;
       background: rgba(0,0,0,.65); border: 1px solid #333; border-radius: 6px;
       font-variant-numeric: tabular-nums; white-space: pre-wrap; }
@@ -15,16 +24,154 @@
 </head>
 <body>
   <canvas id="xcal-canvas" width="640" height="480"></canvas>
+
+  <div id="xcal-toolbar">
+    <label>作品
+      <select id="xcal-demo" disabled>
+        <option>加载清单…</option>
+      </select>
+    </label>
+    <label>上传
+      <input id="xcal-file" type="file" accept=".xsb" disabled>
+    </label>
+    <button id="xcal-replay" type="button" disabled>重播</button>
+    <a id="xcal-repo" href="https://github.com/xcrtp/xcal-rs" target="_blank" rel="noreferrer">GitHub 仓库</a>
+  </div>
+
   <div id="xcal-status">初始化…</div>
 
   <script type="module">
-    import init, { start } from './pkg/xcal_web.js';
+    import init, { start, start_with_bytes } from './pkg/xcal_web.js';
 
-    init().then(() => start()).catch((error) => {
-      const status = document.getElementById('xcal-status');
+    const status = document.getElementById('xcal-status');
+    const select = document.getElementById('xcal-demo');
+    const fileInput = document.getElementById('xcal-file');
+    const replayButton = document.getElementById('xcal-replay');
+
+    // 与 Rust 侧上限一致；**Rust 仍是权威校验**（这里避免超大文件先进 wasm 内存）。
+    const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
+
+    let playing = false;
+    let demos = [];
+    // 重播目标：作品（按当前 URL 重新 fetch）或上传的字节（留在内存里）。
+    let lastKind = 'demo';
+    let lastBytes = null;
+
+    function setBusy(busy) {
+      playing = busy;
+      select.disabled = busy || demos.length === 0;
+      fileInput.disabled = busy;
+      replayButton.disabled = busy;
+    }
+
+    function fail(error) {
       status.textContent = `错误：${error}`;
       console.error(error);
+    }
+
+    // 切换作品：改 `?xsb=` 并重载（Rust 入口统一从 URL 取路径）。
+    function reloadWith(xsb) {
+      const url = new URL(location.href);
+      url.search = '';
+      url.searchParams.set('xsb', xsb);
+      location.href = url.toString();
+    }
+
+    async function loadDemos() {
+      try {
+        const response = await fetch('./demos.json', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        demos = Array.isArray(data) ? data : [];
+      } catch (error) {
+        console.warn(`demos.json 不可用，保留默认作品：${error}`);
+        demos = [];
+      }
+
+      select.replaceChildren();
+      for (const demo of demos) {
+        const option = document.createElement('option');
+        option.value = demo.xsb;
+        option.textContent = demo.title || demo.id;
+        select.append(option);
+      }
+      if (demos.length === 0) {
+        const option = document.createElement('option');
+        option.textContent = '默认作品';
+        select.append(option);
+      }
+
+      const current = new URL(location.href).searchParams.get('xsb');
+      if (current && demos.some((demo) => demo.xsb === current)) {
+        select.value = current;
+      }
+      select.disabled = demos.length === 0;
+    }
+
+    select.addEventListener('change', () => {
+      if (!playing) reloadWith(select.value);
     });
+
+    fileInput.addEventListener('change', async () => {
+      const [file] = fileInput.files || [];
+      if (!file) return;
+      if (file.size > MAX_BUNDLE_BYTES) {
+        status.textContent = `错误：XSB 文件过大：${file.size} B（上限 ${MAX_BUNDLE_BYTES} B）`;
+        fileInput.value = '';
+        return;
+      }
+
+      setBusy(true);
+      status.textContent = `读取 ${file.name} …`;
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        await start_with_bytes(bytes);
+        // 只有播放成功才把它设为重播目标（坏文件不应覆盖上一次可播的作品）。
+        lastKind = 'upload';
+        lastBytes = bytes;
+      } catch (error) {
+        fail(error);
+      } finally {
+        fileInput.value = '';
+        setBusy(false);
+      }
+    });
+
+    replayButton.addEventListener('click', async () => {
+      if (playing) return;
+      setBusy(true);
+      status.textContent = '重播…';
+      try {
+        if (lastKind === 'upload' && lastBytes) {
+          await start_with_bytes(lastBytes);
+        } else {
+          // 作品：按当前 `?xsb=` 重新 fetch，compare 等 URL 语义保持不变。
+          await start();
+        }
+      } catch (error) {
+        fail(error);
+      } finally {
+        setBusy(false);
+      }
+    });
+
+    await loadDemos();
+
+    try {
+      await init();
+      // 没有 `?xsb=` 时与列表选择保持一致：默认播放清单第一项。
+      const url = new URL(location.href);
+      if (!url.searchParams.get('xsb') && demos.length > 0) {
+        url.searchParams.set('xsb', demos[0].xsb);
+        history.replaceState(null, '', url);
+      }
+      setBusy(true);
+      await start();
+    } catch (error) {
+      fail(error);
+    } finally {
+      setBusy(false);
+    }
   </script>
 </body>
 </html>

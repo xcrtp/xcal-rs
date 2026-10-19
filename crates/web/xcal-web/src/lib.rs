@@ -13,7 +13,14 @@
 //! URL 参数：
 //! - `?xsb=./fourier.xsb`（默认）；
 //! - `?compare=1` 开启对拍（结束后在页面与控制台输出序列哈希）。
+//!
+//! 两个入口：
+//! - [`start`]：按 URL 参数 fetch `.xsb`；
+//! - [`start_with_bytes`]：上传预览（只播放，不 compare；32 MB 上限）。
+//!   两者共用 [`run_with`]，忙标志保证同一时刻只有一个有限帧循环。
 #![cfg(target_arch = "wasm32")]
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -34,6 +41,38 @@ use xcal_scene_bundle::frame_hash::FrameSequenceHash;
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 480;
 const FPS: f64 = 30.0;
+
+/// 单个 XSB 的体积上限（32 MB）：**解析之前**校验，防止坏长度字段诱导巨量分配。
+const MAX_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
+
+/// 忙标志：`run()` 是**有限**帧循环（`for index in 0..frames`），不并发；
+/// 播放中拒绝第二次启动即可，不需要 generation 机制。
+static PLAYING: AtomicBool = AtomicBool::new(false);
+
+struct PlayGuard;
+
+impl PlayGuard {
+    fn acquire() -> Result<Self, JsValue> {
+        if PLAYING.swap(true, Ordering::SeqCst) {
+            return Err(js_err("正在播放，请等待完成"));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for PlayGuard {
+    fn drop(&mut self) {
+        PLAYING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 页面显示的短 hash：`991068e3…1cc4`（完整值留在控制台）。
+fn short_hash(hex: &str) -> String {
+    if hex.len() <= 16 {
+        return hex.to_string();
+    }
+    format!("{}…{}", &hex[..8], &hex[hex.len() - 4..])
+}
 
 fn js_err(message: impl Into<String>) -> JsValue {
     JsValue::from_str(&message.into())
@@ -68,16 +107,32 @@ fn show_error(error: &JsValue) {
 #[wasm_bindgen]
 pub async fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
-    match run().await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            show_error(&error);
-            Err(error)
-        }
+    let result = run().await;
+    if let Err(error) = &result {
+        show_error(error);
     }
+    result
 }
 
-async fn run() -> Result<(), JsValue> {
+/// 上传预览入口：`index.html` 把 `File` 读成 `Uint8Array` 后传入。
+///
+/// **只播放，不 compare**：compare 需要 native 对侧，对上传文件无意义。
+#[wasm_bindgen]
+pub async fn start_with_bytes(bytes: Vec<u8>) -> Result<(), JsValue> {
+    console_error_panic_hook::set_once();
+    let result = async {
+        let (window, document) = prepare()?;
+        run_with(window, document, bytes, false, "加载上传文件 …").await
+    }
+    .await;
+    if let Err(error) = &result {
+        show_error(error);
+    }
+    result
+}
+
+/// window / document / WebGPU 能力检测（两条入口共用）。
+fn prepare() -> Result<(Window, Document), JsValue> {
     let window = web_sys::window().ok_or_else(|| js_err("没有 window"))?;
     let document = window
         .document()
@@ -91,12 +146,44 @@ async fn run() -> Result<(), JsValue> {
             "当前浏览器不支持 WebGPU（navigator.gpu 缺失）。请使用 Chrome/Edge 113+ 并启用硬件加速。",
         ));
     }
+    Ok((window, document))
+}
+
+/// fetch 入口：URL 参数 → 字节 → 公共播放实现。
+async fn run() -> Result<(), JsValue> {
+    let (window, document) = prepare()?;
 
     let params = UrlSearchParams::new_with_str(&window.location().search().unwrap_or_default())?;
     let xsb_url = params
         .get("xsb")
         .unwrap_or_else(|| "./fourier.xsb".to_string());
     let compare = params.get("compare").as_deref() == Some("1");
+
+    let loading = format!("加载 {xsb_url} …");
+    set_status(&document, &loading);
+    let bytes = fetch_bytes(&xsb_url).await?;
+    run_with(window, document, bytes, compare, &loading).await
+}
+
+/// **唯一的播放实现**：fetch 路径与上传路径共用。
+async fn run_with(
+    window: Window,
+    document: Document,
+    bytes: Vec<u8>,
+    compare: bool,
+    loading: &str,
+) -> Result<(), JsValue> {
+    let _playing = PlayGuard::acquire()?;
+
+    // 体积上限必须在解析之前校验（坏长度字段可能诱导巨量分配）。
+    if bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(js_err(format!(
+            "XSB 文件过大：{} B（上限 {MAX_BUNDLE_BYTES} B）",
+            bytes.len()
+        )));
+    }
+
+    set_status(&document, loading);
 
     let canvas: HtmlCanvasElement = document
         .get_element_by_id("xcal-canvas")
@@ -149,22 +236,27 @@ async fn run() -> Result<(), JsValue> {
         },
     );
 
-    // ── 2. fetch .xsb → 还原 → Runtime ─────────────────────────────────
-    set_status(&document, &format!("加载 {xsb_url} …"));
-    let bytes = fetch_bytes(&xsb_url).await?;
+    // ── 2. 字节 → 还原 → Runtime（fetch 与上传共用同一条路）────────────
     let bundle = Bundle::from_bytes(&bytes).map_err(|e| js_err(e.to_string()))?;
+    let payload = bundle.payload_hash_hex();
+    let payload_short = short_hash(&payload);
     let runtime = build_bundle_runtime(display_ctx.clone(), &bundle)
         .map_err(|e| js_err(e.to_string()))?;
     set_view_rect(&runtime, WIDTH as f32, HEIGHT as f32);
     set_status(
         &document,
         &format!(
-            "已加载：{} 个对象 / {:.3}s；{}",
+            "已加载：{} 个对象 / {:.3}s / payload {}；{}",
             bundle.meta().object_count,
             bundle.meta().duration,
+            payload_short,
             if compare { "对拍模式" } else { "播放" }
         ),
     );
+    web_sys::console::log_1(&JsValue::from_str(&format!(
+        "[payload] hash = {payload}（{} 字节）",
+        bundle.payload().len()
+    )));
 
     let mut display_backends = StandardBackends::new(&display_ctx);
 
@@ -267,7 +359,10 @@ async fn run() -> Result<(), JsValue> {
             fnv(&structure)
         )));
     } else {
-        set_status(&document, &format!("播放完成：{frames} 帧"));
+        set_status(
+            &document,
+            &format!("播放完成：{frames} 帧 · payload {payload_short}"),
+        );
     }
     Ok(())
 }

@@ -1,0 +1,13 @@
+# Demo 清单（**单一真源**）：build.ps1 逐条编译 → www/<id>.xsb + www/demos.json
+#
+# 列（空白分隔）：
+#   id            输出文件名（www/<id>.xsb），仅限 [A-Za-z0-9._-]
+#   title         页面显示名（不含空白；含空白的标题也可，解析时为中间全部列）
+#   script        相对 crates/app/xcal-app/scripts/ 的脚本路径
+#                 （初期直接指向根目录作品，不移动它们：xtask 对拍依赖原路径）
+#   payload-hash  可选；`-` 表示不校验。非 `-` 时编译后断言 payload hash，
+#                 不符即 fail（保证公网 bundle 就是 native 验证过的同一个）。
+#
+# id            title              script          payload-hash
+fourier         傅里叶级数展开      fourier.lua     991068e3e4da72038181a11c8adec58784d9d7ee21059d39076ad29507771cc4
+storyboard      分镜演示            storyboard.lua  -
