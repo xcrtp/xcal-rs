@@ -153,7 +153,7 @@ pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<Compiled
     Ok(CompiledScript {
         script,
         capabilities: used_capabilities(scene_used, content_used),
-        pods: runtime_pods(),
+        pods: runtime_pods(scene_used, content_used),
         source_sha256: xcal_scene_bundle::sha256::hex(&xcal_scene_bundle::sha256::sha256(
             source.as_bytes(),
         )),
@@ -195,8 +195,29 @@ fn runtime_capabilities() -> Vec<xcal_scene_bundle::Capability> {
     vec![scene_capability(), content_capability()]
 }
 
-/// 参与装配的 Pod 版本（Service 常量）。
-fn runtime_pods() -> Vec<xcal_scene_bundle::Pod> {
+/// 脚本**实际用到的最小 Pod 集**（XSB Meta 口径，与 [`used_capabilities`] 同口径）。
+///
+/// 未用到的 Pod 不得写进 Meta：回放端（尤其浏览器）可能根本没有 content Pod，
+/// `check_restorable` 会因未使用的 Pod 误报拒载 —— 而几何早已烘焙进 payload。
+fn runtime_pods(scene_used: bool, content_used: bool) -> Vec<xcal_scene_bundle::Pod> {
+    let mut out = Vec::new();
+    if scene_used {
+        out.push(xcal_scene_bundle::Pod::new(
+            xcal_scene::pod::SERVICE_NAME,
+            xcal_scene::pod::SERVICE_VERSION,
+        ));
+    }
+    if content_used {
+        out.push(xcal_scene_bundle::Pod::new(
+            xcal_scene::pod::CONTENT_SERVICE_NAME,
+            xcal_scene::pod::CONTENT_SERVICE_VERSION,
+        ));
+    }
+    out
+}
+
+/// 当前运行时注册的**全部** Pod（可还原性检查的"可用集"）。
+fn all_runtime_pods() -> Vec<xcal_scene_bundle::Pod> {
     vec![
         xcal_scene_bundle::Pod::new(
             xcal_scene::pod::SERVICE_NAME,
@@ -211,7 +232,7 @@ fn runtime_pods() -> Vec<xcal_scene_bundle::Pod> {
 
 /// 当前运行时**能解释什么**（XSB 可还原性检查的"可用集"）。
 pub fn available_runtime_caps() -> xcal_scene_bundle::Available {
-    xcal_scene_bundle::Available::new(runtime_capabilities(), runtime_pods())
+    xcal_scene_bundle::Available::new(runtime_capabilities(), all_runtime_pods())
 }
 
 /// **headless 回放入口**：XSB 产物 → 与脚本路径**同一条** Runtime。
@@ -1276,6 +1297,46 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             .collect();
         assert!(names.contains(&"xcal.scene"), "names = {names:?}");
         assert!(names.contains(&"xcal.content"), "names = {names:?}");
+    }
+
+    /// **S4 验收**：`CompiledScript.pods` 与 capabilities 同口径 ——
+    /// 只用 `scene.spawn({Circle})` 时 Meta 的 pods **仅 scene**。
+    #[test]
+    fn compiled_pods_are_the_minimal_used_set() {
+        let scene_only = r#"
+scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
+"#;
+        let compiled = compile_script(scene_only, ScriptLanguage::Lua).expect("编译 scene-only 脚本");
+        let names: Vec<&str> = compiled
+            .pods
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![xcal_scene::pod::SERVICE_NAME],
+            "只用到 scene，Meta 的 pods 不得含 content"
+        );
+
+        // fourier 用了 content.text ⇒ scene + content 两个 Pod。
+        let compiled = compile_script(
+            include_str!("../scripts/fourier.lua"),
+            ScriptLanguage::Lua,
+        )
+        .expect("编译 fourier");
+        let names: Vec<&str> = compiled
+            .pods
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                xcal_scene::pod::SERVICE_NAME,
+                xcal_scene::pod::CONTENT_SERVICE_NAME
+            ],
+            "用到 content 时两个 Pod 都必须在 Meta 中"
+        );
     }
 
     /// **XSB 三路径同构**：`script` → `.xsb` → 还原，产物与直接脚本逐对象 / 逐绑定相等。
