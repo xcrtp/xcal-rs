@@ -2,14 +2,65 @@
 
 基于 ECS（hecs）与 wgpu 的 2D/3D 渲染实验框架：分阶段的 System 调度器、
 Painter 抽象、egui UI overlay、3D 渲染层，以及语言无关的 Pod 边界
-（Lua / Python 在装配期编排场景）。
+（Lua / Python 在装配期编排场景）。同一套装配尾也能在浏览器（WebGPU / WASM）
+回放 XSB。
+
+## Quick Start
+
+> 目标：**5 分钟内看到第一个 mp4**。命令都在仓库根目录执行。
+> 前置：Rust stable；路径 1 / 2 需要 `ffmpeg` 在 PATH。
+> 不想装系统 Python 时，统一加 `--no-default-features --features typst`
+> （Lua + Typst，不含 Python Pod）。
+
+### 1) 渲染一个作品（Lua → mp4）
+
+```shell
+cargo run -p xcal-app --no-default-features --features typst --bin xcal-render -- \
+  --script crates/app/xcal-app/scripts/storyboard.lua \
+  --out out/storyboard.mp4 --fps 30 --size 640x480
+```
+
+- 产物：`out/storyboard.mp4`（135 帧 / 4.5s）。
+- 没有 ffmpeg：把 `--out out/storyboard.mp4` 换成 `--frames out/storyboard`，
+  得到 PNG 序列。
+- 要真公式：去掉 `--no-default-features --features typst`（默认含 `typst`）；
+  `--python` 另需系统 Python 与 `python` feature。
+
+### 2) 编译 + 回放 XSB
+
+```shell
+cargo run -p xcal-compile --no-default-features --features typst -- \
+  crates/app/xcal-app/scripts/fourier.lua --out out/fourier.xsb
+
+cargo run -p xcal-app --no-default-features --features typst --bin xcal-render -- \
+  --bundle out/fourier.xsb --out out/fourier.mp4 --fps 30 --size 640x480
+```
+
+- `.xsb` 是装配产物；native 与浏览器共用 `xcal-playback` 的回放路径。
+- 同一脚本的 `--script` 与 `--bundle` 逐帧像素一致，见
+  [`FRAME_HASH_BASELINES.md`](crates/app/xcal-app/scripts/FRAME_HASH_BASELINES.md)。
+
+### 3)（可选）浏览器预览
+
+```shell
+cargo install wasm-pack
+rustup target add wasm32-unknown-unknown
+powershell -ExecutionPolicy Bypass -File crates/web/xcal-web/build.ps1
+python -m http.server 8080 -d crates/web/xcal-web/www
+```
+
+打开 <http://localhost:8080/>（Chrome / Edge，需要 WebGPU）。
+加 `?compare=1` 会额外打印帧序列哈希与结构指纹，用于跨端对拍。
+
+- 前置：`wasm-pack`（首次会自动下载匹配的 `wasm-bindgen`）与静态文件服务器；
+  不需要系统 Python 参与编译。
 
 ## 架构总览
 
 workspace 采用分层目录结构 `crates/<layer>/`，通用基础 crate 用 `xc-` 前缀，
 领域/应用层保留 `xcal-` 前缀。分层顺序为
-**kernel → object / graph / script → schedule → scene → render → ui → app**
-（允许上层依赖下层，禁止反向）。
+**kernel → object / graph / script → schedule → scene → render → ui → app → web**
+（允许上层依赖下层，禁止反向；`web` 只是 wasm 薄壳）。
 
 ```text
 crates/
@@ -59,17 +110,21 @@ crates/
 │   ├── xcal-node-egui      egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸）
 │   └── xcal-node-egui-ui   属性→egui 控件映射（PropertyNodeView / draw_property）
 │
-└── app/             # 应用外壳层
-    ├── xcal-app          组装（无 UI）：Runtime / Pod 装配 / Resource 注入 / System 注册
-    ├── xcal-gui          GUI 可执行壳（eframe::App）
-    └── xcal-compile      XSB 独立编译器（脚本 → .xsb）
+├── app/             # 应用外壳层
+│   ├── xcal-app          组装（无 UI）：Runtime / Pod 装配 / Resource 注入 / System 注册
+│   ├── xcal-playback     回放运行时：XSB → Scene → 调度器 → 帧回调（native / wasm 共用）
+│   ├── xcal-gui          GUI 可执行壳（eframe::App）
+│   └── xcal-compile      XSB 独立编译器（脚本 → .xsb）
+│
+└── web/             # 浏览器层
+    └── xcal-web          浏览器薄壳（wasm32）：WebGPU canvas / fetch XSB / rAF 固定 dt
 ```
 
 依赖铁律：
 - `xc-*` crate 不得依赖任何 `xcal-*` crate 或 egui/wgpu
 - `xcal-*` crate 可依赖 `xc-*`，但不得依赖 `xcal-app`
-- `xcal-app` 是唯一组装入口；`xcal-gui` / `xcal-compile` 只是调用它的壳
-  （**`xcal-app` 不依赖 `xcal-egui`**）
+- 装配尾只有 `xcal-playback` 一份；`xcal-app` / `xcal-web` 调用它，
+  `xcal-gui` / `xcal-compile` 只是壳（**`xcal-app` 不依赖 `xcal-egui`**）
 - 语言适配器（`xc-pod-lua` / `xc-pod-py`）属于 `crates/pod/` 的语言适配器组，**生产依赖不含任何 `xcal-*`**；
   domain 能力由 App 通过 `register_capability::<SceneApi>(..)` 注入
 - `crates/pod/` 的核心组（`xc-pod` / `xc-pod-binding` / `xc-pod-macro`）平台无关，必须过 wasm gate；
@@ -110,8 +165,10 @@ crates/
 | `xcal-node-egui` | ui | egui 画布（pan/zoom / 卡片 / 连线 / resize / 磁吸） |
 | `xcal-node-egui-ui` | ui | 属性→egui 控件映射（PropertyNodeView / draw_property / spawn_menu） |
 | `xcal-app` | app | 组装（无 UI）：Runtime 构建 / Resource 注入 / System 注册 / Pod 装配 |
+| `xcal-playback` | app | 回放运行时：`build_bundle_runtime` / `assemble_runtime` / 帧推进与渲染；native 与 wasm 共用 |
 | `xcal-gui` | app | GUI 可执行壳：`eframe::App` + 窗口参数（依赖 `xcal-app` + `xcal-egui`） |
 | `xcal-compile` | app | XSB 独立编译器：脚本 → `.xsb`（复用 `xcal_app::compile_script`） |
+| `xcal-web` | web | 浏览器薄壳（仅 wasm32）：WebGPU canvas、fetch XSB、rAF 固定 `dt`、离屏对拍 |
 
 
 ## 动画架构（Director 唯一时间源）
