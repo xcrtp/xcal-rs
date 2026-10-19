@@ -7,6 +7,8 @@
 //!
 //! - 默认 **ffmpeg 管道**（rawvideo → libx264）；ffmpeg 不在 PATH ⇒ **明确报错**并提示 `--frames`；
 //! - `--frames DIR` 走序列帧（PNG，交给外部工具合成）；
+//! - `--hash-out FILE` 额外写出**帧像素序列哈希**（只覆盖画面像素，不含编码器元数据；
+//!   两种 sink 都会计算并打印 `[frame-hash] sequence = …`）；
 //! - 帧数 = `ceil(duration × fps)`，时长由脚本 / 产物决定；
 //! - 脚本语言按扩展名推断（`.lua` / `.py`）；`.py` 但未开 `python` feature ⇒ 明确报错；
 //! - `--bundle` 读 XSB 产物：先做可还原性检查，再走**与脚本完全相同**的 Runtime 路径。
@@ -31,11 +33,13 @@ use xcal_render_backends::{RenderContext, ScreenParams, StandardBackends, render
 use xcal_scene::DriverCommand;
 use xcal_scene::contract::WorldView;
 use xcal_scene_bundle::Bundle;
+use xcal_scene_bundle::frame_hash::FrameSequenceHash;
 
 struct Args {
     script: Option<PathBuf>,
     bundle: Option<PathBuf>,
     frames_dir: Option<PathBuf>,
+    hash_out: Option<PathBuf>,
     fps: f64,
     out: PathBuf,
     size: (u32, u32),
@@ -54,6 +58,7 @@ impl Args {
         let mut script: Option<PathBuf> = None;
         let mut bundle: Option<PathBuf> = None;
         let mut frames_dir = None;
+        let mut hash_out = None;
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
         let mut size = (640u32, 480u32);
@@ -65,6 +70,13 @@ impl Args {
                     i += 1;
                     frames_dir = Some(PathBuf::from(
                         raw.get(i).ok_or("--frames 需要一个目录参数")?,
+                    ));
+                }
+                // 帧像素序列哈希（跨运行时对拍口径；与 sink 无关）。
+                "--hash-out" => {
+                    i += 1;
+                    hash_out = Some(PathBuf::from(
+                        raw.get(i).ok_or("--hash-out 需要一个文件参数")?,
                     ));
                 }
                 // 与位置参数等价（计划 A0 的验收命令使用 `--script PATH`）。
@@ -133,6 +145,7 @@ impl Args {
             script,
             bundle,
             frames_dir,
+            hash_out,
             fps,
             out,
             size,
@@ -208,6 +221,9 @@ fn run() -> Result<(), String> {
         a: 1.0,
     };
     let mut backends = StandardBackends::new(&ctx);
+    // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
+    // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
+    let mut frame_hash = FrameSequenceHash::new(width, height);
 
     let mut sink = match &args.frames_dir {
         Some(dir) => Sink::Png {
@@ -237,6 +253,8 @@ fn run() -> Result<(), String> {
             .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
 
         let pixels = render_frame_headless(&ctx, &mut backends, &callback, screen, clear);
+        // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
+        frame_hash.push_frame(&to_rgba(&ctx, &pixels));
         sink.write(&ctx, index, &pixels)?;
 
         runtime.driver.with_scheduler_mut(|scheduler| {
@@ -245,6 +263,22 @@ fn run() -> Result<(), String> {
     }
 
     sink.finish()?;
+
+    let sequence = frame_hash.hex();
+    eprintln!(
+        "[frame-hash] sequence = {sequence}（{} 帧，{}×{}，RGBA8）",
+        frame_hash.frames(),
+        width,
+        height
+    );
+    if let Some(path) = &args.hash_out {
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录 {} 失败：{e}", parent.display()))?;
+        }
+        std::fs::write(path, format!("{sequence}\n"))
+            .map_err(|e| format!("写 {} 失败：{e}", path.display()))?;
+    }
 
     // 软失败汇总：三角化失败只跳过该绘制，不中断导出、不改退出码。
     let skipped = xcal_render_backends::diagnostics::total_skipped();

@@ -32,6 +32,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod frame_hash;
 pub mod sha256;
 
 use xcal_scene::scene_script::SceneScript;
