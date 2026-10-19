@@ -1,6 +1,9 @@
-// typst/world.rs — 极简 TypstWorld：内存主文件、无真实文件系统、系统发现字体。
+// typst/world.rs — 极简 TypstWorld：内存主文件、无真实文件系统、字体管理。
 //
 // 设计要点：
+// - **确定字体**：设置 `XCAL_TYPST_FONT_DIR` 时只加载该目录的字体
+//   （构建脚本下载并校验），payload 里的 glyph 轮廓因此跨平台一致；
+//   未设置时退回系统字体（native 测试 / GUI 的既有行为不变）。
 // - math 主场景必须有至少一个带数学表的字体（Latin Modern Math / Cambria Math / STIX Two Math）。
 //   优先系统发现；找不到时给用户明确提示。
 // - 所有加载函数（main/source/file/font）做内部缓存（Typst 官方设计意图，comemo 记忆化前置）。
@@ -8,7 +11,7 @@
 //   原始归一化文本另存，用于 span → 归一化字节区间的"再映射"（convert.rs 用）。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use typst::diag::{FileError, FileResult};
@@ -18,19 +21,27 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World, WorldExt};
 
+/// 确定字体目录：设置后**只**加载该目录，不读系统字体。
+pub const FONT_DIR_ENV: &str = "XCAL_TYPST_FONT_DIR";
+
 /// 共享单例：Library（跨 World 实例复用）。
 fn library() -> &'static LazyHash<Library> {
     static LIB: OnceLock<LazyHash<Library>> = OnceLock::new();
     LIB.get_or_init(|| LazyHash::new(Library::builder().build()))
 }
 
-/// 共享单例：字体列表（系统发现）。第一次做 O(字体文件数) IO，之后复用。
+/// 共享单例：字体列表。第一次做 O(字体文件数) IO，之后复用。
 fn fonts() -> &'static (LazyHash<FontBook>, Vec<Font>) {
     static F: OnceLock<(LazyHash<FontBook>, Vec<Font>)> = OnceLock::new();
     F.get_or_init(discover_fonts)
 }
 
 fn discover_fonts() -> (LazyHash<FontBook>, Vec<Font>) {
+    // 确定字体优先：构建脚本下载并校验的字体集合 ⇒ 只读该目录，跨平台字节一致。
+    if let Some(dir) = std::env::var_os(FONT_DIR_ENV) {
+        return load_font_dir(Path::new(&dir));
+    }
+
     let mut book = FontBook::new();
     let mut fonts: Vec<Font> = Vec::new();
 
@@ -57,6 +68,64 @@ fn discover_fonts() -> (LazyHash<FontBook>, Vec<Font>) {
         tracing::warn!(
             "[xc-prerender::typst] 警告：未检测到支持数学表的字体（Latin Modern Math / STIX / Cambria Math 等）。\
              复杂数学公式将无法正确显示。"
+        );
+    }
+
+    (LazyHash::new(book), fonts)
+}
+
+/// 只加载目录中的字体文件；按文件名排序，保证 FontBook 顺序确定。
+fn load_font_dir(dir: &Path) -> (LazyHash<FontBook>, Vec<Font>) {
+    let mut book = FontBook::new();
+    let mut fonts: Vec<Font> = Vec::new();
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_font = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        matches!(
+                            ext.to_ascii_lowercase().as_str(),
+                            "otf" | "ttf" | "ttc" | "otc"
+                        )
+                    });
+                if is_font {
+                    paths.push(path);
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                "[xc-prerender::typst] 无法读取 {FONT_DIR_ENV}={}：{error}",
+                dir.display()
+            );
+        }
+    }
+    paths.sort();
+
+    for path in paths {
+        let Ok(data) = std::fs::read(&path) else {
+            tracing::warn!("[xc-prerender::typst] 读取字体失败：{}", path.display());
+            continue;
+        };
+        let faces = ttf_parser::fonts_in_collection(&data).unwrap_or(1).max(1);
+        let bytes = Bytes::new(data);
+        for face_index in 0..faces {
+            if let Some(font) = Font::new(bytes.clone(), face_index) {
+                book.push(font.info().clone());
+                fonts.push(font);
+            }
+        }
+    }
+
+    if fonts.is_empty() {
+        tracing::warn!(
+            "[xc-prerender::typst] {FONT_DIR_ENV}={} 中没有可用字体（文本/公式可能无法编译）",
+            dir.display()
         );
     }
 

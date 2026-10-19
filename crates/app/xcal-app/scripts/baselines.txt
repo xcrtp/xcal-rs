@@ -22,4 +22,6 @@ smoke = 779c909d126eb47406b3994f536612e15158fa4a2df136b29be41be3da29b1be
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档
-fourier = bec735052020b250b8ee5a42db49f2d3019b10508b3ee139a9a15c8bfa1e279c
+# 网页 bundle 使用 typst-assets v0.14.2 的确定字体（XCAL_TYPST_FONT_DIR），
+# 因此字形轮廓不再随系统字体变化；本值录于 2026-10-19。
+fourier = 3f4ef2012403ab2d3bfad3c265860c2ebd8b7eb890b092b797742250122c677a

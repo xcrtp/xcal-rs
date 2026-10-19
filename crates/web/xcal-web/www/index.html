@@ -8,7 +8,8 @@
     html, body { margin: 0; height: 100%; background: #0b0b0d; color: #d7d7db; }
     body { display: flex; align-items: center; justify-content: center; font: 14px/1.5 system-ui, sans-serif; }
     #xcal-canvas { width: min(100vw, 1280px); height: auto; image-rendering: pixelated; background: #000; }
-    #xcal-toolbar { position: fixed; left: 12px; top: 12px; display: flex; gap: 10px; align-items: center;
+    #xcal-toolbar { position: fixed; left: 12px; top: 12px; display: flex; flex-wrap: wrap; gap: 10px;
+      align-items: center; max-width: calc(100vw - 24px);
       padding: 6px 10px; background: rgba(0,0,0,.65); border: 1px solid #333; border-radius: 6px; }
     #xcal-toolbar label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
     #xcal-toolbar select, #xcal-toolbar input { font: inherit; color: inherit; background: #17171a;
@@ -44,6 +45,7 @@
       </select>
     </label>
     <button id="xcal-replay" type="button" disabled>重播</button>
+    <a id="xcal-commit" href="https://github.com/xcrtp/xcal-rs" target="_blank" rel="noreferrer" hidden>commit …</a>
     <a id="xcal-repo" href="https://github.com/xcrtp/xcal-rs" target="_blank" rel="noreferrer">GitHub 仓库</a>
   </div>
 
@@ -57,6 +59,9 @@
     const fileInput = document.getElementById('xcal-file');
     const speedSelect = document.getElementById('xcal-speed');
     const replayButton = document.getElementById('xcal-replay');
+    const commitLink = document.getElementById('xcal-commit');
+
+    const REPO_URL = 'https://github.com/xcrtp/xcal-rs';
 
     // 与 Rust 侧上限一致；**Rust 仍是权威校验**（这里避免超大文件先进 wasm 内存）。
     const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
@@ -178,7 +183,25 @@
       if (!playing) await restartPlayback();
     });
 
+    // 显示构建所用的提交哈希，并链接到 GitHub 对应 commit 页面。
+    async function loadBuildInfo() {
+      try {
+        const response = await fetch('./build.json', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const info = await response.json();
+        const commit = String(info.commit || '');
+        if (!/^[0-9a-f]{40}$/i.test(commit)) return;
+        commitLink.textContent = commit.slice(0, 7) + (info.dirty ? '+' : '');
+        commitLink.title = info.dirty ? `${commit}（工作区有未提交改动）` : commit;
+        commitLink.href = `${REPO_URL}/commit/${commit}`;
+        commitLink.hidden = false;
+      } catch (error) {
+        console.warn(`build.json 不可用：${error}`);
+      }
+    }
+
     await loadDemos();
+    await loadBuildInfo();
 
     try {
       await init();

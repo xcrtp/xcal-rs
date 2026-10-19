@@ -21,6 +21,17 @@ $www = Join-Path $PSScriptRoot "www"
 $scripts = Join-Path $repo "crates/app/xcal-app/scripts"
 $manifest = Join-Path $scripts "demo/manifest.txt"
 
+# 确定字体：与 Cargo.toml 的 `typst = "0.14"` 对应（typst-assets 的 tag）。
+# 这三个字体正是 Typst 默认的 text / math / mono 字体族，加载后 payload 的字形轮廓
+# 不再依赖系统字体 ⇒ Windows / Linux 的 payload hash 一致。
+$fontAssetsVersion = "0.14.2"
+$fontDir = Join-Path $repo "target/fonts/typst-assets-v$fontAssetsVersion"
+$fontAssets = @(
+    @{ Name = "LibertinusSerif-Regular.otf"; Sha256 = "fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733" },
+    @{ Name = "NewCMMath-Regular.otf"; Sha256 = "ad746f5307fed53d8e5d7d201f5054abe73f1f47c51040767d898e3481c6e648" },
+    @{ Name = "DejaVuSansMono.ttf"; Sha256 = "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582" }
+)
+
 function ConvertTo-JsonString([string] $value) {
     $escaped = $value.Replace('\', '\\').Replace('"', '\"')
     return '"' + $escaped + '"'
@@ -67,6 +78,30 @@ try {
     if (-not (Test-Path -LiteralPath $manifest)) {
         throw "缺少 demo 清单：$manifest"
     }
+
+    # ── 确定字体：下载 + SHA-256 校验（缓存于 target/，不入库）────────────
+    New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
+    $fontBase = "https://raw.githubusercontent.com/typst/typst-assets/v$fontAssetsVersion/files/fonts"
+    foreach ($asset in $fontAssets) {
+        $fontPath = Join-Path $fontDir $asset.Name
+        $valid = $false
+        if (Test-Path -LiteralPath $fontPath) {
+            $existing = (Get-FileHash -Algorithm SHA256 -LiteralPath $fontPath).Hash.ToLowerInvariant()
+            $valid = $existing -eq $asset.Sha256
+        }
+        if (-not $valid) {
+            Write-Host "[font] 下载 $($asset.Name)"
+            $fontUrl = "$fontBase/$($asset.Name)"
+            Invoke-WebRequest -Uri $fontUrl -OutFile $fontPath -UseBasicParsing
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $fontPath).Hash.ToLowerInvariant()
+            if ($actual -ne $asset.Sha256) {
+                throw "字体校验失败（$($asset.Name)）：`n  实测 = $actual`n  期望 = $($asset.Sha256)"
+            }
+        }
+    }
+    # 只对随后的 xcal-compile 生效：xc-prerender 见到它就不再读系统字体。
+    $env:XCAL_TYPST_FONT_DIR = $fontDir
+    Write-Host "[font] XCAL_TYPST_FONT_DIR = $fontDir"
 
     # ── Demo 集：清单（单一真源）→ www/<id>.xsb，并断言 payload hash ──────
     # 先编译（快）再 wasm-pack（慢）：断言失败要尽早失败。
@@ -159,6 +194,25 @@ try {
         (New-Object System.Text.UTF8Encoding($false))
     )
     Write-Host "[demo] 写出 $(Join-Path $www 'demos.json')（$($demos.Count) 项）"
+
+    # ── 构建信息：提交哈希（页面显示 + 链接到 GitHub commit）──────────────
+    $commit = "unknown"
+    $commitOutput = & git rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $commitOutput) {
+        $commit = ($commitOutput | Select-Object -First 1).Trim()
+    }
+    $dirty = $false
+    $statusOutput = & git status --porcelain 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $dirty = -not [string]::IsNullOrWhiteSpace(($statusOutput -join ""))
+    }
+    $buildJson = "{`n  `"commit`": $(ConvertTo-JsonString $commit),`n  `"dirty`": $($dirty.ToString().ToLowerInvariant())`n}`n"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $www "build.json"),
+        $buildJson,
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    Write-Host "[build] commit = $commit$(if ($dirty) { ' (dirty)' } else { '' })"
 
     # ── wasm ────────────────────────────────────────────────────────────
     wasm-pack build $PSScriptRoot `
