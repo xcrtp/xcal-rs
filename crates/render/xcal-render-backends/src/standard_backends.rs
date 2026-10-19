@@ -205,19 +205,79 @@ impl BackendStore for TypeMapStore<'_> {
     }
 }
 
+/// **把一帧渲染进给定 view**（S1）：不建纹理、不回读。
+///
+/// 这是显示路径与离屏路径的**唯一共享帧体入口**：
+/// - 浏览器显示：`view` = canvas surface view；
+/// - headless / 对拍：`view` = [`render_frame_headless`] 自建的离屏纹理 view。
+///
+/// viewport / scissor 仍设为回调矩形 `(0,0,w,h)`（与 egui 的 courtesy 行为同口径）。
+pub fn render_frame_to_view(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+    view: &wgpu::TextureView,
+) {
+    let geometry = Frame2DGeometry {
+        viewport_points: frame.viewport_points(),
+        pixels_per_point: screen.pixels_per_point,
+        screen_size_px: screen.size_in_pixels,
+    };
+    let (_, _, width, height) = geometry.viewport_px();
+    let (width, height) = (width.max(1), height.max(1));
+
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("xcal-frame-encoder"),
+        });
+    let composed = frame.prepare_frame(
+        ctx.device(),
+        ctx.queue(),
+        &mut encoder,
+        screen,
+        backends,
+    );
+
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("xcal-frame-main-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        // 与 egui-wgpu 的 "courtesy" 行为同口径：viewport == scissor == 回调矩形。
+        pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+        pass.set_scissor_rect(0, 0, width, height);
+        if let Some(compositor) = backends.compositor() {
+            frame.paint_frame(compositor, &composed, &mut pass);
+        }
+    }
+
+    ctx.submit(encoder.finish());
+}
+
 /// **headless（非 egui）渲染入口**（W1 的产出）。
 ///
-/// 与 egui 宿主跑**同一份帧体**（[`SceneCompositorCallback::prepare_frame`] +
-/// [`SceneCompositorCallback::paint_frame`]），差异只在"谁给目标纹理与
-/// viewport / scissor"：
-/// - egui-wgpu 会为每个回调把 render pass 的 viewport 设成回调矩形；
-/// - 本函数按回调的 `viewport_points` **自建同等尺寸的目标纹理**，并显式把
-///   viewport / scissor 设成 `(0,0,w,h)` —— 于是 NDC 全屏四边形正好铺满目标，
-///   与 egui 路径的几何关系完全一致。
+/// 按回调的 `viewport_points` **自建同等尺寸的目标纹理** →
+/// [`render_frame_to_view`] → 回读紧凑像素。
 ///
 /// 返回**紧凑像素**（行距 `w*4`，左上角为原点）；字节序为目标纹理格式
 /// （默认 `Bgra8UnormSrgb` ⇒ **BGRA**）。喂给 PNG 编码器前需按
-/// [`RenderContext::target_format`] 转换通道（示例：`xcal_app::export::to_rgba`）。
+/// [`RenderContext::target_format`] 转换通道（示例：`xcal_playback::to_rgba`）。
+#[cfg(feature = "blocking")]
 pub fn render_frame_headless(
     ctx: &RenderContext,
     backends: &mut StandardBackends,
@@ -249,52 +309,53 @@ pub fn render_frame_headless(
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = ctx
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("xcal-headless-encoder"),
-        });
-    let composed = frame.prepare_frame(
-        ctx.device(),
-        ctx.queue(),
-        &mut encoder,
-        screen,
-        backends,
-    );
-
-    {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("xcal-headless-main-pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(clear),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        // 与 egui-wgpu 的 "courtesy" 行为同口径：viewport == scissor == 回调矩形。
-        pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
-        pass.set_scissor_rect(0, 0, width, height);
-        if let Some(compositor) = backends.compositor() {
-            frame.paint_frame(compositor, &composed, &mut pass);
-        }
-    }
-
-    ctx.submit(encoder.finish());
+    render_frame_to_view(ctx, backends, frame, screen, clear, &view);
     ctx.read_texture(&target, (width, height))
+}
+
+/// **异步 headless 回读**（S3；浏览器对拍用）。
+///
+/// 与同步版逐字节一致，只是等待方式换成 `map_async` → oneshot → `await`。
+pub async fn render_frame_headless_async(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+) -> Vec<u8> {
+    let geometry = Frame2DGeometry {
+        viewport_points: frame.viewport_points(),
+        pixels_per_point: screen.pixels_per_point,
+        screen_size_px: screen.size_in_pixels,
+    };
+    let (_, _, width, height) = geometry.viewport_px();
+    let (width, height) = (width.max(1), height.max(1));
+
+    let target = ctx.device().create_texture(&wgpu::TextureDescriptor {
+        label: Some("xcal-headless-target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: ctx.target_format(),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+    render_frame_to_view(ctx, backends, frame, screen, clear, &view);
+    ctx.read_texture_async(&target, (width, height)).await
 }
 
 /// headless 入口的**便捷形态**：`StandardBackends` 自建（跨帧缓存随之丢弃）。
 ///
 /// ⚠️ 序列帧导出**不要**用它 —— 每帧重建后端会丢掉管线与几何缓存；
 /// 那条路请自持一个 [`StandardBackends`] 反复喂给 [`render_frame_headless`]。
+#[cfg(feature = "blocking")]
 pub fn render_single_frame(
     ctx: &RenderContext,
     frame: &SceneCompositorCallback,

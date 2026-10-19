@@ -132,6 +132,101 @@ impl SceneCompositorCallback {
         self.viewport_points
     }
 
+    /// **诊断用**：本帧的**结构指纹**（只含计数 / 拓扑序，不含任何浮点数值）。
+    ///
+    /// 跨运行时对拍的**第一层**判据：必须逐位相同；不同即为逻辑错误，
+    /// 不能归入舍入容差。
+    #[doc(hidden)]
+    pub fn debug_structure(&self) -> String {
+        fn fnv(text: &str) -> u64 {
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in text.as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            hash
+        }
+        fn shape_kind(shape: &xc_render_ir::Shape2D) -> &'static str {
+            match shape {
+                xc_render_ir::Shape2D::Empty => "empty",
+                xc_render_ir::Shape2D::Line { .. } => "line",
+                xc_render_ir::Shape2D::Polyline { .. } => "polyline",
+                xc_render_ir::Shape2D::Path(_) => "path",
+                xc_render_ir::Shape2D::Circle { .. } => "circle",
+                xc_render_ir::Shape2D::Ellipse { .. } => "ellipse",
+                xc_render_ir::Shape2D::Rect(_) => "rect",
+                xc_render_ir::Shape2D::Polygon { .. } => "polygon",
+                xc_render_ir::Shape2D::Group { .. } => "group",
+                xc_render_ir::Shape2D::Custom(_) => "custom",
+                _ => "unknown",
+            }
+        }
+        fn layer_kind(kind: &xc_object::LayerKind) -> &'static str {
+            match kind {
+                xc_object::LayerKind::Viewport2D { .. } => "v2d",
+                xc_object::LayerKind::Viewport3D { .. } => "v3d",
+                xc_object::LayerKind::ContentTexture { .. } => "ct",
+            }
+        }
+
+        let mut topo = String::new();
+        for layer in &self.layers {
+            topo.push_str(layer_kind(&layer.kind));
+            topo.push(';');
+        }
+        topo.push('|');
+        for draw in &self.draws_2d {
+            let space = match draw.style.space {
+                xc_notion::MeasureSpace::World => "W",
+                xc_notion::MeasureSpace::Screen => "S",
+                xc_notion::MeasureSpace::WorldWithMinPx(_) => "WM",
+            };
+            topo.push_str(&format!(
+                "{}:{}:{}{}{};",
+                shape_kind(&draw.shape),
+                draw.z,
+                if draw.style.fill.is_some() { "f" } else { "-" },
+                if draw.style.stroke.is_some() { "s" } else { "-" },
+                space
+            ));
+        }
+
+        format!(
+            "layers={};draws={};meshes={};lines={};morphs={};reveals={};topo={:016x}",
+            self.layers.len(),
+            self.draws_2d.len(),
+            self.meshes_3d.len(),
+            self.lines_3d.len(),
+            self.morphs.len(),
+            self.reveals.len(),
+            fnv(&topo)
+        )
+    }
+
+    /// **诊断用**：本帧 CPU 侧绘制内容的结构指纹（不含 GPU 光栅化结果）。
+    ///
+    /// 用于跨运行时定位差异：若 native 与浏览器的指纹相同而像素不同，
+    /// 差异来自 GPU 后端（MSAA 采样位置 / 精度），而非场景求值。
+    #[doc(hidden)]
+    pub fn debug_fingerprint(&self) -> String {
+        let text = format!(
+            "vp={:?};layers={:?};draws={:?};meshes={:?};lines={:?};morphs={:?};reveals={:?}",
+            self.viewport_points,
+            self.layers,
+            self.draws_2d,
+            self.meshes_3d,
+            self.lines_3d,
+            self.morphs,
+            self.reveals
+        );
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in text.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+
     /// **帧体（唯一实现）**：渲染全部图层到各自离屏纹理 → 一次合成 → 产出
     /// [`SceneCompositorFrame`]。
     ///

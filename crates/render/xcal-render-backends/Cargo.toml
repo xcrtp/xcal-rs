@@ -17,7 +17,10 @@ glam.workspace = true
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
 # GPU 测试汇报：直接写 fd 2，绕过 libtest 的线程输出捕获。
-libc.workspace = true
+# S4：仅 native blocking 构建需要（wasm 构建不编译 gpu_test）。
+libc = { workspace = true, optional = true }
+# 异步回读（map_async → oneshot → await）；纯 Rust、wasm 可用。
+futures-channel = "0.3"
 
 # wgpu / egui 均为可选：按 feature 组合提供后端实现。
 wgpu = { workspace = true, optional = true }
@@ -44,8 +47,12 @@ required-features = ["egui-wgpu"]
 [features]
 # 默认启用 wgpu：让 `cargo test -p xcal-render-backends`（顶点契约 V6 验收命令）
 # 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
-default = ["wgpu"]
-wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
+default = ["wgpu", "blocking"]
+wgpu = ["dep:wgpu", "xcal-render/wgpu"]
+# S2：native 同步构造/回读（`pollster::block_on` / `device.poll(wait)`）。
+# **wasm 构建必须关闭**（`--no-default-features --features wgpu`）⇒ 相关 API 编译期不存在，
+# 不会出现"运行时静默卡死"。
+blocking = ["dep:pollster", "dep:libc", "wgpu"]
 # S2：eframe/egui 宿主适配（EframeWgpuBackend + install_standard_backends）。
 # **默认关闭**：浏览器产物绝不带 egui 链（本阶段不做 UI）。
 # native 宿主（xcal-gui）显式开启；签名为 `egui-wgpu` 的纯回调仍在 egui-wgpu 下。
@@ -56,7 +63,6 @@ egui-wgpu = [
     "dep:egui",
     "dep:egui-wgpu",
     "dep:wgpu",
-    "dep:pollster",
     "xcal-render/wgpu",
 ]
 # 文本引擎（Typst/LaTeX）预留。

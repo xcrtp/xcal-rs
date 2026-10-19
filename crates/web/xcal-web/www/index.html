@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>xcal-web · fourier</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0d; color: #d7d7db; }
+    body { display: flex; align-items: center; justify-content: center; font: 14px/1.5 system-ui, sans-serif; }
+    #xcal-canvas { width: min(100vw, 1280px); height: auto; image-rendering: pixelated; background: #000; }
+    #xcal-status { position: fixed; left: 12px; bottom: 12px; padding: 6px 10px;
+      background: rgba(0,0,0,.65); border: 1px solid #333; border-radius: 6px;
+      font-variant-numeric: tabular-nums; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <canvas id="xcal-canvas" width="640" height="480"></canvas>
+  <div id="xcal-status">初始化…</div>
+
+  <script type="module">
+    import init, { start } from './pkg/xcal_web.js';
+
+    init().then(() => start()).catch((error) => {
+      const status = document.getElementById('xcal-status');
+      status.textContent = `错误：${error}`;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>

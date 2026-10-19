@@ -14,24 +14,32 @@ use std::sync::Arc;
 use xc_notion::Rect2D;
 use xc_object::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
-    Framing2D,
 };
-use xcal_render::{
-    ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect, scene::Scene,
-};
+use xcal_render::scene::Scene;
 use xcal_render_backends::RenderContext;
 pub use xcal_scene::Result;
-use xcal_scene::animation::{Binding, BindingTable, CameraEye};
-use xcal_scene::contract::{GroupVisibility, ObjectId, SceneRead};
-use xcal_scene::director_state::DirectorState;
-use xcal_scene::domain::{ContentTextureSpec, InputEvents, UiConfig};
+use xcal_scene::animation::BindingTable;
+use xcal_scene::contract::GroupVisibility;
+use xcal_scene::domain::ContentTextureSpec;
 use xcal_scene::errors::Error;
 use xcal_scene::scene::components::TextureHandle;
-use xcal_scene::{
-    ClockForest, ClockNode, ComposerQueue, Curve, DeferredCommands, DriverPod, DynamicObjects,
-    LifetimeEvents, LifetimeTracker, SeekKind, TimeState,
-};
+use xcal_scene::ClockForest;
+
+// 装配尾已下沉到 `xcal-playback`；以下导入只服务于本 crate 的回归测试与
+// `register_systems`（test-only）。
+#[cfg(test)]
+use xcal_render::{DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect};
+#[cfg(test)]
+use xcal_scene::animation::Binding;
+#[cfg(test)]
+use xcal_scene::director_state::DirectorState;
+#[cfg(test)]
+use xcal_scene::domain::{InputEvents, UiConfig};
+#[cfg(test)]
+use xcal_scene::{ClockNode, Curve, TimeState};
+#[cfg(test)]
 use xcal_schedule::resource::Resources;
+#[cfg(test)]
 use xcal_schedule::scheduler::Scheduler;
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
@@ -64,15 +72,8 @@ pub enum SceneChoice {
     PythonStoryboard,
 }
 
-/// 一次装配的产物：**GUI 与 headless 共用**。
-pub struct Runtime {
-    /// 命令驱动的场景推进器。
-    pub driver: Arc<DriverPod>,
-    /// 渲染上下文（headless 由调用方创建后传入）。
-    pub render_ctx: RenderContext,
-    /// 动画时长（秒）：脚本取 `SceneScript::duration()`，硬编码场景取最晚绑定结束时间。
-    pub duration: f64,
-}
+/// 一次装配的产物：**GUI 与 headless 共用**（定义在回放运行时 crate）。
+pub use xcal_playback::Runtime;
 
 /// 脚本语言（headless 按扩展名推断）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,15 +95,15 @@ pub fn language_from_path(path: &std::path::Path) -> Result<ScriptLanguage> {
     }
 }
 
-/// 场景来源：启动参数选定的内置场景、headless 指定的脚本，或 XSB 产物。
+/// 场景来源：启动参数选定的内置场景，或 headless 指定的脚本。
+///
+/// XSB 回放不再经过本 crate（见 [`build_bundle_runtime`] / `xcal-playback`）。
 enum SceneSource {
     Choice(SceneChoice),
     Script {
         source: String,
         language: ScriptLanguage,
     },
-    /// XSB 回放：已装配产物（纯数据），不经过任何脚本运行时。
-    Bundle(xcal_scene::scene_script::SceneScript),
 }
 
 /// **headless 装配入口**：脚本 → 与 GUI 完全相同的 Runtime。
@@ -126,10 +127,14 @@ pub fn build_script_runtime(
 pub struct CompiledScript {
     /// 装配产物（会写进 `.xsb` 的 payload）。
     pub script: xcal_scene::scene_script::SceneScript,
-    /// 参与装配的能力版本（写入 Meta）。
+    /// 参与装配的能力版本（写入 Meta 的诊断字段 `capabilities`）。
     pub capabilities: Vec<xcal_scene_bundle::Capability>,
-    /// 参与装配的 Pod 版本（写入 Meta）。
+    /// **回放期所需**能力（写入 Meta 的 `required_capabilities`，参与可还原性检查）。
+    pub required_capabilities: Vec<xcal_scene_bundle::Capability>,
+    /// 参与装配的 Pod 版本（写入 Meta 的诊断字段 `pods`）。
     pub pods: Vec<xcal_scene_bundle::Pod>,
+    /// **回放期所需** Pod（写入 Meta 的 `required_pods`，参与可还原性检查）。
+    pub required_pods: Vec<xcal_scene_bundle::Pod>,
     /// 源脚本的 SHA-256（诊断用，不进内容 hash）。
     pub source_sha256: String,
 }
@@ -153,7 +158,9 @@ pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<Compiled
     Ok(CompiledScript {
         script,
         capabilities: used_capabilities(scene_used, content_used),
+        required_capabilities: required_playback_capabilities(),
         pods: runtime_pods(scene_used, content_used),
+        required_pods: required_playback_pods(),
         source_sha256: xcal_scene_bundle::sha256::hex(&xcal_scene_bundle::sha256::sha256(
             source.as_bytes(),
         )),
@@ -216,6 +223,24 @@ fn runtime_pods(scene_used: bool, content_used: bool) -> Vec<xcal_scene_bundle::
     out
 }
 
+/// **回放期实际需要的能力集**：payload 是已烘焙的纯数据 ⇒ 只需要 scene 运行时。
+///
+/// 装配期调用的 content 能力不写进这里（否则无内容引擎的回放端会被误拒）。
+fn required_playback_capabilities() -> Vec<xcal_scene_bundle::Capability> {
+    vec![scene_capability()]
+}
+
+/// **回放期实际需要的 Pod 集**：payload 是已烘焙的纯数据 ⇒ 只需要 scene 运行时。
+///
+/// 装配期用到的 content Pod 不写进这里（否则浏览器等无内容引擎的回放端会被
+/// `check_restorable` 误拒）。
+fn required_playback_pods() -> Vec<xcal_scene_bundle::Pod> {
+    vec![xcal_scene_bundle::Pod::new(
+        xcal_scene::pod::SERVICE_NAME,
+        xcal_scene::pod::SERVICE_VERSION,
+    )]
+}
+
 /// 当前运行时注册的**全部** Pod（可还原性检查的"可用集"）。
 fn all_runtime_pods() -> Vec<xcal_scene_bundle::Pod> {
     vec![
@@ -237,18 +262,16 @@ pub fn available_runtime_caps() -> xcal_scene_bundle::Available {
 
 /// **headless 回放入口**：XSB 产物 → 与脚本路径**同一条** Runtime。
 ///
-/// 顺序：可还原性检查（列全缺失项）→ 还原 `SceneScript` → 提交场景 → 建调度器。
+/// 实现已下沉到 [`xcal_playback::build_bundle_runtime`]（浏览器共用）；
+/// 这里只补 native 的真实时钟注入。
 pub fn build_bundle_runtime(
     render_ctx: RenderContext,
     bundle: &xcal_scene_bundle::Bundle,
 ) -> Result<Runtime> {
-    bundle
-        .check_restorable(&available_runtime_caps())
+    let runtime = xcal_playback::build_bundle_runtime(render_ctx, bundle)
         .map_err(|e| Error::InitializationError(e.to_string()))?;
-    let script = bundle
-        .script()
-        .map_err(|e| Error::InitializationError(format!("XSB payload 还原失败：{e}")))?;
-    build_runtime(render_ctx, SceneSource::Bundle(script), false)
+    install_native_clock(&runtime);
+    Ok(runtime)
 }
 
 /// **GUI 装配入口**：内置场景 → Runtime（带 app 自带的 3D demo）。
@@ -260,13 +283,18 @@ pub fn build_scene_runtime(render_ctx: RenderContext, choice: SceneChoice) -> Re
 
 /// 2D 相机的**语义判据**：场景里唯一带 `Framing2D` 的对象。
 ///
-/// 不能按"第几个句柄"取：脚本可以任意安排创建顺序（当前坐标轴先于相机）。
+/// 唯一实现在 `xcal-playback`（脚本路径与回放路径共用同一判据）。
 fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
-    let mut cameras = Vec::new();
-    scene.for_each::<Framing2D>(|id, _| cameras.push(id));
-    cameras.first().copied().map(Camera2DHandle).ok_or_else(|| {
-        Error::InitializationError("场景没有 2D 相机对象（缺少 Framing2D）".to_string())
-    })
+    xcal_playback::find_camera2d(scene).map_err(|e| Error::InitializationError(e.to_string()))
+}
+
+/// **native 宿主**注入真实时钟；核心默认是安全零时钟（wasm 不注入也安全）。
+fn install_native_clock(runtime: &Runtime) {
+    runtime
+        .driver
+        .with_scheduler_mut(|scheduler| {
+            scheduler.set_clock(xcal_schedule::telemetry::InstantClock::new());
+        });
 }
 
 /// **唯一的 System 注册入口**（回归测试共用）。
@@ -279,6 +307,7 @@ fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
 /// 抽成函数的原因不变：`Scheduler::add_system` 在 debug 下做**静态借用冲突检查**并
 /// 直接 `panic!`，单测分别装单个 System 测不出来；整张图由
 /// `full_system_graph_assembles_without_borrow_conflicts` 覆盖。
+#[cfg(test)]
 fn register_systems(
     scheduler: &mut Scheduler,
     cam2d_bindings: Vec<Binding>,
@@ -315,76 +344,8 @@ fn build_runtime(
     let (forest2d, bindings2d, camera2d_handle, group_visibility, script_duration) =
         build_scene_source(&mut scene, &engine, &source)?;
 
-    let world = scene.into_world();
-
-    // ── 时钟树 + 绑定表（动画唯一驱动链路）────────────────────────
-    // 2D 场景已把时间编排编译进 `forest2d` / `bindings2d`；下面只补一条与
-    // 2D 编排无关的手工绑定：3D 轨道相机（时间源 = 全局 t）。
-    //
-    // K3：这条绑定由 `CameraDriveSystem` **托管**——"视口操作"切到 3D 时
-    // 它会从表里移出（让位给交互）、切回 2D 时放回。
-    let mut forest = forest2d;
-    let mut bindings = bindings2d;
-    // 「2D 相机自由」开关：分镜里指向 2D 相机（`Camera2DFraming`）的绑定
-    // （`center` + `scale` 各一条）也被 `CameraDriveSystem` 托管——开关打开时从表里
-    // 移出（否则每帧覆盖用户的 Pan/Zoom）、关闭时放回（分镜驱动）。
-    // 能力 demo 没有 2D 相机取景绑定 ⇒ 此向量为空，托管自然退化为 no-op。
-    //
-    // T0-②：筛选口径从"按 target 类别"改为"**按对象**"（`target_id() == 相机句柄`）
-    // —— 比按类别更精确：真正想要的是"作用于**这台**相机的绑定"。
-    let cam2d_bindings: Vec<Binding> = bindings
-        .bindings
-        .iter()
-        .filter(|b| b.target.target_id() == camera2d_handle.0)
-        .cloned()
-        .collect();
-    let orbit_clock = forest.insert(ClockNode::new(None)).unwrap();
-    let orbit_binding = Binding {
-        clock: orbit_clock,
-        // 3D 轨道相机：eye = radius * rotate_y(speed * t)，radius=5, speed=0.5
-        curve: Curve::Orbit {
-            radius: 5.0,
-            axis: glam::Vec3::Y,
-            speed: 0.5,
-            initial_angle: 0.0,
-        },
-        // 无 demo3d 时指向悬垂 id（不会命中任何对象）；CameraDriveSystem 仍拿到一条
-        // 形状合法的绑定，不必为 headless 分叉场景层签名。
-        target: Arc::new(CameraEye {
-            id: demo3d
-                .as_ref()
-                .map_or(ObjectId::DANGLING, |demo| demo.camera3d.0),
-        }),
-        seek_kind: SeekKind::O1,
-    };
-    bindings.add(orbit_binding.clone());
-
-    // 时长：脚本给的是显式 `duration()`；无脚本时取最晚绑定结束时间。
-    let duration = if script_duration > 0.0 {
-        script_duration
-    } else {
-        forest_duration(&forest, &bindings)
-    };
-
-    let mut resources = Resources::new();
-    // P1-1：相机状态**不再是 Resource** —— 场景里有一个 2D 相机对象，
-    // 这里只放它的**句柄**（引用型，P2）；K3 再加 3D 相机句柄。
-    resources.insert(camera2d_handle);
-    if let Some(demo) = &demo3d {
-        resources.insert(demo.camera3d);
-    }
-    resources.insert(TimeState::default());
-    resources.insert(UiConfig::default());
-    // S5：父子变换累乘的派生态（每帧由 TransformHierarchySystem 重建）。
-    resources.insert(xcal_scene::WorldTransforms::default());
-    resources.insert(xcal_scene::TransformHierarchyError::default());
-    resources.insert(ViewRect::default());
-    resources.insert(InputEvents::default());
-    resources.insert(DrawQueue::new());
-    resources.insert(DrawQueue3D::new());
-    // S3-3 内容纹理：配置（唯一真相来源）+ 当帧录制结果。
-    // 仅 demo3d 需要它（参数曲面采样公式纹理）；headless 脚本没有 3D 曲面 ⇒ 不声明该图层。
-    if let Some(demo) = &demo3d {
+    // S3-3 内容纹理（仅 demo3d）：配置（唯一真相来源）。
+    let content_texture = demo3d.as_ref().map(|demo| {
         // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
         let content_camera = demo.content_camera.unwrap_or_else(|| {
             Camera2D::new(
@@ -399,47 +360,28 @@ fn build_runtime(
                 ),
             )
         });
-        resources.insert(ContentTextureSpec {
+        ContentTextureSpec {
             camera: content_camera,
             size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
             texture: TextureHandle::new(CONTENT_TEXTURE_ID),
             composite: false,
-        });
-        resources.insert(ContentTextureQueue::default());
-    }
-    // S4.3 形变：当帧的形变项（`from`/`to` 常量 + 逐帧 `t`），由 MorphRecordSystem 写。
-    resources.insert(MorphQueue::default());
-    // R0 书写动画：当帧的 reveal 项（路径常量 + 区间 [start, end]）。
-    resources.insert(RevealQueue::default());
-    resources.insert(render_ctx.clone());
-    resources.insert(forest);
-    resources.insert(bindings);
-    resources.insert(DirectorState::new());
-    // N3：组级可见性开关（纯数据资源；默认空 ⇒ 所有组可见）。
-    // 录制路径（`SceneRecordSystem` 等）以"可缺席资源"方式读取，缺席同样按空处理。
-    // 分镜场景给默认空；能力 demo 也用默认空（组控制由测试填上以验证 N2）。
-    resources.insert(group_visibility);
-    // P6/B3：运行时延迟命令队列（帧末由 `DeferredApplySystem` 应用）。
-    resources.insert(DeferredCommands::new());
-    // P6/B4：运行时创建对象台账（重播清理用）。
-    resources.insert(DynamicObjects::new());
-    // S1：生命周期事件的差集状态与最近批次（opt-in：只有 LifetimeTracked 对象进集合）。
-    resources.insert(LifetimeTracker::new());
-    resources.insert(LifetimeEvents::new());
-    // S3：合成器的派生态（相机无关内容索引；无 Composer 时保持空）。
-    resources.insert(ComposerQueue::new());
+        }
+    });
 
-    let mut scheduler = Scheduler::new(world, resources);
-    // W3：核心默认是安全零时钟（wasm 上不会 panic）；native 宿主显式注入真实
-    // 时钟，保持 telemetry 输出与注入前一致。
-    scheduler.set_clock(xcal_schedule::telemetry::InstantClock::new());
-    register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
-
-    Ok(Runtime {
-        driver: Arc::new(DriverPod::new(scheduler)),
-        render_ctx,
-        duration,
-    })
+    // **装配尾唯一实现**位于 `xcal-playback`（脚本路径与 `--bundle` / 浏览器共用）。
+    let assembly = xcal_playback::SceneAssembly {
+        world: scene.into_world(),
+        forest: forest2d,
+        bindings: bindings2d,
+        camera2d: camera2d_handle,
+        group_visibility,
+        duration: script_duration,
+        camera3d: demo3d.as_ref().map(|demo| demo.camera3d),
+        content_texture,
+    };
+    let runtime = xcal_playback::assemble_runtime(render_ctx, assembly);
+    install_native_clock(&runtime);
+    Ok(runtime)
 }
 
 /// 场景来源 → 时钟树 / 绑定表 / 2D 相机 / 组开关 / 脚本时长。
@@ -482,30 +424,8 @@ fn build_scene_source(
         ));
     }
 
-    // ── XSB 产物回放（纯数据，无脚本运行时）──
-    if let SceneSource::Bundle(script) = source {
-        let duration = script.duration();
-        eprintln!(
-            "[xcal-app] 场景 = XSB 产物（{} 个对象，{}s）",
-            script.len(),
-            duration
-        );
-        let recipe = script
-            .clone()
-            .commit(scene)
-            .map_err(|e| Error::InitializationError(format!("XSB commit 失败：{e}")))?;
-        let camera = find_camera2d(scene)?;
-        return Ok((
-            recipe.forest,
-            recipe.bindings,
-            camera,
-            GroupVisibility::default(),
-            duration,
-        ));
-    }
-
     let SceneSource::Choice(choice) = source else {
-        unreachable!("Script / Bundle 分支已在上面返回")
+        unreachable!("Script 分支已在上面返回")
     };
 
     match choice {
@@ -581,19 +501,6 @@ fn run_script_source(
             }
         }
     }
-}
-
-/// 动画时长 = 最晚结束的绑定（`local_offset + span.1`）；无绑定 ⇒ 0。
-fn forest_duration(forest: &ClockForest, bindings: &BindingTable) -> f64 {
-    bindings
-        .bindings
-        .iter()
-        .filter_map(|binding| {
-            let node = forest.get(binding.clock)?;
-            let (_, end) = node.span?;
-            Some(node.local_offset + end)
-        })
-        .fold(0.0, f64::max)
 }
 
 #[cfg(test)]
@@ -1362,7 +1269,9 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             &script,
             MetaInput {
                 capabilities: available.capabilities.clone(),
+                required_capabilities: required_playback_capabilities(),
                 pods: available.pods.clone(),
+                required_pods: required_playback_pods(),
                 downgrades: Vec::new(),
                 source_sha256: None,
             },

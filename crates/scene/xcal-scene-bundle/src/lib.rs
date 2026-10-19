@@ -40,7 +40,9 @@ use xcal_scene::scene_script::SceneScript;
 /// 文件魔数（4 字节）。
 pub const MAGIC: &[u8; 4] = b"XSB1";
 /// 当前容器版本（决定"怎么读字节"，不属于内容 hash）。
-pub const CONTAINER_VERSION: u16 = 1;
+///
+/// v2：Meta 增加 `required_pods`（回放期所需），`pods` 降级为装配期诊断字段。
+pub const CONTAINER_VERSION: u16 = 2;
 /// payload 的格式标识（写入 Meta）。
 pub const PAYLOAD_FORMAT: &str = "xsb.script/1";
 const HEADER_LEN: usize = 24;
@@ -92,10 +94,22 @@ pub struct Meta {
     pub container: u16,
     /// payload 格式标识。
     pub payload_format: String,
-    /// 能力版本清单（可还原性检查的依据）。
+    /// **装配期参与者**（诊断信息：装配时调用了哪些能力）。
+    ///
+    /// **不参与** [`Bundle::check_restorable`]：payload 是已烘焙的纯数据，
+    /// 回放端不需要重新执行这些能力。
     pub capabilities: Vec<Capability>,
-    /// Pod 版本清单。
+    /// **回放期所需**能力（可还原性检查的唯一能力依据）。
+    #[serde(default)]
+    pub required_capabilities: Vec<Capability>,
+    /// **装配期参与者**（诊断信息：谁生成了这份 payload）。
+    ///
+    /// **不参与** [`Bundle::check_restorable`]：内容/字体等 Pod 只在编译期需要，
+    /// 回放端拿到的是已烘焙的纯数据。
     pub pods: Vec<Pod>,
+    /// **回放期所需** Pod（可还原性检查的唯一 Pod 依据）。
+    #[serde(default)]
+    pub required_pods: Vec<Pod>,
     /// 降级记录（影响"一比一还原"能力）。
     pub downgrades: Vec<Downgrade>,
     /// 源脚本 SHA-256（诊断用，不进内容 hash）。
@@ -111,8 +125,14 @@ pub struct Meta {
 /// `encode` 的元信息输入（payload 侧的信息由实现自行填充）。
 #[derive(Debug, Clone, Default)]
 pub struct MetaInput {
+    /// 装配期参与者（诊断，不参与可还原性检查）。
     pub capabilities: Vec<Capability>,
+    /// 回放期所需能力（只有它参与可还原性检查）。
+    pub required_capabilities: Vec<Capability>,
+    /// 装配期参与者（诊断，不参与可还原性检查）。
     pub pods: Vec<Pod>,
+    /// 回放期所需 Pod（只有它参与可还原性检查）。
+    pub required_pods: Vec<Pod>,
     pub downgrades: Vec<Downgrade>,
     pub source_sha256: Option<String>,
 }
@@ -249,7 +269,9 @@ impl Bundle {
             container: CONTAINER_VERSION,
             payload_format: PAYLOAD_FORMAT.to_string(),
             capabilities: input.capabilities,
+            required_capabilities: input.required_capabilities,
             pods: input.pods,
+            required_pods: input.required_pods,
             downgrades: input.downgrades,
             source_sha256: input.source_sha256,
             duration,
@@ -355,13 +377,18 @@ impl Bundle {
         sha256::hex(&self.payload_hash())
     }
 
-    /// **可还原性检查**：逐项确认当前运行时能解释 Meta 声明的 cap / pod。
+    /// **可还原性检查**：逐项确认当前运行时能解释 Meta 声明的
+    /// **回放期所需能力/ Pod**（`required_capabilities` / `required_pods`）。
+    ///
+    /// 装配期字段（`capabilities` / `pods`）**不参与**本检查：它们只是
+    /// "装配时用了什么"的诊断；回放端消费的是已烘焙的纯数据，不需要重新装配
+    /// 内容/字体等能力。
     ///
     /// 失败时返回**完整清单**（不是遇到第一个就返回）。
     pub fn check_restorable(&self, available: &Available) -> Result<(), RestoreError> {
         let mut missing = Vec::new();
 
-        for required in &self.meta.capabilities {
+        for required in &self.meta.required_capabilities {
             match available
                 .capabilities
                 .iter()
@@ -379,7 +406,7 @@ impl Bundle {
             }
         }
 
-        for required in &self.meta.pods {
+        for required in &self.meta.required_pods {
             match available.pods.iter().find(|p| p.name == required.name) {
                 None => missing.push(format!("缺少 Pod `{}`", required.name)),
                 Some(found) => {
@@ -432,7 +459,9 @@ mod tests {
                 Capability::new("scene", Some("4")),
                 Capability::new("content", Some("1")),
             ],
+            required_capabilities: vec![Capability::new("scene", Some("4"))],
             pods: vec![Pod::new("scene", "0.1.0"), Pod::new("content", "0.1.0")],
+            required_pods: vec![Pod::new("scene", "0.1.0")],
             downgrades: Vec::new(),
             source_sha256: Some("deadbeef".to_string()),
         }
@@ -473,19 +502,42 @@ mod tests {
     }
 
     #[test]
-    fn missing_capability_is_listed_with_pod() {
+    fn missing_required_capability_is_listed() {
         let script = tiny_script();
         let bundle = Bundle::encode(&script, meta_input()).expect("encode");
-        let available = Available::new(
+        let available = Available::new(vec![], vec![Pod::new("scene", "0.1.0")]);
+        let error = bundle
+            .check_restorable(&available)
+            .expect_err("缺少 scene 能力");
+        assert_eq!(error.missing.len(), 1, "必须列出全部缺失项：{error}");
+        assert!(error.missing.iter().any(|m| m.contains("scene")));
+    }
+
+    /// **P0-1 验收**：装配期用到 content Pod，不影响只有 scene Pod 的回放端。
+    #[test]
+    fn assembly_pods_do_not_block_playback() {
+        let script = tiny_script();
+        let bundle = Bundle::encode(
+            &script,
+            MetaInput {
+                capabilities: vec![Capability::new("scene", Some("4"))],
+                required_capabilities: vec![Capability::new("scene", Some("4"))],
+                // 编译期确实用了 content……
+                pods: vec![Pod::new("scene", "0.1.0"), Pod::new("content", "0.1.0")],
+                // ……但回放只需要 scene（payload 是已烘焙的纯数据）。
+                required_pods: vec![Pod::new("scene", "0.1.0")],
+                downgrades: Vec::new(),
+                source_sha256: None,
+            },
+        )
+        .expect("encode");
+        let browser_like = Available::new(
             vec![Capability::new("scene", Some("4"))],
             vec![Pod::new("scene", "0.1.0")],
         );
-        let error = bundle
-            .check_restorable(&available)
-            .expect_err("缺少 content");
-        assert_eq!(error.missing.len(), 2, "必须列出全部缺失项：{error}");
-        assert!(error.missing.iter().any(|m| m.contains("content")));
-        assert!(error.missing.iter().any(|m| m.contains("Pod")));
+        bundle
+            .check_restorable(&browser_like)
+            .expect("只有 scene Pod 的回放端必须接受该 bundle");
     }
 
     #[test]

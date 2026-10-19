@@ -22,6 +22,8 @@ xc-pod-lua = { path = "../../pod/xc-pod-lua" }
 xc-pod-py = { path = "../../pod/xc-pod-py", optional = true }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
+# 回放运行时（XSB → Scene → 调度器 → 帧回调）：浏览器与 `--bundle` 共用装配尾。
+xcal-playback = { path = "../xcal-playback" }
 xcal-render = { path = "../../render/xcal-render" }
 # RenderContext / WgpuBackend3D / WgpuBackend2D / SceneCompositorCallback 等具体后端实现。
 xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }

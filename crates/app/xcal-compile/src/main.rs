@@ -91,7 +91,9 @@ fn run() -> Result<(), String> {
         &compiled.script,
         MetaInput {
             capabilities: compiled.capabilities.clone(),
+            required_capabilities: compiled.required_capabilities.clone(),
             pods: compiled.pods.clone(),
+            required_pods: compiled.required_pods.clone(),
             // 当前脚本不使用 Shape2D::Custom ⇒ 无降级记录。
             downgrades: Vec::new(),
             source_sha256: Some(compiled.source_sha256.clone()),

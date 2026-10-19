@@ -65,12 +65,31 @@ jobs:
         shell: bash
 
       # S1：渲染后端是浏览器路径**唯一**需要改的 crate —— 必须能编到 wasm32。
-      # 默认 features = ["wgpu"]（webgpu backend）；`eframe`（egui 链）默认关闭，
-      # 故本步不会把 UI 依赖带进浏览器产物。
+      # 用**浏览器 feature 组合**（wgpu，不含 blocking/eframe）：
+      # `blocking` 里的 `pollster::block_on` / `poll(wait)` 在 wasm 主线程会静默卡死，
+      # 因此它在 web 构建里编译期不可用；`eframe`（egui 链）默认关闭。
       - name: Render backends wasm gate
         run: |
           rustup target add wasm32-unknown-unknown
-          cargo check -p xcal-render-backends --target wasm32-unknown-unknown
+          cargo check -p xcal-render-backends --target wasm32-unknown-unknown \
+            --no-default-features --features wgpu
+        shell: bash
+
+      # 回放运行时组（**非 kernel 层**，单列，不混进上面的 kernel 组）：
+      # 浏览器实际依赖的 crate 全部纳入门禁。
+      - name: Playback runtime wasm gate
+        run: |
+          rustup target add wasm32-unknown-unknown
+          echo "== xcal-schedule (default features) =="
+          cargo check -p xcal-schedule --target wasm32-unknown-unknown || exit 1
+          echo "== xcal-render (wgpu, no blocking) =="
+          cargo check -p xcal-render --target wasm32-unknown-unknown \
+            --no-default-features --features wgpu || exit 1
+          echo "== xcal-playback (web config) =="
+          cargo check -p xcal-playback --target wasm32-unknown-unknown \
+            --no-default-features || exit 1
+          echo "== xcal-web =="
+          cargo check -p xcal-web --target wasm32-unknown-unknown || exit 1
         shell: bash
 
       # 结构性判据：`crates/pod/` 下任一 crate 的**生产依赖边**中不得出现任何 `xcal-*`。

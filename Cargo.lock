@@ -584,6 +584,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1316,6 +1326,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "futures-channel"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+dependencies = [
+ "futures-core",
 ]
 
 [[package]]
@@ -6019,6 +6038,7 @@ dependencies = [
  "xc-pod-lua",
  "xc-pod-py",
  "xc-prerender",
+ "xcal-playback",
  "xcal-render",
  "xcal-render-backends",
  "xcal-scene",
@@ -6110,6 +6130,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "xcal-playback"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "hecs",
+ "png 0.17.16",
+ "thiserror 2.0.20",
+ "wgpu",
+ "xc-notion",
+ "xc-object",
+ "xc-pod",
+ "xcal-render",
+ "xcal-render-backends",
+ "xcal-scene",
+ "xcal-scene-bundle",
+ "xcal-schedule",
+]
+
+[[package]]
 name = "xcal-render"
 version = "0.1.0"
 dependencies = [
@@ -6142,6 +6181,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
+ "futures-channel",
  "glam",
  "hecs",
  "libc",
@@ -6201,6 +6241,21 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "xcal-web"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+ "xcal-playback",
+ "xcal-render-backends",
+ "xcal-scene-bundle",
 ]
 
 [[package]]

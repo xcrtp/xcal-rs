@@ -196,18 +196,8 @@ pub fn target_pix_fmt(ctx: &RenderContext) -> Result<&'static str, ExportError> 
 
 /// 把回读像素转成 PNG 用的 RGBA8（按目标格式做通道交换；alpha 原样）。
 pub fn to_rgba(ctx: &RenderContext, pixels: &[u8]) -> Vec<u8> {
-    use wgpu::TextureFormat;
-
-    let mut out = pixels.to_vec();
-    match ctx.target_format() {
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
-            for px in out.chunks_exact_mut(4) {
-                px.swap(0, 2);
-            }
-        }
-        _ => {}
-    }
-    out
+    // 唯一实现在回放 crate（浏览器对拍共用同一口径）。
+    xcal_playback::to_rgba(ctx, pixels)
 }
 
 /// 写一张 RGBA8 PNG。

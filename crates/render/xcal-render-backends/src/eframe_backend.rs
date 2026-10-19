@@ -47,6 +47,8 @@ impl EframeWgpuBackend {
         }
     }
 
+    /// headless 构造（测试 / 离屏渲染）。仅 native `blocking` 构建可用。
+    #[cfg(feature = "blocking")]
     pub fn headless() -> crate::render_context::Result<Self> {
         Ok(Self {
             ctx: RenderContext::headless()?,
