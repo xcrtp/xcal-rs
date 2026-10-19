@@ -109,7 +109,7 @@ demo 逐位不变。
 - `fourier.lua` / `fourier.py`：**216 帧 / 7.2s**，SHA256 相同；
 - `storyboard.lua`：**135 帧 / 4.5s**，SHA256 与 S1–S6 前一致；
 - 同目标（`--script` vs `--bundle`）：fourier / storyboard 序列哈希均不变；
-- 跨端结构：216/216 一致（聚合哈希 `43410ed978eb2690`）；
+- 跨端结构：216/216 一致（聚合哈希 `3cbb0cb65ce50842`，结构串无浮点）；
 - 跨端逐位：1/216 帧、1 个像素差异（已知可接受，MAD 0.000086）；
 - `cargo check --workspace --all-targets`：0 warning；
 - `cargo test --workspace -- --test-threads=1`：全绿（含本清单所有新用例）。

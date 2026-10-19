@@ -146,21 +146,6 @@ impl SceneCompositorCallback {
             }
             hash
         }
-        fn shape_kind(shape: &xc_render_ir::Shape2D) -> &'static str {
-            match shape {
-                xc_render_ir::Shape2D::Empty => "empty",
-                xc_render_ir::Shape2D::Line { .. } => "line",
-                xc_render_ir::Shape2D::Polyline { .. } => "polyline",
-                xc_render_ir::Shape2D::Path(_) => "path",
-                xc_render_ir::Shape2D::Circle { .. } => "circle",
-                xc_render_ir::Shape2D::Ellipse { .. } => "ellipse",
-                xc_render_ir::Shape2D::Rect(_) => "rect",
-                xc_render_ir::Shape2D::Polygon { .. } => "polygon",
-                xc_render_ir::Shape2D::Group { .. } => "group",
-                xc_render_ir::Shape2D::Custom(_) => "custom",
-                _ => "unknown",
-            }
-        }
         fn layer_kind(kind: &xc_object::LayerKind) -> &'static str {
             match kind {
                 xc_object::LayerKind::Viewport2D { .. } => "v2d",
@@ -181,10 +166,11 @@ impl SceneCompositorCallback {
                 xc_notion::MeasureSpace::Screen => "S",
                 xc_notion::MeasureSpace::WorldWithMinPx(_) => "WM",
             };
+            // 结构层**不含浮点**：`draw.z` 是 f32，只影响绘制顺序；
+            // 顺序本身已由队列迭代序 + 本串顺序表达，故不写入数值。
             topo.push_str(&format!(
-                "{}:{}:{}{}{};",
-                shape_kind(&draw.shape),
-                draw.z,
+                "{}:{}{}{};",
+                draw.shape.kind_name(),
                 if draw.style.fill.is_some() { "f" } else { "-" },
                 if draw.style.stroke.is_some() { "s" } else { "-" },
                 space
@@ -614,32 +600,32 @@ mod tests {
         // ── 3D 层：全屏四边形，材质引用内容纹理 ────────────────────────
         let quad = MeshGeometry::new(
             vec![
-                glam::Vec3::new(-1.0, -1.0, 0.0),
-                glam::Vec3::new(1.0, -1.0, 0.0),
-                glam::Vec3::new(1.0, 1.0, 0.0),
-                glam::Vec3::new(-1.0, 1.0, 0.0),
+                xc_notion::Vec3::new(-1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(1.0, 1.0, 0.0),
+                xc_notion::Vec3::new(-1.0, 1.0, 0.0),
             ],
             Some(vec![0, 1, 2, 0, 2, 3]),
             PrimitiveTopology::Triangles,
         )
         .with_uvs(vec![
-            glam::Vec2::new(0.0, 1.0),
-            glam::Vec2::new(1.0, 1.0),
-            glam::Vec2::new(1.0, 0.0),
-            glam::Vec2::new(0.0, 0.0),
+            xc_notion::Vec2::new(0.0, 1.0),
+            xc_notion::Vec2::new(1.0, 1.0),
+            xc_notion::Vec2::new(1.0, 0.0),
+            xc_notion::Vec2::new(0.0, 0.0),
         ])
-        .with_normals(vec![glam::Vec3::Z; 4]);
+        .with_normals(vec![xc_notion::Vec3::Z; 4]);
         let mut material = Material3D::color(Color32::WHITE);
         material.texture = Some(TextureHandle::new(CONTENT_ID));
         let mut queue_3d = DrawQueue3D::new();
-        queue_3d.draw_mesh(std::sync::Arc::new(quad), glam::Mat4::IDENTITY, material);
+        queue_3d.draw_mesh(std::sync::Arc::new(quad), xc_notion::Mat4::IDENTITY, material);
 
         // 正交相机：垂直半高 1.0、aspect 1.0 ⇒ 覆盖世界 x/y ∈ [-1,1]，
         // 与四边形的世界范围完全对齐（视口 32×32，aspect = 1.0）。
         let camera = Camera3D::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
+            xc_notion::Vec3::new(0.0, 0.0, 5.0),
+            xc_notion::Vec3::ZERO,
+            xc_notion::Vec3::Y,
             Projection::orthographic(1.0, 1.0, 0.1, 100.0),
         );
 
@@ -798,30 +784,30 @@ mod tests {
         // ── 3D 视口层：全屏四边形，材质采样内容纹理 ───────────────────────────
         let quad = MeshGeometry::new(
             vec![
-                glam::Vec3::new(-1.0, -1.0, 0.0),
-                glam::Vec3::new(1.0, -1.0, 0.0),
-                glam::Vec3::new(1.0, 1.0, 0.0),
-                glam::Vec3::new(-1.0, 1.0, 0.0),
+                xc_notion::Vec3::new(-1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(1.0, 1.0, 0.0),
+                xc_notion::Vec3::new(-1.0, 1.0, 0.0),
             ],
             Some(vec![0, 1, 2, 0, 2, 3]),
             PrimitiveTopology::Triangles,
         )
         .with_uvs(vec![
-            glam::Vec2::new(0.0, 1.0),
-            glam::Vec2::new(1.0, 1.0),
-            glam::Vec2::new(1.0, 0.0),
-            glam::Vec2::new(0.0, 0.0),
+            xc_notion::Vec2::new(0.0, 1.0),
+            xc_notion::Vec2::new(1.0, 1.0),
+            xc_notion::Vec2::new(1.0, 0.0),
+            xc_notion::Vec2::new(0.0, 0.0),
         ])
-        .with_normals(vec![glam::Vec3::Z; 4]);
+        .with_normals(vec![xc_notion::Vec3::Z; 4]);
         let mut material = Material3D::color(Color32::WHITE);
         material.texture = Some(TextureHandle::new(CONTENT_ID));
         let mut queue_3d = DrawQueue3D::new();
-        queue_3d.draw_mesh(std::sync::Arc::new(quad), glam::Mat4::IDENTITY, material);
+        queue_3d.draw_mesh(std::sync::Arc::new(quad), xc_notion::Mat4::IDENTITY, material);
 
         let camera = Camera3D::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
+            xc_notion::Vec3::new(0.0, 0.0, 5.0),
+            xc_notion::Vec3::ZERO,
+            xc_notion::Vec3::Y,
             Projection::orthographic(1.0, 1.0, 0.1, 100.0),
         );
         let viewport_points =

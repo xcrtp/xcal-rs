@@ -233,6 +233,26 @@ pub enum Shape2D {
 }
 
 impl Shape2D {
+    /// 结构指纹 / 诊断用的**稳定变体名**。
+    ///
+    /// 本匹配在定义 crate 内**穷举**（无 `_` 兜底）：新增 `Shape2D` 变体必须在这里
+    /// 显式归类，否则**编译失败**。下游（如结构层对拍）只调用本方法，不自己 match ——
+    /// 因为 `Shape2D` 是 `#[non_exhaustive]`，跨 crate 无法真正穷举。
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Shape2D::Empty => "empty",
+            Shape2D::Line { .. } => "line",
+            Shape2D::Polyline { .. } => "polyline",
+            Shape2D::Path(_) => "path",
+            Shape2D::Circle { .. } => "circle",
+            Shape2D::Ellipse { .. } => "ellipse",
+            Shape2D::Rect(_) => "rect",
+            Shape2D::Polygon { .. } => "polygon",
+            Shape2D::Group { .. } => "group",
+            Shape2D::Custom(_) => "custom",
+        }
+    }
+
     /// 图元的逻辑包围盒（None 表示无几何/空图元）。
     ///
     /// Custom 图元直接使用其声明的 bounds；Circle/Ellipse 按参数计算。
