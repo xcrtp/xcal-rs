@@ -16,7 +16,7 @@ xcal-app = { path = "../xcal-app" }
 xcal-egui = { path = "../../ui/xcal-egui" }
 # 场景类型（Result / DriverPod）与后端安装。
 xcal-scene = { path = "../../scene/xcal-scene" }
-xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu"] }
+xcal-render-backends = { path = "../../render/xcal-render-backends", features = ["egui-wgpu", "eframe"] }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 xc-pod = { path = "../../pod/xc-pod" }
 

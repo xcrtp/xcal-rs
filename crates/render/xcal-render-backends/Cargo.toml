@@ -46,6 +46,10 @@ required-features = ["egui-wgpu"]
 # 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
 default = ["wgpu"]
 wgpu = ["dep:wgpu", "dep:pollster", "xcal-render/wgpu"]
+# S2：eframe/egui 宿主适配（EframeWgpuBackend + install_standard_backends）。
+# **默认关闭**：浏览器产物绝不带 egui 链（本阶段不做 UI）。
+# native 宿主（xcal-gui）显式开启；签名为 `egui-wgpu` 的纯回调仍在 egui-wgpu 下。
+eframe = ["egui-wgpu"]
 # egui + wgpu 集成（egui_wgpu 回调、EframeWgpuBackend、RenderContext）。
 # `dep:egui` 为必需项——回调整合依赖 egui 类型。
 egui-wgpu = [

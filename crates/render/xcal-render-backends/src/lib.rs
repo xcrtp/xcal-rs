@@ -33,7 +33,9 @@ pub mod compositor;
 // 渲染期软失败计数（三角化失败跳过数：每帧 / 累计）。
 pub mod diagnostics;
 
-#[cfg(feature = "egui-wgpu")]
+// S2：eframe/egui 宿主适配，默认关闭（feature = "eframe"）——
+// 浏览器产物不得带 egui 链；native 宿主（xcal-gui）显式开启。
+#[cfg(feature = "eframe")]
 pub mod eframe_backend;
 // W1：**不依赖 egui 的渲染环境装配**（`StandardBackends`）+ headless 渲染入口。
 // 与 `wgpu_2d` 等同门控（只吃 `RenderContext`），故在 `wgpu` 下即可编译与测试。
@@ -73,7 +75,7 @@ pub use wgpu_2d::{
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use wgpu_3d::{Frame3DData, Layer3DFrame, PreparedDraw3D, WgpuBackend3D};
 
-#[cfg(feature = "egui-wgpu")]
+#[cfg(feature = "eframe")]
 pub use eframe_backend::{EframeWgpuBackend, install_standard_backends};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use scene_callback::{SceneCompositorCallback, SceneCompositorFrame, SceneLayer};

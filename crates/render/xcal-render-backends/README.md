@@ -16,7 +16,7 @@ xcal-scene / xcal-render / xc-notion
               ├ wgpu 2D 后端 (feature = "wgpu")          ← S3-1：离屏 MSAA；S3-2：透明清屏
               ├ 图层合成器 (feature = "wgpu")            ← S3-2：N 层按声明顺序混合
               ├ 顶点契约 → wgpu 翻译 (feature = "wgpu")
-              └ eframe + egui_wgpu 集成 (feature = "egui-wgpu")
+              └ eframe + egui_wgpu 集成 (feature = "eframe")
 ```
 
 ---
@@ -27,7 +27,8 @@ xcal-scene / xcal-render / xc-notion
 |---------|-----------|----------|
 | `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p xcal-render-backends` 直接跑顶点契约测试） |
 | `wgpu` | `wgpu 30`, `pollster 0.3`, `xcal-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `standard_backends`, `scene_callback` |
-| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | 同 `wgpu` + `eframe_backend`（`scene_callback` 额外提供 `CallbackTrait` 实现） |
+| `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | 同 `wgpu`（`scene_callback` 额外提供 `CallbackTrait` 实现） |
+| `eframe` | 同 `egui-wgpu` | 同 `egui-wgpu` + `eframe_backend`（`EframeWgpuBackend` / `install_standard_backends`）。**默认关闭**：浏览器产物不带 egui 链 |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |
 
 > **S4.1**：旧 CPU 2D 回放的 feature（含其历史别名）与 `egui_2d` 模块已删除——
@@ -207,7 +208,7 @@ compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序�
   2D 离屏为 `Rgba8Unorm`（存 gamma）。
 - 导出：`Compositor` / `CompositeOp` / `CompositeFrame`。
 
-### 6. `eframe_backend` (`egui-wgpu`)
+### 6. `eframe_backend` (`eframe`)
 
 `EframeWgpuBackend`：实现 `xcal_render::RenderBackend` trait 的 eframe 版本。
 对写纯 eframe/wgpu 示例时可直接复用。
