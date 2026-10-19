@@ -7,6 +7,13 @@
 > 结论先行：**Lua 无法编译到 wasm（内容来源缺失）；渲染后端有 23 个编译错误；
 > 主体 crate 虽然编译通过，但默认 telemetry 会在 wasm 运行时立刻 panic。**
 > wgpu 本身没有踩 push constants / 硬编码 limits 这两个"黑屏"雷。
+>
+> ---
+>
+> **状态更新（2026-10-19）**：本报告的「未做项」多数已被后续阶段
+> **S1–S7 解决**，详见仓库根 [`GAPS.md`](GAPS.md) 的 B 段。
+> 本文件**保留作为当时的探测证据，不删除**；§7 的每条已补状态列。
+> 阅读时请以状态列为准，不要把历史结论当成当前缺口。
 
 ---
 
@@ -322,32 +329,32 @@ adapter，需在浏览器内再测一次（本轮无浏览器环境）。
 
 ### P0 — 不做就无法产出画面
 
-| # | 项 | 位置 | 说明 |
-|---|---|---|---|
-| P0-1 | **Lua 内容来源** | `xc-pod-lua` / `lua-src` | 必须换 wasm 可构建的 Lua 供给；否则浏览器无脚本 |
-| P0-2 | **telemetry 的 `Instant::now()`** | `xcal-schedule/src/scheduler.rs:247` | 默认 feature 下每帧必 panic；需关 telemetry 或换时间源 |
-| P0-3 | **`GpuHandle` / `RenderBackend3D` 的 `Send + Sync`** | `xc-resource` / `xcal-render` | wasm wgpu 资源不是 Send/Sync；23 个编译错误全源于此 |
-| P0-4 | **GUI 的 dt 来源** | `xcal-egui/src/frame.rs:46,53` | `Instant` 不可用；需 `performance.now()` |
-| P0-5 | **GUI 入口** | `xcal-egui/src/frame.rs:24` / `xcal-gui/src/main.rs` | `NativeOptions` / `run_native` 仅 native；需 wasm 入口 |
+| # | 项 | 位置 | 说明 | 状态（2026-10-19） |
+|---|---|---|---|---|
+| P0-1 | **Lua 内容来源** | `xc-pod-lua` / `lua-src` | 必须换 wasm 可构建的 Lua 供给；否则浏览器无脚本 | **已解决（路线变更）**：浏览器只回放 XSB，`xcal-playback` / `xcal-web` 不依赖 Lua |
+| P0-2 | **telemetry 的 `Instant::now()`** | `xcal-schedule/src/scheduler.rs:247` | 默认 feature 下每帧必 panic；需关 telemetry 或换时间源 | **已解决（W3）**：默认 `ZeroClock`，native 宿主注入 `InstantClock` |
+| P0-3 | **`GpuHandle` / `RenderBackend3D` 的 `Send + Sync`** | `xc-resource` / `xcal-render` | wasm wgpu 资源不是 Send/Sync；23 个编译错误全源于此 | **已解决（第一阶段）**：`GpuHandle` 改为 `Box<dyn Any>`，trait 约束移除 |
+| P0-4 | **GUI 的 dt 来源** | `xcal-egui/src/frame.rs:46,53` | `Instant` 不可用；需 `performance.now()` | **范围外**：浏览器薄壳用 rAF 固定 `dt`；`xcal-egui` 不进浏览器 |
+| P0-5 | **GUI 入口** | `xcal-egui/src/frame.rs:24` / `xcal-gui/src/main.rs` | `NativeOptions` / `run_native` 仅 native；需 wasm 入口 | **范围外**：wasm 入口由 `xcal-web` 提供 |
 
 ### P1 — 画面能出，但功能缺失
 
-| # | 项 | 位置 | 说明 |
-|---|---|---|---|
-| P1-1 | 字体按路径读盘 | `xcal-egui/src/host.rs:81` | 浏览器需 fetch / 打包字体 |
-| P1-2 | 同步 GPU 回读 | `render_context.rs:154` | 导出/截图需改异步 |
-| P1-3 | 上下文创建 `block_on` | `render_context.rs:47` | headless 路径需 async |
-| P1-4 | 导出 / CLI 的 fs / ffmpeg | `xcal-app/src/export.rs`、`bin/xcal-render.rs` | 浏览器侧另做导出 |
-| P1-5 | `xcal-gui` 无法关闭下层默认 features | `xcal-gui/Cargo.toml` | `xcal-app` 依赖缺 `default-features = false` |
+| # | 项 | 位置 | 说明 | 状态（2026-10-19） |
+|---|---|---|---|---|
+| P1-1 | 字体按路径读盘 | `xcal-egui/src/host.rs:81` | 浏览器需 fetch / 打包字体 | **已解决**：XSB 在 native 把字形烘焙成路径；`xcal-web` 无字体代码 |
+| P1-2 | 同步 GPU 回读 | `render_context.rs:154` | 导出/截图需改异步 | **已解决（S3）**：`read_texture_async` |
+| P1-3 | 上下文创建 `block_on` | `render_context.rs:47` | headless 路径需 async | **已解决（S2）**：`request_adapter_and_device` + `blocking` feature |
+| P1-4 | 导出 / CLI 的 fs / ffmpeg | `xcal-app/src/export.rs`、`bin/xcal-render.rs` | 浏览器侧另做导出 | **范围外**：浏览器不导出；XSB 路线绕开 |
+| P1-5 | `xcal-gui` 无法关闭下层默认 features | `xcal-gui/Cargo.toml` | `xcal-app` 依赖缺 `default-features = false` | **降格（工效项）**：`xcal-gui` 不进浏览器，与 wasm 无关 |
 
 ### P2 — 清理项
 
-| # | 项 | 说明 |
-|---|---|---|
-| P2-1 | `gpu_test` 的 `libc::write` / `thread::sleep` / `spawn` | 编进库的测试辅助，需 target 门控 |
-| P2-2 | `Receipt::wait` 的 `yield_now` 忙等 | wasm no-op；已有"主线程禁令"，可保持 |
-| P2-3 | CI wasm gate 未覆盖 scene/render/schedule | 本轮证明可编译，可考虑纳入（本轮不改） |
-| P2-4 | `xc-pod-py` 的 wasm 形态 | 默认关闭，不影响；浏览器侧预计不启用 Python Pod |
+| # | 项 | 说明 | 状态（2026-10-19） |
+|---|---|---|---|
+| P2-1 | `gpu_test` 的 `libc::write` / `thread::sleep` / `spawn` | 编进库的测试辅助，需 target 门控 | **已解决（S4）**：归入 `blocking` feature |
+| P2-2 | `Receipt::wait` 的 `yield_now` 忙等 | wasm no-op；已有"主线程禁令"，可保持 | **已解决（W1）**：命令同步跑完后 `complete()`，`yield_now` 走不到 |
+| P2-3 | CI wasm gate 未覆盖 scene/render/schedule | 本轮证明可编译，可考虑纳入（本轮不改） | **已解决（S7）**：Playback runtime wasm gate |
+| P2-4 | `xc-pod-py` 的 wasm 形态 | 默认关闭，不影响；浏览器侧预计不启用 Python Pod | **范围外**：浏览器不启用 Python Pod |
 
 ---
 

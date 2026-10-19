@@ -1,5 +1,8 @@
 # Fourier 动画：缺口清单（S1–S7 后更新）
 
+> **总账见 [`GAPS.md`](../../../../GAPS.md)**。本文件保留为 fourier 作品的专属快照；
+> 跨作品 / 跨层的状态判定以总账为准。
+>
 > 作品：`fourier.lua` / `fourier.py`（旋转向量 / epicycles 版）。
 > 渲染：`xcal-render`，640×480 @ 30fps，**216 帧 / 7.2s**；
 > 两版 mp4 SHA256 相同。
@@ -39,10 +42,13 @@ demo 逐位不变。
 
 ### P1 — 表达力 / 一致性
 
-1. **脚本 `Curve.Keyframes` 只有标量**：没有 `Vec2` / `Vec3` 关键帧。
-   曲线路径/位置的多关键帧编排仍要靠 `Ramp2` 或多段。
-2. **`WorldTransforms` 只有 2D 仿射**：3D `SceneRecord3DSystem` 仍只读 local
-   `Transform`，3D 父子层级未接线。
+1. **脚本层 `Curve.Keyframes` 只有标量**（**内核已支持向量**）：
+   `xc_time::AnimValue` 已含 `Vec2` / `Vec3` / `Color` / `Path`，`Curve::Keyframes`
+   本身也用它；缺口只在脚本入口 —— `xcal_scene::pod::types::Curve::Keyframes`
+   目前是 `Vec<ScalarKey>`，只能写标量。位置/向量的多关键帧编排仍要靠
+   `Ramp2`（仅两端）或多段。
+2. **`WorldTransforms` 只有 2D 仿射**（**2D/3D 融合前置 P0**，见 `GAPS.md` G-101）：
+   3D `SceneRecord3DSystem` 仍只读 local `Transform`，3D 父子层级未接线。
 3. **`MorphRecordSystem` / `ContentTextureRecordSystem` 不消费世界变换**：
    Text（Path）与向量（Arrow/Reveal/Circle）已覆盖，但形变/内容纹理对象在
    `Parent` 下不会跟随。
