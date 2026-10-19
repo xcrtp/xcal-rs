@@ -15,7 +15,7 @@
 | [`context`] | `ExecutorContext { world, commands, dt, time, resources }`（含 `with_world_and_resource_mut` 拆分借用、`spawn` / `despawn` / `insert` 命令缓冲）+ debug-only `BorrowTracker` |
 | [`system`] | `System`（关联类型 `Reads` / `Writes: ResourceTuple`）、`Sys<F, R, W>` 闭包适配器与 `sys::<R, W>(...)`、`InitSystem`（blanket auto-impl）、object-safe 的 `ErasedSystem` |
 | [`scheduler`] | `Phase`（六阶段 enum）、`Scheduler`（`add_system` / `init_resources` / `run_frame` / `run_frame_with_time` / `tick` / `frame_report`） |
-| [`telemetry`] `feature="telemetry"` | `FrameReport` / `SystemTelemetry`（每帧 System 计时）、`init_tracing`（结构化日志）、`SnapshotRegistry` / `WorldSnapshot` / `write_snapshot_json`（World 状态导出） |
+| [`telemetry`] `feature="telemetry"` | `FrameReport` / `SystemTelemetry`（每帧 System 计时）、`FrameClock` / `InstantClock`（**可注入**时间源，浏览器注入 `performance.now()`）、`init_tracing`（结构化日志）、`SnapshotRegistry` / `WorldSnapshot` / `write_snapshot_json`（World 状态导出） |
 
 ### 六阶段
 
@@ -63,6 +63,10 @@ tracing / tracing-subscriber / serde / serde_json
 
 关闭 feature（`--no-default-features`）时整个 `telemetry` 模块在编译期完全剔除，
 观测代码零运行时开销。
+
+> **wasm 注意**：默认时间源 `InstantClock` 调用 `Instant::now()`，在
+> `wasm32-unknown-unknown` 上会 panic。浏览器入口必须在第一次 `run_frame` 之前
+> 调用 `Scheduler::set_clock(..)` 注入基于 `performance.now()` 的实现。
 
 **不依赖**：`xcal-scene` / `xcal-render` / `xcal-egui` / `wgpu`。
 反过来说：本 crate 之内**不含任何场景或渲染概念**。

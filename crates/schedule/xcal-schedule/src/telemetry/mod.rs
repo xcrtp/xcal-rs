@@ -11,10 +11,12 @@
 // - 零侵入：Span / 计时由 Scheduler 统一注入，业务 System 无需改动。
 // - 正交性：本模块只看 ECS / Scheduler / 帧指标，不依赖渲染层。
 
+mod clock;
 mod frame_report;
 mod log;
 mod snapshot;
 
+pub use clock::{FrameClock, InstantClock};
 pub use frame_report::{FrameReport, SystemTelemetry};
 pub use log::init_tracing;
 pub use snapshot::{
