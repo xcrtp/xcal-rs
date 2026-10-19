@@ -126,8 +126,8 @@ jobs:
         run: |
           # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边
           # 退出码非零 = 检测到循环或解析失败
-          cargo-workspace-analyzer -d . 2>&1 | tee workspace-analysis.txt
-          echo "exit_code=$?"
+          # -o mmd：只输出 Mermaid 文本，不依赖 Mermaid CLI（mmdc）；默认 SVG 需要 mmdc
+          cargo-workspace-analyzer -d . -o mmd 2>&1 | tee workspace-analysis.txt
           # 分析表中的 Instability 列 = FanOut/(FanIn+FanOut)；
           # 循环依赖表现为多个 crate FanOut/FanIn 互相指向；
           # 工具本身会打印循环警告
