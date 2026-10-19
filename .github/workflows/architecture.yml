@@ -107,6 +107,33 @@ jobs:
           echo "OK: xcal-render-backends 的生产依赖不含 xcal-scene"
         shell: bash
 
+      # 数学入口唯一（M0）：依赖 `xc-notion` 的 crate 不得再直接依赖 glam。
+      # 豁免（见 GAPS.md R-19）：节点图组暂未统一 —— 它们不依赖 xc-notion，
+      # 按 M0 不违规；但合成图（ComposerGraph）接入场景前必须先统一，届时删除豁免。
+      # `xc-notion` 自身是 glam 的唯一包装/再导出点。
+      - name: No direct glam outside xc-notion
+        run: |
+          cargo metadata --format-version 1 --no-deps > metadata.json
+          jq -r '
+            .packages[]
+            | select(.name | IN("xc-notion",
+                                "xcal-node-editor",
+                                "xcal-node-egui",
+                                "xcal-node-egui-ui") | not)
+            | .name as $n
+            | .dependencies[]
+            | select(.kind != "dev")
+            | select(.name == "glam")
+            | "\($n) -> glam"
+          ' metadata.json > glam-violations.txt
+          if [ -s glam-violations.txt ]; then
+            echo "依赖 xc-notion 的 crate 不得直接引 glam（数学入口唯一）："
+            cat glam-violations.txt
+            exit 1
+          fi
+          echo "OK: 除 xc-notion 与节点图组豁免外，无 crate 直接依赖 glam"
+        shell: bash
+
       - name: Workspace Analyzer (cycles + DAG)
         run: |
           # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边

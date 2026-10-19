@@ -109,8 +109,9 @@
 | R-16 | `opacity × blend` 未穷举验证 | `ARCHITECTURE.md` | 仍成立 | 测试覆盖缺口 |
 | R-17 | 3D 无深度缓冲 | `ARCHITECTURE.md` | **可清（文档已修）** | [`DEPTH_FORMAT = Depth32Float`](crates/render/xcal-render-backends/src/wgpu_3d.rs#L98) 且两个 pass 都挂深度附件 |
 | R-18 | `xc-pod-lua` / `xc-pod-py` wasm 未做 | 两个 README | 范围外 | 浏览器只回放 XSB，不运行脚本；不进 wasm gate |
+| R-19 | 节点图组直接依赖 glam（数学入口第二套）：`xcal-node-editor`(10) / `xcal-node-egui`(6) / `xcal-node-egui-ui`(1) | 节点图组 | 仍成立（不违规，记账） | 三者不依赖 `xc-notion`，按 M0 不违规；CI 已显式豁免并注明理由。**触发条件：合成图（ComposerGraph）接入场景前，必须先统一到 `xc-notion`**；此前不改代码（当前零消费方，避免为未发生的需求付代价） |
 
-**C 段小计**：可清 3（含 2 条纯文档漂移 + `Parent`）· 仍成立 13 · 范围外 1 ·
+**C 段小计**：可清 3（含 2 条纯文档漂移 + `Parent`）· 仍成立 14 · 范围外 1 ·
 排期 1（计入仍成立）。
 
 ---
@@ -123,11 +124,11 @@
 | 可清 | 10（A 1 + B 6 + C 3） |
 | 描述不准，已改写 | 1（F-01） |
 | 降格 | 1（W-05） |
-| 仍成立 | 25（A 11 + C 13 + 排期 1） |
+| 仍成立 | 26（A 11 + C 14 + 排期 1） |
 | 范围外 | 3（B 2 + C 1） |
 | 待定 | 1（统一相机 / 深度合成模型） |
 
-合计 41 条：A 14 + B 9 + C 18；G-101 是 F-02 的升格形态，不重复计数。
+共 **42 条**：A 段 14（作品）+ B 段 9（WASM 探测）+ C 段 19（README/ARCHITECTURE）；G-101 是 F-02 的升格形态，不重复计数。
 
 维护约定：
 

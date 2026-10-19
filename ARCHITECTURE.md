@@ -545,7 +545,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 |---|---|---|---|
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
-| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：**2026-10-18 实测 `*.rs` 中 189 处**（含 README 共 198 处）`glam::` 直接引用未收敛，其中 `xcal-scene` **归零**（仅剩 2 行**说明性注释**：`types.rs` 的历史沿革 + `transform.rs` 的"翻转只有一份"约定）；主要分布：`xcal-app` 73 / `xcal-render-backends` 55 / `xcal-render` 24 / 节点编辑器系列 17 / `xc-time` 7 / `xc-notion` 定义侧 6 / `xcal-egui` 5 / 场景层注释 2 | 分阶段收敛（**不新增** + 场景层已清零）；不阻塞任何功能 |
+| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`xcal-render-backends` / `xcal-app` / `xcal-scene` / `xcal-render` / `xc-time` / `xcal-egui` / `xcal-playback` 已改经 `xc-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用只在：`xc-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`xcal-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
 | 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
 | 2D / 3D 录制 System 仍是两个 | `xcal-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（632 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
