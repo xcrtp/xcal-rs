@@ -33,11 +33,12 @@ jobs:
           shared-key: native
 
       # pyo3（xcal-app 默认 feature）需要带开发头的解释器。
-      # CI 有 python3 ⇒ xtask 检测到后走默认 features，与本地降级路径不同。
-      - name: Install Python (pyo3)
+      # 单测里还有直接构造 `RenderContext::headless()` 的 GPU 像素用例；
+      # 托管 runner 无 GPU，lavapipe 提供软件 Vulkan（否则测试在 expect 处 panic）。
+      - name: Install system deps (pyo3 + lavapipe)
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-dev
+          sudo apt-get install -y python3-dev mesa-vulkan-drivers libvulkan1
         shell: bash
 
       # 以下步骤统一走 `cargo verify --step …`（命令定义单一真源）。
