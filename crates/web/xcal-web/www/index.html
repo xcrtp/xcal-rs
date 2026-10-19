@@ -34,6 +34,15 @@
     <label>上传
       <input id="xcal-file" type="file" accept=".xsb" disabled>
     </label>
+    <label>速度
+      <select id="xcal-speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+      </select>
+    </label>
     <button id="xcal-replay" type="button" disabled>重播</button>
     <a id="xcal-repo" href="https://github.com/xcrtp/xcal-rs" target="_blank" rel="noreferrer">GitHub 仓库</a>
   </div>
@@ -41,11 +50,12 @@
   <div id="xcal-status">初始化…</div>
 
   <script type="module">
-    import init, { start, start_with_bytes } from './pkg/xcal_web.js';
+    import init, { start, start_with_bytes, set_speed } from './pkg/xcal_web.js';
 
     const status = document.getElementById('xcal-status');
     const select = document.getElementById('xcal-demo');
     const fileInput = document.getElementById('xcal-file');
+    const speedSelect = document.getElementById('xcal-speed');
     const replayButton = document.getElementById('xcal-replay');
 
     // 与 Rust 侧上限一致；**Rust 仍是权威校验**（这里避免超大文件先进 wasm 内存）。
@@ -56,6 +66,10 @@
     // 重播目标：作品（按当前 URL 重新 fetch）或上传的字节（留在内存里）。
     let lastKind = 'demo';
     let lastBytes = null;
+    let wasmReady = false;
+    // compare 模式强制 1×（Rust 侧保证），禁用速度选择避免误导。
+    const isCompare = new URL(location.href).searchParams.get('compare') === '1';
+    if (isCompare) speedSelect.disabled = true;
 
     function setBusy(busy) {
       playing = busy;
@@ -137,7 +151,7 @@
       }
     });
 
-    replayButton.addEventListener('click', async () => {
+    async function restartPlayback() {
       if (playing) return;
       setBusy(true);
       status.textContent = '重播…';
@@ -153,12 +167,23 @@
       } finally {
         setBusy(false);
       }
+    }
+
+    replayButton.addEventListener('click', restartPlayback);
+
+    // 播放中：帧循环每个 rAF 读取速度，即时生效；已结束：按新速度重播。
+    speedSelect.addEventListener('change', async () => {
+      if (!wasmReady) return;
+      set_speed(Number(speedSelect.value));
+      if (!playing) await restartPlayback();
     });
 
     await loadDemos();
 
     try {
       await init();
+      wasmReady = true;
+      set_speed(Number(speedSelect.value));
       // 没有 `?xsb=` 时与列表选择保持一致：默认播放清单第一项。
       const url = new URL(location.href);
       if (!url.searchParams.get('xsb') && demos.length > 0) {

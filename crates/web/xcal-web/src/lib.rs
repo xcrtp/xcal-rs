@@ -4,7 +4,8 @@
 //! 1. canvas + WebGPU 初始化（格式取自 `surface.get_capabilities`，不硬编码）；
 //! 2. `fetch` `.xsb` → `Bundle::from_bytes` → `xcal-playback::build_bundle_runtime`；
 //! 3. rAF 驱动，**固定 dt = 1/30**（绝不用 rAF delta）；
-//! 4. 无 `navigator.gpu` ⇒ 显式提示，不白屏。
+//! 4. 无 `navigator.gpu` ⇒ 显式提示，不白屏；
+//! 5. 调速：只改变每个 rAF 推进的仿真帧数，**dt 恒为 1/30**。
 //!
 //! 显示与对拍是两套格式（S6）：
 //! - 显示：canvas surface 格式；
@@ -20,7 +21,7 @@
 //!   两者共用 [`run_with`]，忙标志保证同一时刻只有一个有限帧循环。
 #![cfg(target_arch = "wasm32")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
@@ -48,6 +49,20 @@ const MAX_BUNDLE_BYTES: usize = 32 * 1024 * 1024;
 /// 忙标志：`run()` 是**有限**帧循环（`for index in 0..frames`），不并发；
 /// 播放中拒绝第二次启动即可，不需要 generation 机制。
 static PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// 播放速度（0.1×–8×）。帧循环每个 rAF 读取一次，因此播放中可即时调速。
+/// compare 模式强制 1×（见 [`playback_speed`]），不参与调速。
+static SPEED_BITS: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+
+const MIN_SPEED: f32 = 0.1;
+const MAX_SPEED: f32 = 8.0;
+
+fn playback_speed(compare: bool) -> f32 {
+    if compare {
+        return 1.0;
+    }
+    f32::from_bits(SPEED_BITS.load(Ordering::Relaxed)).clamp(MIN_SPEED, MAX_SPEED)
+}
 
 struct PlayGuard;
 
@@ -129,6 +144,20 @@ pub async fn start_with_bytes(bytes: Vec<u8>) -> Result<(), JsValue> {
         show_error(error);
     }
     result
+}
+
+/// 设置播放速度（0.1×–8×）。播放中调用即时生效（帧循环每个 rAF 读取一次）。
+///
+/// **不改变固定 dt**：只改变每个 rAF 推进的仿真帧数（`>1×` 快进、`<1×` 慢放），
+/// compare 模式（`?compare=1`）强制 1×，不受此设置影响。
+#[wasm_bindgen]
+pub fn set_speed(speed: f32) {
+    let speed = if speed.is_finite() {
+        speed.clamp(MIN_SPEED, MAX_SPEED)
+    } else {
+        1.0
+    };
+    SPEED_BITS.store(speed.to_bits(), Ordering::Relaxed);
 }
 
 /// window / document / WebGPU 能力检测（两条入口共用）。
@@ -246,10 +275,11 @@ async fn run_with(
     set_status(
         &document,
         &format!(
-            "已加载：{} 个对象 / {:.3}s / payload {}；{}",
+            "已加载：{} 个对象 / {:.3}s / payload {} / {:.2}×；{}",
             bundle.meta().object_count,
             bundle.meta().duration,
             payload_short,
+            playback_speed(compare),
             if compare { "对拍模式" } else { "播放" }
         ),
     );
@@ -282,10 +312,35 @@ async fn run_with(
     };
     let dt = 1.0 / FPS as f32;
 
-    // ── 3. rAF 驱动，固定 dt ───────────────────────────────────────────
-    for index in 0..frames {
+    // ── 3. rAF 驱动，固定 dt；速度只改变每个 rAF 推进的仿真帧数 ─────────
+    //
+    // - 1×：每个 rAF 推进并渲染 1 帧；
+    // - >1×：每个 rAF 连续推进多帧，只渲染最后一帧（快进）；
+    // - <1×：累积到 1 才推进一帧（慢放，画面保持）。
+    // compare 模式强制 1×（`playback_speed`），帧序列与 native 基线逐位一致。
+    let mut index: u32 = 0;
+    let mut credit: f64 = 0.0;
+    let mut next_status: u32 = 0;
+
+    while index < frames {
         next_animation_frame(&window).await?;
 
+        credit += f64::from(playback_speed(compare));
+        let mut steps = credit.floor() as u32;
+        if steps == 0 {
+            continue;
+        }
+        credit -= f64::from(steps);
+        steps = steps.min(frames - index);
+
+        // 前面的步骤只推进（不渲染、不取 surface 纹理）。
+        for _ in 1..steps {
+            let _ = step_frame(&runtime, dt);
+            end_frame(&runtime);
+            index += 1;
+        }
+
+        // ── 渲染最后一步 ──
         let output = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -303,6 +358,7 @@ async fn run_with(
         let Some(callback) = step_frame(&runtime, dt) else {
             end_frame(&runtime);
             display_ctx.queue.present(output);
+            index += 1;
             continue;
         };
 
@@ -336,9 +392,14 @@ async fn run_with(
         }
 
         end_frame(&runtime);
+        index += 1;
 
-        if index % 30 == 0 {
-            set_status(&document, &format!("帧 {}/{}", index + 1, frames));
+        if index >= next_status {
+            set_status(
+                &document,
+                &format!("帧 {index}/{frames} · {:.2}×", playback_speed(compare)),
+            );
+            next_status = index.saturating_add(30);
         }
     }
 
