@@ -103,8 +103,8 @@ fn scene_pod() -> Pod {
 }
 
 fn scene_capability() -> Capability {
-    let meta = <zela_scene::pod::SceneApi<'static> as ze_pod::Capability<'static>>::meta();
-    let name = <zela_scene::pod::SceneApi<'static> as ze_pod::Capability<'static>>::signatures()
+    let meta = <zela_scene::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::meta();
+    let name = <zela_scene::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::signatures()
         .first()
         .map(|signature| signature.namespace)
         .unwrap_or("");

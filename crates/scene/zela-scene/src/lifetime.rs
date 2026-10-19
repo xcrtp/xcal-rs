@@ -23,7 +23,7 @@
 
 use std::collections::BTreeSet;
 
-use ze_pod::{FlushBatch, FlushBoundary, FlushBuffer, PodHandle, PodId, Sequenced, Sequencer};
+use ze_pod_core::{FlushBatch, FlushBoundary, FlushBuffer, PodHandle, PodId, Sequenced, Sequencer};
 use ze_scene_contract::{LifetimeTracked, ObjectId, SceneRead};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;

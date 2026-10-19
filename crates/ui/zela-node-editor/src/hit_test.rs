@@ -4,14 +4,14 @@
 //! The editor delegates every pick to a [`HitTestPolicy`] trait object. The
 //! built-in [`DefaultHitTestPolicy`] implements the standard priority
 //! (output sockets → input sockets → resize grips → cards → edges) and is
-//! data-driven by each node type's [`ze_node::NodeMeta::interaction`]
+//! data-driven by each node type's [`ze_node_core::NodeMeta::interaction`]
 //! metadata (e.g. non-resizable nodes expose no grip). Host applications can
 //! swap in a custom policy via `Editor::set_hit_policy` to add extra hit
 //! regions, change priorities or disable interactions globally — without
 //! touching the editor state machine.
 
 use glam::Vec2;
-use ze_node::{EdgeId, Graph, InputSocketId, NodeId, OutputSocketId};
+use ze_node_core::{EdgeId, Graph, InputSocketId, NodeId, OutputSocketId};
 
 use crate::edge_geom::EdgePath;
 use crate::geometry::{HitTarget, RESIZE_HIT_RADIUS, Rect, SOCKET_HIT_RADIUS};
@@ -52,7 +52,7 @@ pub trait HitTestPolicy: Send + Sync + 'static {
 /// Built-in policy: sockets first, then resize grips, then cards, then edges.
 ///
 /// Node interaction is metadata-driven: nodes whose
-/// [`ze_node::NodeInteraction`] marks `resizable = false` expose no grip.
+/// [`ze_node_core::NodeInteraction`] marks `resizable = false` expose no grip.
 /// Newest nodes (highest [`NodeId`]) win overlaps, matching draw order.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultHitTestPolicy;
@@ -179,7 +179,7 @@ pub const DEFAULT_RESIZE_HIT_RADIUS: f32 = RESIZE_HIT_RADIUS;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_node::SimpleGraph;
+    use ze_node_core::SimpleGraph;
 
     use crate::socket_layout::{DefaultSocketLayout, SocketLayout};
     use crate::test_util::TestNode;
@@ -283,7 +283,7 @@ mod tests {
         let mut h = Harness::new();
         // Node whose metadata disables resize.
         let node = TestNode::new("f32", 1, 1)
-            .with_interaction(ze_node::NodeInteraction::default().resizable(false));
+            .with_interaction(ze_node_core::NodeInteraction::default().resizable(false));
         let id = h.graph.add_node(Box::new(node));
         h.positions.insert(id, Vec2::new(0.0, 0.0));
         h.sizes.insert(id, Vec2::new(160.0, 120.0));

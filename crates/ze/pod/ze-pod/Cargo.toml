@@ -1,0 +1,13 @@
+[package]
+name = "ze-pod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "zela Pod 统一入口：核心抽象 + 绑定驱动 + capability 宏（不含 lua / py，保持 wasm32）"
+readme = "README.md"
+
+[dependencies]
+ze-pod-core = { path = "../ze-pod-core", version = "0.1.0" }
+ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.0" }
+ze-pod-macro = { path = "../ze-pod-macro", version = "0.1.0" }

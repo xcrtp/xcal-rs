@@ -154,8 +154,9 @@ jobs:
         with:
           shared-key: wasm
 
-      # kernel 组 / ZSB bundle / render-backends / playback 四组 gate 都在
-      # xtask 的 wasm step 内；每个 crate 会先打印 `== <crate> ==` 便于定位。
+      # kernel 组 / 门面（ze-pod / ze-node / zela）/ ZSB bundle /
+      # render-backends / playback 都在 xtask 的 wasm step 内；
+      # 每个 crate 会先打印 `== <crate> ==` 便于定位。
       - name: wasm gates
         run: cargo verify --step wasm
         shell: bash

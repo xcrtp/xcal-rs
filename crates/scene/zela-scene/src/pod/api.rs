@@ -14,7 +14,7 @@ use crate::pod::types::{
     Arrow, Axes2D, Camera2D, Circle, Curve, Fill, Formula, Name, Opacity, Parent, PathList,
     PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform, TransformChannel,
 };
-use ze_pod::Handle;
+use ze_pod_core::Handle;
 use ze_pod_macro::capability;
 
 /// 宿主暴露给脚本的场景装配接口。

@@ -7,7 +7,7 @@
 
 use crate::animation::target::TransformChannel as NativeTransformChannel;
 use crate::{AnimValue, Curve as NativeCurve, Interp as NativeInterp};
-use ze_pod::Handle;
+use ze_pod_core::Handle;
 use ze_pod_macro::PodType;
 
 /// 颜色（取代旧的 `rgba: u32` 打包）。
@@ -181,20 +181,20 @@ pub struct Path {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PathList(pub Vec<Path>);
 
-impl ze_pod::PodType for PathList {
-    const SPEC: &'static ze_pod::TypeSpec = <Vec<Path> as ze_pod::PodType>::SPEC;
+impl ze_pod_core::PodType for PathList {
+    const SPEC: &'static ze_pod_core::TypeSpec = <Vec<Path> as ze_pod_core::PodType>::SPEC;
 
-    fn to_pod_value(&self) -> ze_pod::PodValue {
-        <Vec<Path> as ze_pod::PodType>::to_pod_value(&self.0)
+    fn to_pod_value(&self) -> ze_pod_core::PodValue {
+        <Vec<Path> as ze_pod_core::PodType>::to_pod_value(&self.0)
     }
 
-    fn from_pod_value(value: &ze_pod::PodValue) -> Result<Self, ze_pod::PodValueError> {
-        <Vec<Path> as ze_pod::PodType>::from_pod_value(value).map(Self)
+    fn from_pod_value(value: &ze_pod_core::PodValue) -> Result<Self, ze_pod_core::PodValueError> {
+        <Vec<Path> as ze_pod_core::PodType>::from_pod_value(value).map(Self)
     }
 }
 
-impl ze_pod::IntoPodTypeName for PathList {
-    const NAME: ze_pod::PodTypeName = "Array<xcal.Path>";
+impl ze_pod_core::IntoPodTypeName for PathList {
+    const NAME: ze_pod_core::PodTypeName = "Array<xcal.Path>";
 }
 
 /// 书写组件组：`Reveal` + `StrokeSolid`（一个句柄对应多个组件）。

@@ -5922,7 +5922,7 @@ dependencies = [
 name = "ze-graph-algo"
 version = "0.1.0"
 dependencies = [
- "ze-node",
+ "ze-node-core",
 ]
 
 [[package]]
@@ -5930,7 +5930,7 @@ name = "ze-graph-eval"
 version = "0.1.0"
 dependencies = [
  "ze-graph-algo",
- "ze-node",
+ "ze-node-core",
 ]
 
 [[package]]
@@ -5944,6 +5944,16 @@ dependencies = [
 
 [[package]]
 name = "ze-node"
+version = "0.1.0"
+dependencies = [
+ "ze-graph-algo",
+ "ze-graph-eval",
+ "ze-node-core",
+ "ze-node-schema",
+]
+
+[[package]]
+name = "ze-node-core"
 version = "0.1.0"
 dependencies = [
  "derive_more",
@@ -5961,7 +5971,7 @@ dependencies = [
  "thiserror 2.0.20",
  "ze-graph-algo",
  "ze-graph-eval",
- "ze-node",
+ "ze-node-core",
  "ze-node-schema-macros",
 ]
 
@@ -5974,7 +5984,7 @@ dependencies = [
  "syn 2.0.119",
  "ze-graph-algo",
  "ze-graph-eval",
- "ze-node",
+ "ze-node-core",
  "ze-node-schema",
 ]
 
@@ -6004,6 +6014,8 @@ dependencies = [
 name = "ze-pod"
 version = "0.1.0"
 dependencies = [
+ "ze-pod-binding",
+ "ze-pod-core",
  "ze-pod-macro",
 ]
 
@@ -6011,7 +6023,14 @@ dependencies = [
 name = "ze-pod-binding"
 version = "0.1.0"
 dependencies = [
- "ze-pod",
+ "ze-pod-core",
+]
+
+[[package]]
+name = "ze-pod-core"
+version = "0.1.0"
+dependencies = [
+ "ze-pod-macro",
 ]
 
 [[package]]
@@ -6020,8 +6039,8 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "serde_json",
- "ze-pod",
  "ze-pod-binding",
+ "ze-pod-core",
  "ze-pod-macro",
 ]
 
@@ -6032,7 +6051,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "ze-pod",
+ "ze-pod-core",
 ]
 
 [[package]]
@@ -6040,8 +6059,8 @@ name = "ze-pod-py"
 version = "0.1.0"
 dependencies = [
  "pyo3",
- "ze-pod",
  "ze-pod-binding",
+ "ze-pod-core",
  "ze-pod-macro",
 ]
 
@@ -6051,8 +6070,8 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "serde_json",
- "ze-pod",
  "ze-pod-binding",
+ "ze-pod-core",
  "ze-pod-lua",
  "ze-pod-macro",
  "ze-pod-py",
@@ -6116,6 +6135,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zela"
+version = "0.1.0"
+dependencies = [
+ "ze-node",
+ "ze-pod",
+]
+
+[[package]]
 name = "zela-app"
 version = "0.1.0"
 dependencies = [
@@ -6130,8 +6157,8 @@ dependencies = [
  "ze-macro",
  "ze-notion",
  "ze-object",
- "ze-pod",
  "ze-pod-binding",
+ "ze-pod-core",
  "ze-pod-lua",
  "ze-pod-py",
  "ze-prerender",
@@ -6165,7 +6192,7 @@ dependencies = [
  "ze-macro",
  "ze-notion",
  "ze-object",
- "ze-pod",
+ "ze-pod-core",
  "zela-render",
  "zela-render-backends",
  "zela-scene",
@@ -6178,7 +6205,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "ze-pod",
+ "ze-pod-core",
  "zela-app",
  "zela-egui",
  "zela-render-backends",
@@ -6193,7 +6220,7 @@ dependencies = [
  "glam",
  "thiserror 2.0.20",
  "ze-graph-algo",
- "ze-node",
+ "ze-node-core",
 ]
 
 [[package]]
@@ -6206,7 +6233,7 @@ dependencies = [
  "tracing",
  "ze-graph-algo",
  "ze-graph-eval",
- "ze-node",
+ "ze-node-core",
  "ze-node-schema",
  "ze-node-schema-macros",
  "zela-node-editor",
@@ -6220,7 +6247,7 @@ dependencies = [
  "eframe",
  "egui",
  "glam",
- "ze-node",
+ "ze-node-core",
  "ze-node-schema",
  "zela-node-egui",
 ]
@@ -6235,7 +6262,7 @@ dependencies = [
  "wgpu",
  "ze-notion",
  "ze-object",
- "ze-pod",
+ "ze-pod-core",
  "zela-render",
  "zela-render-backends",
  "zela-scene",
@@ -6304,7 +6331,7 @@ dependencies = [
  "ze-macro",
  "ze-notion",
  "ze-object",
- "ze-pod",
+ "ze-pod-core",
  "ze-pod-macro",
  "ze-prerender",
  "ze-render-ir",

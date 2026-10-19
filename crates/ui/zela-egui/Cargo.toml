@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 zela-scene = { path = "../../scene/zela-scene" }
 # 事件订阅方（FrameProgress）实现 Pod 的 EventSink。
-ze-pod = { path = "../../pod/ze-pod" }
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。
 zela-schedule = { path = "../../schedule/zela-schedule" }
 # 仅用 2D 冻结管线（draw/components），不需要 zela-render 的 wgpu feature。

@@ -75,23 +75,25 @@ crates/
 │   ├── ze-resource         GPU 资源契约与缓存（ResourceKey / ResourceCache / GpuHandle，纯 std）
 │   ├── ze-macro            Transform2DInto 派生宏
 │
-├── pod/             # 领域无关的 Pod 层（生产依赖不含任何 zela-*）
-│   ├── ze-pod              Pod 机制（capability 协商 / 不透明句柄 / Injector / Broker）
-│   ├── ze-pod-binding      语言无关绑定驱动（BindingPlan / ValueCodec / JSON 文档）
-│   ├── ze-pod-macro        #[capability] 与 #[derive(PodType)] 过程宏
-│   ├── ze-pod-lua          Lua 适配器（mlua，解释器 vendored）：装配期脚本 → SceneScript
-│   ├── ze-pod-py           Python 适配器（pyo3，feature 门控）：装配期批量能力 + .pyi 导出
-│   └── ze-pod-tests        集成测试 + 基准（publish = false；mini pod / topic / Ord / flush）
+├── ze/              # 基础层（pod + graph；可独立发布）
+│   ├── pod/
+│   │   ├── ze-pod-core         Pod 机制（capability 协商 / 不透明句柄 / Injector / Broker）
+│   │   ├── ze-pod-binding      语言无关绑定驱动（BindingPlan / ValueCodec / JSON 文档）
+│   │   ├── ze-pod-macro        #[capability] 与 #[derive(PodType)] 过程宏
+│   │   ├── ze-pod-lua          Lua 适配器（mlua，解释器 vendored）
+│   │   ├── ze-pod-py           Python 适配器（pyo3，feature 门控）
+│   │   ├── ze-pod-tests        集成测试 + 基准（publish = false）
+│   │   └── ze-pod              门面：core + binding + macro（不含 lua / py，保持 wasm32）
+│   └── graph/
+│       ├── ze-node-core        节点图内核（Node / Graph / Socket trait + NodeInteraction）
+│       ├── ze-graph-algo       图算法（TopoSort / SCC / 脏标记传播）
+│       ├── ze-graph-eval       惰性拉取求值（LazyPullEval）
+│       ├── ze-node-schema      属性模型（Property / NodeSpec / DynamicObject / NodeRegistry）
+│       ├── ze-node-schema-macros  #[derive(NodeSpec)] 过程宏
+│       └── ze-node             门面：core + schema + algo + eval（不含 UI）
 │
 ├── object/          # 场景对象层（只依赖 kernel）
 │   └── ze-object           图元 newtype / 相机 / 变换 / 装配对象（Axes2D · FunctionGraph）
-│
-├── graph/           # 节点图契约层（禁止依赖 egui / zela-* / 领域类型）
-│   ├── ze-node             节点图内核（Node / Graph / Socket trait + NodeInteraction）
-│   ├── ze-graph-algo       图算法（TopoSort / SCC / 脏标记传播）
-│   ├── ze-graph-eval       惰性拉取求值（LazyPullEval）
-│   ├── ze-node-schema      属性模型（Property / NodeSpec / DynamicObject / NodeRegistry）
-│   └── ze-node-schema-macros  #[derive(NodeSpec)] 过程宏
 │
 ├── schedule/        # 通用 ECS 调度框架（不含任何场景/渲染概念）
 │   └── zela-schedule       Resource / System trait / 六阶段 Scheduler + Telemetry（依赖仅 hecs）
@@ -116,6 +118,9 @@ crates/
 │   ├── zela-gui          GUI 可执行壳（eframe::App）
 │   └── zela-compile      ZSB 独立编译器（脚本 → .zsb）
 │
+├── zela/            # 应用层门面
+│   └── zela               Pod + 节点图统一入口（re-export ze-pod / ze-node）
+│
 └── web/             # 浏览器层
     └── zela-web          浏览器薄壳（wasm32）：WebGPU canvas / fetch ZSB / rAF 固定 dt
 ```
@@ -125,9 +130,9 @@ crates/
 - `zela-*` crate 可依赖 `ze-*`，但不得依赖 `zela-app`
 - 装配尾只有 `zela-playback` 一份；`zela-app` / `zela-web` 调用它，
   `zela-gui` / `zela-compile` 只是壳（**`zela-app` 不依赖 `zela-egui`**）
-- 语言适配器（`ze-pod-lua` / `ze-pod-py`）属于 `crates/pod/` 的语言适配器组，**生产依赖不含任何 `zela-*`**；
+- 语言适配器（`ze-pod-lua` / `ze-pod-py`）属于 `crates/ze/pod/` 的语言适配器组，**生产依赖不含任何 `zela-*`**；
   domain 能力由 App 通过 `register_capability::<SceneApi>(..)` 注入
-- `crates/pod/` 的核心组（`ze-pod` / `ze-pod-binding` / `ze-pod-macro`）平台无关，必须过 wasm gate；
+- `crates/ze/pod/` 的核心组（`ze-pod-core` / `ze-pod-binding` / `ze-pod-macro`）平台无关，必须过 wasm gate；
   语言适配器组（mlua / pyo3）**不在** wasm gate 名单内（CI 注释已注明原因）
 
 ## Crate 一览
@@ -143,11 +148,11 @@ crates/
 | `ze-vertex` | kernel | 顶点格式契约（VertexLayout / VertexAttrib / AaModel / CacheStrategy；无 wgpu 依赖，可序列化） |
 | `ze-resource` | kernel | GPU 资源契约与缓存（GpuResourceId / GpuHandle / ResourceKey / ResourceCache / DeferredDestroyer） |
 | `ze-macro` | kernel | `Transform2DInto` 派生过程宏 |
-| `ze-pod` | pod | Pod 机制：capability 协商（typed 句柄）/ 不透明句柄 / Injector / Broker（需求校验、拓扑、环检测、注入） |
-| `ze-pod-binding` | pod | 语言无关绑定驱动：`BindingPlan` / `ValueCodec` + `invoke` / JSON 文档真源；只依赖 `ze-pod` |
-| `ze-pod-macro` | pod | `#[capability]` 与 `#[derive(PodType)]` 过程宏（`ze-pod` 保持零依赖） |
+| `ze-pod-core` | pod | Pod 机制：capability 协商（typed 句柄）/ 不透明句柄 / Injector / Broker（需求校验、拓扑、环检测、注入） |
+| `ze-pod-binding` | pod | 语言无关绑定驱动：`BindingPlan` / `ValueCodec` + `invoke` / JSON 文档真源；只依赖 `ze-pod-core` |
+| `ze-pod-macro` | pod | `#[capability]` 与 `#[derive(PodType)]` 过程宏（`ze-pod-core` 保持零依赖） |
 | `ze-object` | object | 场景对象层：图元 newtype / 相机 / 摆放 / 装配对象（`Axes2D` / `FunctionGraph`）；只依赖 kernel |
-| `ze-node` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
+| `ze-node-core` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `ze-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
 | `ze-graph-eval` | graph | 惰性拉取求值（LazyPullEval） |
 | `ze-node-schema` | graph | 属性模型（Property / NodeSpec / DynamicObject / NodeRegistry），不依赖 egui |
@@ -158,6 +163,9 @@ crates/
 | `ze-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `zela-*` |
 | `ze-pod-py` | pod（语言适配器组） | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |
 | `ze-pod-tests` | pod（测试组） | 集成测试 + 基准（`publish = false`）：mini pod、topic 扇出、逻辑时序、flush、Lua/Python 对称性 |
+| `ze-pod` | pod（门面） | 聚合 `ze-pod-core` + `ze-pod-binding` + `ze-pod-macro`；不含 lua / py，保持 wasm32 |
+| `ze-node` | graph（门面） | 聚合 `ze-node-core` + `ze-node-schema` + `ze-graph-algo` + `ze-graph-eval`；不含 UI |
+| `zela` | zela（门面） | 聚合 `ze-pod` + `ze-node`，作为基础层统一入口 |
 | `zela-render` | render | 2D/3D 渲染抽象（Painter / DrawQueue / Shape2D / RenderLayer / Viewport）+ 录制 System |
 | `zela-render-backends` | render | wgpu / egui-wgpu 具体后端（WgpuBackend3D / WgpuBackend2D / Compositor / SceneCompositorCallback） |
 | `zela-egui` | ui | egui 适配层：输入翻译 / 面板 chrome / 写 `ViewRect` / 内容提交（**不含任何场景 System**） |
@@ -223,7 +231,7 @@ Lua / Python 脚本
   → Injector 注入的 SceneApi / ContentApi（typed capability）
   → SceneScript（对象 + Binding / ClockForest 描述）
   → zela-app::assembly（静态插件清单）
-  → ze_pod::Broker（需求校验 / 拓扑排序 / 环检测 / 注入）
+  → ze_pod_core::Broker（需求校验 / 拓扑排序 / 环检测 / 注入）
   → Scene + BindingTable + ClockForest
 ```
 
@@ -266,3 +274,13 @@ cargo run -p zela-app --example export_frames
 cargo test --workspace
 cargo doc --no-deps -p zela-scene -p zela-render
 ```
+
+## 许可
+
+本项目以 **MIT OR Apache-2.0** 双许可发布；全文见
+[LICENSE-MIT](LICENSE-MIT) 与 [LICENSE-APACHE](LICENSE-APACHE)。
+
+可独立发布的 crate：`ze-pod-core`、`ze-pod-binding`、`ze-pod-macro`、
+`ze-pod-lua`、`ze-pod-py`、`ze-pod`、`ze-node-core`、`ze-node-schema`、
+`ze-node-schema-macros`、`ze-graph-algo`、`ze-graph-eval`、`ze-node`、`zela`。
+`ze-pod-tests` 为内部测试 crate（`publish = false`）。

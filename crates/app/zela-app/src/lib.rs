@@ -168,7 +168,7 @@ pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<Compiled
 }
 
 /// 单个 capability 的版本声明（名字取自签名，唯一真源）。
-fn capability_of<C: ze_pod::Capability<'static>>() -> zela_scene_bundle::Capability {
+fn capability_of<C: ze_pod_core::Capability<'static>>() -> zela_scene_bundle::Capability {
     let meta = C::meta();
     let name = C::signatures()
         .first()

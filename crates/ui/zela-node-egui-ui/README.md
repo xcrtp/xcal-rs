@@ -200,7 +200,7 @@ fn main() {
 ## 依赖
 
 ```toml
-ze-node        = { path = "../ze-node" }
+ze-node-core        = { path = "../ze-node-core" }
 ze-node-schema     = { path = "../ze-node-schema" }
 zela-node-egui   = { path = "../zela-node-egui" }
 egui             = "0.36"

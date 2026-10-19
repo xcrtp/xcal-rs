@@ -6,8 +6,8 @@ license.workspace = true
 description = "egui widget mappings for ze-node-schema property nodes (draw_property / PropertyNodeView / spawn menu)"
 
 [dependencies]
-ze-node = { path = "../../graph/ze-node" }
-ze-node-schema = { path = "../../graph/ze-node-schema" }
+ze-node-core = { path = "../../ze/graph/ze-node-core" }
+ze-node-schema = { path = "../../ze/graph/ze-node-schema" }
 zela-node-egui = { path = "../zela-node-egui" }
 egui = { workspace = true }
 glam = { workspace = true }

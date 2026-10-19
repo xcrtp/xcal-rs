@@ -1,6 +1,6 @@
 # zela-node-editor
 
-> **纯逻辑节点编辑器状态机**。位于领域模型（ze-node）与任何 UI 层之间。
+> **纯逻辑节点编辑器状态机**。位于领域模型（ze-node-core）与任何 UI 层之间。
 >
 > **硬约束**：**绝不引入 egui / eframe，绝不依赖 zela-scene/zela-render**。
 > 保证可被 CLI、WASM、移动端等非 egui 前端复用。
@@ -9,7 +9,7 @@
 > 不关心 pan/zoom（那是 UI 层 canvas 的事）。
 
 ```
-ze-node + ze-graph-algo
+ze-node-core + ze-graph-algo
           │
           ▼
    zela-node-editor  ← 本 crate (Editor / Command / Undo / Validation)
@@ -204,7 +204,7 @@ let path: EdgePath = geom.build(
 ## 依赖
 
 ```toml
-ze-node       = { path = "../ze-node" }
+ze-node-core       = { path = "../ze-node-core" }
 ze-graph-algo = { path = "../ze-graph-algo" }
 glam            = "0.33"
 thiserror       = "2.0"

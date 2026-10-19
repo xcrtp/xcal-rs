@@ -1,0 +1,12 @@
+[package]
+name = "zela"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "zela 统一入口：Pod 层 + 节点图基础层（ze-pod + ze-node）"
+readme = "README.md"
+
+[dependencies]
+ze-pod = { path = "../../ze/pod/ze-pod", version = "0.1.0" }
+ze-node = { path = "../../ze/graph/ze-node", version = "0.1.0" }

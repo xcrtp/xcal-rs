@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 
 use egui::Color32;
 use glam::Vec2;
-use ze_node::Node;
+use ze_node_core::Node;
 
 /// How a node type is presented as a card.
 pub trait NodeView: Send + Sync + 'static {

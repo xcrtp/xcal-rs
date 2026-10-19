@@ -6,7 +6,7 @@
 > 本 crate 不依赖 `zela-scene / zela-render / zela-app`，可独立于主应用使用。
 
 ```
-ze-node  ──►  zela-node-editor  ──►  zela-node-egui  ← 本 crate
+ze-node-core  ──►  zela-node-editor  ──►  zela-node-egui  ← 本 crate
                     (Editor)              │
                                           ├ NodeView trait（卡片外观）
                                           ├ GraphPainter （整图画线/画卡片）
@@ -161,7 +161,7 @@ impl<V, E> eframe::App for NodeGraphApp<V, E> { ... }
 ## 依赖
 
 ```toml
-ze-node        = { path = "../ze-node" }
+ze-node-core        = { path = "../ze-node-core" }
 zela-node-editor = { path = "../zela-node-editor" }
 egui             = "0.36"
 glam             = "0.33"

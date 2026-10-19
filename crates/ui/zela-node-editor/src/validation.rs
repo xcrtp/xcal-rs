@@ -6,7 +6,7 @@
 //! would otherwise reject the trial) are detached and restored afterwards.
 
 use ze_graph_algo::TarjanSccDetector;
-use ze_node::{
+use ze_node_core::{
     ConnectError, CycleDetector, EdgeData, Graph, InputSocketId, OutputSocketId, UnitEdge,
 };
 
@@ -16,7 +16,7 @@ pub struct ConnectionValidator;
 
 impl ConnectionValidator {
     /// Check that the output's type tag can feed the input's tag, using the
-    /// graph's authoritative [`ze_node::TypeCast`].
+    /// graph's authoritative [`ze_node_core::TypeCast`].
     pub fn check_types(
         graph: &dyn Graph,
         from: OutputSocketId,

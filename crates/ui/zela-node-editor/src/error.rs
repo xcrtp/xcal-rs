@@ -1,6 +1,6 @@
 //! Editor-level errors.
 
-use ze_node::{ConnectError, NodeId};
+use ze_node_core::{ConnectError, NodeId};
 
 /// Failures returned by [`crate::Editor::apply`] and friends.
 #[derive(Debug, thiserror::Error)]

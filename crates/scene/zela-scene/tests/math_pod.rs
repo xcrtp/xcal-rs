@@ -1,4 +1,4 @@
-//! A 线验收：`ze-pod` 的生产消费方（`zela_scene::math_pod`）。
+//! A 线验收：`ze-pod-core` 的生产消费方（`zela_scene::math_pod`）。
 //!
 //! 1. 7 个内置函数全部可从 Pod 取到，且与 `ze_notion::builtin_f32` **逐位一致**；
 //! 2. 适配器产物 `Send + Sync`、可深 Clone；
@@ -12,7 +12,7 @@ use zela_scene::math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 use zela_scene::{deserialize_components, serialize_components};
 use ze_notion::{FunctionX2Y, Sampler1D};
 use ze_object::FunctionGraph;
-use ze_pod::RegistryPod;
+use ze_pod_core::RegistryPod;
 
 const NAMES: [&str; 7] = [
     "xcal.math.sin",

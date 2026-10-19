@@ -11,10 +11,10 @@ ze-notion = { path = "../../kernel/ze-notion" }
 # 场景对象层（图元 newtype）：组件词汇由对象层定义，本层（ECS 实现）只消费。
 ze-object = { path = "../../object/ze-object" }
 # Pod（A 线）：内置数学函数以 `RegistryPod` 为唯一来源 —— zela-scene 是
-# `ze-pod` 的**第一个生产消费方**（`math_pod` 模块）。ze-notion 仍不依赖 ze-pod。
-ze-pod = { path = "../../pod/ze-pod" }
+# `ze-pod-core` 的**第一个生产消费方**（`math_pod` 模块）。ze-notion 仍不依赖 ze-pod-core。
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # `TargetKind` 的 schema：target 枚举是持久化表与脚本绑定的**唯一真源**。
-ze-pod-macro = { path = "../../pod/ze-pod-macro" }
+ze-pod-macro = { path = "../../ze/pod/ze-pod-macro" }
 # 渲染 IR（样式组件）：ECS 里存的 `StrokeSolid` / `FillSolid` 组件来自此处。
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # 契约层（M3-7/M3-8）：本层为 `ze_scene_contract::Scene` 提供 hecs 实现，

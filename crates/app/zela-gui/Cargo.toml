@@ -18,7 +18,7 @@ zela-egui = { path = "../../ui/zela-egui" }
 zela-scene = { path = "../../scene/zela-scene" }
 zela-render-backends = { path = "../../render/zela-render-backends", features = ["egui-wgpu", "eframe"] }
 zela-schedule = { path = "../../schedule/zela-schedule" }
-ze-pod = { path = "../../pod/ze-pod" }
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 
 eframe.workspace = true
 egui.workspace = true

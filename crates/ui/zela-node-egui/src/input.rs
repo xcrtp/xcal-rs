@@ -8,12 +8,12 @@
 //! - release: finish or cancel the pending connection
 //!
 //! Which interactions a node accepts comes from its
-//! [`ze_node::NodeMeta::interaction`] metadata (non-draggable cards ignore
+//! [`ze_node_core::NodeMeta::interaction`] metadata (non-draggable cards ignore
 //! header drags, non-resizable cards expose no grip); the hit policy itself
 //! is pluggable via `Editor::set_hit_policy`.
 
 use glam::Vec2;
-use ze_node::{EdgeId, NodeId};
+use ze_node_core::{EdgeId, NodeId};
 use zela_node_editor::{Command, Editor, EditorError, HitTarget};
 
 use crate::canvas::GraphCanvas;

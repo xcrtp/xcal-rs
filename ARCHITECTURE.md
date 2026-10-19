@@ -9,15 +9,16 @@
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
 | kernel | `crates/kernel/` | `ze-` | 纯计算/数据内核（无 egui、无渲染；含通用能力领域，如几何、排版）|
-| pod    | `crates/pod/`    | `ze-` | **领域无关的 Pod 层**：核心组 `ze-pod` / `ze-pod-binding` / `ze-pod-macro`（平台无关，必须过 wasm gate）+ 语言适配器组 `ze-pod-lua` / `ze-pod-py`（按 mlua / pyo3 属平台相关，**不进** wasm gate）+ 测试组 `ze-pod-tests`（`publish = false`，只服务集成测试 / 基准）。全部生产依赖**均不含任何 `zela-*`**；domain 能力由 App 注入 |
+| pod    | `crates/ze/pod/`    | `ze-` | **领域无关的 Pod 层**：核心组 `ze-pod-core` / `ze-pod-binding` / `ze-pod-macro`（平台无关，必须过 wasm gate）+ 门面 `ze-pod`（只聚合核心组，不含 lua / py）+ 语言适配器组 `ze-pod-lua` / `ze-pod-py`（按 mlua / pyo3 属平台相关，**不进** wasm gate）+ 测试组 `ze-pod-tests`（`publish = false`，只服务集成测试 / 基准）。全部生产依赖**均不含任何 `zela-*`**；domain 能力由 App 注入 |
 | object | `crates/object/` | `ze-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
-| graph  | `crates/graph/`  | `ze-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
+| graph  | `crates/ze/graph/`  | `ze-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）+ 门面 `ze-node`（聚合 core + schema + algo + eval，不含 UI）|
 | schedule | `crates/schedule/` | `zela-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
 | scene  | `crates/scene/` | `zela-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 + Pod domain（`SceneApi` / `ContentApi`）|
-| script | ~~`crates/script/`~~ | — | 已并入 `crates/pod/` 的语言适配器组（本轮迁移，`crates/script/` 目录消失） |
+| script | ~~`crates/script/`~~ | — | 已并入 `crates/ze/pod/` 的语言适配器组（本轮迁移，`crates/script/` 目录消失） |
 | render | `crates/render/` | `zela-` | 渲染抽象（trait / 队列 / 三角化）+ 具体后端 |
 | ui     | `crates/ui/`     | `zela-` | egui 前端 + 编辑器 |
 | app    | `crates/app/`    | `zela-` | 组装 / 可执行 |
+| zela   | `crates/zela/`   | `zela` | 应用层门面：聚合 `ze-pod` + `ze-node`（真实 re-export，不是空壳） |
 
 ## 依赖图
 
@@ -39,8 +40,8 @@ graph TD
         ze_macro["ze-macro"]
     end
 
-    subgraph pod[crates/pod]
-        ze_pod["ze-pod（核心组）"]
+    subgraph pod[crates/ze/pod]
+        ze_pod_core["ze-pod-core（核心组）"]
         ze_pod_binding["ze-pod-binding（核心组）"]
         ze_pod_macro["ze-pod-macro（核心组）"]
         ze_pod_lua["ze-pod-lua（语言适配器组）"]
@@ -52,8 +53,8 @@ graph TD
         ze_object["ze-object"]
     end
 
-    subgraph graph[crates/graph]
-        ze_node["ze-node"]
+    subgraph graph[crates/ze/graph]
+        ze_node_core["ze-node-core"]
         ze_graph_algo["ze-graph-algo"]
         ze_graph_eval["ze-graph-eval"]
         ze_node_schema["ze-node-schema"]
@@ -98,13 +99,13 @@ graph TD
     ze_time --> ze_notion
 
     %% pod：核心组 + 语言适配器组（生产边不含任何 zela-*）
-    ze_pod_binding --> ze_pod
-    ze_pod_py --> ze_pod
+    ze_pod_binding --> ze_pod_core
+    ze_pod_py --> ze_pod_core
     ze_pod_py --> ze_pod_binding
     ze_pod_py --> ze_pod_macro
-    ze_pod_lua --> ze_pod
+    ze_pod_lua --> ze_pod_core
     ze_pod_lua --> ze_pod_binding
-    ze_pod_tests --> ze_pod
+    ze_pod_tests --> ze_pod_core
     ze_pod_tests --> ze_pod_binding
     ze_pod_tests --> ze_pod_macro
     ze_pod_tests --> ze_pod_lua
@@ -117,9 +118,9 @@ graph TD
     ze_object --> ze_macro
 
     %% graph → kernel
-    ze_graph_algo --> ze_node
-    ze_graph_eval --> ze_node
-    ze_node_schema --> ze_node
+    ze_graph_algo --> ze_node_core
+    ze_graph_eval --> ze_node_core
+    ze_node_schema --> ze_node_core
     ze_node_schema --> ze_node_schema_macros
 
     %% schedule（无内部依赖，仅依赖 hecs）
@@ -130,7 +131,7 @@ graph TD
     zela_scene --> ze_macro
     zela_scene --> ze_content
     zela_scene --> ze_prerender
-    zela_scene --> ze_pod
+    zela_scene --> ze_pod_core
     zela_scene --> ze_pod_macro
     zela_scene --> ze_object
     zela_scene --> ze_render_ir
@@ -157,21 +158,21 @@ graph TD
     zela_egui --> ze_notion
     zela_egui --> ze_macro
     zela_egui --> ze_object
-    zela_egui --> ze_pod
+    zela_egui --> ze_pod_core
     zela_egui --> zela_scene
     zela_egui --> zela_schedule
     zela_egui --> zela_render
     zela_egui --> zela_render_backends
-    zela_node_editor --> ze_node
+    zela_node_editor --> ze_node_core
     zela_node_editor --> ze_graph_algo
-    zela_node_egui --> ze_node
+    zela_node_egui --> ze_node_core
     zela_node_egui --> zela_node_editor
-    zela_node_egui_ui --> ze_node
+    zela_node_egui_ui --> ze_node_core
     zela_node_egui_ui --> ze_node_schema
     zela_node_egui_ui --> zela_node_egui
 
     %% GUI 壳 → app + ui（S0：UI 不再由 app 依赖）
-    zela_gui --> ze_pod
+    zela_gui --> ze_pod_core
     zela_gui --> zela_app
     zela_gui --> zela_egui
     zela_gui --> zela_render_backends
@@ -189,7 +190,7 @@ graph TD
     zela_app --> ze_prerender
     zela_app --> ze_notion
     zela_app --> ze_object
-    zela_app --> ze_pod
+    zela_app --> ze_pod_core
     zela_app --> ze_pod_binding
     zela_app --> ze_pod_lua
     zela_app --> ze_pod_py
@@ -205,13 +206,13 @@ graph TD
 |---|---|---|
 | NoReverseDependency | ✅ 通过 | 无 ze-* → zela-* / egui / wgpu 生产依赖 |
 | NoAppDependency | ✅ 通过 | 无 zela-* crate 依赖 zela-app |
-| NoGraphDomainTypes | ✅ 通过 | crates/graph 无领域类型引用 |
-| NoPodDomainDependency | ✅ 通过 | `crates/pod` 全部 5 个 crate 的生产依赖不含任何 `zela-*`（含两个语言适配器）；domain 由 App 注入 |
+| NoGraphDomainTypes | ✅ 通过 | crates/ze/graph 无领域类型引用 |
+| NoPodDomainDependency | ✅ 通过 | `crates/ze/pod` 全部 5 个 crate 的生产依赖不含任何 `zela-*`（含两个语言适配器）；domain 由 App 注入 |
 | NoCycles | ✅ 通过 | 生产依赖为 DAG（dev-deps 不计入） |
 
 **依赖分析（2026-10-18 按 `cargo metadata` 等价重算，仅生产依赖、dev-deps 不计；见文末说明）：**
 
-> 本次复核把脚本层、`ze-pod` 家族与 ZSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
+> 本次复核把脚本层、`ze-pod-core` 家族与 ZSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
 > 零缺零余；FanIn/FanOut 共 **33 行**。
 > 此前的 W2 复核（8 条漏边修复）仍有效，本表是在其基础上的全量重算。
 >
@@ -246,10 +247,10 @@ graph TD
 | ze-pod-binding | 4 | 1 | 0.20 |
 | ze-render-ir | 5 | 1 | 0.17 |
 | ze-macro | 4 | 0 | 0.00 |
-| ze-node | 6 | 0 | 0.00 |
+| ze-node-core | 6 | 0 | 0.00 |
 | ze-node-schema-macros | 1 | 0 | 0.00 |
 | ze-notion | 11 | 0 | 0.00 |
-| ze-pod | 8 | 0 | 0.00 |
+| ze-pod-core | 8 | 0 | 0.00 |
 | ze-pod-macro | 3 | 0 | 0.00 |
 | ze-resource | 1 | 0 | 0.00 |
 | ze-vertex | 1 | 0 | 0.00 |
@@ -300,7 +301,7 @@ GUI 用墙钟算 `dt`，导出用固定 `dt = 1/fps`；场景、系统图、渲�
   `push_immediate` 是逃生舱，不保证顺序。
 - **寻址**：`PodHandle`（`PodType` = `u64`）标识 Pod 本身；资源 `Handle` 带 owner，
   不得用于寻址。
-- **自证**：`crates/pod/ze-pod-tests`（`publish = false`）提供 mini pod、
+- **自证**：`crates/ze/pod/ze-pod-tests`（`publish = false`）提供 mini pod、
   集成断言与基准；不被任何生产 crate 依赖。
 
 ### 调度流水线
@@ -546,7 +547,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 | `ObjectId` generation 失效检测 | 契约层 `ze_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `ze-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
 | `ze-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`zela-render-backends` / `zela-app` / `zela-scene` / `zela-render` / `ze-time` / `zela-egui` / `zela-playback` 已改经 `ze-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用共 **25 次**（`*.rs` 出现次数口径）：`ze-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`zela-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
-| 节点编辑器（`zela-node-editor` / `zela-node-egui` / `zela-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
+| 节点编辑器（`zela-node-editor` / `zela-node-egui` / `zela-node-egui-ui`） | `crates/ui/*` + `crates/ze/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
 | 2D / 3D 录制 System 仍是两个 | `zela-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（632 行，约一半测试） | `crates/app/zela-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`ze-content` / `zela-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/zela-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
@@ -579,18 +580,18 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 函数侧走的是另一套（两步走：序列化写 name，反序列化由 Pod / registry 反查），
 > 两套口径的差异是真实取舍，记账于此。
 >
-> **脚本 Pod（2026-10-17，C3 消费；D 线后归位到 `crates/pod/ze-pod-lua`）**：
-> 它是 `ze-pod` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
+> **脚本 Pod（2026-10-17，C3 消费；D 线后归位到 `crates/ze/pod/ze-pod-lua`）**：
+> 它是 `ze-pod-core` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
 > `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
 > 经 erased `Pod::call("xcal.script::run")`），**不参与每帧采样**。
-> 依赖图 / FanIn-FanOut 表**已包含** `ze-pod` / `ze-pod-macro` / `ze-pod-binding` /
+> 依赖图 / FanIn-FanOut 表**已包含** `ze-pod-core` / `ze-pod-macro` / `ze-pod-binding` /
 > `ze-pod-lua` / `ze-pod-py`（2026-10-18 按 `cargo metadata` 口径重算，见文末备注）。
-> 实际边：`zela-scene → ze-pod / ze-pod-macro`（`math_pod`）、
-> `ze-pod-lua → ze-pod / ze-pod-binding / mlua`、`ze-pod-py → ze-pod / ze-pod-binding /
-> ze-pod-macro / pyo3`；`zela-app → ze-pod / ze-pod-binding / ze-pod-lua / ze-pod-py`；
+> 实际边：`zela-scene → ze-pod-core / ze-pod-macro`（`math_pod`）、
+> `ze-pod-lua → ze-pod-core / ze-pod-binding / mlua`、`ze-pod-py → ze-pod-core / ze-pod-binding /
+> ze-pod-macro / pyo3`；`zela-app → ze-pod-core / ze-pod-binding / ze-pod-lua / ze-pod-py`；
 > **两条语言边都不含 `zela-*`**。
 >
-> **Pod 类型系统与绑定生成（2026-10-17，V 线）**：`ze-pod` 从"字符串签名"升级为
+> **Pod 类型系统与绑定生成（2026-10-17，V 线）**：`ze-pod-core` 从"字符串签名"升级为
 > **类型描述 IDL**：
 > - `typespec.rs`：`TypeSpec`（Scalar / Struct / Enum / Array / Opaque）+ `ParamSpec`
 >   （**形参名进 schema**）+ `ErasedFn`（绑定入口）；仍然零依赖、过 wasm gate；
@@ -615,17 +616,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （占位引擎：25 对象 / 9 绑定）。`storyboard.rs` 保留为**参考实现**（默认启动路径仍在用），
 >   是否删除由用户决定；
 > - **W4**：删除 `spawn` 的 `ComponentList` 字符串 override（`Vec<Handle>` 自带 schema 名
->   `Array<ze_pod.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
+>   `Array<ze_pod_core.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
 >
 > **Pod 解耦与 Broker（2026-10-17，B 线）**：
-> - **B1 语言无关绑定层**：新增 kernel crate `ze-pod-binding`（只依赖 `ze-pod`，可进 wasm gate）。
+> - **B1 语言无关绑定层**：新增 kernel crate `ze-pod-binding`（只依赖 `ze-pod-core`，可进 wasm gate）。
 >   它持有 `BindingPlan` / `ValueCodec` / `invoke` / JSON 文档；Lua 适配器只实现 `LuaCodec`。
 >   `ze-pod-binding` 中不出现任何语言运行时类型；
 > - **B2 domain 与解释器分居**：`SceneApi` / `ContentApi` / 类型词汇 / `SceneServicePod` /
 >   `ContentServicePod` / `PathStore` 全部搬到 `zela-scene::script`（**D 线后改名
 >   `zela-scene::pod`**）；Lua 适配器只留 Lua codec（**D 线后 `zela-script` 整个删除**）。
->   `grep SceneServicePod crates/pod/ze-pod-lua/src/` = 0；
-> - **B3 Broker**：`ze-pod::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
+>   `grep SceneServicePod crates/ze/pod/ze-pod-lua/src/` = 0；
+> - **B3 Broker**：`ze-pod-core::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
 >   依赖边 = `requires.service → provides`；`A → B → A` 在注入前即报 `BrokerError::Cycle`
 >   （含参与链），不会构造 `Arc` 互持。每次装配打印一次报告（顺序 / 边 / 注入 / optional 缺失）；
 > - **B4 Python（feature 门控）**：`ze-pod-py`（B4 时名 `zela-py`）用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
@@ -636,14 +637,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > **Pod 层彻底解耦（2026-10-17，D 线）**：
 > - **`zela-script` 删除**：`ScriptHost` 整个消失（`grep -r ScriptHost crates/` = 0）；
->   语言适配器拆为 `crates/pod/ze-pod-lua` 与 `crates/pod/ze-pod-py`，
+>   语言适配器拆为 `crates/ze/pod/ze-pod-lua` 与 `crates/ze/pod/ze-pod-py`，
 >   两者**互不依赖**，生产边**不含任何 `zela-*`**（`cargo tree -p ...` 实测）；
 > - **domain 归位**：`zela-scene::script` → **`zela-scene::pod`**。内容服务带来的
 >   `zela-scene → ze-prerender` 依赖仍在（记账：若将来 scene 要进 wasm，这条会先挡路）；
 > - **Broker 补 `run` / `run_with`**：在已装配的图上取节点 → `Pod::call` → downcast，
 >   承担原 `ScriptHost::run` 的职责；错误通道为 `UnknownNode` / `BadEntry` /
 >   `UnknownEntry` / `Run` / `BadOutput`；
-> - **D3 描述层 / 执行层分离**：`ze-pod::AssemblyPlan` / `NodeSpec` 是**纯数据**
+> - **D3 描述层 / 执行层分离**：`ze-pod-core::AssemblyPlan` / `NodeSpec` 是**纯数据**
 >   （拓扑 / 环 / optional 缺失可在不建 Pod 时单测）；App 的 `src/assembly.rs`
 >   声明静态插件清单，Broker 消费它完成校验 / 排序 / 注入，并在 debug 下断言
 >   "描述层 == 执行层"；
@@ -669,11 +670,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > **备注（2026-10-18，脚本层与 Pod 入图）**：按 `cargo metadata`（仅生产依赖，
 > `kind != dev`）全量重算，内部依赖边 **59 → 73（+14）**：
-> - 新增 `ze-pod-binding → ze-pod`；`ze-pod-lua → ze-pod / ze-pod-binding`；
->   `ze-pod-py → ze-pod / ze-pod-binding / ze-pod-macro`；
-> - 补齐 `zela-scene → ze-content / ze-prerender / ze-pod / ze-pod-macro`；
-> - 补齐 `zela-app → ze-pod / ze-pod-binding / ze-pod-lua / ze-pod-py`；
-> - FanIn/FanOut 表由 24 行扩为 **29 行**（新增 `ze-pod` 5/0、`ze-pod-macro` 2/0、
+> - 新增 `ze-pod-binding → ze-pod-core`；`ze-pod-lua → ze-pod-core / ze-pod-binding`；
+>   `ze-pod-py → ze-pod-core / ze-pod-binding / ze-pod-macro`；
+> - 补齐 `zela-scene → ze-content / ze-prerender / ze-pod-core / ze-pod-macro`；
+> - 补齐 `zela-app → ze-pod-core / ze-pod-binding / ze-pod-lua / ze-pod-py`；
+> - FanIn/FanOut 表由 24 行扩为 **29 行**（新增 `ze-pod-core` 5/0、`ze-pod-macro` 2/0、
 >   `ze-pod-binding` 3/1、`ze-pod-lua` 1/2、`ze-pod-py` 1/3；`ze-notion` FanIn 11、
 >   `zela-scene` FanOut 11、`zela-app` FanOut 14）；
 > - 程序化比对结果：mermaid **73 条 ⇔ Cargo.toml 73 条**，零缺零余。
@@ -697,8 +698,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > 备注（2026-10-15）：依赖图与 `workspace-analyzer.mmd` 按同一 `cargo metadata` 口径
 > 手工补齐（工具仍不可用），合计补 9 条边：
-> - 本文件图区：修正 `zela_node_egui → ze_node`、`zela_node_egui_ui → ze_node_schema`
->   两处前缀笔误，并补 `ze-node-schema → ze-node` / `→ ze-node-schema-macros`（2 条）；
+> - 本文件图区：修正 `zela_node_egui → ze_node_core`、`zela_node_egui_ui → ze_node_schema`
+>   两处前缀笔误，并补 `ze-node-schema → ze-node-core` / `→ ze-node-schema-macros`（2 条）；
 > - `workspace-analyzer.mmd`：补 `ze-prerender → ze-content` / `→ ze-notion`、
 >   `ze-time → ze-notion`、`zela-app → ze-content` / `→ ze-notion` / `→ ze-prerender`、
 >   `zela-render → ze-content`（7 条，29 → 36）。

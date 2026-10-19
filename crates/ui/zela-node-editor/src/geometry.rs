@@ -6,7 +6,7 @@
 
 pub use glam::Vec2;
 
-use ze_node::{EdgeId, InputSocketId, NodeId, OutputSocketId};
+use ze_node_core::{EdgeId, InputSocketId, NodeId, OutputSocketId};
 
 /// Axis-aligned rectangle in graph local coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]

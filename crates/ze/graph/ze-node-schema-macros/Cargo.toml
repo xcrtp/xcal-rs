@@ -1,0 +1,21 @@
+[package]
+name = "ze-node-schema-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proc-macro support for ze-node-schema: #[derive(NodeSpec)] + #[property]."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[dev-dependencies]
+ze-node-schema = { path = "../ze-node-schema" }
+ze-node-core = { path = "../ze-node-core" }
+ze-graph-eval = { path = "../ze-graph-eval" }
+ze-graph-algo = { path = "../ze-graph-algo" }

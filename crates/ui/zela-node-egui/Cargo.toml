@@ -7,7 +7,7 @@ description = "egui rendering and interaction layer for zela-node-editor"
 
 [dependencies]
 zela-node-editor = { path = "../zela-node-editor" }
-ze-node = { path = "../../graph/ze-node" }
+ze-node-core = { path = "../../ze/graph/ze-node-core" }
 egui = { workspace = true }
 glam = { workspace = true }
 # 交互失败不能静默（delete / connect / move 被拒绝时给出诊断）。
@@ -15,10 +15,10 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 eframe = { workspace = true, features = ["default_fonts"] }
-ze-node = { path = "../../graph/ze-node" }
-ze-node-schema = { path = "../../graph/ze-node-schema" }
-ze-node-schema-macros = { path = "../../graph/ze-node-schema-macros" }
+ze-node-core = { path = "../../ze/graph/ze-node-core" }
+ze-node-schema = { path = "../../ze/graph/ze-node-schema" }
+ze-node-schema-macros = { path = "../../ze/graph/ze-node-schema-macros" }
 zela-node-egui-ui = { path = "../zela-node-egui-ui" }
-ze-graph-eval = { path = "../../graph/ze-graph-eval" }
-ze-graph-algo = { path = "../../graph/ze-graph-algo" }
+ze-graph-eval = { path = "../../ze/graph/ze-graph-eval" }
+ze-graph-algo = { path = "../../ze/graph/ze-graph-algo" }
 glam = { workspace = true }

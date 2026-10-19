@@ -22,7 +22,7 @@ use ze_object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Circle as NativeCircle, Framing2D,
     Path as NativePath, TickSpec, Transform as NativeTransform,
 };
-use ze_pod::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
+use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use ze_render_ir::{FillSolid, MeasureSpace, Opacity as NativeOpacity, StrokeSolid};
 use ze_scene_contract::{Components, Name as NativeName, Parent as NativeParent};
 
@@ -154,31 +154,31 @@ impl SceneServicePod {
         registry.register_fn1_named::<Circle, Handle>(
             "xcal.scene::circle",
             "xcal.Circle",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_circle,
         );
         registry.register_fn1_named::<Stroke, Handle>(
             "xcal.scene::stroke",
             "xcal.Stroke",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_stroke,
         );
         registry.register_fn1_named::<Camera2D, Handle>(
             "xcal.scene::camera2d",
             "xcal.Camera2D",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_camera2d,
         );
         registry.register_fn1_named::<Reveal, Handle>(
             "xcal.scene::reveal",
             "xcal.Reveal",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_reveal,
         );
         registry.register_fn1_named::<Polyline, Handle>(
             "xcal.scene::polyline",
             "xcal.Polyline",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_polyline,
         );
         registry.register_fn1::<Parent, Handle>("xcal.scene::parent", scene_parent);
@@ -187,37 +187,37 @@ impl SceneServicePod {
         registry.register_fn1_named::<Axes2D, Handle>(
             "xcal.scene::axes2d",
             "xcal.Axes2D",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_axes2d,
         );
         registry.register_fn1_named::<Arrow, Handle>(
             "xcal.scene::arrow",
             "xcal.Arrow",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_arrow,
         );
         registry.register_fn1_named::<Fill, Handle>(
             "xcal.scene::fill",
             "xcal.Fill",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_fill,
         );
         registry.register_fn1_named::<Transform, Handle>(
             "xcal.scene::transform",
             "xcal.Transform",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_transform,
         );
         registry.register_fn1_named::<RevealPath, Handle>(
             "xcal.scene::reveal_path",
             "xcal.RevealPath",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_reveal_path,
         );
         registry.register_fn1_named::<PathShape, Handle>(
             "xcal.scene::path_shape",
             "xcal.PathShape",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
             scene_path_shape,
         );
 
@@ -233,8 +233,8 @@ impl SceneServicePod {
         );
         registry.register_fn3_named::<Handle, Handle, f64, ()>(
             "xcal.scene::animate",
-            "ze_pod.Handle",
-            "ze_pod.Handle",
+            "ze_pod_core.Handle",
+            "ze_pod_core.Handle",
             "f64",
             "()",
             scene_animate,

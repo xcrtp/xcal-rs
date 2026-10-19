@@ -9,21 +9,23 @@ members = [
     "crates/kernel/ze-vertex",
     "crates/kernel/ze-resource",
     "crates/kernel/ze-macro",
-    "crates/pod/ze-pod",
-    "crates/pod/ze-pod-binding",
-    "crates/pod/ze-pod-macro",
+    "crates/ze/pod/ze-pod-core",
+    "crates/ze/pod/ze-pod-binding",
+    "crates/ze/pod/ze-pod-macro",
+    "crates/ze/pod/ze-pod",
     "crates/object/ze-object",
-    "crates/graph/ze-node",
-    "crates/graph/ze-graph-algo",
-    "crates/graph/ze-graph-eval",
-    "crates/graph/ze-node-schema",
-    "crates/graph/ze-node-schema-macros",
+    "crates/ze/graph/ze-node-core",
+    "crates/ze/graph/ze-graph-algo",
+    "crates/ze/graph/ze-graph-eval",
+    "crates/ze/graph/ze-node-schema",
+    "crates/ze/graph/ze-node-schema-macros",
+    "crates/ze/graph/ze-node",
     "crates/scene/zela-scene",
     "crates/scene/zela-scene-bundle",
-    "crates/pod/ze-pod-lua",
-    "crates/pod/ze-pod-py",
+    "crates/ze/pod/ze-pod-lua",
+    "crates/ze/pod/ze-pod-py",
     # 测试专用（publish = false）：集成测试 + 基准，不进 wasm gate、不被生产反向依赖。
-    "crates/pod/ze-pod-tests",
+    "crates/ze/pod/ze-pod-tests",
     "crates/schedule/zela-schedule",
     "crates/render/zela-render",
     "crates/render/zela-render-backends",
@@ -36,11 +38,12 @@ members = [
     "crates/app/zela-gui",
     "crates/app/zela-compile",
     "crates/web/zela-web",
+    "crates/zela/zela",
 ]
 resolver = "2"
 
 # ─── 全仓体检观察项（第 15–18 项，本轮暂不改动）──────────────────────────────
-# 15. crate 内模块级循环依赖（ze-graph-eval / ze-node-schema / ze-pod / ze-time /
+# 15. crate 内模块级循环依赖（ze-graph-eval / ze-node-schema / ze-pod-core / ze-time /
 #     zela-render-backends / zela-scene / zela-schedule）：Rust 允许同一编译单元内
 #     模块互相 `use`，不是 bug；拆分属于架构调整，不在本轮范围。
 # 16. `//!` 模块文档覆盖率约 37%（156/247 缺）：缺口集中在 tests / examples / benches，
@@ -54,6 +57,7 @@ resolver = "2"
 edition = "2024"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/xcrtp/zela"
 
 [workspace.dependencies]
 eframe = { version = "0.36", default-features = false, features = [

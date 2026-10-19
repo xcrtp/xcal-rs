@@ -15,7 +15,7 @@ use eframe::egui;
 use glam::Vec2;
 use ze_graph_algo::KahnSorter;
 use ze_graph_eval::LazyPullEval;
-use ze_node::{
+use ze_node_core::{
     EvalError, EvalErrorPolicy, EvalStrategy, ExecContext, InputSocketId, Node, NodeExecutor,
     NodeId, OutputSocketId, SimpleGraph,
 };

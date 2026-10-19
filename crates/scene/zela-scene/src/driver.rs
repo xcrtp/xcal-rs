@@ -22,14 +22,14 @@
 //! # 事件分发（P4：只走 topic）
 //!
 //! 订阅方经 [`DriverPod::attach_sink`] 登记为一个 topic 成员；
-//! 发布走 [`ze_pod::publish_topic`]（成员查询 + 按 `PodId` 升序单播）。
+//! 发布走 [`ze_pod_core::publish_topic`]（成员查询 + 按 `PodId` 升序单播）。
 //! **不再保留旧事件总线入口**：扇出顺序只有 topic 一个来源。
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use ze_pod::{
+use ze_pod_core::{
     Broker, Capability, CommandQueue, EventSink, FunctionId, Pod, PodError, PodId, PodNode,
     QualifiedName, Receipt, negotiate_dyn, publish_topic,
 };
@@ -140,7 +140,7 @@ impl DriverPod {
     pub fn attach_sink(&self, sink: Arc<dyn Pod>) -> Result<(), PodError> {
         let _: EventSink<'_, DriverEvent> = negotiate_dyn(&*sink).ok_or_else(|| {
             PodError::CallFailed(
-                "Driver 订阅方必须提供 EventSink<DriverEvent>（ze_pod::event_sink::on_event）"
+                "Driver 订阅方必须提供 EventSink<DriverEvent>（ze_pod_core::event_sink::on_event）"
                     .to_string(),
             )
         })?;
@@ -294,18 +294,18 @@ impl Pod for DriverPod {
 
 /// `DriverCommand` / `DriverEvent` 的类型名（协商签名的一部分）。
 pub fn command_type_name() -> &'static str {
-    <DriverCommand as ze_pod::IntoPodTypeName>::NAME
+    <DriverCommand as ze_pod_core::IntoPodTypeName>::NAME
 }
 
 /// 事件类型名（协商签名的一部分）。
 pub fn event_type_name() -> &'static str {
-    <DriverEvent as ze_pod::IntoPodTypeName>::NAME
+    <DriverEvent as ze_pod_core::IntoPodTypeName>::NAME
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_pod::{Capability, CommandQueue, EventSink};
+    use ze_pod_core::{Capability, CommandQueue, EventSink};
     use zela_schedule::resource::Resources;
 
     fn scheduler() -> Scheduler {
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn events_are_dispatched_to_typed_sinks() {
         use std::sync::atomic::{AtomicU32, Ordering};
-        use ze_pod::RegistryPod;
+        use ze_pod_core::RegistryPod;
 
         static HITS: AtomicU32 = AtomicU32::new(0);
         fn count_event(_: &dyn Pod, _event: DriverEvent) {
@@ -351,7 +351,7 @@ mod tests {
         HITS.store(0, Ordering::Relaxed);
         let mut sink = RegistryPod::new();
         // 订阅方只需要提供 on_event 的 typed 签名。
-        sink.register_fn1::<DriverEvent, ()>("ze_pod::event_sink::on_event", count_event);
+        sink.register_fn1::<DriverEvent, ()>("ze_pod_core::event_sink::on_event", count_event);
         pod.attach_sink(Arc::new(sink))
             .expect("订阅方提供 EventSink<DriverEvent>");
 
@@ -399,7 +399,7 @@ mod tests {
                 .qualified()
                 .to_string(),
             format!(
-                "ze_pod::command::submit({}) -> Receipt",
+                "ze_pod_core::command::submit({}) -> Receipt",
                 command_type_name()
             )
         );
@@ -408,7 +408,7 @@ mod tests {
             EventSink::<DriverEvent>::signatures()[0]
                 .qualified()
                 .to_string(),
-            format!("ze_pod::event_sink::on_event({}) -> ()", event_type_name())
+            format!("ze_pod_core::event_sink::on_event({}) -> ()", event_type_name())
         );
     }
 }

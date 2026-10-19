@@ -1,9 +1,9 @@
-// math_pod.rs — **`ze-pod` 的第一个生产消费方**：内置数学函数由 Pod 提供。
+// math_pod.rs — **`ze-pod-core` 的第一个生产消费方**：内置数学函数由 Pod 提供。
 //
 // # 为什么放在这里（而不是 `ze-notion`）
 //
 // `FunctionX2Y` 在理念层，但"函数从哪来"是**使用侧**的事：
-// - `ze-notion` 不得依赖 `ze-pod`（分层铁律，本轮 §7.2）；
+// - `ze-notion` 不得依赖 `ze-pod-core`（分层铁律，本轮 §7.2）；
 // - `zela-scene` 已依赖两者，且函数图像的持久化（名字壳 → 函数体）就在这里。
 //
 // # 适配器形态
@@ -33,7 +33,7 @@
 use std::sync::{Arc, OnceLock};
 
 use ze_notion::FunctionX2Y;
-use ze_pod::{IntoPodTypeName, Pod, QualifiedName, RegistryPod};
+use ze_pod_core::{IntoPodTypeName, Pod, QualifiedName, RegistryPod};
 
 /// 可当函数提供者的 Pod：**具体类型**必须 `Send + Sync`（trait 本身不变）。
 ///
@@ -59,7 +59,7 @@ where
 /// 内置数学函数的 Pod（装配期注册一次，调用期只读）。
 ///
 /// 7 个名字即原 `ze-notion::builtin_f32` 那张表（本轮**搬进 Pod**；
-/// `ze-notion` 不依赖 `ze-pod`，故表不再留在理念层）。
+/// `ze-notion` 不依赖 `ze-pod-core`，故表不再留在理念层）。
 pub fn math_pod() -> &'static SharedPod {
     static MATH_POD: OnceLock<SharedPod> = OnceLock::new();
     MATH_POD.get_or_init(|| {

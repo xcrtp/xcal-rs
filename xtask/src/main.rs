@@ -42,15 +42,18 @@ const KERNEL_CRATES: &[&str] = &[
     "ze-resource",
     "ze-macro",
     "ze-prerender",
-    "ze-pod",
+    "ze-pod-core",
     "ze-pod-binding",
 ];
 
-/// 结构性判据 1：`crates/pod/` 的生产依赖边不得出现任何 `zela-*`。
+/// 门面 crate：必须与核心组一样保持 wasm32 可编译（不含 lua / py / UI）。
+const FACADE_CRATES: &[&str] = &["ze-pod", "ze-node", "zela"];
+
+/// 结构性判据 1：`crates/ze/pod/` 的生产依赖边不得出现任何 `zela-*`。
 const JQ_POD_LAYER: &str = r#"
 .packages[]
-| select(.name | IN("ze-pod", "ze-pod-binding", "ze-pod-macro",
-                    "ze-pod-lua", "ze-pod-py", "ze-pod-tests"))
+| select(.name | IN("ze-pod-core", "ze-pod-binding", "ze-pod-macro",
+                    "ze-pod-lua", "ze-pod-py", "ze-pod-tests", "ze-pod"))
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
@@ -435,6 +438,15 @@ fn step_wasm(root: &Path) -> Result<(), String> {
         )?;
     }
 
+    // 门面必须保持 wasm32 能力：不能吞 lua / py / UI。
+    for name in FACADE_CRATES {
+        println!("[xtask] == {name} facade (wasm32-unknown-unknown) ==");
+        cargo(
+            root,
+            &strings(&["check", "-p", name, "--target", "wasm32-unknown-unknown"]),
+        )?;
+    }
+
     println!("[xtask] == zela-scene-bundle (wasm32-unknown-unknown) ==");
     cargo(
         root,
@@ -540,9 +552,9 @@ fn step_structure(root: &Path) -> Result<(), String> {
 
     let checks = [
         (
-            "crates/pod 生产依赖不含 zela-*",
+            "crates/ze/pod 生产依赖不含 zela-*",
             JQ_POD_LAYER,
-            "crates/pod 的生产依赖边中出现了 zela-*（违反领域无关规则）：",
+            "crates/ze/pod 的生产依赖边中出现了 zela-*（违反领域无关规则）：",
         ),
         (
             "zela-render-backends 生产依赖不含 zela-scene（S2）",

@@ -6,7 +6,7 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use glam::Vec2;
-use ze_node::{InputSocketId, NodeId, OutputSocketId};
+use ze_node_core::{InputSocketId, NodeId, OutputSocketId};
 use zela_node_editor::{Command, EdgePath, Editor};
 
 use crate::edge_render::{EdgeRenderer, EdgeStyle};

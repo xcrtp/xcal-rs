@@ -2,7 +2,7 @@
 
 use std::any::Any;
 
-use ze_node::{
+use ze_node_core::{
     DirtyPolicy, InputSocket, NamedTypeTag, Node, NodeInteraction, NodeMeta, OutputSocket, TypeTag,
 };
 

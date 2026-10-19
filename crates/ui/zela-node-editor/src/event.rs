@@ -1,7 +1,7 @@
 //! Logical events emitted by the editor after applying commands.
 
 use glam::Vec2;
-use ze_node::{ConnectError, EdgeId, InputSocketId, NodeId, OutputSocketId};
+use ze_node_core::{ConnectError, EdgeId, InputSocketId, NodeId, OutputSocketId};
 
 /// Notifications produced by the editor, drained by the UI layer after each
 /// batch of commands.

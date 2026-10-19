@@ -1,20 +1,20 @@
 graph TD
     ze-content --> ze-notion
-    ze-graph-algo --> ze-node
-    ze-graph-eval --> ze-node
-    ze-node-schema --> ze-node
+    ze-graph-algo --> ze-node-core
+    ze-graph-eval --> ze-node-core
+    ze-node-schema --> ze-node-core
     ze-node-schema --> ze-node-schema-macros
     ze-object --> ze-macro
     ze-object --> ze-notion
     ze-object --> ze-render-ir
     ze-object --> ze-scene-contract
-    ze-pod-binding --> ze-pod
-    ze-pod-lua --> ze-pod
+    ze-pod-binding --> ze-pod-core
+    ze-pod-lua --> ze-pod-core
     ze-pod-lua --> ze-pod-binding
-    ze-pod-py --> ze-pod
+    ze-pod-py --> ze-pod-core
     ze-pod-py --> ze-pod-binding
     ze-pod-py --> ze-pod-macro
-    ze-pod-tests --> ze-pod
+    ze-pod-tests --> ze-pod-core
     ze-pod-tests --> ze-pod-binding
     ze-pod-tests --> ze-pod-lua
     ze-pod-tests --> ze-pod-macro
@@ -29,7 +29,7 @@ graph TD
     zela-app --> ze-macro
     zela-app --> ze-notion
     zela-app --> ze-object
-    zela-app --> ze-pod
+    zela-app --> ze-pod-core
     zela-app --> ze-pod-binding
     zela-app --> ze-pod-lua
     zela-app --> ze-pod-py
@@ -45,27 +45,27 @@ graph TD
     zela-egui --> ze-macro
     zela-egui --> ze-notion
     zela-egui --> ze-object
-    zela-egui --> ze-pod
+    zela-egui --> ze-pod-core
     zela-egui --> zela-render
     zela-egui --> zela-render-backends
     zela-egui --> zela-scene
     zela-egui --> zela-schedule
-    zela-gui --> ze-pod
+    zela-gui --> ze-pod-core
     zela-gui --> zela-app
     zela-gui --> zela-egui
     zela-gui --> zela-render-backends
     zela-gui --> zela-scene
     zela-gui --> zela-schedule
     zela-node-editor --> ze-graph-algo
-    zela-node-editor --> ze-node
-    zela-node-egui --> ze-node
+    zela-node-editor --> ze-node-core
+    zela-node-egui --> ze-node-core
     zela-node-egui --> zela-node-editor
-    zela-node-egui-ui --> ze-node
+    zela-node-egui-ui --> ze-node-core
     zela-node-egui-ui --> ze-node-schema
     zela-node-egui-ui --> zela-node-egui
     zela-playback --> ze-notion
     zela-playback --> ze-object
-    zela-playback --> ze-pod
+    zela-playback --> ze-pod-core
     zela-playback --> zela-render
     zela-playback --> zela-render-backends
     zela-playback --> zela-scene
@@ -88,7 +88,7 @@ graph TD
     zela-scene --> ze-macro
     zela-scene --> ze-notion
     zela-scene --> ze-object
-    zela-scene --> ze-pod
+    zela-scene --> ze-pod-core
     zela-scene --> ze-pod-macro
     zela-scene --> ze-prerender
     zela-scene --> ze-render-ir
@@ -99,4 +99,13 @@ graph TD
     zela-web --> zela-playback
     zela-web --> zela-render-backends
     zela-web --> zela-scene-bundle
+    zela --> ze-pod
+    zela --> ze-node
+    ze-pod --> ze-pod-binding
+    ze-pod --> ze-pod-core
+    ze-pod --> ze-pod-macro
+    ze-node --> ze-graph-algo
+    ze-node --> ze-graph-eval
+    ze-node --> ze-node-core
+    ze-node --> ze-node-schema
 classDef red stroke:#ff0000,stroke-width:2px;

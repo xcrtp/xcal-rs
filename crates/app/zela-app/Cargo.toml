@@ -14,12 +14,12 @@ zela-scene = { path = "../../scene/zela-scene" }
 # ZSB 装配产物（格式 + 可还原性检查）。不依赖任何语言适配器。
 zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
 # Pod 机制 + 静态插件装配（src/assembly.rs）。
-ze-pod = { path = "../../pod/ze-pod" }
-ze-pod-binding = { path = "../../pod/ze-pod-binding" }
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
+ze-pod-binding = { path = "../../ze/pod/ze-pod-binding" }
 # Lua 适配器（纯语言层）：`--script` 用 Lua 编排最小分镜。
-ze-pod-lua = { path = "../../pod/ze-pod-lua" }
+ze-pod-lua = { path = "../../ze/pod/ze-pod-lua" }
 # Python 适配器：只在 feature = "python" 时引入，默认构建不受 pyo3 影响。
-ze-pod-py = { path = "../../pod/ze-pod-py", optional = true }
+ze-pod-py = { path = "../../ze/pod/ze-pod-py", optional = true }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 zela-schedule = { path = "../../schedule/zela-schedule" }
 # 回放运行时（ZSB → Scene → 调度器 → 帧回调）：浏览器与 `--bundle` 共用装配尾。

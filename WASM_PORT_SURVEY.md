@@ -59,7 +59,7 @@ Caused by:
 ### 判定
 
 - **不是 setjmp/longjmp 问题**：失败在 C 源码构建脚本阶段，Rust 代码尚未开始编译。
-- 根因是 [ze-pod-lua/Cargo.toml](../../crates/pod/ze-pod-lua/Cargo.toml)
+- 根因是 [ze-pod-lua/Cargo.toml](../../crates/ze/pod/ze-pod-lua/Cargo.toml)
   启用了 `mlua` 的 `vendored` feature，而 `lua-src` 的 `build.rs` 没有
   `wasm32-unknown-unknown` 分支，直接 `panic!`。
 - 这是**构建目标缺失**，不是 ABI 不兼容。
@@ -84,11 +84,11 @@ Caused by:
 | ze-vertex | PASS | |
 | ze-resource | PASS | 但 `Send + Sync` 约束是后端错误根因（见 §4.1） |
 | ze-macro | PASS | |
-| ze-pod | PASS | |
+| ze-pod-core | PASS | |
 | ze-pod-binding | PASS | |
 | ze-pod-macro | PASS | proc-macro（host 编译，不作为 wasm 产物） |
 | ze-object | PASS | |
-| ze-node | PASS | |
+| ze-node-core | PASS | |
 | ze-graph-algo | PASS | |
 | ze-graph-eval | PASS | |
 | ze-node-schema | PASS | |
@@ -219,7 +219,7 @@ CPython 本身被编进 wasm（pyo3 支持 wasm32-wasi/emscripten 的特定配�
 
 | 位置 | 调用 | wasm 行为 |
 |---|---|---|
-| [ze-pod/src/command.rs:178,189](../../crates/pod/ze-pod/src/command.rs) | `thread::yield_now()`（`Receipt::wait` / `wait_pumping`） | no-op ⇒ 忙等；且主线程本来禁止 `wait()` |
+| [ze-pod-core/src/command.rs:178,189](../../crates/ze/pod/ze-pod-core/src/command.rs) | `thread::yield_now()`（`Receipt::wait` / `wait_pumping`） | no-op ⇒ 忙等；且主线程本来禁止 `wait()` |
 | `zela-render-backends/src/gpu_test.rs:60` | `thread::sleep` | 无 atomics ⇒ panic（有 atomics ⇒ 阻塞主线程） |
 | `zela-render-backends/src/gpu_test.rs:146` | `thread::Builder::spawn` | `Err(UNSUPPORTED)` ⇒ `.expect` panic |
 | `zela-scene/src/scene_script.rs:510` | `thread::spawn`（**仅测试**） | 仅测试 |

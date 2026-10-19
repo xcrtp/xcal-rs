@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use eframe::{App as EframeApp, egui as gui};
 
-use ze_pod::Pod;
+use ze_pod_core::Pod;
 use zela_app::{SceneChoice, build_scene_runtime};
 use zela_egui::{EguiSceneHost, FrameProgress, SceneFrame, install_visuals};
 use zela_render_backends::{RenderContext, install_standard_backends};

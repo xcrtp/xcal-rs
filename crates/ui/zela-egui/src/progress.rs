@@ -6,7 +6,7 @@
 use std::any::Any;
 use std::cell::Cell;
 
-use ze_pod::{Capability, EventSink, FunctionId, Pod, PodError, PodId, QualifiedName};
+use ze_pod_core::{Capability, EventSink, FunctionId, Pod, PodError, PodId, QualifiedName};
 
 use zela_scene::DriverEvent;
 

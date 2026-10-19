@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use ze_pod::{
+use ze_pod_core::{
     AssemblyPlan, Broker, BrokerError, Capability, FnSig, NodeSpec, Pod, PodNode,
     ServiceRequirement,
 };
@@ -75,7 +75,7 @@ fn requirements(service: &str, signatures: &[FnSig], required: bool) -> Vec<Serv
 pub enum AssemblyError {
     Broker(BrokerError),
     #[cfg(feature = "python")]
-    Python(ze_pod::PodError),
+    Python(ze_pod_core::PodError),
 }
 
 impl std::fmt::Display for AssemblyError {
@@ -210,7 +210,7 @@ fn run_broker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_pod::BrokerError;
+    use ze_pod_core::BrokerError;
 
     /// 描述层：拓扑 / 边 / optional 缺失全部可在**不建 Pod** 时断言。
     #[test]

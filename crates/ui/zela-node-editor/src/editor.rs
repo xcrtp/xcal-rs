@@ -8,7 +8,7 @@
 use std::collections::{HashSet, VecDeque};
 
 use glam::Vec2;
-use ze_node::{
+use ze_node_core::{
     ConnectError, EdgeId, Graph, InputSocketId, NodeId, OutputSocketId, SimpleGraph, UnitEdge,
 };
 
@@ -947,7 +947,7 @@ mod tests {
     fn resize_node_clamps_to_interaction_bounds_and_undoes_as_one_gesture() {
         let mut editor = make_editor();
         let node = TestNode::f32_passthrough().with_interaction(
-            ze_node::NodeInteraction::default()
+            ze_node_core::NodeInteraction::default()
                 .min_size(100.0, 50.0)
                 .max_size(300.0, 200.0),
         );

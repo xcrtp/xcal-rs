@@ -1,0 +1,14 @@
+[package]
+name = "ze-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "zela 节点图统一入口：核心 trait + schema + 图算法 + 求值（不含 UI）"
+readme = "README.md"
+
+[dependencies]
+ze-node-core = { path = "../ze-node-core", version = "0.1.0" }
+ze-node-schema = { path = "../ze-node-schema", version = "0.1.0" }
+ze-graph-algo = { path = "../ze-graph-algo", version = "0.1.0" }
+ze-graph-eval = { path = "../ze-graph-eval", version = "0.1.0" }

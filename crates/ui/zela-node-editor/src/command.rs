@@ -6,7 +6,7 @@
 //! therefore not `Clone`. The undo stack moves commands by value.
 
 use glam::Vec2;
-use ze_node::{EdgeId, InputSocketId, Node, NodeId, OutputSocketId};
+use ze_node_core::{EdgeId, InputSocketId, Node, NodeId, OutputSocketId};
 
 use crate::edge_geom::EdgeGeometry;
 use crate::layout::LayoutStrategy;

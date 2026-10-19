@@ -11,15 +11,21 @@
     },
     {
       "name": "pod",
-      "path": "crates/pod",
+      "path": "crates/ze/pod",
       "prefix": "ze-",
-      "description": "领域无关的 Pod 层。核心组（ze-pod / ze-pod-binding / ze-pod-macro）平台无关、必须过 wasm gate；语言适配器组（ze-pod-lua / ze-pod-py）依赖 mlua / pyo3，不得进 wasm gate。ze-pod-tests 是测试专用 crate（publish = false，不进 wasm gate、不被生产依赖）。全部生产依赖均不含任何 zela-*",
-      "crates": ["ze-pod", "ze-pod-binding", "ze-pod-macro", "ze-pod-lua", "ze-pod-py", "ze-pod-tests"],
+      "description": "领域无关的 Pod 层。核心组（ze-pod-core / ze-pod-binding / ze-pod-macro）平台无关、必须过 wasm gate；语言适配器组（ze-pod-lua / ze-pod-py）依赖 mlua / pyo3，不得进 wasm gate。ze-pod-tests 是测试专用 crate（publish = false，不进 wasm gate、不被生产依赖）。全部生产依赖均不含任何 zela-*",
+      "crates": ["ze-pod-core", "ze-pod-binding", "ze-pod-macro", "ze-pod-lua", "ze-pod-py", "ze-pod-tests", "ze-pod"],
       "subgroups": [
         {
           "name": "core",
-          "crates": ["ze-pod", "ze-pod-binding", "ze-pod-macro"],
+          "crates": ["ze-pod-core", "ze-pod-binding", "ze-pod-macro"],
           "wasm_gate": true
+        },
+        {
+          "name": "facade",
+          "crates": ["ze-pod"],
+          "wasm_gate": true,
+          "reason": "只聚合 core + binding + macro；不含 lua / py，保持 wasm32"
         },
         {
           "name": "language-adapters",
@@ -44,15 +50,16 @@
     },
     {
       "name": "graph",
-      "path": "crates/graph",
+      "path": "crates/ze/graph",
       "prefix": "ze-",
-      "description": "图论 + 节点结构契约，禁止依赖 egui/zela-*/领域类型",
+      "description": "图论 + 节点结构契约，禁止依赖 egui/zela-*/领域类型；ze-node 为门面（core+schema+algo+eval）",
       "crates": [
-        "ze-node",
+        "ze-node-core",
         "ze-graph-algo",
         "ze-graph-eval",
         "ze-node-schema",
-        "ze-node-schema-macros"
+        "ze-node-schema-macros",
+        "ze-node"
       ]
     },
     {
@@ -97,6 +104,13 @@
       "prefix": "zela-",
       "description": "应用组装层（唯一可执行入口）",
       "crates": ["zela-app"]
+    },
+    {
+      "name": "zela",
+      "path": "crates/zela",
+      "prefix": "zela",
+      "description": "应用层门面：聚合 ze-pod + ze-node（真实 re-export，不是空壳）",
+      "crates": ["zela"]
     }
   ],
   "rules": [
@@ -112,13 +126,13 @@
     },
     {
       "rule": "NoGraphDomainTypes",
-      "description": "crates/graph 层 crate 禁止引用领域类型（FunctionDef, AST, AnimationClip 等）",
+      "description": "crates/ze/graph 层 crate 禁止引用领域类型（FunctionDef, AST, AnimationClip 等）",
       "enforced_by": "人工 review + grep 扫描"
     },
     {
       "rule": "NoPodDomainDependency",
-      "description": "crates/pod 下任一 crate（含两个语言适配器与测试 crate）的生产依赖边中不得出现任何 zela-*；dev 边不计入",
-      "enforced_by": "CI: cargo metadata 扫描 crates/pod/* 的生产依赖"
+      "description": "crates/ze/pod 下任一 crate（含两个语言适配器与测试 crate）的生产依赖边中不得出现任何 zela-*；dev 边不计入",
+      "enforced_by": "CI: cargo metadata 扫描 crates/ze/pod/* 的生产依赖"
     },
     {
       "rule": "NoCycles",

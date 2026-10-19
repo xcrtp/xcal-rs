@@ -3,11 +3,11 @@ name = "zela-node-editor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pure-logic node editor state machine for ze-node (no UI dependencies)"
+description = "Pure-logic node editor state machine for ze-node-core (no UI dependencies)"
 
 [dependencies]
-ze-node = { path = "../../graph/ze-node" }
-ze-graph-algo = { path = "../../graph/ze-graph-algo" }
+ze-node-core = { path = "../../ze/graph/ze-node-core" }
+ze-graph-algo = { path = "../../ze/graph/ze-graph-algo" }
 glam = { workspace = true }
 thiserror.workspace = true
 

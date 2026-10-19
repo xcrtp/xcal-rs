@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use glam::Vec2;
-use ze_node::{Graph, NodeId};
+use ze_node_core::{Graph, NodeId};
 
 /// Measured node card sizes, keyed by node. Populated by the UI layer after
 /// laying out each card's body; the editor layer treats it as read-only input.

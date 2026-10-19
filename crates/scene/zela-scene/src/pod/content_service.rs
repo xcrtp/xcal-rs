@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use ze_content::StrokeOutline;
 use ze_notion::{Color32 as NotionColor, Path2D, Vec2 as NotionVec2};
-use ze_pod::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
+use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use ze_prerender::InMemoryEngine;
 
 use crate::pod::types::{Color, Formula, Path, PathList, Text};
@@ -37,7 +37,7 @@ pub const CONTENT_SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// 句柄 owner 是本表自己的 `PodId`（不是两个 Service 之一）——
 /// 两个 Service 都只是这张表的用户，跨 Service 传递因此不触发
-/// [`ze_pod::HandleTable`] 的跨 Pod 检查。
+/// [`ze_pod_core::HandleTable`] 的跨 Pod 检查。
 #[derive(Clone)]
 pub struct PathStore(Arc<Mutex<PathStoreInner>>);
 

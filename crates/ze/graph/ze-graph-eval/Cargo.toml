@@ -1,0 +1,13 @@
+[package]
+name = "ze-graph-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Evaluation strategies (lazy pull) for ze-node-core"
+
+[dependencies]
+ze-node-core = { path = "../ze-node-core", version = "0.1.0" }
+
+[dev-dependencies]
+ze-graph-algo = { path = "../ze-graph-algo" }

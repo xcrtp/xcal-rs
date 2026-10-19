@@ -9,7 +9,7 @@
 //! - `xcal/__init__.pyi` / `xcal/scene.pyi` / `xcal/content.pyi` / `xcal/python.pyi`
 //!   （`ze-pod-py`，路径与 capability 命名空间一致）。
 
-use ze_pod::Capability;
+use ze_pod_core::Capability;
 use ze_pod_binding::CapabilityDocs;
 use zela_scene::pod::{ContentApi, SceneApi};
 
