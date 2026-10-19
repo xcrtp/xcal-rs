@@ -11,9 +11,9 @@ name: Pages
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, dev]
   pull_request:
-    branches: [main, master]
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
