@@ -35,7 +35,7 @@ xcal-render-backends (wgpu / egui 实现)
 |------|------|------|
 | `render_backend` | [`GpuResourceId`](#gpuresourceid--世代感知资源标识) | 世代感知的 `index + generation` 资源标识符 + 哨兵值 |
 | `render_backend` | `AccessError` | 句柄访问失败原因（`Stale` / `TypeMismatch` / `Dropped`） |
-| `render_backend` | [`GpuHandle`](#gpuhandle--类型擦除句柄) | 类型擦除的 GPU 资源句柄（`Box<dyn Any + Send + Sync>`） |
+| `render_backend` | [`GpuHandle`](#gpuhandle--类型擦除句柄) | 类型擦除的 GPU 资源句柄（`Box<dyn Any>`；wasm 上 wgpu 资源非 `Send + Sync`） |
 | `resource_cache` | [`ResourceKey`](#resourcekey--资源寻址键) | 资源寻址键：内容寻址（`Content`）/ 版本寻址（`Versioned`） |
 | `resource_cache` | [`DeferredDestroyer`](#deferreddestroyer--延迟销毁) | graveyard 3 帧延迟销毁器 |
 | `resource_cache` | [`ResourceCache<T>`](#resourcecache--世代感知缓存) | 世代感知 slot + `key → id` 索引的缓存 |

@@ -214,6 +214,10 @@ graph TD
 > 本次复核把脚本层、`xc-pod` 家族与 XSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
 > 零缺零余；FanIn/FanOut 共 **33 行**。
 > 此前的 W2 复核（8 条漏边修复）仍有效，本表是在其基础上的全量重算。
+>
+> **2026-10-19 更新**：新增 `xcal-playback` / `xcal-web` 后，`cargo metadata` 口径的
+> 内部生产边为 **100 条**，见 [`workspace-analyzer.mmd`](workspace-analyzer.mmd)。
+> 下方 FanIn/FanOut 表仍是 2026-10-18 快照，**未包含这两个 crate**。
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
@@ -307,7 +311,7 @@ GUI 用墙钟算 `dt`，导出用固定 `dt = 1/fps`；场景、系统图、渲�
 Input:         DirectorAdvance · CameraDrive · CameraInput
 LogicUpdate:   TimeControl · ParamPanel
 SceneSync:     BindingApply
-Prepare:       AxesRefresh · FunctionGraphRefresh
+Prepare:       TransformHierarchy · AxesRefresh · FunctionGraphRefresh
 RenderCommit:  SceneRecord (2D) · SceneRecord3D (3D) · ContentTextureRecord · MorphRecord · RevealRecord
 FrameEnd:      —（内容提交由 host.present 承担；
                  面板 chrome 与 ViewRect 由 host.begin_frame 在 run_frame 前写入）
@@ -521,9 +525,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 - `present` 只注册**一个**回调，放在有效序中**首个 GPU 图层**的位置（CPU 2D 层就地回放）。
 - `LayerId` 改为**按层唯一**（`build_scene_view` 按索引派生），并有单测断言两两不相等。
 
-**已知限制**：3D 无深度缓冲（同层内物体互相穿透，S4）；3D 离屏无 MSAA（1x，与现状一致，S4）；
-每层多一次全屏 blit（层数少时可接受，层多时优化）；**CPU 路径不支持真合成**
-（退化为顺序绘制，2D 仍在下，S3-4 退役旧管线后消失）；`opacity` × `blend` 组合未穷举验证。
+**已知限制**：3D 离屏无 MSAA（1x）；每层多一次全屏 blit（层数少时可接受，层多时优化）；
+`opacity` × `blend` 组合未穷举验证。
+
+> 两条已退出限制：3D 两个 pass 均挂 `Depth32Float` 深度附件（`wgpu_3d::DEPTH_FORMAT`）；
+> 旧 CPU 2D 回放（`egui_2d`）已在 S4.1 删除，2D 统一走 `wgpu_2d` 离屏 + 合成。
 
 ### 已知未接线项（Known unwired，记账非缺陷）
 
@@ -531,14 +537,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 按本项目原则「有明确用途而非凭空设计 → 不是问题，但不能忘记」，集中记账于此。
 （其中节点编辑器与其余各项性质不同：它**已排期**，只是触发条件未到 —— 见下表。）
 
+> **S5 已把 `Parent` 移出本表**：`TransformHierarchySystem` 每帧产出 `WorldTransforms`，
+> `SceneRecordSystem` / `RevealRecordSystem` 已消费（详见
+> [`transform_hierarchy.rs`](crates/scene/xcal-scene/src/transform_hierarchy.rs)）。
+
 | 项 | 位置 | 现状 | 何时接 |
 |---|---|---|---|
-| `Parent` 父子变换累乘 System | 契约层 `xc_scene_contract::Parent` / `Children` | 类型与 `Scene::attach` 已就位，**零生产消费方**（父子变换尚未累乘） | 做相机跟随 / 对象整体变换时 |
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
 | `xc-notion`「全仓唯一数学元语出口」 | 全仓 | 仍是**目标态**：**2026-10-18 实测 `*.rs` 中 189 处**（含 README 共 198 处）`glam::` 直接引用未收敛，其中 `xcal-scene` **归零**（仅剩 2 行**说明性注释**：`types.rs` 的历史沿革 + `transform.rs` 的"翻转只有一份"约定）；主要分布：`xcal-app` 73 / `xcal-render-backends` 55 / `xcal-render` 24 / 节点编辑器系列 17 / `xc-time` 7 / `xc-notion` 定义侧 6 / `xcal-egui` 5 / 场景层注释 2 | 分阶段收敛（**不新增** + 场景层已清零）；不阻塞任何功能 |
 | 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
-| 2D / 3D 录制 System **分居** | `xcal-render::record_systems::SceneRecordSystem` / `xcal-app::SceneRecord3DSystem` | 同型病（同型职责分居两层）。**P4 后 2D 侧已归位到渲染层**（不再住 UI）；与 3D 侧合并仍取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
+| 2D / 3D 录制 System 仍是两个 | `xcal-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（632 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
 | `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
 | 非原生 Pod 的 `FunctionX2Y` 适配器 | `xcal-scene::math_pod` | **C3 已消费（2026-10-17）**：第一个非原生 Pod（Lua / `xc-pod-lua`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xc-pod-lua` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |

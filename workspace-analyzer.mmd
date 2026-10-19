@@ -34,18 +34,28 @@ graph TD
     xcal-app --> xc-pod-lua
     xcal-app --> xc-pod-py
     xcal-app --> xc-prerender
-    xcal-app --> xcal-egui
+    xcal-app --> xcal-playback
     xcal-app --> xcal-render
     xcal-app --> xcal-render-backends
     xcal-app --> xcal-scene
+    xcal-app --> xcal-scene-bundle
     xcal-app --> xcal-schedule
+    xcal-compile --> xcal-app
+    xcal-compile --> xcal-scene-bundle
     xcal-egui --> xc-macro
     xcal-egui --> xc-notion
     xcal-egui --> xc-object
+    xcal-egui --> xc-pod
     xcal-egui --> xcal-render
     xcal-egui --> xcal-render-backends
     xcal-egui --> xcal-scene
     xcal-egui --> xcal-schedule
+    xcal-gui --> xc-pod
+    xcal-gui --> xcal-app
+    xcal-gui --> xcal-egui
+    xcal-gui --> xcal-render-backends
+    xcal-gui --> xcal-scene
+    xcal-gui --> xcal-schedule
     xcal-node-editor --> xc-graph-algo
     xcal-node-editor --> xc-node
     xcal-node-egui --> xc-node
@@ -53,6 +63,14 @@ graph TD
     xcal-node-egui-ui --> xc-node
     xcal-node-egui-ui --> xc-node-schema
     xcal-node-egui-ui --> xcal-node-egui
+    xcal-playback --> xc-notion
+    xcal-playback --> xc-object
+    xcal-playback --> xc-pod
+    xcal-playback --> xcal-render
+    xcal-playback --> xcal-render-backends
+    xcal-playback --> xcal-scene
+    xcal-playback --> xcal-scene-bundle
+    xcal-playback --> xcal-schedule
     xcal-render --> xc-content
     xcal-render --> xc-notion
     xcal-render --> xc-object
@@ -64,8 +82,8 @@ graph TD
     xcal-render --> xcal-schedule
     xcal-render-backends --> xc-notion
     xcal-render-backends --> xc-object
+    xcal-render-backends --> xc-render-ir
     xcal-render-backends --> xcal-render
-    xcal-render-backends --> xcal-scene
     xcal-scene --> xc-content
     xcal-scene --> xc-macro
     xcal-scene --> xc-notion
@@ -77,4 +95,8 @@ graph TD
     xcal-scene --> xc-scene-contract
     xcal-scene --> xc-time
     xcal-scene --> xcal-schedule
+    xcal-scene-bundle --> xcal-scene
+    xcal-web --> xcal-playback
+    xcal-web --> xcal-render-backends
+    xcal-web --> xcal-scene-bundle
 classDef red stroke:#ff0000,stroke-width:2px;

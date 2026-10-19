@@ -150,7 +150,9 @@ let style = circle.apply(&(
 `Parent(pub ObjectId)` 挂子对象、`Children(Vec<ObjectId>)` 挂父对象；`Scene::attach`
 只写子侧的 `Parent`，`Children` 的维护策略由装配层决定（契约层不强制双向同步）。
 
-> ⚠️ **记账**：**父子变换累乘 System 尚未存在**（`Parent` 类型零生产消费方）。
+> **S5 已接线**：`TransformHierarchySystem`（`xcal-scene`）每帧按拓扑序累乘出
+> `WorldTransforms`（`Transform2D`），`SceneRecordSystem` / `RevealRecordSystem` 消费；
+> 环路写入 `TransformHierarchyError` 资源。相关缺口见根目录 `GAPS.md`。
 > `push` 不查重 —— 去重是装配层策略。
 
 ### `organize` — 组织与可见性（N1–N3）
