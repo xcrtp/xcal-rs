@@ -29,7 +29,6 @@ egui-wgpu.workspace = true
 hecs.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
-glam.workspace = true
 # health overlay 的 F10 快照日志（与 xcal-schedule telemetry 同源）。
 tracing.workspace = true
 

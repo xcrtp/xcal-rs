@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use glam::Mat4;
+use xc_notion::Mat4;
 use xc_notion::{Color32, Vec3};
 use xcal_scene::scene::components::{Material3D, MeshGeometry};
 
@@ -27,7 +27,7 @@ use xcal_scene::scene::components::{Material3D, MeshGeometry};
 /// # Example
 /// ```
 /// use std::sync::Arc;
-/// use glam::Mat4;
+/// use xc_notion::Mat4;
 /// use xcal_scene::scene::components::{Material3D, MeshGeometry};
 /// use xc_notion::{Color32, Vec3};
 /// use xcal_render::Painter3D;

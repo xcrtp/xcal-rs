@@ -53,7 +53,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use glam::{Mat4, Vec2, Vec3};
+use xc_notion::{Mat4, Vec2, Vec3};
 use wgpu::util::DeviceExt as _;
 
 use crate::gpu_util::{UniformArena, bytes_of};
@@ -1212,9 +1212,9 @@ mod tests {
     fn basic_mesh() -> MeshGeometry {
         MeshGeometry::new(
             vec![
-                glam::Vec3::new(-1.0, -1.0, 0.0),
-                glam::Vec3::new(1.0, -1.0, 0.0),
-                glam::Vec3::new(0.0, 1.0, 0.0),
+                xc_notion::Vec3::new(-1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(1.0, -1.0, 0.0),
+                xc_notion::Vec3::new(0.0, 1.0, 0.0),
             ],
             Some(vec![0, 1, 2]),
             PrimitiveTopology::Triangles,
@@ -1345,9 +1345,9 @@ mod tests {
         };
 
         let camera = Camera3D::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
+            xc_notion::Vec3::new(0.0, 0.0, 5.0),
+            xc_notion::Vec3::ZERO,
+            xc_notion::Vec3::Y,
             Projection::perspective(std::f32::consts::FRAC_PI_3, 1.0, 0.1, 100.0),
         );
         let viewport = Viewport::full(256, 256);
@@ -1633,19 +1633,19 @@ mod tests {
         // 顶点绕序从 +z 观察为 CCW，与默认背面剔除约定一致。
         let quad = MeshGeometry::new(
             vec![
-                glam::Vec3::new(-1.0, -1.0, 0.5),
-                glam::Vec3::new(1.0, -1.0, 0.5),
-                glam::Vec3::new(1.0, 1.0, 0.5),
-                glam::Vec3::new(-1.0, 1.0, 0.5),
+                xc_notion::Vec3::new(-1.0, -1.0, 0.5),
+                xc_notion::Vec3::new(1.0, -1.0, 0.5),
+                xc_notion::Vec3::new(1.0, 1.0, 0.5),
+                xc_notion::Vec3::new(-1.0, 1.0, 0.5),
             ],
             Some(vec![0, 1, 2, 0, 2, 3]),
             PrimitiveTopology::Triangles,
         )
         .with_uvs(vec![
-            glam::Vec2::new(0.0, 1.0),
-            glam::Vec2::new(1.0, 1.0),
-            glam::Vec2::new(1.0, 0.0),
-            glam::Vec2::new(0.0, 0.0),
+            xc_notion::Vec2::new(0.0, 1.0),
+            xc_notion::Vec2::new(1.0, 1.0),
+            xc_notion::Vec2::new(1.0, 0.0),
+            xc_notion::Vec2::new(0.0, 0.0),
         ]);
 
         let mut material = Material3D::color(Color32::WHITE);
@@ -1732,19 +1732,19 @@ mod tests {
         let size = 64u32;
 
         // 法线倾斜的四边形：lit ≈ 0.2 + 0.8 / √2 ≈ 0.766 < 1。
-        let n = glam::Vec3::new(1.0, 0.0, 1.0).normalize();
+        let n = xc_notion::Vec3::new(1.0, 0.0, 1.0).normalize();
         let geometry = std::sync::Arc::new(
             MeshGeometry::new(
                 vec![
-                    glam::Vec3::new(-1.0, -1.0, 0.5),
-                    glam::Vec3::new(1.0, -1.0, 0.5),
-                    glam::Vec3::new(1.0, 1.0, 0.5),
-                    glam::Vec3::new(-1.0, 1.0, 0.5),
+                    xc_notion::Vec3::new(-1.0, -1.0, 0.5),
+                    xc_notion::Vec3::new(1.0, -1.0, 0.5),
+                    xc_notion::Vec3::new(1.0, 1.0, 0.5),
+                    xc_notion::Vec3::new(-1.0, 1.0, 0.5),
                 ],
                 Some(vec![0, 1, 2, 0, 2, 3]),
                 PrimitiveTopology::Triangles,
             )
-            .with_uvs(vec![glam::Vec2::ZERO; 4])
+            .with_uvs(vec![xc_notion::Vec2::ZERO; 4])
             .with_normals(vec![n; 4]),
         );
 
@@ -1799,7 +1799,7 @@ mod tests {
         );
         MeshDraw::new(
             std::sync::Arc::new(geometry),
-            Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z)),
+            Mat4::from_translation(xc_notion::Vec3::new(0.0, 0.0, z)),
             Material3D::color(color),
         )
     }

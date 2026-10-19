@@ -35,7 +35,7 @@ pub struct FormulaSpec {
     /// 目标显示字号（pt ≈ 世界单位高度）。经 `ir_to_draw_cmds` 缩放到世界坐标。
     pub font_size: f32,
     /// 世界坐标锚点（Y-up；IR 原点位于墨迹包围盒左下方）。
-    pub world_pos: glam::Vec2,
+    pub world_pos: xc_notion::Vec2,
     /// Typst 编译用的标称字号（pt）：决定曲线提取精度与 IR 本地点尺度。
     /// 与 [`font_size`](Self::font_size) 解耦——后者只决定最终显示大小。
     pub nominal_font_size: f32,
@@ -44,7 +44,7 @@ pub struct FormulaSpec {
 #[cfg(test)]
 impl FormulaSpec {
     /// 用默认标称字号（12.0）构造。
-    pub fn new(source: impl Into<String>, font_size: f32, world_pos: glam::Vec2) -> Self {
+    pub fn new(source: impl Into<String>, font_size: f32, world_pos: xc_notion::Vec2) -> Self {
         Self {
             source: source.into(),
             font_size,
@@ -103,7 +103,7 @@ pub struct TextSpec {
     /// 目标显示字号（pt ≈ 世界单位高度），语义同 [`FormulaSpec::font_size`]。
     pub font_size: f32,
     /// 世界坐标锚点（Y-up；IR 原点位于墨迹包围盒左下方）。
-    pub world_pos: glam::Vec2,
+    pub world_pos: xc_notion::Vec2,
     /// Typst 编译用的标称字号（pt）。
     pub nominal_font_size: f32,
 }
@@ -111,7 +111,7 @@ pub struct TextSpec {
 #[cfg(test)]
 impl TextSpec {
     /// 用默认标称字号（12.0）构造。
-    pub fn new(source: impl Into<String>, font_size: f32, world_pos: glam::Vec2) -> Self {
+    pub fn new(source: impl Into<String>, font_size: f32, world_pos: xc_notion::Vec2) -> Self {
         Self {
             source: source.into(),
             font_size,
@@ -217,7 +217,7 @@ mod tests {
     fn spec_with_nominal(source: &str, font_size: f32, nominal: f32) -> FormulaSpec {
         FormulaSpec {
             nominal_font_size: nominal,
-            ..FormulaSpec::new(source, font_size, glam::Vec2::ZERO)
+            ..FormulaSpec::new(source, font_size, xc_notion::Vec2::ZERO)
         }
     }
 
@@ -229,7 +229,7 @@ mod tests {
     }
 
     /// 取路径的折线点（`MoveTo` / `LineTo` 端点），用于断言几何。
-    fn path_points(path: &Path2D) -> Vec<glam::Vec2> {
+    fn path_points(path: &Path2D) -> Vec<xc_notion::Vec2> {
         path.commands
             .iter()
             .filter_map(|c| match c {
@@ -241,8 +241,8 @@ mod tests {
 
     /// 顶点集合的包围盒尺寸（宽, 高）。
     fn bounds_of(paths: &[StrokePath]) -> (f32, f32) {
-        let mut min = glam::Vec2::splat(f32::INFINITY);
-        let mut max = glam::Vec2::splat(f32::NEG_INFINITY);
+        let mut min = xc_notion::Vec2::splat(f32::INFINITY);
+        let mut max = xc_notion::Vec2::splat(f32::NEG_INFINITY);
         for (path, _, _, _) in paths {
             for p in path_points(path) {
                 min = min.min(p);
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn path_count_matches_items() {
         let ir = placeholder_ir("abc", 12.0);
-        let spec = FormulaSpec::new("abc", 12.0, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("abc", 12.0, xc_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         // 占位字形每个都是单轮廓闭合矩形 → 每条 item 恰好一条路径。
         assert_eq!(paths.len(), ir.items.len());
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn every_path_has_points() {
         let ir = placeholder_ir("xy", 12.0);
-        let spec = FormulaSpec::new("xy", 12.0, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("xy", 12.0, xc_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert!(!paths.is_empty());
         for (path, _, width, _) in &paths {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn default_width_is_world_units() {
         let ir = placeholder_ir("a", 12.0);
-        let spec = FormulaSpec::new("a", 1.3, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("a", 1.3, xc_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         let world_w = paths[0].2;
         assert!((world_w - 1.0 * 1.3 / 12.0).abs() < 1e-6, "got {world_w}");
@@ -301,8 +301,8 @@ mod tests {
     fn font_size_doubles_bounds() {
         // 固定 IR（nominal = 12），仅改变 target 字号，隔离缩放逻辑。
         let ir = placeholder_ir("abc", 12.0);
-        let spec1 = FormulaSpec::new("abc", 12.0, glam::Vec2::ZERO);
-        let spec2 = FormulaSpec::new("abc", 24.0, glam::Vec2::ZERO);
+        let spec1 = FormulaSpec::new("abc", 12.0, xc_notion::Vec2::ZERO);
+        let spec2 = FormulaSpec::new("abc", 24.0, xc_notion::Vec2::ZERO);
         let (w1, h1) = bounds_of(&compile_to_stroke_paths(&ir, &spec1));
         let (w2, h2) = bounds_of(&compile_to_stroke_paths(&ir, &spec2));
         assert!(
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn geometry_stays_y_up_from_anchor() {
         let ir = placeholder_ir("abc", 12.0);
-        let anchor = glam::Vec2::new(-8.0, 2.5);
+        let anchor = xc_notion::Vec2::new(-8.0, 2.5);
         let spec = FormulaSpec::new("abc", 12.0, anchor);
         let paths = compile_to_stroke_paths(&ir, &spec);
         for (path, _, _, _) in &paths {
@@ -375,7 +375,7 @@ mod tests {
         ));
         ir.recompute_bounds();
 
-        let spec = FormulaSpec::new("o", 10.0, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("o", 10.0, xc_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert_eq!(paths.len(), 2, "双轮廓应拆成两条独立路径");
         for (path, _, _, _) in &paths {
@@ -408,7 +408,7 @@ mod tests {
         ));
         ir.recompute_bounds();
 
-        let spec = FormulaSpec::new("s", 10.0, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("s", 10.0, xc_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0].1, Color32::from_rgb(0x00FF00));
@@ -437,7 +437,7 @@ mod tests {
         });
         ir.recompute_bounds();
 
-        let spec = FormulaSpec::new("n", 10.0, glam::Vec2::ZERO);
+        let spec = FormulaSpec::new("n", 10.0, xc_notion::Vec2::ZERO);
         assert!(compile_to_stroke_paths(&ir, &spec).is_empty());
     }
 
@@ -448,7 +448,7 @@ mod tests {
     /// T3 验收 1：`路径数 > 0`（headless，不依赖 typst feature）。
     #[test]
     fn text_spec_compiles_to_nonempty_stroke_paths() {
-        let text = TextSpec::new("Hello world", 1.0, glam::Vec2::ZERO);
+        let text = TextSpec::new("Hello world", 1.0, xc_notion::Vec2::ZERO);
         let fs = text.to_formula_spec();
         // 包装形态：`"Hello world"`（非斜体正文的关键）。
         assert_eq!(fs.source, "\"Hello world\"");
@@ -467,7 +467,7 @@ mod tests {
     /// 引号 / 反斜杠转义（否则 Typst 字面量会被提前闭合 / 转义错）。
     #[test]
     fn text_spec_escapes_quotes_and_backslashes() {
-        let fs = TextSpec::new("a\"b\\c", 1.0, glam::Vec2::ZERO).to_formula_spec();
+        let fs = TextSpec::new("a\"b\\c", 1.0, xc_notion::Vec2::ZERO).to_formula_spec();
         assert_eq!(fs.source, "\"a\\\"b\\\\c\"");
     }
 
@@ -480,7 +480,7 @@ mod tests {
         use xcal_scene::contract::WorldView;
 
         let engine = xc_prerender::placeholder_engine();
-        let text = TextSpec::new("hi", 1.0, glam::Vec2::ZERO);
+        let text = TextSpec::new("hi", 1.0, xc_notion::Vec2::ZERO);
         let fs = text.to_formula_spec();
         let ir = rebuild(&engine, &fs).expect("placeholder IR");
         let paths = compile_to_stroke_paths(&ir, &fs);
@@ -504,7 +504,7 @@ mod tests {
             StrokeSolid::new_in(width, color, space),
             Opacity::new(0.5),
             Transform {
-                position: glam::Vec3::new(1.0, 0.0, 0.0),
+                position: xc_notion::Vec3::new(1.0, 0.0, 0.0),
                 ..Default::default()
             },
         ));
@@ -533,7 +533,7 @@ mod tests {
         use xcal_scene::scene::components::Reveal;
 
         let engine = xc_prerender::placeholder_engine();
-        let text = TextSpec::new("ab", 1.0, glam::Vec2::ZERO);
+        let text = TextSpec::new("ab", 1.0, xc_notion::Vec2::ZERO);
         let fs = text.to_formula_spec();
         let ir = rebuild(&engine, &fs).expect("placeholder IR");
         let (path, _, _, _) = compile_to_stroke_paths(&ir, &fs)
@@ -544,7 +544,7 @@ mod tests {
         let mut scene = xcal_scene::scene::Scene::new();
         let cam = xc_object::spawn_camera2d(
             &mut scene,
-            xc_object::Framing2D::new(glam::Vec2::ZERO, 40.0),
+            xc_object::Framing2D::new(xc_notion::Vec2::ZERO, 40.0),
         )
         .expect("Framing2D 已登记");
         scene.spawn((

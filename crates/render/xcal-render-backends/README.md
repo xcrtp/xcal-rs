@@ -82,10 +82,9 @@ let ctx = RenderContext::from_render_state(rs);
   `color * lit * textureSample(t, s, uv)`，其中 `lit` 为固定头顶方向
   `L = (0,0,1)` 的 Lambert（`ambient = 0.2`）；无法线几何 `lit = 1` 故外观不变
   （RC 补充）。
-- 兼容 `glam 0.33`：使用
-  `glam::camera::rh::proj::directx::perspective` / `orthographic` 与
-  `glam::camera::rh::view::look_at_mat4`（移除旧 `perspective_rh` /
-  `look_at_rh`）。
+- 兼容 `glam 0.33`：经唯一数学入口 `xc_notion::proj` 使用
+  `directx::perspective` / `orthographic` 与 `look_at_mat4`
+  （移除旧 `perspective_rh` / `look_at_rh`）。
 
 ### 3. `scene_callback` (`egui-wgpu`) — S3-2 修复
 

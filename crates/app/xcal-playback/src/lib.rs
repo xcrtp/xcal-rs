@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use glam::Vec3;
+use xc_notion::Vec3;
 use xcal_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect,
 };

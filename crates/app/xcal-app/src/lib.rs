@@ -565,9 +565,9 @@ mod tests {
         // K3 的对象形态：3D 相机对象 + 模式组件。
         let camera3d = world.spawn((
             Camera3D::new(
-                glam::Vec3::new(0.0, 0.0, 5.0),
-                glam::Vec3::ZERO,
-                glam::Vec3::Y,
+                xc_notion::Vec3::new(0.0, 0.0, 5.0),
+                xc_notion::Vec3::ZERO,
+                xc_notion::Vec3::Y,
                 Projection::perspective(1.0, 1.0, 0.1, 100.0),
             ),
             CameraMode::PATH,
@@ -581,7 +581,7 @@ mod tests {
             clock,
             curve: Curve::Orbit {
                 radius: 5.0,
-                axis: glam::Vec3::Y,
+                axis: xc_notion::Vec3::Y,
                 speed: 0.5,
                 initial_angle: 0.0,
             },
@@ -701,7 +701,7 @@ mod tests {
         let mut world = hecs::World::new();
         let camera = {
             let mut ws = WorldScene::new(&mut world);
-            spawn_camera2d(&mut ws, Framing2D::new(glam::Vec2::ZERO, 25.0))
+            spawn_camera2d(&mut ws, Framing2D::new(xc_notion::Vec2::ZERO, 25.0))
                 .expect("Framing2D 已登记")
         };
 
@@ -1484,7 +1484,7 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
         );
         assert_eq!(
             scene.with::<Framing2D, _>(camera.0, |f| *f),
-            Some(Framing2D::new(glam::Vec2::ZERO, 40.0)),
+            Some(Framing2D::new(xc_notion::Vec2::ZERO, 40.0)),
             "找到的必须是初始取景的 2D 相机"
         );
     }
@@ -1700,7 +1700,7 @@ mod t_capabilities_gpu {
 
     fn transform_at(x: f32, y: f32) -> Transform {
         Transform {
-            position: glam::Vec3::new(x, y, 0.0),
+            position: xc_notion::Vec3::new(x, y, 0.0),
             ..Default::default()
         }
     }
@@ -1743,7 +1743,7 @@ mod t_capabilities_gpu {
             Circle::new((0.0, 0.0), 0.5),
             white_fill(),
             Transform {
-                scale: glam::Vec3::splat(2.0),
+                scale: xc_notion::Vec3::splat(2.0),
                 ..Default::default()
             },
         ));
@@ -1768,7 +1768,7 @@ mod t_capabilities_gpu {
             rect,
             white_fill(),
             Transform {
-                rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+                rotation: xc_notion::Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
                 ..Default::default()
             },
         ));
@@ -1872,7 +1872,7 @@ mod t_capabilities_gpu {
     #[test]
     fn t3_text_has_pixels() {
         let engine = xc_prerender::placeholder_engine();
-        let text = crate::formula::TextSpec::new("abc", 1.0, glam::Vec2::ZERO);
+        let text = crate::formula::TextSpec::new("abc", 1.0, xc_notion::Vec2::ZERO);
         let spec = text.to_formula_spec();
         let ir = crate::formula::rebuild(&engine, &spec).expect("placeholder IR");
         let paths = crate::formula::compile_to_stroke_paths(&ir, &spec);

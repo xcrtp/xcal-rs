@@ -294,7 +294,7 @@ impl System for SceneRecord3DSystem {
                     .unwrap_or_default();
                 let model = scene
                     .with::<Transform, _>(id, |transform| transform.matrix())
-                    .unwrap_or(glam::Mat4::IDENTITY);
+                    .unwrap_or(xc_notion::Mat4::IDENTITY);
                 items.push((Arc::clone(mesh), model, material));
             });
             for (mesh, model, material) in items {

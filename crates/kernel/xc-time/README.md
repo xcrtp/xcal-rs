@@ -87,7 +87,7 @@ let id = forest.insert(looper).unwrap();
 ```rust
 use xc_time::{Curve, AnimValue};
 
-let orbit = Curve::Orbit { radius: 5.0, axis: glam::Vec3::Y, speed: 1.0, initial_angle: 0.0 };
+let orbit = Curve::Orbit { radius: 5.0, axis: xc_notion::Vec3::Y, speed: 1.0, initial_angle: 0.0 };
 let eye = orbit.sample(0.0);               // AnimValue::Vec3(0, 0, 5)，与旧 OrbitAnim 起点一致
 let v = eye.try_vec3().unwrap();           // 类型安全取值：不匹配返回 None
 ```

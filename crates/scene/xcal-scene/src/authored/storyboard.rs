@@ -35,11 +35,11 @@ use crate::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 
 /// 主 2D 相机初始取景（世界原点居中、40 px/世界单位）。
 const CAMERA_START: Framing2D = Framing2D {
-    center: glam::Vec2::ZERO,
+    center: xc_notion::Vec2::ZERO,
     scale: 40.0,
 };
 /// 镜头推进目标：曲线峰值 `(π/2, 1)`，并放大到 110 px/世界单位。
-const CAMERA_PEAK: glam::Vec2 = glam::Vec2::new(FRAC_PI_2, 1.0);
+const CAMERA_PEAK: xc_notion::Vec2 = xc_notion::Vec2::new(FRAC_PI_2, 1.0);
 const CAMERA_SCALE_PUSHED: f32 = 110.0;
 
 /// 分镜 6（公式书写）的总时长：各轮廓**平摊**这一段（见 `build` 的编排）。
@@ -52,7 +52,7 @@ const FORMULA_WRITE_SECONDS: f64 = 1.0;
 ///
 /// 选点使它在**镜头推进前后都在可见范围内**（推进后可见 x ∈ [-2.07, 5.21]、
 /// y ∈ [-1.73, 3.73]）；文字几何在原点编译，位置由 `Transform` 负责 ⇒ T1 + T3 联用。
-const TEXT_POS: glam::Vec3 = glam::Vec3::new(-1.5, 3.0, 0.0);
+const TEXT_POS: xc_notion::Vec3 = xc_notion::Vec3::new(-1.5, 3.0, 0.0);
 /// 标注文字的目标字号（世界单位高度）。
 const TEXT_FONT_SIZE: f32 = 0.55;
 
@@ -169,12 +169,12 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Storyboard {
 // ─── 采样 / 曲线构造（纯函数）─────────────────────────────────────────────
 
 /// `y = sin x` 在 `[-π, π]` 上的等步长采样（首尾点都恰为 `y = 0`）。
-fn sin_samples() -> Vec<glam::Vec2> {
+fn sin_samples() -> Vec<xc_notion::Vec2> {
     let step = std::f32::consts::TAU / CURVE_STEP_COUNT as f32;
     (0..=CURVE_STEP_COUNT)
         .map(|i| {
             let x = -std::f32::consts::PI + (i as f32) * step;
-            glam::Vec2::new(x, x.sin())
+            xc_notion::Vec2::new(x, x.sin())
         })
         .collect()
 }
@@ -195,7 +195,7 @@ fn keyframes_scalar(dur: f64, from: f32, to: f32) -> Curve {
 }
 
 /// 段内把 `Vec2` 从 `from` 插值到 `to`（驱动 `Framing2D.center`）。
-fn keyframes_vec2(dur: f64, from: glam::Vec2, to: glam::Vec2) -> Curve {
+fn keyframes_vec2(dur: f64, from: xc_notion::Vec2, to: xc_notion::Vec2) -> Curve {
     Curve::Keyframes {
         keys: vec![(0.0, AnimValue::Vec2(from)), (dur, AnimValue::Vec2(to))],
         interpolation: Interp::Linear,
@@ -226,7 +226,7 @@ fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<
 
     // 编译产物 → **按阅读顺序排序** → 录进脚本。排序在此处（而非通用工具内）：
     // 书写方向是动画语义，通用路径工具不该知道它。
-    let outlines = xc_content::stroke_outlines(&ir, 0.8, glam::Vec2::new(1.0, 2.0), true);
+    let outlines = xc_content::stroke_outlines(&ir, 0.8, xc_notion::Vec2::new(1.0, 2.0), true);
 
     let mut handles = Vec::new();
     for outline in outlines {
@@ -255,7 +255,7 @@ fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
         eprintln!("[xcal-scene] T3 标注文字编译失败，跳过");
         return;
     };
-    for outline in xc_content::stroke_outlines(&ir, TEXT_FONT_SIZE, glam::Vec2::ZERO, false) {
+    for outline in xc_content::stroke_outlines(&ir, TEXT_FONT_SIZE, xc_notion::Vec2::ZERO, false) {
         enc.spawn(vec![
             Box::new(Path::new(outline.path)),
             Box::new(StrokeSolid::new_in(

@@ -195,8 +195,8 @@ use xc_notion::Color32;
 
 let white = Color32::new(255, 255, 255, 255);
 let mut q3 = DrawQueue3D::new();
-q3.draw_mesh(Arc::new(wireframe_cube(1.0)), glam::Mat4::IDENTITY, Material3D::color(white));
-q3.draw_line(glam::Vec3::ZERO, glam::Vec3::X, Color32::new(255, 0, 0, 255));
+q3.draw_mesh(Arc::new(wireframe_cube(1.0)), xc_notion::Mat4::IDENTITY, Material3D::color(white));
+q3.draw_line(xc_notion::Vec3::ZERO, xc_notion::Vec3::X, Color32::new(255, 0, 0, 255));
 assert_eq!(q3.mesh_count() + q3.line_count(), 2);
 ```
 

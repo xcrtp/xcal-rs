@@ -22,7 +22,6 @@ xc-notion = { path = "../../kernel/xc-notion" }
 
 wgpu.workspace = true
 hecs.workspace = true
-glam.workspace = true
 thiserror.workspace = true
 
 [features]

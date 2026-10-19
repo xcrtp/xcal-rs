@@ -4,12 +4,12 @@
 // 与 2D DrawQueue 不同，3D 队列不做排序：遮挡由 3D 后端离屏 pass 的深度测试
 // 决定（RC.3，Depth32Float + CompareFunction::Less），队列本身按录制顺序提交。
 //
-// 坐标类型使用 xc-notion 的 Vec3（= glam::Vec3）/ Color32；
+// 坐标类型使用 xc-notion 的 Vec3（= xc_notion::Vec3）/ Color32；
 // 网格几何（MeshGeometry）与材质（Material3D）由 xcal-scene 的 ECS 组件体系提供。
 
 use std::sync::Arc;
 
-use glam::Mat4;
+use xc_notion::Mat4;
 use xc_notion::{Color32, Vec3};
 use xcal_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
@@ -64,7 +64,7 @@ impl LineDraw {
 /// ```
 /// use std::sync::Arc;
 ///
-/// use glam::Mat4;
+/// use xc_notion::Mat4;
 /// use xcal_render::DrawQueue3D;
 /// use xcal_scene::scene::components::Material3D;
 /// use xcal_scene::scene::primitives::wireframe_cube;

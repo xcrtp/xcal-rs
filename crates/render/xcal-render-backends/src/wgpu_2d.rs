@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 use std::mem;
 
-use glam::Mat4;
+use xc_notion::Mat4;
 use wgpu::util::DeviceExt as _;
 
 use xc_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
@@ -1394,8 +1394,8 @@ mod tests {
         let g = geometry(300.0, 200.0, 1.0, [1600, 1200]);
         let m = g.clip_matrix();
         let (w, h) = g.offscreen_size();
-        let nw = m * glam::vec4(0.0, 0.0, 0.0, 1.0);
-        let se = m * glam::vec4(w as f32, h as f32, 0.0, 1.0);
+        let nw = m * xc_notion::Vec4::new(0.0, 0.0, 0.0, 1.0);
+        let se = m * xc_notion::Vec4::new(w as f32, h as f32, 0.0, 1.0);
         assert!((nw.x + 1.0).abs() < 1e-5 && (nw.y - 1.0).abs() < 1e-5);
         assert!((se.x - 1.0).abs() < 1e-5 && (se.y + 1.0).abs() < 1e-5);
     }

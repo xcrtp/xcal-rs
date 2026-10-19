@@ -164,9 +164,9 @@ mod tests {
             let cam2d = world.spawn((Framing2D::default(), CameraMode::PATH));
             let cam3d = world.spawn((
                 Camera3D::new(
-                    glam::Vec3::new(0.0, 0.0, 5.0),
-                    glam::Vec3::ZERO,
-                    glam::Vec3::Y,
+                    xc_notion::Vec3::new(0.0, 0.0, 5.0),
+                    xc_notion::Vec3::ZERO,
+                    xc_notion::Vec3::Y,
                     Projection::perspective(1.0, 1.0, 0.1, 100.0),
                 ),
                 CameraMode::PATH,
@@ -210,7 +210,7 @@ mod tests {
                 clock: c_orbit,
                 curve: Curve::Orbit {
                     radius: 5.0,
-                    axis: glam::Vec3::Y,
+                    axis: xc_notion::Vec3::Y,
                     speed: 0.5,
                     initial_angle: 0.0,
                 },

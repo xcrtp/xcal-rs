@@ -108,7 +108,7 @@ pub fn build(scene: &mut Scene) -> CapabilityDemo {
 
     // ── 相机（**必须先建**：`Visibility::for_camera` 需要引用它的句柄）──────
     let camera_h = enc.spawn(vec![Box::new(Framing2D::new(
-        glam::Vec2::ZERO,
+        xc_notion::Vec2::ZERO,
         CAMERA_SCALE,
     ))]);
 
@@ -182,22 +182,22 @@ pub fn build(scene: &mut Scene) -> CapabilityDemo {
 // ─── 装配辅助 ─────────────────────────────────────────────────────────────
 
 /// 在 `[-π, π]` 上按 `f` 采样（首尾点分别在 `∓π`）。
-fn samples(f: impl Fn(f32) -> f32) -> Vec<glam::Vec2> {
+fn samples(f: impl Fn(f32) -> f32) -> Vec<xc_notion::Vec2> {
     let step = std::f32::consts::TAU / STEP_COUNT as f32;
     (0..=STEP_COUNT)
         .map(|i| {
             let x = -std::f32::consts::PI + (i as f32) * step;
-            glam::Vec2::new(x, f(x))
+            xc_notion::Vec2::new(x, f(x))
         })
         .collect()
 }
 
 /// 对照组几何：一段远离两条曲线的折线（世界坐标），只在"相机 tag 命中"时才会出现。
-fn control_samples() -> Vec<glam::Vec2> {
+fn control_samples() -> Vec<xc_notion::Vec2> {
     vec![
-        glam::Vec2::new(-1.0, 3.0),
-        glam::Vec2::new(0.0, 3.4),
-        glam::Vec2::new(1.0, 3.0),
+        xc_notion::Vec2::new(-1.0, 3.0),
+        xc_notion::Vec2::new(0.0, 3.4),
+        xc_notion::Vec2::new(1.0, 3.0),
     ]
 }
 

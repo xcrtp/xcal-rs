@@ -230,7 +230,7 @@ mod tests {
             clock: ClockId(1),
             curve: Curve::Orbit {
                 radius: 5.0,
-                axis: glam::Vec3::Y,
+                axis: xc_notion::Vec3::Y,
                 speed: 0.5,
                 initial_angle: 0.0,
             },

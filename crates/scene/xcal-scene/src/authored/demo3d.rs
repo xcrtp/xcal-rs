@@ -59,7 +59,7 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
         Arc::new(surface),
         surface_material,
         Transform {
-            position: glam::Vec3::new(0.0, -1.35, 0.0),
+            position: xc_notion::Vec3::new(0.0, -1.35, 0.0),
             ..Default::default()
         },
     ));
@@ -73,16 +73,16 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
     //
     // 注：eye 由 Orbit 绑定直接写入（半径 5、绕原点、eye.y ≡ 0），改变 target 只影响
     // 朝向，不影响该旋转轨道。
-    const SCENE_LOOK_AT: glam::Vec3 = glam::Vec3::new(0.0, -0.9, 0.0);
+    const SCENE_LOOK_AT: xc_notion::Vec3 = xc_notion::Vec3::new(0.0, -0.9, 0.0);
     // K0/K2：3D 相机的交互模式是**组件**；这里取 `Path`（动画驱动）——
     // 与改动前逐位一致（`eye` 由下面的 `Curve::Orbit` 绑定驱动、不接受交互命令）。
     // `CameraDriveSystem` 会在用户把"视口操作"切到 3D 时把它改成 `Orbit` / `Fps`，
     // 并让自动轨道绑定**让位**（否则每帧覆盖 `eye`，交互看不见效果）。
     let camera3d_entity = scene.spawn((
         Camera3D::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
+            xc_notion::Vec3::new(0.0, 0.0, 5.0),
             SCENE_LOOK_AT,
-            glam::Vec3::Y,
+            xc_notion::Vec3::Y,
             Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
         ),
         CameraMode::PATH,
@@ -104,7 +104,7 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
         Some(ir) => {
             // 包围盒由理念层 `Path2D::bounds`（懒计算）给出 —— 不再遍历命令。
             let mut bounds: Option<Rect2D> = None;
-            for outline in xc_content::stroke_outlines(&ir, 1.3, glam::Vec2::new(-2.8, 3.0), false)
+            for outline in xc_content::stroke_outlines(&ir, 1.3, xc_notion::Vec2::new(-2.8, 3.0), false)
             {
                 let mut path = outline.path;
                 bounds = Some(match bounds {

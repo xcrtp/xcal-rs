@@ -262,12 +262,12 @@ impl EguiSceneHost {
                     let axis = |neg: egui::Key, pos: egui::Key| {
                         (i.key_down(pos) as i32 - i.key_down(neg) as i32) as f32
                     };
-                    let delta = glam::Vec3::new(
+                    let delta = xc_notion::Vec3::new(
                         axis(egui::Key::A, egui::Key::D),
                         axis(egui::Key::Q, egui::Key::E),
                         axis(egui::Key::S, egui::Key::W),
                     ) * MOVE_PER_FRAME;
-                    if delta != glam::Vec3::ZERO {
+                    if delta != xc_notion::Vec3::ZERO {
                         events.push(SceneEvent::Camera {
                             layer: *layer,
                             command: CameraCommand::Move { delta },
@@ -688,9 +688,9 @@ mod tests {
     /// 建含 3D 相机的世界（3D 图层来源）。
     fn spawn_3d_camera(world: &mut hecs::World) {
         world.spawn((Camera3D::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
+            xc_notion::Vec3::new(0.0, 0.0, 5.0),
+            xc_notion::Vec3::ZERO,
+            xc_notion::Vec3::Y,
             Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
         ),));
     }

@@ -29,7 +29,6 @@ xc-content = { path = "../../kernel/xc-content" }
 xc-vertex = { path = "../../kernel/xc-vertex" }
 xc-resource = { path = "../../kernel/xc-resource" }
 
-glam.workspace = true
 derive_more.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
@@ -42,7 +41,6 @@ lyon_tessellation = "1.0"
 lyon_path = "1.0"
 
 [dev-dependencies]
-glam.workspace = true
 serde_json.workspace = true
 # ⚠️ 仅测试用：录制 System 的用例要驱动 `Scheduler`（容器是 `hecs::World`）。
 # 库本体**不认识 hecs**（M3-7 纪律）—— `record_scene` 只吃契约层 `SceneRead`。

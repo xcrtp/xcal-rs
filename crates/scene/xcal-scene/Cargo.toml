@@ -26,7 +26,6 @@ xc-content = { path = "../../kernel/xc-content" }
 xc-prerender = { path = "../../kernel/xc-prerender", default-features = false }
 xcal-schedule = { path = "../../schedule/xcal-schedule" }
 
-glam.workspace = true
 derive_more.workspace = true
 thiserror.workspace = true
 smart-default.workspace = true
@@ -38,4 +37,3 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-glam.workspace = true

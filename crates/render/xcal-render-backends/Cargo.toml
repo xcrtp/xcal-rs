@@ -13,7 +13,6 @@ xc-object = { path = "../../object/xc-object" }
 # S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖 xcal-scene。
 xc-render-ir = { path = "../../kernel/xc-render-ir" }
 
-glam.workspace = true
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
 # GPU 测试汇报：直接写 fd 2，绕过 libtest 的线程输出捕获。
@@ -35,7 +34,6 @@ eframe.workspace = true
 egui-wgpu.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
-glam.workspace = true
 # N6：GPU 像素级验收要构造真实 ECS 场景（`record_scene_tagged` 的入参是
 # `SceneRead`，hecs 侧适配器 `WorldView` 需要 `&hecs::World`）——**仅测试用**。
 hecs.workspace = true

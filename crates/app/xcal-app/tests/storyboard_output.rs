@@ -16,7 +16,7 @@ use xcal_schedule::resource::Resources;
 use xcal_schedule::scheduler::{Phase, Scheduler};
 
 const CAMERA_SCALE_PUSHED: f32 = 110.0;
-const CAMERA_PEAK: glam::Vec2 = glam::Vec2::new(FRAC_PI_2, 1.0);
+const CAMERA_PEAK: xc_notion::Vec2 = xc_notion::Vec2::new(FRAC_PI_2, 1.0);
 
 #[test]
 fn storyboard_produces_draw_output_over_time() {

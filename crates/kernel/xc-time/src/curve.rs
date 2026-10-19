@@ -2,7 +2,7 @@
 //
 // 全部 Curve::sample 为纯函数，输入 t，输出 AnimValue。
 
-use glam::{Vec2, Vec3};
+use xc_notion::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use xc_notion::{DEFAULT_MORPH_SAMPLES, Path2D};
 
@@ -463,10 +463,10 @@ mod tests {
     fn square(half: f32) -> Path2D {
         Path2D::from_polyline(
             &[
-                glam::Vec2::new(-half, -half),
-                glam::Vec2::new(half, -half),
-                glam::Vec2::new(half, half),
-                glam::Vec2::new(-half, half),
+                xc_notion::Vec2::new(-half, -half),
+                xc_notion::Vec2::new(half, -half),
+                xc_notion::Vec2::new(half, half),
+                xc_notion::Vec2::new(-half, half),
             ],
             true,
         )
@@ -534,10 +534,10 @@ mod tests {
         assert!((bnd(&p1).max.x - 2.0).abs() < 1e-3, "t=1 max.x={}", bnd(&p1).max.x);
 
         // 输出顶点数恒为 samples，与输入复杂度无关：from/to 一个 4 点、一个 512 点。
-        let circle_poly: Vec<glam::Vec2> = (0..512)
+        let circle_poly: Vec<xc_notion::Vec2> = (0..512)
             .map(|i| {
                 let a = std::f32::consts::TAU * (i as f32) / 512.0;
-                glam::Vec2::new(a.cos(), a.sin())
+                xc_notion::Vec2::new(a.cos(), a.sin())
             })
             .collect();
         let curve2 = Curve::PathMorph {

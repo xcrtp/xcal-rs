@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use glam::Mat4;
+use xc_notion::Mat4;
 use xcal_scene::domain::{LayerBlend, LayerId, LayerKind};
 use xcal_scene::scene::components::{Material3D, MeshGeometry};
 use xc_object::{Camera3D, Projection};
@@ -34,11 +34,11 @@ impl eframe::App for Cube3dApp {
         // 相机轨道运动：eye 绕 Y 轴、半径 5、角速度 0.5 rad/s。
         let t = self.start.elapsed().as_secs_f32();
         let angle = t * 0.5;
-        let eye = glam::Vec3::new(angle.sin() * 5.0, 1.2, angle.cos() * 5.0);
+        let eye = xc_notion::Vec3::new(angle.sin() * 5.0, 1.2, angle.cos() * 5.0);
         let camera = Camera3D::new(
             eye,
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
+            xc_notion::Vec3::ZERO,
+            xc_notion::Vec3::Y,
             Projection::perspective(60.0f32.to_radians(), 16.0 / 9.0, 0.1, 100.0),
         );
 

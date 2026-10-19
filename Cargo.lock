@@ -6001,7 +6001,6 @@ dependencies = [
 name = "xc-time"
 version = "0.1.0"
 dependencies = [
- "glam",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -6024,7 +6023,6 @@ dependencies = [
  "derive-new",
  "derive_builder",
  "egui-wgpu",
- "glam",
  "hecs",
  "png 0.17.16",
  "tracing",
@@ -6063,7 +6061,6 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
- "glam",
  "hecs",
  "tracing",
  "xc-macro",
@@ -6133,7 +6130,6 @@ dependencies = [
 name = "xcal-playback"
 version = "0.1.0"
 dependencies = [
- "glam",
  "hecs",
  "png 0.17.16",
  "thiserror 2.0.20",
@@ -6155,7 +6151,6 @@ dependencies = [
  "derive-new",
  "derive_builder",
  "derive_more",
- "glam",
  "hecs",
  "lyon_path",
  "lyon_tessellation",
@@ -6182,7 +6177,6 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "futures-channel",
- "glam",
  "hecs",
  "libc",
  "pollster 0.3.0",
@@ -6202,7 +6196,6 @@ dependencies = [
  "derive-new",
  "derive_builder",
  "derive_more",
- "glam",
  "hecs",
  "serde",
  "serde_json",

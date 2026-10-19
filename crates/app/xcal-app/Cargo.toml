@@ -40,7 +40,6 @@ xc-object = { path = "../../object/xc-object" }
 
 wgpu.workspace = true
 hecs.workspace = true
-glam.workspace = true
 derive-new.workspace = true
 derive_builder.workspace = true
 tracing.workspace = true

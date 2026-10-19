@@ -907,7 +907,7 @@ mod tests {
     fn test_scene_render_path_stroke() {
         let mut world = TestScene::new();
         let path = Path::new(Path2D::from_polyline(
-            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0)],
+            &[xc_notion::Vec2::new(0.0, 0.0), xc_notion::Vec2::new(1.0, 1.0)],
             false,
         ));
         world.spawn((path, StrokeSolid::new(1.0, (0, 0, 255, 255))));
@@ -938,7 +938,7 @@ mod tests {
             FillSolid::new((0, 255, 0, 128)),
         ));
         let path = Path::new(Path2D::from_polyline(
-            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 1.0)],
+            &[xc_notion::Vec2::new(0.0, 0.0), xc_notion::Vec2::new(1.0, 1.0)],
             false,
         ));
         world.spawn((path, FillSolid::new((0, 0, 255, 255))));
@@ -990,7 +990,7 @@ mod tests {
     }
     fn mk_path() -> Path {
         Path::new(Path2D::from_polyline(
-            &[glam::Vec2::new(0.0, 0.0), glam::Vec2::new(1.0, 0.0)],
+            &[xc_notion::Vec2::new(0.0, 0.0), xc_notion::Vec2::new(1.0, 0.0)],
             false,
         ))
     }
@@ -1247,9 +1247,9 @@ mod tests {
         world.spawn((
             Path::new(Path2D::from_polyline(
                 &[
-                    glam::Vec2::new(0.0, 0.0),
-                    glam::Vec2::new(1.0, 0.0),
-                    glam::Vec2::new(1.0, 1.0),
+                    xc_notion::Vec2::new(0.0, 0.0),
+                    xc_notion::Vec2::new(1.0, 0.0),
+                    xc_notion::Vec2::new(1.0, 1.0),
                 ],
                 true,
             )),
@@ -1283,12 +1283,12 @@ mod tests {
 
     fn transform_at(x: f32, y: f32) -> xc_object::Transform {
         xc_object::Transform {
-            position: glam::Vec3::new(x, y, 0.0),
+            position: xc_notion::Vec3::new(x, y, 0.0),
             ..Default::default()
         }
     }
 
-    fn circle_center(cmd: &DrawCommand) -> glam::Vec2 {
+    fn circle_center(cmd: &DrawCommand) -> xc_notion::Vec2 {
         match &cmd.shape {
             Shape2D::Circle { center, .. } => *center,
             other => panic!("expected Circle, got {other:?}"),
@@ -1340,7 +1340,7 @@ mod tests {
             mk_circle(0.0),
             mk_stroke(),
             xc_object::Transform {
-                scale: glam::Vec3::splat(2.0),
+                scale: xc_notion::Vec3::splat(2.0),
                 ..Default::default()
             },
         ));
@@ -1364,7 +1364,7 @@ mod tests {
             Line::new((0.0, 0.0), (1.0, 0.0)),
             mk_stroke(),
             xc_object::Transform {
-                rotation: glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                rotation: xc_notion::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
                 ..Default::default()
             },
         ));
@@ -1377,7 +1377,7 @@ mod tests {
         // 基准（未摆放）：世界 (0,0)→(1,0) ⇒ 屏幕 (50,50)→(60,50)。
         assert_eq!(
             (*s0, *e0),
-            (glam::Vec2::new(50.0, 50.0), glam::Vec2::new(60.0, 50.0))
+            (xc_notion::Vec2::new(50.0, 50.0), xc_notion::Vec2::new(60.0, 50.0))
         );
 
         let Shape2D::Line { start: s1, end: e1 } = &q.commands()[1].shape else {
@@ -1471,10 +1471,10 @@ mod tests {
     /// **首尾相接的弦** —— 在画面上就是 x 轴上一条额外的直线。
     #[test]
     fn open_morph_endpoints_stay_open_without_chord() {
-        let pts: Vec<glam::Vec2> = (0..=16)
+        let pts: Vec<xc_notion::Vec2> = (0..=16)
             .map(|i| {
                 let x = -1.0 + (i as f32) * 0.125;
-                glam::Vec2::new(x, x.sin())
+                xc_notion::Vec2::new(x, x.sin())
             })
             .collect();
         let item = MorphItem {
@@ -1498,10 +1498,10 @@ mod tests {
     #[test]
     fn closed_morph_endpoints_stay_closed() {
         let ring = |r: f32| {
-            let pts: Vec<glam::Vec2> = (0..16)
+            let pts: Vec<xc_notion::Vec2> = (0..16)
                 .map(|i| {
                     let a = std::f32::consts::TAU * (i as f32) / 16.0;
-                    glam::Vec2::new(r * a.cos(), r * a.sin())
+                    xc_notion::Vec2::new(r * a.cos(), r * a.sin())
                 })
                 .collect();
             Path2D::from_polyline(&pts, true)
