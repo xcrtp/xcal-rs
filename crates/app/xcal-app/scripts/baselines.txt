@@ -1,0 +1,25 @@
+# 帧像素序列哈希基线（机器可读的单一真源）
+#
+# 算法与口径见 FRAME_HASH_BASELINES.md（V1：RGBA8 逐帧 SHA-256 链）。
+# 本文件是哈希值的唯一真源：MD 只解释口径，不重复写值。
+#
+# [native]  完整对拍（fourier / storyboard）：不符即 fail
+# [smoke]   短对拍（PR / --fast）：不符即 fail；**不是**完整基线的等价替代
+# [browser] 仅留档：本机跑不出浏览器产物，**绝不**参与自动比对
+#
+# 记录环境：2026-10-19，Windows / RTX 4060 Laptop
+
+[native]
+# Vulkan headless，640×480 @ 30fps；`--script` 与 `--bundle` 两条路径逐位相同
+fourier = fd40329fe6d18045265e801b5a8b0459926f461b73489e8208ff2779ad2a690d
+storyboard = 7e1a46e89dbad7fcf5a3f955fab56fa7dc85e2b8127c8acfe449b7131a1e4e43
+
+[smoke]
+# 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
+# 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
+# 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
+smoke = 779c909d126eb47406b3994f536612e15158fa4a2df136b29be41be3da29b1be
+
+[browser]
+# Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档
+fourier = bec735052020b250b8ee5a42db49f2d3019b10508b3ee139a9a15c8bfa1e279c

@@ -1,0 +1,6 @@
+# 本机验证入口：一条命令跑完本机能跑的一切。
+#   cargo verify               # full：check + test + wasm + structure + hashes
+#   cargo verify --fast        # 只跑 check + test
+#   cargo verify --step <name> # 单步：check | test | wasm | structure | hashes
+[alias]
+verify = "run --manifest-path xtask/Cargo.toml --"

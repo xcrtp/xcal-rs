@@ -228,13 +228,12 @@ xc-object          = { path = "../../object/xc-object" }          # 图元 / 相
 xc-time            = { path = "../../kernel/xc-time" }            # 时钟树 / 曲线 / Director
 xcal-schedule      = { path = "../../schedule/xcal-schedule" }    # ECS 调度框架 + Telemetry
 
-glam = "0.33.6"
 derive_more (full) / thiserror / smart-default / derive-new / derive_builder
 hecs = "0.11"
 ```
 
-> **W4 记账**：`glam` 在本 crate 的**源码里已不再直接引用**（43 处 → 0；数学类型一律走
-> `xc-notion` 或本层的转发模块 [`types`](src/types.rs)）。Cargo.toml 里的条目仍保留
-> —— 清理清单不在 W4 范围内，留待下次一并处理。
+> **2026-10-19 收口**：`glam` 依赖已从 Cargo.toml 删除；源码 0 处直接引用
+> （数学类型一律走 `xc-notion` 或本层的转发模块 [`types`](src/types.rs)），
+> 仅剩 2 行说明性注释（`types.rs` 历史沿革 / `transform.rs` 的 Y 翻转约定）。
 
 无 `egui`、无 `wgpu`、无 optional feature。

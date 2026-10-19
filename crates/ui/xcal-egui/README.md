@@ -158,7 +158,7 @@ xc-object                                                   # 相机句柄 / 取
 xc-macro
 egui                   = "0.36"
 egui-wgpu                                                     # present 提交 3D/GPU2D 回调
-hecs / glam / derive-new / derive-builder
+hecs / derive-new / derive-builder
 ```
 
 本 crate **无自有 feature**（S4.1 删除了转发旧 CPU 回放的那个）。

@@ -21,7 +21,8 @@ xcal-rs 动画架构的时间单向管道中，本 crate 承担全部「时间 �
 seek（跳转）、倒放（负 rate/speed）、循环回绕因此**免费且必然正确**，
 且与渲染帧率完全解耦。
 
-**硬约束**：仅依赖 `glam` / `xc-notion` / `serde` / `thiserror`；
+**硬约束**：仅依赖 `xc-notion` / `serde` / `thiserror`；
+`glam` 为**禁用项**（数学类型一律经 `xc-notion`，见 `Cargo.toml` 依赖铁律注释）；
 `hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止。
 **路线甲**：可依赖 `xc-notion`（插值原语），但**不得**依赖 `xc-content`——
 语义配对（按源码锚点）的知识留在外层。
@@ -151,7 +152,8 @@ d.pause();  d.resume();  d.toggle();
 ## 序列化
 
 `ClockForest` / `ClockNode` / `Curve` / `AnimValue` / `Director` 全部
-`Serialize + Deserialize`（`Vec2`/`Vec3` 由 glam 的 `serde` feature 打开）。
+`Serialize + Deserialize`（`Vec2`/`Vec3` 的 `serde` 由 `xc-notion` 的 `serde`
+feature 转开）。
 round-trip 测试锁定：**反序列化后在相同时刻采样结果完全相等**——
 时钟树与曲线可安全导出 / 导入。
 
@@ -183,11 +185,13 @@ cargo tree -p xc-time          # 依赖卫生：不含 xc-content / hecs / egui 
 
 ```toml
 [dependencies]
-glam = { workspace = true, features = ["serde"] }            # 数学类型 + 可序列化
-xc-notion = { path = "../xc-notion", features = ["serde"] }  # 插值原语（Lerp / Path2D 形变）
+xc-notion = { path = "../xc-notion", features = ["serde"] }  # 唯一数学入口 + 插值原语
 serde.workspace = true                                       # ClockForest / Curve 可导出
 thiserror.workspace = true                                   # 错误类型
 ```
+
+> `glam` **不是本 crate 的依赖**；直接引用 glam 会被 CI 门禁拦下
+> （`No direct glam outside xc-notion`）。
 
 `hecs` / `egui` / `wgpu` / 任何 `xcal-*` 绝对禁止；
 `xc-content` 亦禁止（路线甲：语义配对不进时间内核）。

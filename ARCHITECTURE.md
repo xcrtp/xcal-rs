@@ -333,7 +333,7 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
 - Rust edition 2024
 - hecs 0.11 为唯一 ECS 后端，不替换
 - wgpu 30 / egui 0.36 / eframe 0.36
-- glam 0.33：NDC Z∈[0,1]，用 `glam::camera::rh::proj::directx::` 系列
+- glam 0.33：NDC Z∈[0,1]；上层经 `xc_notion::proj` 使用 `directx::` 系列（不直接引 glam）
 - Transform2D traits 由 `xc_macro::Transform2DInto` 过程宏派生
 - System trait 关联类型 `Reads` / `Writes` 无默认值（stable Rust 不支持 associated type defaults）
 - `ErasedSystem` 为 object-safe 运行时 trait，`Box<dyn ErasedSystem>` 存储
@@ -545,7 +545,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 |---|---|---|---|
 | `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
 | `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
-| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`xcal-render-backends` / `xcal-app` / `xcal-scene` / `xcal-render` / `xc-time` / `xcal-egui` / `xcal-playback` 已改经 `xc-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用只在：`xc-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`xcal-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
+| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`xcal-render-backends` / `xcal-app` / `xcal-scene` / `xcal-render` / `xc-time` / `xcal-egui` / `xcal-playback` 已改经 `xc-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用共 **25 次**（`*.rs` 出现次数口径）：`xc-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`xcal-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
 | 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
 | 2D / 3D 录制 System 仍是两个 | `xcal-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
 | `formula.rs` 归位（632 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
@@ -969,9 +969,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   或场景层出口 `crate::types`），仅剩 **2 行说明性注释**（`types.rs` 历史沿革 /
 >   `transform.rs` 的"Y 翻转只有一份"约定）—— 按纪律**不为凑 grep 删注释**。
 >   `types.rs` **未**补 `Mat3/Mat4/Quat` 转发：`transform.rs` 的 11 处只有 Vec2/Vec3，
->   不需要新增类型（不留纸面能力）；全仓 `glam::` 行计数 152（原记 172）。
->   附带记账：`xcal-scene` 的 `glam` 依赖在源码层面**已不再使用**，
->   但 Cargo.toml 未动（不在本轮范围）—— 留待下次清单清理时一并处理。
+>   不需要新增类型（不留纸面能力）。
+>   2026-10-19 收口后全仓 `*.rs` 中 `glam::` **出现 25 次**
+>   （口径：含注释、含 3 个豁免 crate；不含 `.md` 文档提及；不含根 `Cargo.toml`
+>   workspace 声明）：`xc-notion` 定义侧 6 + 节点图组 17 + `xcal-scene` 注释 2。
+>   `xcal-scene` 的 `glam` 依赖已在同批从 Cargo.toml 删除。
 
 **N 线（准备阶段二：对象组织与可见性 N1–N6）**
 

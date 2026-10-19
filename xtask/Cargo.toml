@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "本机验证入口（cargo verify）：check / test / wasm / structure / hashes"
+
+# 独立 workspace：**不加入**根 workspace 的 members。
+# 根 workspace 有 34 个成员且没有 default-members，混入会让
+# `cargo check --workspace --all-targets` 与 wasm gate 一并检查本 crate。
+[workspace]

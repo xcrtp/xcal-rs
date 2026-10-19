@@ -6,11 +6,18 @@
 > M1 起本 crate 由 `xc-geometry` 更名而来（四层重构第一刀，见执行计划）：定位从
 > "纯几何数据层"提升为**理念层（数学元语）**。
 >
-> **目标态**：本 crate 是全仓唯一的数学元语出口 —— glam 仅在此被包装 / 再导出。
-> **当前态（迁移进行中）**：仍有 **10 个 crate 直接声明 `glam` 依赖、共 216 处
-> `glam::` 引用**（M2/M3 后按计划渐进收口）。迁移不阻塞编译 —— re-export 与直接
-> 引用是同一类型；但这意味着"唯一出口"目前是**目标**，不是既成事实。
-> 迁移完成前，不要把它当成事实引用（"纸面能力"是本仓已确认的头号失效模式）。
+> **唯一出口（已收口，2026-10-19）**：本 crate 是全仓唯一的数学元语出口 ——
+> glam 仅在此被包装 / 再导出；依赖 `xc-notion` 的 crate **不得再直接声明 glam**
+> （CI 门禁 `No direct glam outside xc-notion`）。
+>
+> 当前仍直接依赖 glam 的只有：
+> - 本 crate（定义侧，允许）；
+> - 节点图组 `xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`
+>   （**CI 显式豁免**）：它们尚不依赖 `xc-notion`，按 M0 规则不违规；但它们是
+>   **第二套数学入口**，合成图（ComposerGraph）接入场景前必须先统一
+>   （记账见根目录 `GAPS.md` R-19）。
+>
+> 根 `Cargo.toml` 的 `glam` 只是 workspace 声明，不是依赖边。
 
 ---
 
@@ -28,7 +35,8 @@ xcal-render-backends (wgpu / egui / SVG / 文本后端)
 
 **硬约束**：本 crate 绝不引入 `egui` / `wgpu` / `hecs` 或任何项目内部 crate，
 保证它可被任何上层工程（WASM、Headless 测试、离线 SVG 录制）安全复用；
-且**只依赖 glam（+ 可选 serde）**（验收口径：`cargo tree -p xc-notion`）。
+且**只依赖 glam（+ 可选 serde）**—— 本 crate 是全仓**唯一允许**直接依赖 glam 的地方
+（验收口径：`cargo tree -p xc-notion`）。
 
 ---
 

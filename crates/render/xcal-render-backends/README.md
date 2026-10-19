@@ -303,7 +303,6 @@ cargo run -p xcal-render-backends --example cube_3d --features egui-wgpu
 xcal-scene              = { default-features = false }
 xcal-render            = { default-features = false }
 xc-notion
-glam
 thiserror
 pollster               (optional)  ← wgpu  / egui-wgpu
 wgpu                   (optional)  ← wgpu  / egui-wgpu

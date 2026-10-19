@@ -399,7 +399,7 @@ xc-notion                             # 分镜：直接构造 Path2D（MorphShap
 xc-object                             # 相机句柄 / 取景参数 / 图元
 
 wgpu 30
-hecs / glam
+hecs
 derive-new / derive_builder
 tracing 0.1
 

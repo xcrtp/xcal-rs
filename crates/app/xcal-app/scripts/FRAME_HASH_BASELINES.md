@@ -38,15 +38,31 @@ cargo run -q -p xcal-app --no-default-features --features typst --bin xcal-rende
 [frame-hash] sequence = <64 hex>（N 帧，640×480，RGBA8）
 ```
 
-## 基线（2026-10-19，Windows / RTX 4060 Laptop，640×480 @ 30fps）
+本机自动对拍：
 
-两个基线**都要保留**，来源不同、用途不同：
+```bash
+cargo verify --step smoke    # 短对拍：smoke.lua，15 帧 @ 320×240
+cargo verify --step hashes   # 完整对拍：fourier 216 帧 + storyboard 135 帧 @ 640×480
+```
 
-| 端 | 作品 | 帧数 | 序列哈希 | 来源 |
-|---|---|---|---|---|
-| native（Vulkan headless） | fourier | 216 | `fd40329fe6d18045265e801b5a8b0459926f461b73489e8208ff2779ad2a690d` | `xcal-render --script/--bundle` |
-| native（Vulkan headless） | storyboard | 135 | `7e1a46e89dbad7fcf5a3f955fab56fa7dc85e2b8127c8acfe449b7131a1e4e43` | 同上 |
-| 浏览器（Chrome WebGPU） | fourier | 216 | `bec735052020b250b8ee5a42db49f2d3019b10508b3ee139a9a15c8bfa1e279c` | `xcal-web` + `?compare=1` |
+> **短对拍是 smoke test，不是完整基线的等价替代**：已知跨端分歧首次出现在
+> fourier 第 103 帧，smoke 只渲前 15 帧 ⇒ 它绿不代表跨端确定性没问题；
+> 完整基线必须在 main push / nightly 跑。
+
+## 基线（2026-10-19，Windows / RTX 4060 Laptop）
+
+**哈希值的唯一真源是 [`baselines.txt`](baselines.txt)**；本文件只解释口径，
+不重复写哈希。三个基线**都要保留**，来源不同、用途不同：
+
+| 段 | 端 | 作品 | 帧数 / 分辨率 | 来源 | 自动比对 |
+|---|---|---|---|---|---|
+| `[native]` | native（Vulkan headless） | fourier | 216 / 640×480 | `xcal-render --script/--bundle` | ✅ 不符即 fail |
+| `[native]` | native（Vulkan headless） | storyboard | 135 / 640×480 | 同上 | ✅ 不符即 fail |
+| `[smoke]` | native（Vulkan headless） | smoke | 15 / 320×240 | 同上（PR / `--fast` 快速反馈） | ✅ 不符即 fail，但**不等价于完整基线** |
+| `[browser]` | 浏览器（Chrome WebGPU） | fourier | 216 / 640×480 | `xcal-web` + `?compare=1` | ❌ **仅留档** |
+
+> `[browser]` 段**绝不参与自动比对**：本机跑不出浏览器产物，
+> 纳入比对只会让本机永远红，并诱导人去"修"一个不该修的东西。
 
 > **两者不同是已知可接受项**，不是缺陷、不是回归。原因见下节：
 > 单帧 1 个像素的 GPU/求值末位差异，被 SHA-256 链放大成整串不同。

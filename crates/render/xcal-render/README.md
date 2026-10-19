@@ -268,7 +268,6 @@ xc-content        = { path = "../../kernel/xc-content" }         # content_ir �
 xc-vertex         = { path = "../../kernel/xc-vertex" }          # 顶点格式契约（已下沉 kernel）
 xc-resource       = { path = "../../kernel/xc-resource" }        # 资源缓存 / GpuHandle（已下沉 kernel）
 serde             = { workspace = true }                        # VertexLayout 可序列化（pipeline 变体缓存 key）
-glam              = "0.33"
 derive_more / derive-new / derive_builder
 thiserror         = "2.0"
 lyon_tessellation = "1.0"   # S3-0 三角化（不自研）
