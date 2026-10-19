@@ -5,7 +5,10 @@ on:
     branches: [main, master, dev]
   pull_request:
     branches: [main, master, dev]
-  # Allow manual trigger
+  # Nightly：跑完整对拍（fourier 216 帧 + storyboard 135 帧）。
+  # UTC 18:00 = Asia/Shanghai 02:00。
+  schedule:
+    - cron: "0 18 * * *"
   workflow_dispatch:
 
 env:
@@ -14,7 +17,7 @@ env:
 
 jobs:
   native:
-    name: Native check + test + analyzer
+    name: Native check + test + structure
     runs-on: ubuntu-latest
 
     steps:
@@ -29,12 +32,28 @@ jobs:
         with:
           shared-key: native
 
-      # `xcal-app` 默认开启 python feature（pyo3）：需要一个带开发头的解释器。
-      # 只有 native job 需要；wasm job 不碰 pyo3。
+      # pyo3（xcal-app 默认 feature）需要带开发头的解释器。
+      # CI 有 python3 ⇒ xtask 检测到后走默认 features，与本地降级路径不同。
       - name: Install Python (pyo3)
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-dev
+        shell: bash
+
+      # 以下步骤统一走 `cargo verify --step …`（命令定义单一真源）。
+      - name: Cargo Check Workspace
+        run: cargo verify --step check
+        shell: bash
+
+      # 单测与 GPU 用例都在这一步；xtask 内固定 `-j 2 --test-threads=1`。
+      - name: Cargo Test Workspace
+        run: cargo verify --step test
+        shell: bash
+
+      # 结构性判据：Pod 层领域无关 / render-backends 不依赖 scene（S2）/
+      # 数学入口唯一（M0）。jq 在 ubuntu-latest 预装；缺失时该步会显式跳过。
+      - name: Structure gates (pod / backends / glam)
+        run: cargo verify --step structure
         shell: bash
 
       - name: Cache cargo-workspace-analyzer
@@ -49,108 +68,13 @@ jobs:
         run: cargo install cargo-workspace-analyzer --version "$ANALYZER_VERSION"
         shell: bash
 
-      - name: Cargo Check Workspace
-        run: cargo check --workspace --all-targets
-        shell: bash
-
-      # 单测与 GPU 用例都在这一步；`-j 2` 避免 7GB runner 上并行编译峰值 OOM。
-      - name: Cargo Test Workspace
-        run: cargo test --workspace -j 2 -- --test-threads=1
-        shell: bash
-
-      # 结构性判据：`crates/pod/` 下任一 crate 的**生产依赖边**中不得出现任何 `xcal-*`。
-      # 这把「领域无关、可独立演进」从口号变成 CI 会拦的规则（覆盖全部 5 个 pod crate，
-      # 含两个语言适配器）。dev 边（测试用 mini domain pod）不计入。
-      - name: Pod layer is domain-agnostic
-        run: |
-          cargo metadata --format-version 1 --no-deps > metadata.json
-          # 用 crate 名精确圈定 pod 层（新增 pod crate 必须加入此列表）；
-          # 依赖名的 `xcal-` 前缀是领域层的唯一判据。dev 边（kind = "dev"）不计入。
-          jq -r '
-            .packages[]
-            | select(.name | IN("xc-pod", "xc-pod-binding", "xc-pod-macro",
-                                "xc-pod-lua", "xc-pod-py", "xc-pod-tests"))
-            | .name as $n
-            | .dependencies[]
-            | select(.kind != "dev")
-            | select(.name | startswith("xcal-"))
-            | "\($n) -> \(.name)"
-          ' metadata.json > pod-violations.txt
-          if [ -s pod-violations.txt ]; then
-            echo "crates/pod 的生产依赖边中出现了 xcal-*（违反领域无关规则）："
-            cat pod-violations.txt
-            exit 1
-          fi
-          echo "OK: crates/pod 的生产依赖不含任何 xcal-*"
-        shell: bash
-
-      - name: Render backends do not depend on scene (S2)
-        run: |
-          cargo metadata --format-version 1 --no-deps > metadata.json
-          # S2：图层合成概念（Layer*）与 3D 渲染描述符已下沉 xc-render-ir / xc-object。
-          # `xcal-render-backends` 的**生产依赖边**不得再出现 `xcal-scene`
-          # （dev 边仅测试使用，不计入）。
-          jq -r '
-            .packages[]
-            | select(.name == "xcal-render-backends")
-            | .name as $n
-            | .dependencies[]
-            | select(.kind != "dev")
-            | select(.name == "xcal-scene")
-            | "\($n) -> \(.name)"
-          ' metadata.json > backends-violations.txt
-          if [ -s backends-violations.txt ]; then
-            echo "xcal-render-backends 的生产依赖边中出现了 xcal-scene（违反 S2 分层规则）："
-            cat backends-violations.txt
-            exit 1
-          fi
-          echo "OK: xcal-render-backends 的生产依赖不含 xcal-scene"
-        shell: bash
-
-      # 数学入口唯一（M0）：依赖 `xc-notion` 的 crate 不得再直接依赖 glam。
-      # 豁免（见 GAPS.md R-19）：节点图组暂未统一 —— 它们不依赖 xc-notion，
-      # 按 M0 不违规；但合成图（ComposerGraph）接入场景前必须先统一，届时删除豁免。
-      # `xc-notion` 自身是 glam 的唯一包装/再导出点。
-      - name: No direct glam outside xc-notion
-        run: |
-          cargo metadata --format-version 1 --no-deps > metadata.json
-          jq -r '
-            .packages[]
-            | select(.name | IN("xc-notion",
-                                "xcal-node-editor",
-                                "xcal-node-egui",
-                                "xcal-node-egui-ui") | not)
-            | .name as $n
-            | .dependencies[]
-            | select(.kind != "dev")
-            | select(.name == "glam")
-            | "\($n) -> glam"
-          ' metadata.json > glam-violations.txt
-          if [ -s glam-violations.txt ]; then
-            echo "依赖 xc-notion 的 crate 不得直接引 glam（数学入口唯一）："
-            cat glam-violations.txt
-            exit 1
-          fi
-          echo "OK: 除 xc-notion 与节点图组豁免外，无 crate 直接依赖 glam"
-        shell: bash
-
       - name: Workspace Analyzer (cycles + DAG)
         run: |
           # workspace-analyzer 输出依赖分析表；dev-dependencies 不计入生产边
           # 退出码非零 = 检测到循环或解析失败
           # -o mmd：只输出 Mermaid 文本，不依赖 Mermaid CLI（mmdc）；默认 SVG 需要 mmdc
           cargo-workspace-analyzer -d . -o mmd 2>&1 | tee workspace-analysis.txt
-          # 分析表中的 Instability 列 = FanOut/(FanIn+FanOut)；
-          # 循环依赖表现为多个 crate FanOut/FanIn 互相指向；
-          # 工具本身会打印循环警告
         shell: bash
-
-      # cargo-archtest TBD: 当前版本 (v0.2.3) 为单 crate 内 src/ 模块分层设计,
-      # 不支持 workspace 级 crate 分层。待上游提供 workspace 模式后接入。
-      #
-      # - name: Archtest (TBD)
-      #   run: cargo archtest
-      #   shell: bash
 
       - name: Upload Analysis Artifact
         if: always()
@@ -160,6 +84,57 @@ jobs:
           path: workspace-analysis.txt
           if-no-files-found: ignore
 
+  # 帧像素序列哈希：PR / dev push 跑短路径，main/master push + nightly 跑完整。
+  #
+  # 边界（不得省略）：
+  # 1. 短路径是 smoke test，**不是**完整基线的等价替代。已知跨端浮点分歧
+  #    首次出现在 fourier 第 103 帧；PR 的 smoke 只渲前 15 帧 ⇒ 它绿不代表
+  #    跨端确定性没问题。main/master push / nightly 必须跑完整对拍。
+  # 2. baselines.txt 是**设备相关**的（录于 Windows / RTX 4060 Laptop）。
+  #    GitHub 托管 runner 没有 GPU，只能装 Mesa lavapipe 软件 Vulkan；
+  #    软件适配器与录制设备的像素哈希不可比。**不得**为了让 CI 变绿而重录基线。
+  #    ⇒ CI 只断言 `--script == --bundle`（同机自洽，带 `--skip-baseline`），
+  #    不比对 baselines.txt；基线回归由录制设备（RTX 4060）上的 `cargo verify` 负责。
+  #    若要让 CI 也校验基线：把仓库变量 `XCAL_HASH_RUNNER` 指向与录制设备一致的
+  #    runner，并去掉两个步骤里的 `--skip-baseline`。
+  hashes:
+    name: Frame hash (smoke on PR/dev, full on main/master+nightly)
+    runs-on: ${{ vars.XCAL_HASH_RUNNER || 'ubuntu-latest' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 对拍固定 `--no-default-features --features typst`（与基线录制组合一致），
+          # 与 native job 的默认 features 产物不同，单独一份缓存避免互相冲刷。
+          shared-key: hashes
+
+      # GitHub 托管的 Linux runner 无 GPU：装 Vulkan loader + lavapipe，让 headless wgpu
+      # 能拿到一个软件 adapter（否则 `RenderContext::headless` 直接失败）。
+      # 指定了 XCAL_HASH_RUNNER（自托管 GPU 机器）时不执行这一步。
+      - name: Install Vulkan software driver (lavapipe)
+        if: runner.os == 'Linux' && vars.XCAL_HASH_RUNNER == ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+        shell: bash
+
+      - name: Frame hash smoke (PR / dev push)
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_name == 'dev')
+        run: cargo verify --step smoke --skip-baseline
+        shell: bash
+
+      - name: Frame hash full (main/master push / nightly / dispatch)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master'))
+        run: cargo verify --step hashes --skip-baseline
+        shell: bash
+
   wasm:
     name: wasm gates
     runs-on: ubuntu-latest
@@ -168,7 +143,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # `targets:` 一次装好；此前三个 gate step 各自 `rustup target add`。
       - name: Install Rust (wasm32)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -179,55 +153,9 @@ jobs:
         with:
           shared-key: wasm
 
-      # kernel 层的 wasm 可编译性是分层的核心承诺之一（跑不上 wasm，分层就没意义）。
-      # 此前一直手工验收，本步把它纳入 CI 自动化门禁。
-      # 新增 kernel crate 必须加入下面的列表（M2 起含 xc-scene-contract / xc-render-ir）。
-      # 例外：`xc-pod-macro` 是 proc-macro crate（永远 host 编译，不产出 wasm 目标），
-      # 因此**不加入**本列表，这不是遗漏。
-      # 注意：语言适配器 `xc-pod-lua` / `xc-pod-py` **不在此列，勿加** ——
-      # mlua 需要 C 工具链、pyo3 需要系统 Python；它们属于 `crates/pod/` 的
-      # **语言适配器组**（平台相关），与同一目录下的核心组（平台无关）判据不同。
-      # 名字里的 `xc-pod-` 只是前缀：pod 层同时含核心组
-      # （xc-pod / xc-pod-binding / xc-pod-macro）与语言适配器组。
-      - name: Kernel wasm gate
-        run: |
-          for c in xc-notion xc-render-ir xc-scene-contract xc-content xc-time xc-vertex xc-resource xc-macro xc-prerender xc-pod xc-pod-binding; do
-            echo "== $c (wasm32-unknown-unknown) =="
-            cargo check -p "$c" --target wasm32-unknown-unknown || exit 1
-          done
+      # kernel 组 / XSB bundle / render-backends / playback 四组 gate 都在
+      # xtask 的 wasm step 内；每个 crate 会先打印 `== <crate> ==` 便于定位。
+      - name: wasm gates
+        run: cargo verify --step wasm
         shell: bash
 
-      # XSB 装配产物门禁（**单列一组**，不混进 kernel 组）：
-      # - `xcal-scene-bundle` 依赖 `xcal-scene`（非 kernel 层），但浏览器方案要求
-      #   "浏览器只读 bundle"，因此它必须能编到 wasm32 —— 这里独立验证；
-      # - `xcal-compile` **不在**此列：它是 Native 侧编译器，依赖 `xcal-app`
-      #   → `xc-pod-lua`（mlua），按既定口径不属于 wasm 目标。
-      - name: XSB bundle wasm gate
-        run: cargo check -p xcal-scene-bundle --target wasm32-unknown-unknown
-        shell: bash
-
-      # S1：渲染后端是浏览器路径**唯一**需要改的 crate —— 必须能编到 wasm32。
-      # 用**浏览器 feature 组合**（wgpu，不含 blocking/eframe）：
-      # `blocking` 里的 `pollster::block_on` / `poll(wait)` 在 wasm 主线程会静默卡死，
-      # 因此它在 web 构建里编译期不可用；`eframe`（egui 链）默认关闭。
-      - name: Render backends wasm gate
-        run: |
-          cargo check -p xcal-render-backends --target wasm32-unknown-unknown \
-            --no-default-features --features wgpu
-        shell: bash
-
-      # 回放运行时组（**非 kernel 层**，单列，不混进上面的 kernel 组）：
-      # 浏览器实际依赖的 crate 全部纳入门禁。
-      - name: Playback runtime wasm gate
-        run: |
-          echo "== xcal-schedule (default features) =="
-          cargo check -p xcal-schedule --target wasm32-unknown-unknown || exit 1
-          echo "== xcal-render (wgpu, no blocking) =="
-          cargo check -p xcal-render --target wasm32-unknown-unknown \
-            --no-default-features --features wgpu || exit 1
-          echo "== xcal-playback (web config) =="
-          cargo check -p xcal-playback --target wasm32-unknown-unknown \
-            --no-default-features || exit 1
-          echo "== xcal-web =="
-          cargo check -p xcal-web --target wasm32-unknown-unknown || exit 1
-        shell: bash

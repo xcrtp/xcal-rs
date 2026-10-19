@@ -45,9 +45,23 @@ cargo verify --step smoke    # 短对拍：smoke.lua，15 帧 @ 320×240
 cargo verify --step hashes   # 完整对拍：fourier 216 帧 + storyboard 135 帧 @ 640×480
 ```
 
+CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
+
+| 触发 | 步骤 | 说明 |
+|---|---|---|
+| PR | `cargo verify --step smoke --skip-baseline` | 快速反馈，覆盖 `--script` / `--bundle`（同机自洽） |
+| dev 等分支 push | `cargo verify --step smoke --skip-baseline` | 快速反馈（同机自洽） |
+| main / master push | `cargo verify --step hashes --skip-baseline` | 完整对拍（同机自洽） |
+| nightly（cron） | `cargo verify --step hashes --skip-baseline` | 完整对拍（同机自洽） |
+| 手动 dispatch | `cargo verify --step hashes --skip-baseline` | 完整对拍（同机自洽） |
+
 > **短对拍是 smoke test，不是完整基线的等价替代**：已知跨端分歧首次出现在
 > fourier 第 103 帧，smoke 只渲前 15 帧 ⇒ 它绿不代表跨端确定性没问题；
 > 完整基线必须在 main push / nightly 跑。
+>
+> **基线是设备相关的**：CI 的托管 runner 无 GPU（安装 lavapipe 软件 Vulkan），
+> 因此 CI 只断言 `--script == --bundle`（`--skip-baseline`），**不比对**本文件的
+> 哈希；基线回归由录制设备（RTX 4060）上的 `cargo verify` 负责。
 
 ## 基线（2026-10-19，Windows / RTX 4060 Laptop）
 

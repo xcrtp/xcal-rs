@@ -1,9 +1,9 @@
 //! xtask：本机验证入口（`cargo verify`）。
 //!
 //! ```text
-//! cargo verify               # full：check + test + wasm + structure + hashes
-//! cargo verify --fast        # 只 check + test（开发循环）
-//! cargo verify --step <name> # 单步：check | test | wasm | structure | hashes
+//! cargo verify               # full：check + test + wasm + structure + smoke + hashes
+//! cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
+//! cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
 //! ```
 //!
 //! 设计约束（见「本机验证入口 xtask 执行计划」）：
@@ -25,7 +25,11 @@ const USAGE: &str = "\
 用法：
   cargo verify               # full：check + test + wasm + structure + smoke + hashes
   cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
-  cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes";
+  cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
+
+对拍选项：
+  --skip-baseline            # 只断言 --script == --bundle，不比对基线
+                             # （用于无匹配 GPU 的 CI；会显式打印，不静默）";
 
 /// wasm gate 的 kernel 组（与 CI 名单逐字一致）。
 const KERNEL_CRATES: &[&str] = &[
@@ -118,17 +122,20 @@ impl Step {
 struct Options {
     fast: bool,
     step: Option<Step>,
+    skip_baseline: bool,
 }
 
 impl Options {
     fn parse(raw: &[String]) -> Result<Self, String> {
         let mut fast = false;
         let mut step = None;
+        let mut skip_baseline = false;
         let mut index = 0;
         while index < raw.len() {
             match raw[index].as_str() {
                 "--help" | "-h" => return Err(USAGE.to_string()),
                 "--fast" => fast = true,
+                "--skip-baseline" => skip_baseline = true,
                 "--step" => {
                     index += 1;
                     let value = raw
@@ -148,7 +155,11 @@ impl Options {
         if fast && step.is_some() {
             return Err("--fast 与 --step 不能同时使用".to_string());
         }
-        Ok(Self { fast, step })
+        Ok(Self {
+            fast,
+            step,
+            skip_baseline,
+        })
     }
 
     fn steps(&self) -> Vec<Step> {
@@ -267,6 +278,11 @@ fn run(options: &Options) -> Result<(), String> {
 
     println!("[xtask] 仓库根：{}", root.display());
     plan.announce();
+    if options.skip_baseline {
+        println!(
+            "[xtask] --skip-baseline：对拍只断言 --script == --bundle，不比对基线（用于无匹配 GPU 的 CI）"
+        );
+    }
 
     let steps = options.steps();
     println!(
@@ -285,8 +301,8 @@ fn run(options: &Options) -> Result<(), String> {
             Step::Test => step_test(&root, &plan)?,
             Step::Wasm => step_wasm(&root)?,
             Step::Structure => step_structure(&root)?,
-            Step::Smoke => step_smoke(&root)?,
-            Step::Hashes => step_hashes(&root)?,
+            Step::Smoke => step_smoke(&root, options.skip_baseline)?,
+            Step::Hashes => step_hashes(&root, options.skip_baseline)?,
         }
     }
 
@@ -586,30 +602,44 @@ fn jq_filter(metadata: &str, program: &str) -> Result<String, String> {
 /// fourier 第 103 帧；本步骤只渲 0.5s ⇒ 它绿只说明链路没断，
 /// **不代表**跨端确定性没问题。完整基线（fourier / storyboard）由 `hashes` 负责，
 /// 必须在 main push / nightly 定期跑。
-fn step_smoke(root: &Path) -> Result<(), String> {
+fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let baseline_path = scripts_dir(root).join("baselines.txt");
     let baselines = load_baselines(&baseline_path)?;
     prepare_hashes_dir(root)?;
     announce_baselines(&baseline_path);
 
-    let expected = baselines
-        .smoke
-        .get("smoke")
-        .ok_or_else(|| "baselines.txt 的 [smoke] 段缺少 `smoke`".to_string())?;
+    let expected = if skip_baseline {
+        None
+    } else {
+        Some(
+            baselines
+                .smoke
+                .get("smoke")
+                .ok_or_else(|| "baselines.txt 的 [smoke] 段缺少 `smoke`".to_string())?
+                .as_str(),
+        )
+    };
     compare_script_vs_bundle(root, "smoke", "320x240", expected)
 }
 
-fn step_hashes(root: &Path) -> Result<(), String> {
+fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let baseline_path = scripts_dir(root).join("baselines.txt");
     let baselines = load_baselines(&baseline_path)?;
     prepare_hashes_dir(root)?;
     announce_baselines(&baseline_path);
 
     for work in ["fourier", "storyboard"] {
-        let expected = baselines
-            .native
-            .get(work)
-            .ok_or_else(|| format!("baselines.txt 的 [native] 段缺少 `{work}`"))?;
+        let expected = if skip_baseline {
+            None
+        } else {
+            Some(
+                baselines
+                    .native
+                    .get(work)
+                    .ok_or_else(|| format!("baselines.txt 的 [native] 段缺少 `{work}`"))?
+                    .as_str(),
+            )
+        };
         compare_script_vs_bundle(root, work, "640x480", expected)?;
     }
     Ok(())
@@ -636,12 +666,15 @@ fn announce_baselines(path: &Path) {
 }
 
 /// 渲染 `--script` 与 `--bundle` 两条路径，断言：
-/// 1. 两者逐位相同；2. 等于给定基线。
+/// 1. 两者逐位相同；2. `expected = Some` 时等于给定基线。
+///
+/// `expected = None`（`--skip-baseline`）只做同机自洽断言：
+/// 用于 CI 的软件 Vulkan（lavapipe），它与基线录制设备不同，像素哈希不可比。
 fn compare_script_vs_bundle(
     root: &Path,
     work: &str,
     size: &str,
-    expected: &str,
+    expected: Option<&str>,
 ) -> Result<(), String> {
     let script_rel = format!("crates/app/xcal-app/scripts/{work}.lua");
     let xsb_rel = format!("target/xtask/hashes/{work}.xsb");
@@ -671,12 +704,21 @@ fn compare_script_vs_bundle(
             "{work}: --script 与 --bundle 哈希不一致\n  script = {script_hash}\n  bundle = {bundle_hash}"
         ));
     }
-    if script_hash != expected {
-        return Err(format!(
-            "{work}: 序列哈希与基线不符\n  实测 = {script_hash}\n  基线 = {expected}"
-        ));
+    match expected {
+        Some(expected) => {
+            if script_hash != expected {
+                return Err(format!(
+                    "{work}: 序列哈希与基线不符\n  实测 = {script_hash}\n  基线 = {expected}"
+                ));
+            }
+            println!("[xtask] {work}: script == bundle == 基线（{script_hash}）");
+        }
+        None => {
+            println!(
+                "[xtask] {work}: script == bundle（{script_hash}）；--skip-baseline：未比对基线"
+            );
+        }
     }
-    println!("[xtask] {work}: script == bundle == 基线（{script_hash}）");
     Ok(())
 }
 
