@@ -19,8 +19,11 @@ use crate::render_layer::RenderLayer;
 ///
 /// 2D/3D 资源缓存（[`crate::ResourceCache`]）通过此 trait 上传资源，
 /// 与具体后端（eframe / headless）解耦。
+///
+/// **不要求 `Send + Sync`**：wasm 上 wgpu 资源含 `Rc<RefCell<…>>`（只能在创建线程用），
+/// 而本项目单线程、主线程唯一 ⇒ GPU 资源本就不跨线程，跨线程需求由调用方局部声明。
 #[cfg(feature = "wgpu")]
-pub trait RenderBackend: Send + Sync {
+pub trait RenderBackend {
     fn device(&self) -> &wgpu::Device;
 
     fn queue(&self) -> &wgpu::Queue;
@@ -52,8 +55,10 @@ pub trait RenderBackend: Send + Sync {
 ///
 /// 与 2D 的 [`RenderBackend`] 独立：3D 路径以「层」为提交单元
 /// （相机 + 视口 + 绘制队列 + 渲染目标），自包含地 begin/end render pass。
+///
+/// **不要求 `Send + Sync`**（同 [`RenderBackend`]）。
 #[cfg(feature = "wgpu")]
-pub trait RenderBackend3D: Send + Sync {
+pub trait RenderBackend3D {
     /// 将一个 RenderLayer 提交到 GPU：
     /// begin render pass（目标 = layer.target，clear 黑色）→
     /// 绘制 `layer.draw_queue` 全部内容 → end pass。

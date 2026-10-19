@@ -205,8 +205,9 @@ struct BindGroupCache {
 
 /// WGPU 3D 渲染后端（设备句柄 + 管线 + 绑定布局 + mesh 缓存 + uniform arena）。
 ///
-/// 内部状态（cache / arena）用 `Mutex` 保护：`RenderBackend3D` 要求 `Send + Sync`，
-/// 而 prepare_draws / record_prepared 是 `&self`，但需要修改缓存和 arena。
+/// 内部状态（cache / arena）用 `Mutex` 保护：prepare_draws / record_prepared
+/// 是 `&self`，但需要修改缓存和 arena。
+/// （`RenderBackend3D` 自 S1 起不再要求 `Send + Sync`；本类型的跨线程徽章见下方。）
 pub struct WgpuBackend3D {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -240,6 +241,18 @@ pub struct WgpuBackend3D {
     /// RC.3：按 [`LayerId`] 分别持有的深度目标，尺寸随颜色目标一同重建。
     depth: Mutex<HashMap<LayerId, DepthTarget>>,
 }
+
+// S1 徽章：egui 的 `CallbackResources` 在 native 上是
+// `type_map::concurrent::TypeMap`，其 `insert` 要求 `Send + Sync`。
+// 本项目渲染全程单线程、主线程唯一 —— 这个边界不是真实的跨线程传递，
+// 只是 egui 的类型要求。native 的 wgpu 资源本身是 `Send + Sync`，
+// 本结构内的 `GpuHandle` 只承载 wgpu 资源（全部由本 crate 的 `GpuHandle::new` 创建），
+// 因此这里显式声明徽章，而不把 `Send + Sync` 写回 `GpuHandle`：
+// wasm 上 wgpu 资源含 `Rc<RefCell<…>>`，全局约束会让 wasm 直接编译失败。
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Send for WgpuBackend3D {}
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for WgpuBackend3D {}
 
 impl WgpuBackend3D {
     /// 用给定 WGSL 源码构造后端（按 `(topology, variant)` 预建管线表）。

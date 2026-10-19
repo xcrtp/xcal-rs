@@ -250,7 +250,8 @@ cargo doc  -p xcal-render --no-deps --all-features
 - `resource_cache`（shim 层）：`ResourceKey` 版本隔离、`get_or_insert` 命中/未命中、
   `mark_used` 保活、`evict_unused`、脏标记与 `upload_dirty`、stale id 返回 `AccessError`
   （`ResourceCache`/`GpuHandle` 主体与 pending 有界性压测已随模块迁至 `xc-resource`）
-- `GpuHandle` 跨线程可 Send（测试用 `std::sync::mpsc` 验证）
+- `GpuHandle` 不再要求 `Send + Sync`（wasm 上 wgpu 资源含 `Rc`）；native 的
+  egui TypeMap 边界由后端类型上的显式徽章局部承担
 
 ---
 

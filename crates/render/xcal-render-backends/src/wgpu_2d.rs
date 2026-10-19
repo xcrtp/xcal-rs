@@ -345,6 +345,18 @@ pub struct WgpuBackend2D {
     reveal_recorder: Vec<RevealItem>,
 }
 
+// S1 徽章：egui 的 `CallbackResources` 在 native 上是
+// `type_map::concurrent::TypeMap`，其 `insert` 要求 `Send + Sync`。
+// 本项目渲染全程单线程、主线程唯一 —— 这个边界不是真实的跨线程传递，
+// 只是 egui 的类型要求。native 的 wgpu 资源本身是 `Send + Sync`，
+// 本结构内的 `GpuHandle` 只承载 wgpu 资源（全部由本 crate 的 `GpuHandle::new` 创建），
+// 因此这里显式声明徽章，而不把 `Send + Sync` 写回 `GpuHandle`：
+// wasm 上 wgpu 资源含 `Rc<RefCell<…>>`，全局约束会让 wasm 直接编译失败。
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Send for WgpuBackend2D {}
+#[cfg(not(target_arch = "wasm32"))]
+unsafe impl Sync for WgpuBackend2D {}
+
 impl WgpuBackend2D {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let device = device.clone();

@@ -89,9 +89,13 @@ pub enum AccessError {
 
 ### GpuHandle — 类型擦除句柄
 
-内部是 `Box<dyn Any + Send + Sync>`，附带一个 `GpuResourceId`：
+内部是 `Box<dyn Any>`，附带一个 `GpuResourceId`：
 创建时为 `SENTINEL`，由 [`ResourceCache`](#resourcecache--世代感知缓存) 插入条目时
 通过 **crate 内可见**的 `assign_id` 赋予实际 id。
+
+**不施加 `Send` / `Sync`**：wasm 上 wgpu 资源含 `Rc<RefCell<…>>`（只能在创建线程用），
+而本项目渲染架构是单线程、主线程唯一。跨线程需求由调用方局部声明（徽章），
+不写回句柄的全局约束。
 
 ```rust
 use xc_resource::GpuHandle;
@@ -111,7 +115,7 @@ assert_eq!(handle.into_inner::<u32>(), Some(100)); // 剥离所有权
 |------|------|
 | `new::<T>(value)` | 构造（id = `SENTINEL`） |
 | `id()` | 读取资源 id |
-| `take()` | 取出内部 `Box<dyn Any + Send + Sync>`（延迟销毁时用） |
+| `take()` | 取出内部 `Box<dyn Any>`（延迟销毁时用） |
 | `downcast_ref::<T>()` / `downcast_mut::<T>()` | 借用内部值 |
 | `into_inner::<T>()` | 按值剥离内部值（类型不符返回 `None`） |
 | `type_id()` / `is::<T>()` | 类型自省 |
@@ -228,7 +232,7 @@ cargo doc  -p xc-resource --no-deps
 
 覆盖点：
 
-- `GpuHandle` — `Send + Sync`、`new`/`downcast`/`into_inner` 往返、类型不符返回 `None`
+- `GpuHandle` — `new`/`downcast`/`into_inner` 往返、类型不符返回 `None`
 - `GpuResourceId` — 哨兵判定、与普通 id 区分
 - `DeferredDestroyer` — graveyard 3 帧语义（第 3 次 `on_submit` 后开始回收）
 - `ResourceCache` — 每帧 churn 下条目数与 pending 队列有界（峰值 = `(period+1) × 每帧条数`）

@@ -74,9 +74,13 @@ impl std::error::Error for AccessError {}
 ///
 /// 附带一个 [`GpuResourceId`]：创建时默认为哨兵值，
 /// 由 `ResourceCache` 在插入条目时通过 `assign_id` 赋予实际 id。
+///
+/// **不施加 `Send` / `Sync` 约束**：wasm 上 wgpu 资源内部含 `Rc<RefCell<…>>`，
+/// 浏览器资源只能在创建它的线程使用；本项目的渲染架构是单线程、主线程唯一，
+/// GPU 资源本就不需要跨线程。`Any` 仍然保留（`downcast_ref` 需要它）。
 pub struct GpuHandle {
     id: GpuResourceId,
-    inner: Box<dyn Any + Send + Sync>,
+    inner: Box<dyn Any>,
 }
 
 impl std::fmt::Debug for GpuHandle {
@@ -98,7 +102,7 @@ impl PartialEq for GpuHandle {
 impl Eq for GpuHandle {}
 
 impl GpuHandle {
-    pub fn new<T: Any + Send + Sync>(value: T) -> Self {
+    pub fn new<T: Any>(value: T) -> Self {
         Self {
             id: GpuResourceId::SENTINEL,
             inner: Box::new(value),
@@ -115,19 +119,19 @@ impl GpuHandle {
     }
 
     /// 剥离所有权：延迟销毁器/缓存需要移动内部资源而不立刻 drop 它时使用。
-    pub fn take(self) -> Box<dyn Any + Send + Sync> {
+    pub fn take(self) -> Box<dyn Any> {
         self.inner
     }
 
-    pub fn downcast_ref<T: Any + Send + Sync>(&self) -> Option<&T> {
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
         self.inner.downcast_ref::<T>()
     }
 
-    pub fn downcast_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
+    pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.inner.downcast_mut::<T>()
     }
 
-    pub fn into_inner<T: Any + Send + Sync>(self) -> Option<T> {
+    pub fn into_inner<T: Any>(self) -> Option<T> {
         self.inner.downcast::<T>().ok().map(|b| *b)
     }
 
@@ -143,13 +147,6 @@ impl GpuHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    #[test]
-    fn test_handle_types_are_send_sync() {
-        assert_send_sync::<GpuHandle>();
-    }
 
     #[test]
     fn test_gpu_handle_roundtrip() {
