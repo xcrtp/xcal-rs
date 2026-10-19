@@ -1,0 +1,13 @@
+[package]
+name = "ze-resource"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "GPU resource contracts (type-erased handle / resource key / generation-aware cache)"
+
+# 依赖铁律：ze-resource 在 kernel 层
+#   ❌ hecs / egui / wgpu / 任何 zela-* / 任何外部依赖 —— 绝对禁止（纯 std，必须能编译到 wasm32）。
+#   需要 wgpu 的后端 trait（RenderBackend / RenderBackend3D）留在 zela-render；
+#   需要 hecs::Entity 的旧 CacheKey 兼容层留在 zela-render。

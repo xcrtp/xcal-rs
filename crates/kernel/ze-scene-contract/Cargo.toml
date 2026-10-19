@@ -1,0 +1,21 @@
+[package]
+name = "ze-scene-contract"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 契约层（M2）：场景抽象 —— 身份 / 关系 / 样式描述符。
+#
+# 硬约束（与理念层同级）：
+#   - 不得出现 ECS / hecs / GPU / wgpu / egui / UI（故不含 `hecs::Entity`）
+#   - 不得依赖任何 zela-* / ze-object
+#     （`cargo tree -p ze-scene-contract | grep -E "zela-|ze-object"` = 0）
+#
+# 允许依赖：理念层 ze-notion、渲染 IR 层 ze-render-ir
+# （`Describable::apply` 要产出 `Style2D`；这是"能被引用的最小公共集"）。
+[dependencies]
+ze-notion = { path = "../ze-notion" }
+ze-render-ir = { path = "../ze-render-ir" }
+# 组件持久化：`Components` 的标签化序列化需要组件可 serde。
+serde.workspace = true

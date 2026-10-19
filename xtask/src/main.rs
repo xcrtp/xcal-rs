@@ -33,49 +33,49 @@ const USAGE: &str = "\
 
 /// wasm gate 的 kernel 组（与 CI 名单逐字一致）。
 const KERNEL_CRATES: &[&str] = &[
-    "xc-notion",
-    "xc-render-ir",
-    "xc-scene-contract",
-    "xc-content",
-    "xc-time",
-    "xc-vertex",
-    "xc-resource",
-    "xc-macro",
-    "xc-prerender",
-    "xc-pod",
-    "xc-pod-binding",
+    "ze-notion",
+    "ze-render-ir",
+    "ze-scene-contract",
+    "ze-content",
+    "ze-time",
+    "ze-vertex",
+    "ze-resource",
+    "ze-macro",
+    "ze-prerender",
+    "ze-pod",
+    "ze-pod-binding",
 ];
 
-/// 结构性判据 1：`crates/pod/` 的生产依赖边不得出现任何 `xcal-*`。
+/// 结构性判据 1：`crates/pod/` 的生产依赖边不得出现任何 `zela-*`。
 const JQ_POD_LAYER: &str = r#"
 .packages[]
-| select(.name | IN("xc-pod", "xc-pod-binding", "xc-pod-macro",
-                    "xc-pod-lua", "xc-pod-py", "xc-pod-tests"))
+| select(.name | IN("ze-pod", "ze-pod-binding", "ze-pod-macro",
+                    "ze-pod-lua", "ze-pod-py", "ze-pod-tests"))
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
-| select(.name | startswith("xcal-"))
+| select(.name | startswith("zela-"))
 | "\($n) -> \(.name)"
 "#;
 
-/// 结构性判据 2：`xcal-render-backends` 的生产依赖边不得出现 `xcal-scene`（S2）。
+/// 结构性判据 2：`zela-render-backends` 的生产依赖边不得出现 `zela-scene`（S2）。
 const JQ_BACKENDS: &str = r#"
 .packages[]
-| select(.name == "xcal-render-backends")
+| select(.name == "zela-render-backends")
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
-| select(.name == "xcal-scene")
+| select(.name == "zela-scene")
 | "\($n) -> \(.name)"
 "#;
 
 /// 结构性判据 3：数学入口唯一（M0）—— 除豁免组外不得直接依赖 glam。
 const JQ_GLAM: &str = r#"
 .packages[]
-| select(.name | IN("xc-notion",
-                    "xcal-node-editor",
-                    "xcal-node-egui",
-                    "xcal-node-egui-ui") | not)
+| select(.name | IN("ze-notion",
+                    "zela-node-editor",
+                    "zela-node-egui",
+                    "zela-node-egui-ui") | not)
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
@@ -228,16 +228,16 @@ impl FeaturePlan {
                     "[xtask] 检测到默认 features 不可用（pyo3），降级为 --no-default-features --features typst"
                 );
                 println!(
-                    "[xtask] 注意：xcal-gui 的依赖边强制 xcal-app 默认 features（含 pyo3），本机将跳过该 crate"
+                    "[xtask] 注意：zela-gui 的依赖边强制 zela-app 默认 features（含 pyo3），本机将跳过该 crate"
                 );
                 println!(
-                    "[xtask] 如需与 CI 完全一致（覆盖 xcal-gui）：设置 PYO3_PYTHON（必要时连同 PYTHONHOME）指向 Python 3 解释器"
+                    "[xtask] 如需与 CI 完全一致（覆盖 zela-gui）：设置 PYO3_PYTHON（必要时连同 PYTHONHOME）指向 Python 3 解释器"
                 );
             }
         }
     }
 
-    /// `-p xcal-app` / `-p xcal-compile` 使用的 feature 参数。
+    /// `-p zela-app` / `-p zela-compile` 使用的 feature 参数。
     fn app_args(&self) -> Vec<String> {
         if self.pyo3_available() {
             Vec::new()
@@ -329,9 +329,9 @@ fn step_check(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
     }
 
     // pyo3 不可用：`--no-default-features` 只影响“被选中的包”，
-    // 而 xcal-gui 对 xcal-app 的依赖边会重新打开 xcal-app 的默认 features
-    // （含 pyo3）。因此先把不依赖 xcal-app 的 crate 用默认 features 检查，
-    // 再单独检查两个壳（xcal-gui 只能跳过并打印）。
+    // 而 zela-gui 对 zela-app 的依赖边会重新打开 zela-app 的默认 features
+    // （含 pyo3）。因此先把不依赖 zela-app 的 crate 用默认 features 检查，
+    // 再单独检查两个壳（zela-gui 只能跳过并打印）。
     cargo(
         root,
         &strings(&[
@@ -339,17 +339,17 @@ fn step_check(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
             "--workspace",
             "--all-targets",
             "--exclude",
-            "xcal-app",
+            "zela-app",
             "--exclude",
-            "xcal-gui",
+            "zela-gui",
             "--exclude",
-            "xcal-compile",
+            "zela-compile",
         ]),
     )?;
     cargo(
         root,
         &[
-            strings(&["check", "-p", "xcal-app", "--all-targets"]),
+            strings(&["check", "-p", "zela-app", "--all-targets"]),
             plan.app_args(),
         ]
         .concat(),
@@ -357,12 +357,12 @@ fn step_check(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
     cargo(
         root,
         &[
-            strings(&["check", "-p", "xcal-compile", "--all-targets"]),
+            strings(&["check", "-p", "zela-compile", "--all-targets"]),
             plan.app_args(),
         ]
         .concat(),
     )?;
-    println!("[xtask] 跳过 xcal-gui：无 Python 时其依赖边无法排除 pyo3");
+    println!("[xtask] 跳过 zela-gui：无 Python 时其依赖边无法排除 pyo3");
     Ok(())
 }
 
@@ -393,11 +393,11 @@ fn step_test(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
             "-j",
             "2",
             "--exclude",
-            "xcal-app",
+            "zela-app",
             "--exclude",
-            "xcal-gui",
+            "zela-gui",
             "--exclude",
-            "xcal-compile",
+            "zela-compile",
             "--",
             "--test-threads=1",
         ]),
@@ -405,7 +405,7 @@ fn step_test(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
     cargo(
         root,
         &[
-            strings(&["test", "-p", "xcal-app", "-j", "2"]),
+            strings(&["test", "-p", "zela-app", "-j", "2"]),
             plan.app_args(),
             strings(&["--", "--test-threads=1"]),
         ]
@@ -414,13 +414,13 @@ fn step_test(root: &Path, plan: &FeaturePlan) -> Result<(), String> {
     cargo(
         root,
         &[
-            strings(&["test", "-p", "xcal-compile", "-j", "2"]),
+            strings(&["test", "-p", "zela-compile", "-j", "2"]),
             plan.app_args(),
             strings(&["--", "--test-threads=1"]),
         ]
         .concat(),
     )?;
-    println!("[xtask] 跳过 xcal-gui：无 Python 时其依赖边无法排除 pyo3");
+    println!("[xtask] 跳过 zela-gui：无 Python 时其依赖边无法排除 pyo3");
     Ok(())
 }
 
@@ -435,52 +435,25 @@ fn step_wasm(root: &Path) -> Result<(), String> {
         )?;
     }
 
-    println!("[xtask] == xcal-scene-bundle (wasm32-unknown-unknown) ==");
+    println!("[xtask] == zela-scene-bundle (wasm32-unknown-unknown) ==");
     cargo(
         root,
         &strings(&[
             "check",
             "-p",
-            "xcal-scene-bundle",
+            "zela-scene-bundle",
             "--target",
             "wasm32-unknown-unknown",
         ]),
     )?;
 
-    println!("[xtask] == xcal-render-backends (wgpu, no blocking) ==");
+    println!("[xtask] == zela-render-backends (wgpu, no blocking) ==");
     cargo(
         root,
         &strings(&[
             "check",
             "-p",
-            "xcal-render-backends",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--no-default-features",
-            "--features",
-            "wgpu",
-        ]),
-    )?;
-
-    println!("[xtask] == xcal-schedule (default features) ==");
-    cargo(
-        root,
-        &strings(&[
-            "check",
-            "-p",
-            "xcal-schedule",
-            "--target",
-            "wasm32-unknown-unknown",
-        ]),
-    )?;
-
-    println!("[xtask] == xcal-render (wgpu, no blocking) ==");
-    cargo(
-        root,
-        &strings(&[
-            "check",
-            "-p",
-            "xcal-render",
+            "zela-render-backends",
             "--target",
             "wasm32-unknown-unknown",
             "--no-default-features",
@@ -489,23 +462,50 @@ fn step_wasm(root: &Path) -> Result<(), String> {
         ]),
     )?;
 
-    println!("[xtask] == xcal-playback (web config) ==");
+    println!("[xtask] == zela-schedule (default features) ==");
     cargo(
         root,
         &strings(&[
             "check",
             "-p",
-            "xcal-playback",
+            "zela-schedule",
+            "--target",
+            "wasm32-unknown-unknown",
+        ]),
+    )?;
+
+    println!("[xtask] == zela-render (wgpu, no blocking) ==");
+    cargo(
+        root,
+        &strings(&[
+            "check",
+            "-p",
+            "zela-render",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--no-default-features",
+            "--features",
+            "wgpu",
+        ]),
+    )?;
+
+    println!("[xtask] == zela-playback (web config) ==");
+    cargo(
+        root,
+        &strings(&[
+            "check",
+            "-p",
+            "zela-playback",
             "--target",
             "wasm32-unknown-unknown",
             "--no-default-features",
         ]),
     )?;
 
-    println!("[xtask] == xcal-web ==");
+    println!("[xtask] == zela-web ==");
     cargo(
         root,
-        &strings(&["check", "-p", "xcal-web", "--target", "wasm32-unknown-unknown"]),
+        &strings(&["check", "-p", "zela-web", "--target", "wasm32-unknown-unknown"]),
     )?;
 
     Ok(())
@@ -540,19 +540,19 @@ fn step_structure(root: &Path) -> Result<(), String> {
 
     let checks = [
         (
-            "crates/pod 生产依赖不含 xcal-*",
+            "crates/pod 生产依赖不含 zela-*",
             JQ_POD_LAYER,
-            "crates/pod 的生产依赖边中出现了 xcal-*（违反领域无关规则）：",
+            "crates/pod 的生产依赖边中出现了 zela-*（违反领域无关规则）：",
         ),
         (
-            "xcal-render-backends 生产依赖不含 xcal-scene（S2）",
+            "zela-render-backends 生产依赖不含 zela-scene（S2）",
             JQ_BACKENDS,
-            "xcal-render-backends 的生产依赖边中出现了 xcal-scene（违反 S2 分层规则）：",
+            "zela-render-backends 的生产依赖边中出现了 zela-scene（违反 S2 分层规则）：",
         ),
         (
-            "除 xc-notion 与节点图组豁免外无直接 glam（M0）",
+            "除 ze-notion 与节点图组豁免外无直接 glam（M0）",
             JQ_GLAM,
-            "依赖 xc-notion 的 crate 不得直接引 glam（数学入口唯一）：",
+            "依赖 ze-notion 的 crate 不得直接引 glam（数学入口唯一）：",
         ),
     ];
 
@@ -652,7 +652,7 @@ fn prepare_hashes_dir(root: &Path) -> Result<(), String> {
 }
 
 fn scripts_dir(root: &Path) -> PathBuf {
-    root.join("crates").join("app").join("xcal-app").join("scripts")
+    root.join("crates").join("app").join("zela-app").join("scripts")
 }
 
 fn announce_baselines(path: &Path) {
@@ -676,15 +676,15 @@ fn compare_script_vs_bundle(
     size: &str,
     expected: Option<&str>,
 ) -> Result<(), String> {
-    let script_rel = format!("crates/app/xcal-app/scripts/{work}.lua");
-    let xsb_rel = format!("target/xtask/hashes/{work}.xsb");
+    let script_rel = format!("crates/app/zela-app/scripts/{work}.lua");
+    let zsb_rel = format!("target/xtask/hashes/{work}.zsb");
     let script_path = root.join(&script_rel);
     if !script_path.is_file() {
         return Err(format!("脚本不存在：{}", script_path.display()));
     }
 
     println!("\n[xtask] -- {work}（{size}）--");
-    compile_bundle(root, &script_rel, &xsb_rel)?;
+    compile_bundle(root, &script_rel, &zsb_rel)?;
 
     let script_hash = render(
         root,
@@ -694,7 +694,7 @@ fn compare_script_vs_bundle(
     )?;
     let bundle_hash = render(
         root,
-        &["--bundle", &xsb_rel],
+        &["--bundle", &zsb_rel],
         &format!("target/xtask/hashes/{work}-bundle"),
         size,
     )?;
@@ -724,7 +724,7 @@ fn compare_script_vs_bundle(
 
 fn compile_bundle(root: &Path, script: &str, out: &str) -> Result<(), String> {
     let args = [
-        strings(&["run", "-q", "-p", "xcal-compile"]),
+        strings(&["run", "-q", "-p", "zela-compile"]),
         hashes_app_args(),
         strings(&["--", script, "--out", out]),
     ]
@@ -739,9 +739,9 @@ fn hashes_app_args() -> Vec<String> {
 }
 
 fn render(root: &Path, source: &[&str], frames: &str, size: &str) -> Result<String, String> {
-    let mut args = strings(&["run", "-q", "-p", "xcal-app"]);
+    let mut args = strings(&["run", "-q", "-p", "zela-app"]);
     args.extend(hashes_app_args());
-    args.extend(strings(&["--bin", "xcal-render", "--"]));
+    args.extend(strings(&["--bin", "zela-render", "--"]));
     args.extend(source.iter().map(|value| value.to_string()));
     args.extend(strings(&["--frames", frames, "--fps", "30", "--size", size]));
 
@@ -767,7 +767,7 @@ fn render(root: &Path, source: &[&str], frames: &str, size: &str) -> Result<Stri
     }
 
     for line in stderr.lines().chain(stdout.lines()) {
-        if line.starts_with("[xsb]") || line.starts_with("[frame-hash]") {
+        if line.starts_with("[zsb]") || line.starts_with("[frame-hash]") {
             println!("[xtask] {line}");
         }
     }

@@ -1,0 +1,21 @@
+[package]
+name = "zela-compile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ZSB 独立编译器：脚本 → 装配产物（.zsb）"
+
+[[bin]]
+name = "zela-compile"
+path = "src/main.rs"
+
+[dependencies]
+# 复用组装层的装配路径（与 GUI / --script 完全相同）。
+zela-app = { path = "../zela-app", default-features = false }
+zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
+
+[features]
+# 与 zela-app 对齐：默认开 Typst（真公式）与 Python（.py 编译）。
+default = ["typst", "python"]
+typst = ["zela-app/typst"]
+python = ["zela-app/python"]

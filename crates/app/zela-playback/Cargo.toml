@@ -1,0 +1,34 @@
+[package]
+name = "zela-playback"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 回放运行时：浏览器与 native `--bundle` 共用**同一份**装配尾。
+# 不依赖任何语言适配器，也不直接依赖 ze-prerender（Typst 只在装配期需要）。
+[dependencies]
+zela-scene = { path = "../../scene/zela-scene" }
+zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
+zela-schedule = { path = "../../schedule/zela-schedule" }
+zela-render = { path = "../../render/zela-render" }
+# 只吃 wgpu 后端；egui/eframe 链默认关闭。
+zela-render-backends = { path = "../../render/zela-render-backends", default-features = false, features = ["wgpu"] }
+# 场景能力版本（Meta 的 capability 口径唯一真源）。
+ze-pod = { path = "../../pod/ze-pod" }
+# 对象层：相机句柄与内容纹理默认配置。
+ze-object = { path = "../../object/ze-object" }
+ze-notion = { path = "../../kernel/ze-notion" }
+
+wgpu.workspace = true
+hecs.workspace = true
+thiserror.workspace = true
+
+[features]
+# native 同步回读（序列帧 / 测试）；wasm 构建用 `--no-default-features`。
+default = ["blocking"]
+blocking = ["zela-render-backends/blocking"]
+
+[dev-dependencies]
+# 对拍示例：解码逐帧 PNG（结构与数值两层判据）。
+png.workspace = true

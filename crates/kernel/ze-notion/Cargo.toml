@@ -1,0 +1,19 @@
+[package]
+name = "ze-notion"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 纯数据层：仅依赖 glam 数学库（serde 默认开启，供组件持久化链路使用）。
+# egui / wgpu 等渲染相关依赖一律禁止出现在此 crate。
+[dependencies]
+glam.workspace = true
+serde = { workspace = true, optional = true }
+
+[features]
+# serde 已是事实必选（组件持久化需要一路加到理念层）⇒ 默认开启。
+# 仍保留 feature 以便 `--no-default-features` 的精简构建。
+default = ["serde"]
+serde = ["dep:serde", "glam/serde"]
+

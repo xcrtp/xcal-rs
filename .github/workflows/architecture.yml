@@ -32,7 +32,7 @@ jobs:
         with:
           shared-key: native
 
-      # pyo3（xcal-app 默认 feature）需要带开发头的解释器。
+      # pyo3（zela-app 默认 feature）需要带开发头的解释器。
       # 单测里还有直接构造 `RenderContext::headless()` 的 GPU 像素用例；
       # 托管 runner 无 GPU，lavapipe 提供软件 Vulkan（否则测试在 expect 处 panic）。
       - name: Install system deps (pyo3 + lavapipe)
@@ -96,11 +96,11 @@ jobs:
   #    软件适配器与录制设备的像素哈希不可比。**不得**为了让 CI 变绿而重录基线。
   #    ⇒ CI 只断言 `--script == --bundle`（同机自洽，带 `--skip-baseline`），
   #    不比对 baselines.txt；基线回归由录制设备（RTX 4060）上的 `cargo verify` 负责。
-  #    若要让 CI 也校验基线：把仓库变量 `XCAL_HASH_RUNNER` 指向与录制设备一致的
+  #    若要让 CI 也校验基线：把仓库变量 `ZELA_HASH_RUNNER` 指向与录制设备一致的
   #    runner，并去掉两个步骤里的 `--skip-baseline`。
   hashes:
     name: Frame hash (smoke on PR/dev, full on main/master+nightly)
-    runs-on: ${{ vars.XCAL_HASH_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.ZELA_HASH_RUNNER || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout
@@ -118,9 +118,9 @@ jobs:
 
       # GitHub 托管的 Linux runner 无 GPU：装 Vulkan loader + lavapipe，让 headless wgpu
       # 能拿到一个软件 adapter（否则 `RenderContext::headless` 直接失败）。
-      # 指定了 XCAL_HASH_RUNNER（自托管 GPU 机器）时不执行这一步。
+      # 指定了 ZELA_HASH_RUNNER（自托管 GPU 机器）时不执行这一步。
       - name: Install Vulkan software driver (lavapipe)
-        if: runner.os == 'Linux' && vars.XCAL_HASH_RUNNER == ''
+        if: runner.os == 'Linux' && vars.ZELA_HASH_RUNNER == ''
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers libvulkan1
@@ -154,7 +154,7 @@ jobs:
         with:
           shared-key: wasm
 
-      # kernel 组 / XSB bundle / render-backends / playback 四组 gate 都在
+      # kernel 组 / ZSB bundle / render-backends / playback 四组 gate 都在
       # xtask 的 wasm step 内；每个 crate 会先打印 `== <crate> ==` 便于定位。
       - name: wasm gates
         run: cargo verify --step wasm

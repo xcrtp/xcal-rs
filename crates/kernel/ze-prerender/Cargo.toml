@@ -1,0 +1,42 @@
+[package]
+name = "ze-prerender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# kernel 层重 crate：内容排版引擎实现（Typst / LaTeX 等）。
+# 注意：所有重型引擎依赖必须放在 feature 后；未启用 feature 时应零重依赖。
+# kernel 铁律：禁止依赖 graph / render / ui / app（ze-* / zela-* 上层）。
+
+[dependencies]
+ze-notion = { path = "../ze-notion" }
+ze-content = { path = "../ze-content" }
+thiserror = { workspace = true }
+derive_more = { workspace = true }
+# 诊断输出（替代 eprintln!，由订阅方决定是否可见）。
+tracing = { workspace = true }
+
+# Typst 引擎依赖（全部 optional，由 feature = "typst" 打开）。
+typst = { version = "0.14", optional = true }
+# `typst-library` 在本 crate 源码中零直接 `use`：它是 `typst` 的版本锁定依赖，
+# 保证 workspace 内 typst 全家桶版本一致（不要因"零引用"而删除）。
+typst-library = { version = "0.14", optional = true }
+ecow = { version = "0.2", optional = true }
+fontdb = { version = "0.16", optional = true }
+ttf-parser = { version = "0.25", optional = true }
+
+[dev-dependencies]
+ze-content = { path = "../ze-content" }
+
+[features]
+default = []
+# Typst 排版引擎。打开时会引入 typst workspace 共 ~15 个 crate。
+typst = [
+    "dep:typst",
+    "dep:typst-library",
+    "dep:ecow",
+    "dep:fontdb",
+    "dep:ttf-parser",
+]
+# 占位引擎（用 ze-content placeholder；默认可用，不需要额外依赖）。
+placeholder = []

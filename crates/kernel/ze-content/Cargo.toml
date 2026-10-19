@@ -1,0 +1,16 @@
+[package]
+name = "ze-content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# kernel 层轻 crate：IR 数据类型 + SVG 序列化 + 占位生成器。
+# 禁止依赖 typst / egui / wgpu / hecs。
+
+[dependencies]
+ze-notion = { path = "../ze-notion" }
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde", "ze-notion/serde"]

@@ -5,7 +5,7 @@ name: Pages
 # 一次性手动前提：仓库 Settings → Pages → Source 选 **GitHub Actions**
 # （否则 deploy job 必然失败）。
 #
-# 铁律：本地与 CI 跑**同一个** `crates/web/xcal-web/build.ps1`
+# 铁律：本地与 CI 跑**同一个** `crates/web/zela-web/build.ps1`
 # （ubuntu runner 预装 pwsh，不另写 bash 版，避免两套命令定义漂移）。
 # build.ps1 内部读 `scripts/demo/manifest.txt`，逐条编译并断言 payload hash。
 
@@ -67,14 +67,14 @@ jobs:
           path: ~/.cache/.wasm-pack
           key: wasm-bindgen-${{ runner.os }}-${{ env.WASM_PACK_VERSION }}
 
-      - name: Build www/ (pkg + demo xsb + demos.json)
-        run: pwsh crates/web/xcal-web/build.ps1
+      - name: Build www/ (pkg + demo zsb + demos.json)
+        run: pwsh crates/web/zela-web/build.ps1
         shell: bash
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: crates/web/xcal-web/www
+          path: crates/web/zela-web/www
 
   # 仅 push main 部署；PR 只做构建验证（避免每个 PR 发一版）。
   deploy:

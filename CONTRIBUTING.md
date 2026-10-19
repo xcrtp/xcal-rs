@@ -3,9 +3,9 @@
 ## 铁律摘要
 
 - 分层单向依赖：`kernel → graph → render → ui → app`，反向禁止
-- `xc-*`（kernel/graph）禁止依赖 egui / wgpu / 任何 `xcal-*` crate
+- `ze-*`（kernel/graph）禁止依赖 egui / wgpu / 任何 `zela-*` crate
 - `crates/graph` 层禁止引用领域类型（FunctionDef, AST, AnimationClip 等）
-- 新 crate 先判命名：与动画/渲染无关 → `xc-`，否则 `xcal-`
+- 新 crate 先判命名：与动画/渲染无关 → `ze-`，否则 `zela-`
 - 新增 crate 必须同步更新 `architecture.json` 对应层的 `crates` 数组
 
 ## 加新 crate

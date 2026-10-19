@@ -1,0 +1,19 @@
+[package]
+name = "ze-pod-macro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "ze-pod 的 proc-macro：#[capability]（生成持有 &dyn Pod 的 capability struct）"
+
+# proc-macro 必须独立 crate（Rust 硬性要求）；ze-pod 本身保持零依赖。
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+ze-pod = { path = "../ze-pod" }

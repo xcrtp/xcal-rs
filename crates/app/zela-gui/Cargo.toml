@@ -1,0 +1,30 @@
+[package]
+name = "zela-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GUI 可执行壳：组装 zela-app 的 Runtime 与 zela-egui 的每帧帧体"
+
+[[bin]]
+name = "zela-app"
+path = "src/main.rs"
+
+[dependencies]
+# 组装层：Pod 装配 / Resources / Runtime（不依赖 UI）。
+zela-app = { path = "../zela-app" }
+# UI 层：EguiSceneHost / SceneFrame / FrameProgress / 主题与字体。
+zela-egui = { path = "../../ui/zela-egui" }
+# 场景类型（Result / DriverPod）与后端安装。
+zela-scene = { path = "../../scene/zela-scene" }
+zela-render-backends = { path = "../../render/zela-render-backends", features = ["egui-wgpu", "eframe"] }
+zela-schedule = { path = "../../schedule/zela-schedule" }
+ze-pod = { path = "../../pod/ze-pod" }
+
+eframe.workspace = true
+egui.workspace = true
+
+[features]
+# 与 zela-app 的默认 feature 对齐（GUI 也走同一套脚本 / 内容引擎）。
+default = ["typst", "python"]
+typst = ["zela-app/typst"]
+python = ["zela-app/python"]

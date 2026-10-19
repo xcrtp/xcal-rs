@@ -1,0 +1,10 @@
+[package]
+name = "ze-pod-binding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "语言无关的 Pod 绑定驱动：能力计划 / 调用编排 / JSON 文档"
+
+[dependencies]
+# 零额外依赖：绑定驱动只认识 `ze-pod` 的 schema 与值模型。
+ze-pod = { path = "../ze-pod" }

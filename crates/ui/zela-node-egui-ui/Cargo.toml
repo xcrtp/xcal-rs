@@ -1,0 +1,16 @@
+[package]
+name = "zela-node-egui-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "egui widget mappings for ze-node-schema property nodes (draw_property / PropertyNodeView / spawn menu)"
+
+[dependencies]
+ze-node = { path = "../../graph/ze-node" }
+ze-node-schema = { path = "../../graph/ze-node-schema" }
+zela-node-egui = { path = "../zela-node-egui" }
+egui = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]
+eframe = { workspace = true, features = ["default_fonts"] }

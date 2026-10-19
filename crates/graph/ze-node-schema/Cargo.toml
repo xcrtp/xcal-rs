@@ -1,0 +1,17 @@
+[package]
+name = "ze-node-schema"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Property model layer for ze-node (NodeSpec / Property / NodeRegistry / DynamicObject). No egui dependency."
+
+[dependencies]
+ze-node = { path = "../ze-node" }
+ze-node-schema-macros = { path = "../ze-node-schema-macros" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ze-graph-eval = { path = "../ze-graph-eval" }
+ze-graph-algo = { path = "../ze-graph-algo" }

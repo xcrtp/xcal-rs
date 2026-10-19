@@ -8,16 +8,16 @@
 
 | 层 | 路径 | 前缀 | 职责 |
 |---|---|---|---|
-| kernel | `crates/kernel/` | `xc-` | 纯计算/数据内核（无 egui、无渲染；含通用能力领域，如几何、排版）|
-| pod    | `crates/pod/`    | `xc-` | **领域无关的 Pod 层**：核心组 `xc-pod` / `xc-pod-binding` / `xc-pod-macro`（平台无关，必须过 wasm gate）+ 语言适配器组 `xc-pod-lua` / `xc-pod-py`（按 mlua / pyo3 属平台相关，**不进** wasm gate）+ 测试组 `xc-pod-tests`（`publish = false`，只服务集成测试 / 基准）。全部生产依赖**均不含任何 `xcal-*`**；domain 能力由 App 注入 |
-| object | `crates/object/` | `xc-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
-| graph  | `crates/graph/`  | `xc-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
-| schedule | `crates/schedule/` | `xcal-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
-| scene  | `crates/scene/` | `xcal-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 + Pod domain（`SceneApi` / `ContentApi`）|
+| kernel | `crates/kernel/` | `ze-` | 纯计算/数据内核（无 egui、无渲染；含通用能力领域，如几何、排版）|
+| pod    | `crates/pod/`    | `ze-` | **领域无关的 Pod 层**：核心组 `ze-pod` / `ze-pod-binding` / `ze-pod-macro`（平台无关，必须过 wasm gate）+ 语言适配器组 `ze-pod-lua` / `ze-pod-py`（按 mlua / pyo3 属平台相关，**不进** wasm gate）+ 测试组 `ze-pod-tests`（`publish = false`，只服务集成测试 / 基准）。全部生产依赖**均不含任何 `zela-*`**；domain 能力由 App 注入 |
+| object | `crates/object/` | `ze-` | **场景对象层**（M3 新增）：用户可见的场景对象（图元 newtype / 相机 / 变换 / 绘制层级 / 装配对象 `Axes2D`·`FunctionGraph`），只依赖 kernel |
+| graph  | `crates/graph/`  | `ze-` | 图论 + 节点结构契约（NodeSpec/Property/DynamicObject）|
+| schedule | `crates/schedule/` | `zela-` | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；不含任何场景/渲染概念 |
+| scene  | `crates/scene/` | `zela-` | **场景层**（R1.6 更名、本轮归位）：ECS 场景数据（`Scene` / 组件）+ 场景 System + UI ↔ 场景 `domain` 契约 + Pod domain（`SceneApi` / `ContentApi`）|
 | script | ~~`crates/script/`~~ | — | 已并入 `crates/pod/` 的语言适配器组（本轮迁移，`crates/script/` 目录消失） |
-| render | `crates/render/` | `xcal-` | 渲染抽象（trait / 队列 / 三角化）+ 具体后端 |
-| ui     | `crates/ui/`     | `xcal-` | egui 前端 + 编辑器 |
-| app    | `crates/app/`    | `xcal-` | 组装 / 可执行 |
+| render | `crates/render/` | `zela-` | 渲染抽象（trait / 队列 / 三角化）+ 具体后端 |
+| ui     | `crates/ui/`     | `zela-` | egui 前端 + 编辑器 |
+| app    | `crates/app/`    | `zela-` | 组装 / 可执行 |
 
 ## 依赖图
 
@@ -28,232 +28,232 @@
 ```mermaid
 graph TD
     subgraph kernel[crates/kernel]
-        xc_notion["xc-notion"]
-        xc_render_ir["xc-render-ir"]
-        xc_scene_contract["xc-scene-contract"]
-        xc_content["xc-content"]
-        xc_prerender["xc-prerender"]
-        xc_time["xc-time"]
-        xc_vertex["xc-vertex"]
-        xc_resource["xc-resource"]
-        xc_macro["xc-macro"]
+        ze_notion["ze-notion"]
+        ze_render_ir["ze-render-ir"]
+        ze_scene_contract["ze-scene-contract"]
+        ze_content["ze-content"]
+        ze_prerender["ze-prerender"]
+        ze_time["ze-time"]
+        ze_vertex["ze-vertex"]
+        ze_resource["ze-resource"]
+        ze_macro["ze-macro"]
     end
 
     subgraph pod[crates/pod]
-        xc_pod["xc-pod（核心组）"]
-        xc_pod_binding["xc-pod-binding（核心组）"]
-        xc_pod_macro["xc-pod-macro（核心组）"]
-        xc_pod_lua["xc-pod-lua（语言适配器组）"]
-        xc_pod_py["xc-pod-py（语言适配器组）"]
-        xc_pod_tests["xc-pod-tests（测试组，publish=false）"]
+        ze_pod["ze-pod（核心组）"]
+        ze_pod_binding["ze-pod-binding（核心组）"]
+        ze_pod_macro["ze-pod-macro（核心组）"]
+        ze_pod_lua["ze-pod-lua（语言适配器组）"]
+        ze_pod_py["ze-pod-py（语言适配器组）"]
+        ze_pod_tests["ze-pod-tests（测试组，publish=false）"]
     end
 
     subgraph object[crates/object]
-        xc_object["xc-object"]
+        ze_object["ze-object"]
     end
 
     subgraph graph[crates/graph]
-        xc_node["xc-node"]
-        xc_graph_algo["xc-graph-algo"]
-        xc_graph_eval["xc-graph-eval"]
-        xc_node_schema["xc-node-schema"]
-        xc_node_schema_macros["xc-node-schema-macros"]
+        ze_node["ze-node"]
+        ze_graph_algo["ze-graph-algo"]
+        ze_graph_eval["ze-graph-eval"]
+        ze_node_schema["ze-node-schema"]
+        ze_node_schema_macros["ze-node-schema-macros"]
     end
 
     subgraph schedule[crates/schedule]
-        xcal_schedule["xcal-schedule"]
+        zela_schedule["zela-schedule"]
     end
 
     subgraph scene[crates/scene]
-        xcal_scene["xcal-scene"]
+        zela_scene["zela-scene"]
     end
 
     subgraph render[crates/render]
-        xcal_render["xcal-render"]
-        xcal_render_backends["xcal-render-backends"]
+        zela_render["zela-render"]
+        zela_render_backends["zela-render-backends"]
     end
 
     subgraph ui[crates/ui]
-        xcal_egui["xcal-egui"]
-        xcal_node_editor["xcal-node-editor"]
-        xcal_node_egui["xcal-node-egui"]
-        xcal_node_egui_ui["xcal-node-egui-ui"]
+        zela_egui["zela-egui"]
+        zela_node_editor["zela-node-editor"]
+        zela_node_egui["zela-node-egui"]
+        zela_node_egui_ui["zela-node-egui-ui"]
     end
 
     subgraph app[crates/app]
-        xcal_app["xcal-app"]
+        zela_app["zela-app"]
     end
 
     %% kernel
-    xc_notion
-    xc_vertex
-    xc_resource
-    xc_macro
-    xc_render_ir --> xc_notion
-    xc_scene_contract --> xc_notion
-    xc_scene_contract --> xc_render_ir
-    xc_content --> xc_notion
-    xc_prerender --> xc_content
-    xc_prerender --> xc_notion
-    xc_time --> xc_notion
+    ze_notion
+    ze_vertex
+    ze_resource
+    ze_macro
+    ze_render_ir --> ze_notion
+    ze_scene_contract --> ze_notion
+    ze_scene_contract --> ze_render_ir
+    ze_content --> ze_notion
+    ze_prerender --> ze_content
+    ze_prerender --> ze_notion
+    ze_time --> ze_notion
 
-    %% pod：核心组 + 语言适配器组（生产边不含任何 xcal-*）
-    xc_pod_binding --> xc_pod
-    xc_pod_py --> xc_pod
-    xc_pod_py --> xc_pod_binding
-    xc_pod_py --> xc_pod_macro
-    xc_pod_lua --> xc_pod
-    xc_pod_lua --> xc_pod_binding
-    xc_pod_tests --> xc_pod
-    xc_pod_tests --> xc_pod_binding
-    xc_pod_tests --> xc_pod_macro
-    xc_pod_tests --> xc_pod_lua
-    xc_pod_tests --> xc_pod_py
+    %% pod：核心组 + 语言适配器组（生产边不含任何 zela-*）
+    ze_pod_binding --> ze_pod
+    ze_pod_py --> ze_pod
+    ze_pod_py --> ze_pod_binding
+    ze_pod_py --> ze_pod_macro
+    ze_pod_lua --> ze_pod
+    ze_pod_lua --> ze_pod_binding
+    ze_pod_tests --> ze_pod
+    ze_pod_tests --> ze_pod_binding
+    ze_pod_tests --> ze_pod_macro
+    ze_pod_tests --> ze_pod_lua
+    ze_pod_tests --> ze_pod_py
 
     %% object → kernel（场景对象层只依赖 kernel）
-    xc_object --> xc_notion
-    xc_object --> xc_render_ir
-    xc_object --> xc_scene_contract
-    xc_object --> xc_macro
+    ze_object --> ze_notion
+    ze_object --> ze_render_ir
+    ze_object --> ze_scene_contract
+    ze_object --> ze_macro
 
     %% graph → kernel
-    xc_graph_algo --> xc_node
-    xc_graph_eval --> xc_node
-    xc_node_schema --> xc_node
-    xc_node_schema --> xc_node_schema_macros
+    ze_graph_algo --> ze_node
+    ze_graph_eval --> ze_node
+    ze_node_schema --> ze_node
+    ze_node_schema --> ze_node_schema_macros
 
     %% schedule（无内部依赖，仅依赖 hecs）
 
     %% render → kernel + object + schedule
-    xcal_scene --> xc_notion
-    xcal_scene --> xc_time
-    xcal_scene --> xc_macro
-    xcal_scene --> xc_content
-    xcal_scene --> xc_prerender
-    xcal_scene --> xc_pod
-    xcal_scene --> xc_pod_macro
-    xcal_scene --> xc_object
-    xcal_scene --> xc_render_ir
-    xcal_scene --> xc_scene_contract
-    xcal_scene --> xcal_schedule
-    xcal_render --> xc_content
-    xcal_render --> xc_notion
-    xcal_render --> xc_render_ir
-    xcal_render --> xc_object
-    xcal_render --> xc_vertex
-    xcal_render --> xc_resource
-    xcal_render --> xcal_scene
-    xcal_render --> xcal_schedule
-    xcal_render --> xc_scene_contract
-    xcal_render_backends --> xc_notion
-    xcal_render_backends --> xc_render_ir
-    xcal_render_backends --> xcal_render
-    xcal_render_backends --> xc_object
+    zela_scene --> ze_notion
+    zela_scene --> ze_time
+    zela_scene --> ze_macro
+    zela_scene --> ze_content
+    zela_scene --> ze_prerender
+    zela_scene --> ze_pod
+    zela_scene --> ze_pod_macro
+    zela_scene --> ze_object
+    zela_scene --> ze_render_ir
+    zela_scene --> ze_scene_contract
+    zela_scene --> zela_schedule
+    zela_render --> ze_content
+    zela_render --> ze_notion
+    zela_render --> ze_render_ir
+    zela_render --> ze_object
+    zela_render --> ze_vertex
+    zela_render --> ze_resource
+    zela_render --> zela_scene
+    zela_render --> zela_schedule
+    zela_render --> ze_scene_contract
+    zela_render_backends --> ze_notion
+    zela_render_backends --> ze_render_ir
+    zela_render_backends --> zela_render
+    zela_render_backends --> ze_object
 
-    %% XSB 装配产物 → scene（不含任何语言适配器）
-    xcal_scene_bundle --> xcal_scene
+    %% ZSB 装配产物 → scene（不含任何语言适配器）
+    zela_scene_bundle --> zela_scene
 
     %% ui → kernel + graph + render + schedule
-    xcal_egui --> xc_notion
-    xcal_egui --> xc_macro
-    xcal_egui --> xc_object
-    xcal_egui --> xc_pod
-    xcal_egui --> xcal_scene
-    xcal_egui --> xcal_schedule
-    xcal_egui --> xcal_render
-    xcal_egui --> xcal_render_backends
-    xcal_node_editor --> xc_node
-    xcal_node_editor --> xc_graph_algo
-    xcal_node_egui --> xc_node
-    xcal_node_egui --> xcal_node_editor
-    xcal_node_egui_ui --> xc_node
-    xcal_node_egui_ui --> xc_node_schema
-    xcal_node_egui_ui --> xcal_node_egui
+    zela_egui --> ze_notion
+    zela_egui --> ze_macro
+    zela_egui --> ze_object
+    zela_egui --> ze_pod
+    zela_egui --> zela_scene
+    zela_egui --> zela_schedule
+    zela_egui --> zela_render
+    zela_egui --> zela_render_backends
+    zela_node_editor --> ze_node
+    zela_node_editor --> ze_graph_algo
+    zela_node_egui --> ze_node
+    zela_node_egui --> zela_node_editor
+    zela_node_egui_ui --> ze_node
+    zela_node_egui_ui --> ze_node_schema
+    zela_node_egui_ui --> zela_node_egui
 
     %% GUI 壳 → app + ui（S0：UI 不再由 app 依赖）
-    xcal_gui --> xc_pod
-    xcal_gui --> xcal_app
-    xcal_gui --> xcal_egui
-    xcal_gui --> xcal_render_backends
-    xcal_gui --> xcal_scene
-    xcal_gui --> xcal_schedule
+    zela_gui --> ze_pod
+    zela_gui --> zela_app
+    zela_gui --> zela_egui
+    zela_gui --> zela_render_backends
+    zela_gui --> zela_scene
+    zela_gui --> zela_schedule
 
-    %% app → everything（**不依赖 xcal-egui**）
-    xcal_app --> xcal_scene
-    xcal_app --> xcal_scene_bundle
-    xcal_app --> xcal_schedule
-    xcal_app --> xc_macro
-    xcal_app --> xcal_render
-    xcal_app --> xcal_render_backends
-    xcal_app --> xc_content
-    xcal_app --> xc_prerender
-    xcal_app --> xc_notion
-    xcal_app --> xc_object
-    xcal_app --> xc_pod
-    xcal_app --> xc_pod_binding
-    xcal_app --> xc_pod_lua
-    xcal_app --> xc_pod_py
+    %% app → everything（**不依赖 zela-egui**）
+    zela_app --> zela_scene
+    zela_app --> zela_scene_bundle
+    zela_app --> zela_schedule
+    zela_app --> ze_macro
+    zela_app --> zela_render
+    zela_app --> zela_render_backends
+    zela_app --> ze_content
+    zela_app --> ze_prerender
+    zela_app --> ze_notion
+    zela_app --> ze_object
+    zela_app --> ze_pod
+    zela_app --> ze_pod_binding
+    zela_app --> ze_pod_lua
+    zela_app --> ze_pod_py
 
     %% 独立编译器 → app + bundle
-    xcal_compile --> xcal_app
-    xcal_compile --> xcal_scene_bundle
+    zela_compile --> zela_app
+    zela_compile --> zela_scene_bundle
 ```
 
 ## 合规校验
 
 | 规则 | 状态 | 说明 |
 |---|---|---|
-| NoReverseDependency | ✅ 通过 | 无 xc-* → xcal-* / egui / wgpu 生产依赖 |
-| NoAppDependency | ✅ 通过 | 无 xcal-* crate 依赖 xcal-app |
+| NoReverseDependency | ✅ 通过 | 无 ze-* → zela-* / egui / wgpu 生产依赖 |
+| NoAppDependency | ✅ 通过 | 无 zela-* crate 依赖 zela-app |
 | NoGraphDomainTypes | ✅ 通过 | crates/graph 无领域类型引用 |
-| NoPodDomainDependency | ✅ 通过 | `crates/pod` 全部 5 个 crate 的生产依赖不含任何 `xcal-*`（含两个语言适配器）；domain 由 App 注入 |
+| NoPodDomainDependency | ✅ 通过 | `crates/pod` 全部 5 个 crate 的生产依赖不含任何 `zela-*`（含两个语言适配器）；domain 由 App 注入 |
 | NoCycles | ✅ 通过 | 生产依赖为 DAG（dev-deps 不计入） |
 
 **依赖分析（2026-10-18 按 `cargo metadata` 等价重算，仅生产依赖、dev-deps 不计；见文末说明）：**
 
-> 本次复核把脚本层、`xc-pod` 家族与 XSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
+> 本次复核把脚本层、`ze-pod` 家族与 ZSB 两个新 crate 一并纳入：mermaid **88 条 ⇔ Cargo.toml 88 条**，
 > 零缺零余；FanIn/FanOut 共 **33 行**。
 > 此前的 W2 复核（8 条漏边修复）仍有效，本表是在其基础上的全量重算。
 >
-> **2026-10-19 更新**：新增 `xcal-playback` / `xcal-web` 后，`cargo metadata` 口径的
+> **2026-10-19 更新**：新增 `zela-playback` / `zela-web` 后，`cargo metadata` 口径的
 > 内部生产边为 **100 条**，见 [`workspace-analyzer.mmd`](workspace-analyzer.mmd)。
 > 下方 FanIn/FanOut 表仍是 2026-10-18 快照，**未包含这两个 crate**。
 
 | Package | FanIn | FanOut | Instability |
 |---------|-------|--------|-------------|
-| xc-graph-eval | 0 | 1 | 1.00 |
-| xc-pod-tests | 0 | 5 | 1.00 |
-| xcal-compile | 0 | 2 | 1.00 |
-| xcal-gui | 0 | 6 | 1.00 |
-| xcal-node-egui-ui | 0 | 3 | 1.00 |
-| xcal-egui | 1 | 8 | 0.89 |
-| xcal-app | 2 | 14 | 0.88 |
-| xcal-render | 3 | 9 | 0.75 |
-| xcal-scene | 5 | 11 | 0.69 |
-| xc-node-schema | 1 | 2 | 0.67 |
-| xcal-node-editor | 1 | 2 | 0.67 |
-| xcal-node-egui | 1 | 2 | 0.67 |
-| xc-pod-py | 2 | 3 | 0.60 |
-| xcal-render-backends | 3 | 4 | 0.57 |
-| xc-graph-algo | 1 | 1 | 0.50 |
-| xc-pod-lua | 2 | 2 | 0.50 |
-| xc-prerender | 2 | 2 | 0.50 |
-| xc-time | 1 | 1 | 0.50 |
-| xc-object | 5 | 4 | 0.44 |
-| xc-scene-contract | 3 | 2 | 0.40 |
-| xcal-scene-bundle | 2 | 1 | 0.33 |
-| xc-content | 4 | 1 | 0.20 |
-| xc-pod-binding | 4 | 1 | 0.20 |
-| xc-render-ir | 5 | 1 | 0.17 |
-| xc-macro | 4 | 0 | 0.00 |
-| xc-node | 6 | 0 | 0.00 |
-| xc-node-schema-macros | 1 | 0 | 0.00 |
-| xc-notion | 11 | 0 | 0.00 |
-| xc-pod | 8 | 0 | 0.00 |
-| xc-pod-macro | 3 | 0 | 0.00 |
-| xc-resource | 1 | 0 | 0.00 |
-| xc-vertex | 1 | 0 | 0.00 |
-| xcal-schedule | 5 | 0 | 0.00 |
+| ze-graph-eval | 0 | 1 | 1.00 |
+| ze-pod-tests | 0 | 5 | 1.00 |
+| zela-compile | 0 | 2 | 1.00 |
+| zela-gui | 0 | 6 | 1.00 |
+| zela-node-egui-ui | 0 | 3 | 1.00 |
+| zela-egui | 1 | 8 | 0.89 |
+| zela-app | 2 | 14 | 0.88 |
+| zela-render | 3 | 9 | 0.75 |
+| zela-scene | 5 | 11 | 0.69 |
+| ze-node-schema | 1 | 2 | 0.67 |
+| zela-node-editor | 1 | 2 | 0.67 |
+| zela-node-egui | 1 | 2 | 0.67 |
+| ze-pod-py | 2 | 3 | 0.60 |
+| zela-render-backends | 3 | 4 | 0.57 |
+| ze-graph-algo | 1 | 1 | 0.50 |
+| ze-pod-lua | 2 | 2 | 0.50 |
+| ze-prerender | 2 | 2 | 0.50 |
+| ze-time | 1 | 1 | 0.50 |
+| ze-object | 5 | 4 | 0.44 |
+| ze-scene-contract | 3 | 2 | 0.40 |
+| zela-scene-bundle | 2 | 1 | 0.33 |
+| ze-content | 4 | 1 | 0.20 |
+| ze-pod-binding | 4 | 1 | 0.20 |
+| ze-render-ir | 5 | 1 | 0.17 |
+| ze-macro | 4 | 0 | 0.00 |
+| ze-node | 6 | 0 | 0.00 |
+| ze-node-schema-macros | 1 | 0 | 0.00 |
+| ze-notion | 11 | 0 | 0.00 |
+| ze-pod | 8 | 0 | 0.00 |
+| ze-pod-macro | 3 | 0 | 0.00 |
+| ze-resource | 1 | 0 | 0.00 |
+| ze-vertex | 1 | 0 | 0.00 |
+| zela-schedule | 5 | 0 | 0.00 |
 
 Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 
@@ -266,7 +266,7 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 「谁推进了时间」不再藏在调用栈里，而是一条显式命令：
 
 ```
-App / xcal-render ──submit(Advance { dt })──► DriverPod（持有 Scheduler + 相机）
+App / zela-render ──submit(Advance { dt })──► DriverPod（持有 Scheduler + 相机）
                                                   │
                                                   ├─ publish_topic("xcal.driver.events")
                                                   │    FrameFinished / Advanced / Error
@@ -285,7 +285,7 @@ App / xcal-render ──submit(Advance { dt })──► DriverPod（持有 Sched
 命令 / 事件是**不同泛型类型**（`C` vs `E`），把事件当命令提交是**编译错误**；
 若退化成 `PodValue` 承载，两者签名会完全相同，约束就只剩约定。
 
-GUI 与 headless（`xcal-render` / `export_frames`）**共用同一个 Driver pod**：
+GUI 与 headless（`zela-render` / `export_frames`）**共用同一个 Driver pod**：
 GUI 用墙钟算 `dt`，导出用固定 `dt = 1/fps`；场景、系统图、渲染回调完全相同。
 导出路径因此不存在"另写一套简化帧循环"的分叉。
 
@@ -300,12 +300,12 @@ GUI 用墙钟算 `dt`，导出用固定 `dt = 1/fps`；场景、系统图、渲�
   `push_immediate` 是逃生舱，不保证顺序。
 - **寻址**：`PodHandle`（`PodType` = `u64`）标识 Pod 本身；资源 `Handle` 带 owner，
   不得用于寻址。
-- **自证**：`crates/pod/xc-pod-tests`（`publish = false`）提供 mini pod、
+- **自证**：`crates/pod/ze-pod-tests`（`publish = false`）提供 mini pod、
   集成断言与基准；不被任何生产 crate 依赖。
 
 ### 调度流水线
 
-**每个 Phase 的系统**（`xcal-app` 的 `register_systems`）
+**每个 Phase 的系统**（`zela-app` 的 `register_systems`）
 
 ```
 Input:         DirectorAdvance · CameraDrive · CameraInput
@@ -318,7 +318,7 @@ FrameEnd:      —（内容提交由 host.present 承担；
 ```
 
 **M4 起，几何不再出现在 UI 层**：坐标轴 / 网格（相机裁剪、步长自适应、刻度线）
-归 `xc_object::Axes2D`，函数采样归 `xc_object::FunctionGraph`；`Prepare` 阶段的两个
+归 `ze_object::Axes2D`，函数采样归 `ze_object::FunctionGraph`；`Prepare` 阶段的两个
 System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原先的 `GridBuildSystem`
 已退役（其几何四段全部归位）。
 
@@ -333,30 +333,30 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
 - Rust edition 2024
 - hecs 0.11 为唯一 ECS 后端，不替换
 - wgpu 30 / egui 0.36 / eframe 0.36
-- glam 0.33：NDC Z∈[0,1]；上层经 `xc_notion::proj` 使用 `directx::` 系列（不直接引 glam）
-- Transform2D traits 由 `xc_macro::Transform2DInto` 过程宏派生
+- glam 0.33：NDC Z∈[0,1]；上层经 `ze_notion::proj` 使用 `directx::` 系列（不直接引 glam）
+- Transform2D traits 由 `ze_macro::Transform2DInto` 过程宏派生
 - System trait 关联类型 `Reads` / `Writes` 无默认值（stable Rust 不支持 associated type defaults）
 - `ErasedSystem` 为 object-safe 运行时 trait，`Box<dyn ErasedSystem>` 存储
 - Scheduler 每阶段独立 CommandBuffer，阶段结束 flush
 - ExecutorContext `resources` 字段私有，仅通过 `get<T>()` / `get_mut<T>()` 访问
 - DrawQueue 使用稳定排序保留同 ZIndex 的插入顺序
 
-### 两阶段内容管线（xc-content / xc-prerender）
+### 两阶段内容管线（ze-content / ze-prerender）
 
 ```
-源码字符串 → xc-prerender（engine: typst [feature] / placeholder）
-           → xc-content::ContentIR（StyledPath + fill/stroke + Span 锚点，pt，Y-up）
-           → xcal-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
+源码字符串 → ze-prerender（engine: typst [feature] / placeholder）
+           → ze-content::ContentIR（StyledPath + fill/stroke + Span 锚点，pt，Y-up）
+           → zela-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
                                           Shape2D::Path + Style2D + Transform2D）
-           → xcal-app::formula（接线桥：flatten_subpaths + apply_point
+           → zela-app::formula（接线桥：flatten_subpaths + apply_point
                                → Path 组件（Path2D）+ StrokeSolid，每个子轮廓一条实体）
 ```
 
-- **铁律**：`typst` 仅允许出现在 `xc-prerender` 且 feature-gated；`xcal-render`
-  只依赖 `xc-content`（验收：`cargo tree -p xcal-render` 无 typst）。
+- **铁律**：`typst` 仅允许出现在 `ze-prerender` 且 feature-gated；`zela-render`
+  只依赖 `ze-content`（验收：`cargo tree -p zela-render` 无 typst）。
 - 锚点两级映射：`Glyph.span` → `WorldExt::range`（main source 字节区间）
-  → 原始归一化源码 `find`；归一化/哈希统一由 `xc-content` 实现，保证跨引擎一致。
-- **消费侧接线**（`crates/app/xcal-app/src/formula.rs`）：复用 `ir_to_draw_cmds` 的
+  → 原始归一化源码 `find`；归一化/哈希统一由 `ze-content` 实现，保证跨引擎一致。
+- **消费侧接线**（`crates/app/zela-app/src/formula.rs`）：复用 `ir_to_draw_cmds` 的
   缩放/平移，不另写变换；用 `Path2D::flatten_subpaths` 按子轮廓分组，每个子轮廓
   单独 spawn 一条 `(Path, StrokeSolid)`（多轮廓字形 `o`/`B`/`8` 因此不会出现横穿
   字形内部的桥接线）。零 System 改动——复用现有 `record_scene` 的 `(Path, StrokeSolid)`
@@ -368,28 +368,28 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
 - **空心字口径（当前）**：旧管线 Fill 分支用 `convex_polygon`，非凸字形会被画成凸包，
   因此公式暂走 Stroke（轮廓）路径；实心填充待 S3 引入三角化后接管
   （挂在 `CustomSpec::to_triangles`；图元只带 `SpecId`，函数指针在具名规格表里）。
-- feature：`xcal-app` 默认 `typst`；`--no-default-features` 时回退 `placeholder` 引擎
+- feature：`zela-app` 默认 `typst`；`--no-default-features` 时回退 `placeholder` 引擎
   （显示方块，链路仍可跑通）。
 
 ### S1 插值内核与形变（路线甲）
 
 ```
-xc-notion：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
-xc-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
-xc-content ：pair_by_anchor（语义配对，按源码锚点）
-xcal-scene  ：MorphShape 组件 + target::MorphT（`Arc<dyn Target>`，P0）+ MorphApplySystem（SceneSync）
+ze-notion：Lerp / arc_lengths / resample_arc_length / Path2D::morph(+morph_points) / transformed
+ze-time    ：Easing + AnimValue::Path + Curve::{Morph, PathMorph, Keyframes}
+ze-content ：pair_by_anchor（语义配对，按源码锚点）
+zela-scene  ：MorphShape 组件 + target::MorphT（`Arc<dyn Target>`，P0）+ MorphApplySystem（SceneSync）
 ```
 
-- **路线甲**：`xc-time` 依赖 `xc-notion`（插值原语），但**不得**依赖 `xc-content`
-  （语义配对知识留外层）。验收：`cargo tree -p xc-time | grep -c xc-content` = 0。
+- **路线甲**：`ze-time` 依赖 `ze-notion`（插值原语），但**不得**依赖 `ze-content`
+  （语义配对知识留外层）。验收：`cargo tree -p ze-time | grep -c ze-content` = 0。
 - 对齐按**弧长**（非索引）：`flatten` 输出点分布不均，按索引配对会让直线段被拉伸、
   曲线段被压缩，形变过程"抽动"。
 - 输出顶点数**恒为 `samples`**（默认 128）→ 稳定开销，与输入复杂度无关。
-- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `xcal_scene::animation::MorphT`），
-  生产路径由 `xcal-render::record_systems::MorphRecordSystem` 录成 `MorphItem`
+- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `zela_scene::animation::MorphT`），
+  生产路径由 `zela-render::record_systems::MorphRecordSystem` 录成 `MorphItem`
   （from/to 常量 + 逐帧 `t`）交 GPU 形变管线；`MorphApplySystem` 是 CPU 回退
   （实体同时带 `Path` 时生效）。from/to 不每帧重建。
-- **语义配对（S1b）**：`xc_content::pair_by_anchor` 按源码 `Span` 锚点配对
+- **语义配对（S1b）**：`ze_content::pair_by_anchor` 按源码 `Span` 锚点配对
   （`x^2 → x^3` 的 `x` 配到 `x`，而非按位置配到 `3`）；单侧存在 → 淡入/淡出
   （退化为包围盒中心的一个点）；无锚点 → 退化为索引配对。
 - 已知限制：旋转对齐（起点不一致会"绕圈"，原型期约定起点对齐）、
@@ -411,10 +411,10 @@ xcal-scene  ：MorphShape 组件 + target::MorphT（`Arc<dyn Target>`，P0）+ M
 Stroke2D.space / StrokeSolid.space / Style2D.space（声明）
         │
         ▼
-xc_notion::resolve_width(width, space, scale)   ← 唯一换算入口
+ze_notion::resolve_width(width, space, scale)   ← 唯一换算入口
         │
         ▼
-xcal-render::record_scene（从 camera.scale 取值）  ← 唯一换算点
+zela-render::record_scene（从 camera.scale 取值）  ← 唯一换算点
         │
         ▼
 DrawQueue（Style::Stroke.width 已是屏幕像素）
@@ -437,7 +437,7 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 `Painter2D::paint(&self, &Shape2D, &Style2D)`；`DrawQueue::push(DrawCommand { z, shape, style })`
 + `ensure_sorted()`（`Vec::sort`，稳定）+ `execute(&painter)`。迁移后画面不变。
 
-**S3-0 三角化适配层**（`xcal-render::tessellate`，纯 CPU / headless，无 feature 门控）：
+**S3-0 三角化适配层**（`zela-render::tessellate`，纯 CPU / headless，无 feature 门控）：
 `Shape2D + Transform2D + Style2D` → `Vec<Tessellation2D>`，顶点**严格**符合顶点契约
 （`VertexLayout::standard`，**R0 后 stride 24、四槽** position/attrib0/attrib1/attrib2；
 `Vertex2D { position, normal, side, advance }`，`size == 24` 编译期断言）。三角化用
@@ -449,7 +449,7 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 `tessellation_layout()` 声明 `CacheStrategy::PerFrame`；2D 后端只读内容哈希、
 从不读该标签，故标签**仅作声明**。
 
-**S3-1 wGPU 2D 后端**（`xcal-render-backends::wgpu_2d`）：离屏 `Rgba8Unorm`（非 sRGB，
+**S3-1 wGPU 2D 后端**（`zela-render-backends::wgpu_2d`）：离屏 `Rgba8Unorm`（非 sRGB，
 存 gamma）+ MSAA 4x。`finish_frame` 流程 = 稳定排序 → 逐项三角化（**CPU 侧结果缓存，
 命中 `mark_used` 防误驱逐**）→ **按 `(color, stroke_width)` 合批**（成员顶点拼接 +
 索引 rebase 成一套缓冲，整批一次 `draw_indexed`；`draw_count` 仍是几何条数，
@@ -460,7 +460,7 @@ DrawQueue（Style::Stroke.width 已是屏幕像素）
 → 离屏绘制。`SceneCompositorCallback`（egui-wgpu）经 `prepare` / `paint` 与之对接。
 **S3-2 起本文件不再自带合成管线**（`pipeline_composite` / `composite_bgl` / `sampler` /
 `composite()` / `COMPOSITE_QUAD` 已移除），离屏清屏改为**透明**，合成统一交给
-`xcal-render-backends::compositor::Compositor`。
+`zela-render-backends::compositor::Compositor`。
 **S4.1 起本文件是唯一的 2D 渲染路径**：旧 CPU 回放后端（`egui_2d`）与其
 **编译期** feature、运行期管线开关已一并删除——2D 不再有"两条并存管线"，
 全部 `Shape2D` 都经 lyon 三角化 + 离屏 MSAA + 合成。
@@ -477,7 +477,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 **索引顺序**（先 = 下）混合进主 pass —— 2D / 3D 可任意叠放（此前 3D 硬编码在 2D 之上），
 并为 S3-3（2D / 3D 互为纹理）铺路。
 
-**声明契约**（`xcal-scene::domain::view`）：
+**声明契约**（`zela-scene::domain::view`）：
 - `LayerBlend { Opaque, Alpha, Additive }`，`Default = Opaque`；
 - `LayerDescriptor.opacity: f32` + `clamped_opacity()`（合成器唯一取值口径，clamp `[0,1]`）；
 - `SceneView.background: Color32`，默认 `DEFAULT_BACKGROUND = (20,20,20,255)`
@@ -491,14 +491,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 离屏纹理，清屏 **alpha = 0**；产出 `Layer3DFrame { offscreen, format, _arena_buffer }`。
 `depth_stencil` 仍为 `None`（深度属 S4）。
 
-**合成器（C4）**：`xcal-render-backends::compositor`
+**合成器（C4）**：`zela-render-backends::compositor`
 - `CompositeOp { texture, src_format, blend, opacity, rect_px }` →
   `prepare(device, &[..]) -> CompositeFrame`（建 bind group + opacity uniform，
   **不重排**，层序 = 输入序）→ `composite_layers(pass, &frame)`；
 - `COMPOSITE_QUAD` = 写死覆盖 NDC `[-1,1]²` 的 TriangleStrip（左上→右上→左下→右下），
   2D / 3D 共用；顶点布局仍来自契约 `VertexLayout::standard(AaModel::None, CacheStrategy::Static)`；
 - **无动态 blend / 无动态入口点** → 预建 `HashMap<(LayerBlend, Conversion), RenderPipeline>`
-  （3 blend × 3 conversion = 9 条，`label` 统一 `"xcal-compositor-pipeline"`）；
+  （3 blend × 3 conversion = 9 条，`label` 统一 `"zela-compositor-pipeline"`）；
 - 混合（预乘 alpha）：`Opaque` = REPLACE；`Alpha` = 色/alpha 均 `One / OneMinusSrcAlpha`；
   `Additive` = `One / One`。`opacity` 由 uniform（x 分量）乘进源色，不走 blend constant；
 - **sRGB 域转换**：`textureSample` 对 sRGB 格式纹理**自动解码**，故按
@@ -517,7 +517,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 `HashMap<TypeId, _>`，**不是 per-callback 的**。早期"每个图层各注册一个回调"的设计里，
 `Layer2DCallback` 与 `Layer3DCallback` 各自 `insert::<CompositeFrame>()` —— 后插入覆盖
 先插入，两个 `paint()` 取到**同一帧**，把同一张离屏纹理画两遍（实机现象：顺序 A 只见 3D、
-顺序 B 只见 2D）。故改为**单个** `SceneCompositorCallback`（`xcal-render-backends::scene_callback`）：
+顺序 B 只见 2D）。故改为**单个** `SceneCompositorCallback`（`zela-render-backends::scene_callback`）：
 - 持有本帧全部图层声明 `Vec<SceneLayer { id, kind, blend, opacity }>` + 两个队列快照；
 - `prepare`：逐层渲染离屏 → 按声明序收集全部 `CompositeOp` → **一次** `Compositor::prepare`
   → 单个 `CompositeFrame`，与各层 `_arena_buffer`（保活）一起存入 TypeMap 的 `SceneCompositorFrame`；
@@ -539,22 +539,22 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 
 > **S5 已把 `Parent` 移出本表**：`TransformHierarchySystem` 每帧产出 `WorldTransforms`，
 > `SceneRecordSystem` / `RevealRecordSystem` 已消费（详见
-> [`transform_hierarchy.rs`](crates/scene/xcal-scene/src/transform_hierarchy.rs)）。
+> [`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs)）。
 
 | 项 | 位置 | 现状 | 何时接 |
 |---|---|---|---|
-| `ObjectId` generation 失效检测 | 契约层 `xc_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
-| `Path3D` | 理念层 `xc-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
-| `xc-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`xcal-render-backends` / `xcal-app` / `xcal-scene` / `xcal-render` / `xc-time` / `xcal-egui` / `xcal-playback` 已改经 `xc-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用共 **25 次**（`*.rs` 出现次数口径）：`xc-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`xcal-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
-| 节点编辑器（`xcal-node-editor` / `xcal-node-egui` / `xcal-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
-| 2D / 3D 录制 System 仍是两个 | `xcal-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
-| `formula.rs` 归位（632 行，约一半测试） | `crates/app/xcal-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`xc-content` / `xcal-render` / 新桥接层） | 真实动画确定它的形态之后 |
-| `tessellate` 下沉 | `crates/render/xcal-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
-| 非原生 Pod 的 `FunctionX2Y` 适配器 | `xcal-scene::math_pod` | **C3 已消费（2026-10-17）**：第一个非原生 Pod（Lua / `xc-pod-lua`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`xc-pod-lua` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
+| `ObjectId` generation 失效检测 | 契约层 `ze_scene_contract::ObjectId::is_stale` | 有单元测试；**无生产消费方** | 引入对象销毁-重建流程时 |
+| `Path3D` | 理念层 `ze-notion` | 已建、**零消费方**；与 `Path2D` **不同构**（不是同一类型的 3D 版本） | 需要真 3D 曲线时；因不同构，届时是**破坏性变更**，需单独立项 |
+| `ze-notion`「全仓唯一数学元语出口」 | 全仓 | **2026-10-19 已收口**：`zela-render-backends` / `zela-app` / `zela-scene` / `zela-render` / `ze-time` / `zela-egui` / `zela-playback` 已改经 `ze-notion` 并删除 glam 依赖，CI 加门禁。剩余直接引用共 **25 次**（`*.rs` 出现次数口径）：`ze-notion` 定义侧 6 处、节点图组 17 处（`GAPS.md` R-19）、`zela-scene` 2 行说明性注释 | 节点图组在合成图（ComposerGraph）接入场景前统一；其余不再新增 |
+| 节点编辑器（`zela-node-editor` / `zela-node-egui` / `zela-node-egui-ui`） | `crates/ui/*` + `crates/graph/*` | **已排期（当前冻结）**：类型/算法/UI 齐备但**零生产消费方**（graph 6364 行 + UI 4502 行 ≈ 10866 行）。用户决策：**肯定要做，但要等 UI 接口与交互层稳定之后**，且**后期可能引入破坏性变更** | UI 接口与交互层稳定后单独立项 |
+| 2D / 3D 录制 System 仍是两个 | `zela-render::record_systems`（`SceneRecordSystem` / `SceneRecord3DSystem`） | 两者已同住渲染层（A6），但仍是两个 System / 两个队列；是否合并取决于真实 3D 动画的录制结构 | 有真实 3D 动画时 |
+| `formula.rs` 归位（632 行，约一半测试） | `crates/app/zela-app/src/formula.rs` | 承载"空心字"这一**既定视觉**；归位目标 crate 亦有争议（`ze-content` / `zela-render` / 新桥接层） | 真实动画确定它的形态之后 |
+| `tessellate` 下沉 | `crates/render/zela-render/src/tessellate.rs` | 纯 CPU 三角化适配层，目前与 2D 后端同层 | 需要非 wgpu 三角化消费方时 |
+| 非原生 Pod 的 `FunctionX2Y` 适配器 | `zela-scene::math_pod` | **C3 已消费（2026-10-17）**：第一个非原生 Pod（Lua / `ze-pod-lua`）已落地并接线 —— 方向是**脚本在装配期产出 `SceneScript`**，不参与每帧 `FunctionX2Y` 采样。走慢路径的 `FunctionX2Y` 适配器仍**无生产消费方**（`ze-pod-lua` 不消费它），故该子项继续记账 | 用户想用 Lua 定义**每帧采样**的数学函数时 |
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
-> （`xcal-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
-> `xcal_scene::Scene` 并存），以及契约层的 `Scene::set` 写路径
+> （`zela-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
+> `zela_scene::Scene` 并存），以及契约层的 `Scene::set` 写路径
 > （消费方 `FunctionGraph::refresh`）。
 >
 > **W3 记账约束**：节点编辑器**后期可能引入破坏性变更**（用户决策），因此
@@ -567,8 +567,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > （GPU 用例 `headless_path_matches_egui_path_bit_for_bit`）—— "Scene 可被任意消费"
 > 从**类型层面的声明**变成**被验证的事实**。
 >
-> **B 线（序列帧导出，本轮已接线）**：`xcal_app::export` 在 headless 入口上做
-> "逐帧 → 抓像素 → PNG"，入口为 `cargo run -p xcal-app --example export_frames`。
+> **B 线（序列帧导出，本轮已接线）**：`zela_app::export` 在 headless 入口上做
+> "逐帧 → 抓像素 → PNG"，入口为 `cargo run -p zela-app --example export_frames`。
 > **没有 seek**（Scene 不保证纯）⇒ 只能边跑边抓；视频编码仍交给外部工具。
 > 每帧自建目标纹理的开销**只测不优化**（导出示例会打印 ms/帧）。
 >
@@ -579,32 +579,32 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 函数侧走的是另一套（两步走：序列化写 name，反序列化由 Pod / registry 反查），
 > 两套口径的差异是真实取舍，记账于此。
 >
-> **脚本 Pod（2026-10-17，C3 消费；D 线后归位到 `crates/pod/xc-pod-lua`）**：
-> 它是 `xc-pod` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
+> **脚本 Pod（2026-10-17，C3 消费；D 线后归位到 `crates/pod/ze-pod-lua`）**：
+> 它是 `ze-pod` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
 > `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
 > 经 erased `Pod::call("xcal.script::run")`），**不参与每帧采样**。
-> 依赖图 / FanIn-FanOut 表**已包含** `xc-pod` / `xc-pod-macro` / `xc-pod-binding` /
-> `xc-pod-lua` / `xc-pod-py`（2026-10-18 按 `cargo metadata` 口径重算，见文末备注）。
-> 实际边：`xcal-scene → xc-pod / xc-pod-macro`（`math_pod`）、
-> `xc-pod-lua → xc-pod / xc-pod-binding / mlua`、`xc-pod-py → xc-pod / xc-pod-binding /
-> xc-pod-macro / pyo3`；`xcal-app → xc-pod / xc-pod-binding / xc-pod-lua / xc-pod-py`；
-> **两条语言边都不含 `xcal-*`**。
+> 依赖图 / FanIn-FanOut 表**已包含** `ze-pod` / `ze-pod-macro` / `ze-pod-binding` /
+> `ze-pod-lua` / `ze-pod-py`（2026-10-18 按 `cargo metadata` 口径重算，见文末备注）。
+> 实际边：`zela-scene → ze-pod / ze-pod-macro`（`math_pod`）、
+> `ze-pod-lua → ze-pod / ze-pod-binding / mlua`、`ze-pod-py → ze-pod / ze-pod-binding /
+> ze-pod-macro / pyo3`；`zela-app → ze-pod / ze-pod-binding / ze-pod-lua / ze-pod-py`；
+> **两条语言边都不含 `zela-*`**。
 >
-> **Pod 类型系统与绑定生成（2026-10-17，V 线）**：`xc-pod` 从"字符串签名"升级为
+> **Pod 类型系统与绑定生成（2026-10-17，V 线）**：`ze-pod` 从"字符串签名"升级为
 > **类型描述 IDL**：
 > - `typespec.rs`：`TypeSpec`（Scalar / Struct / Enum / Array / Opaque）+ `ParamSpec`
 >   （**形参名进 schema**）+ `ErasedFn`（绑定入口）；仍然零依赖、过 wasm gate；
 > - `value.rs`：`PodValue` / `PodType` 只用于**跨语言边界**；`FunctionX2Y` 热路径
->   不引用（`math_pod` / `xc-time` 中 `PodValue|TypeSpec` 命中数为 0）；
+>   不引用（`math_pod` / `ze-time` 中 `PodValue|TypeSpec` 命中数为 0）；
 > - `#[derive(PodType)]`：一处定义生成 schema + 双向转换 + `IntoPodTypeName`；
 > - `#[capability(bindings)]`：生成 `FnIo` + 类型擦除 trampoline（`calls()`）；
-> - `xc-pod-lua`（D 线前为 `xcal-script`）：Lua 绑定与文档由 `calls()` + `TypeSpec` **自动生成**
+> - `ze-pod-lua`（D 线前为 `zela-script`）：Lua 绑定与文档由 `calls()` + `TypeSpec` **自动生成**
 >   （`Circle { ... }` / `Curve.Phase { ... }` 构造器），手写胶水只剩宿主落点转换；
 > - `SceneApi` 升至 v2：4 个曲线函数 → `Curve` 枚举、`rgba:u32` → `Color` 结构体，
 >   共 10 个函数。**未开启 `bindings` 的 capability 不受影响**（`calls()` 默认空）。
 >
 > **脚本接口补全（2026-10-17，W 线）**：
-> - **target 变枚举**：`TargetKind`（`xcal-scene`，`#[derive(PodType)]`）成为唯一真源；
+> - **target 变枚举**：`TargetKind`（`zela-scene`，`#[derive(PodType)]`）成为唯一真源；
 >   `target_ctor_by_name` 退化为 `TargetKind::from_name` 的薄查询，字符串表已删除。
 >   拼错变体在 Lua 绑定层即报错（不再静默不排期）；
 > - **接口补齐**：`Axes2D` / `Arrow` / `Fill` / `Transform` / `RevealPath` / `PathShape`；
@@ -615,67 +615,67 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （占位引擎：25 对象 / 9 绑定）。`storyboard.rs` 保留为**参考实现**（默认启动路径仍在用），
 >   是否删除由用户决定；
 > - **W4**：删除 `spawn` 的 `ComponentList` 字符串 override（`Vec<Handle>` 自带 schema 名
->   `Array<xc_pod.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
+>   `Array<ze_pod.Handle>`）；非法组件句柄从"静默跳过"改为 `run` 的明确失败。
 >
 > **Pod 解耦与 Broker（2026-10-17，B 线）**：
-> - **B1 语言无关绑定层**：新增 kernel crate `xc-pod-binding`（只依赖 `xc-pod`，可进 wasm gate）。
+> - **B1 语言无关绑定层**：新增 kernel crate `ze-pod-binding`（只依赖 `ze-pod`，可进 wasm gate）。
 >   它持有 `BindingPlan` / `ValueCodec` / `invoke` / JSON 文档；Lua 适配器只实现 `LuaCodec`。
->   `xc-pod-binding` 中不出现任何语言运行时类型；
+>   `ze-pod-binding` 中不出现任何语言运行时类型；
 > - **B2 domain 与解释器分居**：`SceneApi` / `ContentApi` / 类型词汇 / `SceneServicePod` /
->   `ContentServicePod` / `PathStore` 全部搬到 `xcal-scene::script`（**D 线后改名
->   `xcal-scene::pod`**）；Lua 适配器只留 Lua codec（**D 线后 `xcal-script` 整个删除**）。
->   `grep SceneServicePod crates/pod/xc-pod-lua/src/` = 0；
-> - **B3 Broker**：`xc-pod::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
+>   `ContentServicePod` / `PathStore` 全部搬到 `zela-scene::script`（**D 线后改名
+>   `zela-scene::pod`**）；Lua 适配器只留 Lua codec（**D 线后 `zela-script` 整个删除**）。
+>   `grep SceneServicePod crates/pod/ze-pod-lua/src/` = 0；
+> - **B3 Broker**：`ze-pod::Broker` 收拢"需求校验 / 拓扑排序 / 环检测 / 注入 / 生命周期"。
 >   依赖边 = `requires.service → provides`；`A → B → A` 在注入前即报 `BrokerError::Cycle`
 >   （含参与链），不会构造 `Arc` 互持。每次装配打印一次报告（顺序 / 边 / 注入 / optional 缺失）；
-> - **B4 Python（feature 门控）**：`xc-pod-py`（B4 时名 `xcal-py`）用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
+> - **B4 Python（feature 门控）**：`ze-pod-py`（B4 时名 `zela-py`）用 pyo3 实现 `PythonApi`（`linspace` / `make_dot`）。
 >   Python 侧经注入的 `scene.*` 建对象（通用绑定驱动 + `PyCodec`）；Lua 侧 `python.*` 表由
 >   同一套绑定生成。feature 关闭时 `cargo test --workspace` 不引入 pyo3；
 > - **optional 首次有消费方**：`python` 能力以 optional 需求注册 —— 无 Python 时装配通过、
 >   `python` 表不存在；有提供者时自动接线。
 >
 > **Pod 层彻底解耦（2026-10-17，D 线）**：
-> - **`xcal-script` 删除**：`ScriptHost` 整个消失（`grep -r ScriptHost crates/` = 0）；
->   语言适配器拆为 `crates/pod/xc-pod-lua` 与 `crates/pod/xc-pod-py`，
->   两者**互不依赖**，生产边**不含任何 `xcal-*`**（`cargo tree -p ...` 实测）；
-> - **domain 归位**：`xcal-scene::script` → **`xcal-scene::pod`**。内容服务带来的
->   `xcal-scene → xc-prerender` 依赖仍在（记账：若将来 scene 要进 wasm，这条会先挡路）；
+> - **`zela-script` 删除**：`ScriptHost` 整个消失（`grep -r ScriptHost crates/` = 0）；
+>   语言适配器拆为 `crates/pod/ze-pod-lua` 与 `crates/pod/ze-pod-py`，
+>   两者**互不依赖**，生产边**不含任何 `zela-*`**（`cargo tree -p ...` 实测）；
+> - **domain 归位**：`zela-scene::script` → **`zela-scene::pod`**。内容服务带来的
+>   `zela-scene → ze-prerender` 依赖仍在（记账：若将来 scene 要进 wasm，这条会先挡路）；
 > - **Broker 补 `run` / `run_with`**：在已装配的图上取节点 → `Pod::call` → downcast，
 >   承担原 `ScriptHost::run` 的职责；错误通道为 `UnknownNode` / `BadEntry` /
 >   `UnknownEntry` / `Run` / `BadOutput`；
-> - **D3 描述层 / 执行层分离**：`xc-pod::AssemblyPlan` / `NodeSpec` 是**纯数据**
+> - **D3 描述层 / 执行层分离**：`ze-pod::AssemblyPlan` / `NodeSpec` 是**纯数据**
 >   （拓扑 / 环 / optional 缺失可在不建 Pod 时单测）；App 的 `src/assembly.rs`
 >   声明静态插件清单，Broker 消费它完成校验 / 排序 / 注入，并在 debug 下断言
 >   "描述层 == 执行层"；
-> - **资产归 App**：`storyboard.lua` 在 `crates/app/xcal-app/scripts/`，
->   `export_scene_api` example 在 `crates/app/xcal-app/examples/`；
-> - **测试归属**：`xc-pod-lua` 用 dev-dependency 自建 mini domain Pod 验双向；
->   完整 6 镜头等价性仍在 `xcal-app`（Lua / Python 两版各一条）。
+> - **资产归 App**：`storyboard.lua` 在 `crates/app/zela-app/scripts/`，
+>   `export_scene_api` example 在 `crates/app/zela-app/examples/`；
+> - **测试归属**：`ze-pod-lua` 用 dev-dependency 自建 mini domain Pod 验双向；
+>   完整 6 镜头等价性仍在 `zela-app`（Lua / Python 两版各一条）。
 >   两个语言适配器**不进 wasm gate**（mlua 需 C 工具链、pyo3 需系统 Python）。
 >
 > **Python 脚本与文档（2026-10-17，D+ 线）**：
-> - `xc-pod-py` 补 `run` 入口（`xcal.python::run(String) -> Any`），协议与 Lua 版同形
+> - `ze-pod-py` 补 `run` 入口（`xcal.python::run(String) -> Any`），协议与 Lua 版同形
 >   （入口服务 `__reset` / `__finish`）：Python 脚本在注入后的模块 globals 里执行；
 > - App 新增 `scripts/storyboard.py` 与 `--python`（`SceneChoice::PythonStoryboard`），
 >   与硬编码分镜逐对象 / 逐绑定等价（25 对象 / 9 绑定）；
-> - **Python Pod 默认开启**：`xcal-app` 的 `default` features 含 `python`
+> - **Python Pod 默认开启**：`zela-app` 的 `default` features 含 `python`
 >   （需要系统 Python；关闭后 Lua 路径仍可用）；
 > - 文档导出新增按 capability 命名空间落盘的 `.pyi`
 >   （`xcal/__init__.pyi` / `xcal/scene.pyi` / `xcal/content.pyi` / `xcal/python.pyi`）；
->   `xc-pod-py` 同时把 capability 注册为真实的 `xcal.*` 模块并安装到 `sys.modules`，
+>   `ze-pod-py` 同时把 capability 注册为真实的 `xcal.*` 模块并安装到 `sys.modules`，
 >   脚本可 `import xcal.scene` / `from xcal import scene, Circle`；
 > - 多 `PyPod` 实例使用**唯一模块名**（`PyImport_ExecCodeModuleEx` 会复用同名模块，
 >   否则实例间会共享 globals），并对 `sys.modules` 的安装 + 执行加锁串行化。
 >
 > **备注（2026-10-18，脚本层与 Pod 入图）**：按 `cargo metadata`（仅生产依赖，
 > `kind != dev`）全量重算，内部依赖边 **59 → 73（+14）**：
-> - 新增 `xc-pod-binding → xc-pod`；`xc-pod-lua → xc-pod / xc-pod-binding`；
->   `xc-pod-py → xc-pod / xc-pod-binding / xc-pod-macro`；
-> - 补齐 `xcal-scene → xc-content / xc-prerender / xc-pod / xc-pod-macro`；
-> - 补齐 `xcal-app → xc-pod / xc-pod-binding / xc-pod-lua / xc-pod-py`；
-> - FanIn/FanOut 表由 24 行扩为 **29 行**（新增 `xc-pod` 5/0、`xc-pod-macro` 2/0、
->   `xc-pod-binding` 3/1、`xc-pod-lua` 1/2、`xc-pod-py` 1/3；`xc-notion` FanIn 11、
->   `xcal-scene` FanOut 11、`xcal-app` FanOut 14）；
+> - 新增 `ze-pod-binding → ze-pod`；`ze-pod-lua → ze-pod / ze-pod-binding`；
+>   `ze-pod-py → ze-pod / ze-pod-binding / ze-pod-macro`；
+> - 补齐 `zela-scene → ze-content / ze-prerender / ze-pod / ze-pod-macro`；
+> - 补齐 `zela-app → ze-pod / ze-pod-binding / ze-pod-lua / ze-pod-py`；
+> - FanIn/FanOut 表由 24 行扩为 **29 行**（新增 `ze-pod` 5/0、`ze-pod-macro` 2/0、
+>   `ze-pod-binding` 3/1、`ze-pod-lua` 1/2、`ze-pod-py` 1/3；`ze-notion` FanIn 11、
+>   `zela-scene` FanOut 11、`zela-app` FanOut 14）；
 > - 程序化比对结果：mermaid **73 条 ⇔ Cargo.toml 73 条**，零缺零余。
 >   工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 
@@ -692,58 +692,58 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > `cargo metadata --format-version 1`（仅生产依赖，`kind != dev`）等价重算。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 >
-> 备注（2026-10-13）：S1 引入 `xc-time → xc-notion` 边后按同一口径再次重算
-> FanIn/FanOut（`xc-time` FanOut 0→1、`xc-notion` FanIn 5→7、`xcal-app` FanOut 5→8）。
+> 备注（2026-10-13）：S1 引入 `ze-time → ze-notion` 边后按同一口径再次重算
+> FanIn/FanOut（`ze-time` FanOut 0→1、`ze-notion` FanIn 5→7、`zela-app` FanOut 5→8）。
 >
 > 备注（2026-10-15）：依赖图与 `workspace-analyzer.mmd` 按同一 `cargo metadata` 口径
 > 手工补齐（工具仍不可用），合计补 9 条边：
-> - 本文件图区：修正 `xcal_node_egui → xc_node`、`xcal_node_egui_ui → xc_node_schema`
->   两处前缀笔误，并补 `xc-node-schema → xc-node` / `→ xc-node-schema-macros`（2 条）；
-> - `workspace-analyzer.mmd`：补 `xc-prerender → xc-content` / `→ xc-notion`、
->   `xc-time → xc-notion`、`xcal-app → xc-content` / `→ xc-notion` / `→ xc-prerender`、
->   `xcal-render → xc-content`（7 条，29 → 36）。
+> - 本文件图区：修正 `zela_node_egui → ze_node`、`zela_node_egui_ui → ze_node_schema`
+>   两处前缀笔误，并补 `ze-node-schema → ze-node` / `→ ze-node-schema-macros`（2 条）；
+> - `workspace-analyzer.mmd`：补 `ze-prerender → ze-content` / `→ ze-notion`、
+>   `ze-time → ze-notion`、`zela-app → ze-content` / `→ ze-notion` / `→ ze-prerender`、
+>   `zela-render → ze-content`（7 条，29 → 36）。
 >
 > FanIn/FanOut 表经复核无需改动。工具恢复后重跑 `cargo-workspace-analyzer -d .`
 > 即可覆盖回自动产物。
 >
-> 备注（2026-10-15，R1.6）：场景层 crate 由 core 更名为 `xcal-scene`、ui 层的过程宏
-> crate 归位 kernel 并更名为 `xc-macro`、ECS 调度内核抽为 `xcal-schedule`
+> 备注（2026-10-15，R1.6）：场景层 crate 由 core 更名为 `zela-scene`、ui 层的过程宏
+> crate 归位 kernel 并更名为 `ze-macro`、ECS 调度内核抽为 `zela-schedule`
 > （置于 `crates/schedule/`），依赖图按同一 `cargo metadata` 口径同步：
-> - 新增 `schedule` 层 / 节点 `xcal-schedule`；kernel 层补 `xc-vertex` / `xc-resource` /
->   `xc-macro`（R1 下沉 + R1.5 归位）；render 层描述改为「场景层 + 渲染抽象 + 具体后端」，
+> - 新增 `schedule` 层 / 节点 `zela-schedule`；kernel 层补 `ze-vertex` / `ze-resource` /
+>   `ze-macro`（R1 下沉 + R1.5 归位）；render 层描述改为「场景层 + 渲染抽象 + 具体后端」，
 >   ui 层移除 proc-macro；
-> - 补边（相对 R1 基线）：`xcal-scene → xcal-schedule`、`xcal-app → xcal-schedule`、
->   `xcal-egui → xcal-schedule`、`xcal-render → xc-vertex`、`xcal-render → xc-resource`、
->   `xcal-egui → xc-notion`；
+> - 补边（相对 R1 基线）：`zela-scene → zela-schedule`、`zela-app → zela-schedule`、
+>   `zela-egui → zela-schedule`、`zela-render → ze-vertex`、`zela-render → ze-resource`、
+>   `zela-egui → ze-notion`；
 > - 图与 `workspace-analyzer.mmd` 保持「仅含 workspace 内部 crate 节点」的既有约定，
->   `xcal-schedule → hecs`（外部 crate）不入图。
+>   `zela-schedule → hecs`（外部 crate）不入图。
 >
 > FanIn/FanOut 表按 `cargo metadata` 全量重算（18 → 21 行）。工具恢复后重跑
 > `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 >
-> 备注（2026-10-16，M2/M3）：新增层 `object`（`crates/object/xc-object`）与 kernel
-> 节点 `xc-render-ir` / `xc-scene-contract`，依赖图与 FanIn/FanOut 按同一
+> 备注（2026-10-16，M2/M3）：新增层 `object`（`crates/object/ze-object`）与 kernel
+> 节点 `ze-render-ir` / `ze-scene-contract`，依赖图与 FanIn/FanOut 按同一
 > `cargo metadata` 口径同步：
-> - 新增边：`xc-render-ir → xc-notion`、`xc-scene-contract → xc-notion / xc-render-ir`、
->   `xc-object → xc-notion / xc-render-ir`、`xcal-scene → xc-object`、
->   `xcal-render → xc-render-ir / xc-object`、`xcal-egui → xc-object`（9 条）；
-> - 表由 21 → 24 行：`xc-notion` FanIn 8→11、`xcal-scene` FanOut 4→5、
->   `xcal-render` FanOut 5→7、`xcal-egui` FanOut 6→7；新增 `xc-scene-contract`（0/2）、
->   `xc-object`（3/2）、`xc-render-ir`（3/1）。
-> - **本轮为部分落地**：`xc-object` 暂不依赖 `xc-scene-contract`（`Describable`
+> - 新增边：`ze-render-ir → ze-notion`、`ze-scene-contract → ze-notion / ze-render-ir`、
+>   `ze-object → ze-notion / ze-render-ir`、`zela-scene → ze-object`、
+>   `zela-render → ze-render-ir / ze-object`、`zela-egui → ze-object`（9 条）；
+> - 表由 21 → 24 行：`ze-notion` FanIn 8→11、`zela-scene` FanOut 4→5、
+>   `zela-render` FanOut 5→7、`zela-egui` FanOut 6→7；新增 `ze-scene-contract`（0/2）、
+>   `ze-object`（3/2）、`ze-render-ir`（3/1）。
+> - **本轮为部分落地**：`ze-object` 暂不依赖 `ze-scene-contract`（`Describable`
 >   派生宏延后），`record_scene` 暂保留 `&hecs::World`（见 M2/M3 交付说明）。
 > 工具恢复后重跑 `cargo-workspace-analyzer -d .` 即可覆盖回自动产物。
 >
 > 备注（2026-10-16，M4）：M 阶段收尾。**M4 本身未新增依赖边**（它只搬逻辑，不加 crate 依赖），
-> 但 M3 余项引入的边（`xc-object → xc-scene-contract`、`xcal-scene → xc-object`、
-> `xcal-render → xc-object / xc-scene-contract`、`xcal-render-backends → xc-object`、
-> `xcal-app → xc-object`）在上一轮的表中尚未计入，故本轮把 FanIn/FanOut 与
+> 但 M3 余项引入的边（`ze-object → ze-scene-contract`、`zela-scene → ze-object`、
+> `zela-render → ze-object / ze-scene-contract`、`zela-render-backends → ze-object`、
+> `zela-app → ze-object`）在上一轮的表中尚未计入，故本轮把 FanIn/FanOut 与
 > `workspace-analyzer.mmd` 一并按同一口径全量重算：
-> - 关键变化：`xc-scene-contract` FanIn **0 → 3**（消费者 `xc-object` / `xcal-scene` /
->   `xcal-render`，Instability 1.00 → 0.40 —— **契约层不再是零消费方空层**）；
->   `xc-object` 3/2 → **5/4**、`xc-render-ir` 3/1 → **4/1**、`xc-macro` 3/0 → **4/0**、
->   `xcal-render` 3/7 → 3/8、`xcal-scene` 4/5 → 4/7、`xcal-render-backends` 2/3 → 2/4、
->   `xcal-app` 0/9 → 0/10；
+> - 关键变化：`ze-scene-contract` FanIn **0 → 3**（消费者 `ze-object` / `zela-scene` /
+>   `zela-render`，Instability 1.00 → 0.40 —— **契约层不再是零消费方空层**）；
+>   `ze-object` 3/2 → **5/4**、`ze-render-ir` 3/1 → **4/1**、`ze-macro` 3/0 → **4/0**、
+>   `zela-render` 3/7 → 3/8、`zela-scene` 4/5 → 4/7、`zela-render-backends` 2/3 → 2/4、
+>   `zela-app` 0/9 → 0/10；
 > - 结构判据（本轮）：`Parent` 定义 1 处、`record_scene` 不认识 hecs、
 >   UI 层无几何计算（`GridBuildSystem` 退役）、装配对象 `Axes2D` / `FunctionGraph`
 >   在对象层。已知未接线项（`Parent` 累乘 System、`Scene` 的第二实现等）见上文
@@ -764,14 +764,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   手写 64 点三角函数循环与 `path.commands` 包围盒遍历**消失**（改为 `Circle2D::sample`
 >   与 `Path2D::bounds` + `Rect2D::union`）；`grep -n "commands" crates/app/.../lib.rs` = 0。
 > - **P2 渲染层清理**：删除 `draw_queue_2d.rs`（`DrawQueue2D` / `DrawCommand2D`，123 行，
->   零生产消费方 —— 保留只会成为"纸面能力"）；修正 `xcal-render/src/lib.rs` 里
+>   零生产消费方 —— 保留只会成为"纸面能力"）；修正 `zela-render/src/lib.rs` 里
 >   自相矛盾的模块注释（`shape.rs` 并非真实文件，是路径稳定的转发模块）；
 >   `components.rs` 加"兼容 facade，非死代码"标注；**新增 `scene` 层**：
->   `crates/render/xcal-scene` → `crates/scene/xcal-scene`（层序改为
+>   `crates/render/zela-scene` → `crates/scene/zela-scene`（层序改为
 >   `kernel → object / graph → schedule → scene → render → ui → app`）。
-> - **P3 app 归位**：后端安装 → `xcal_render_backends::install_standard_backends`（app 一行）；
->   CJK 字体 → `EguiSceneHost::install_cjk_font`（跨平台候选 + `XCAL_CJK_FONT`，不再硬编码
->   Windows 路径）；内容纹理常量 → `xc_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
+> - **P3 app 归位**：后端安装 → `zela_render_backends::install_standard_backends`（app 一行）；
+>   CJK 字体 → `EguiSceneHost::install_cjk_font`（跨平台候选 + `ZELA_CJK_FONT`，不再硬编码
+>   Windows 路径）；内容纹理常量 → `ze_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
 >   CONTENT_TEXTURE_HEIGHT}`（值不变 1 / 512 / 512）；可观测与帧管理 →
 >   `EguiSceneHost::draw_call_count` / `end_frame`。
 > - **依赖图无变化**：本轮只移动目录与搬内部实现，**没有新增/删除任何依赖边**，
@@ -779,28 +779,28 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >
 > 备注（2026-10-16，首个数学动画原型 P0–P5）：本轮第一次**为"内容"改造引擎**
 > （判据：脚本里写不出来的东西才补；脚本用不到的一个都不补）。依赖图新增两条边：
-> `xcal-render → xcal-schedule`（三个录制 System 需要 `System`，P4）与
-> `xcal-render → hecs`（**仅 dev-dependencies**，测录制 System 用）。
+> `zela-render → zela-schedule`（三个录制 System 需要 `System`，P4）与
+> `zela-render → hecs`（**仅 dev-dependencies**，测录制 System 用）。
 > - **P0 目标 trait 化**：`BindingTarget` 枚举 → `Arc<dyn Target>`
->   （`xcal-scene::animation::target`）。五个目标：`CircleRadius` / `Phase` / `CameraEye` /
+>   （`zela-scene::animation::target`）。五个目标：`CircleRadius` / `Phase` / `CameraEye` /
 >   `MorphT` / `Camera2DFraming`（新增）。新增驱动目标**不改枚举、不改 System 源码**。
 >   代价（记账）：失去 enum exhaustiveness；`dyn Trait` 不能 serde。为 UI 分类当时另加了
 >   无载荷的类别判别式（**T0-② 已删除**：改由 target 自报 `name()` / `target_id()`）。
-> - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`xc_object::Framing2D`，
+> - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`ze_object::Framing2D`，
 >   无 `rect`）；`Camera2D` 与渲染目标 `rect` 解绑（录制时经 `ViewRect` 绑定，方案 a）；
->   控制器纯函数移到 `xcal-scene::camera_input::apply_pan_zoom`；
+>   控制器纯函数移到 `zela-scene::camera_input::apply_pan_zoom`；
 >   `SceneRead` 新增只读**点查询** —— 实现为访客形态 `with<T, R>(id, f)`：
 >   hecs 0.11 的 `World::get::<&T>` 返回**借用守卫** `Ref<'_, T>`，`&T` 交不出去
 >   （与 `for_each` 同一约束；计划原文的 `Option<&T>` 断言与代码事实不符，以代码为准）。
-> - **P2 相机句柄**：`xc_object::Camera2DHandle(pub ObjectId)` + `resolve(scene, rect)`
+> - **P2 相机句柄**：`ze_object::Camera2DHandle(pub ObjectId)` + `resolve(scene, rect)`
 >   + `spawn_camera2d`；本轮**只做引用型**，自由相机内联参数按 §5.1 延后（分镜用不到）。
-> - **P3 Timeline**：`xcal-scene::animation::timeline`，顺序游标 → 每段一个
+> - **P3 Timeline**：`zela-scene::animation::timeline`，顺序游标 → 每段一个
 >   `ClockNode{local_offset, span:(0,dur), mode:Hold}` + `Binding`；`parallel()` 表达
 >   **同区间多动作**（镜头推进同时改 scale/center）。`ClockForest` / `eval_local` **零改动**。
-> - **P4 录制 System 归位**：三个 System → `xcal-render::record_systems`；`ViewRect`
->   下沉到 `xcal-render`；`MorphRecordSystem` / `ContentTextureRecordSystem` 的
+> - **P4 录制 System 归位**：三个 System → `zela-render::record_systems`；`ViewRect`
+>   下沉到 `zela-render`；`MorphRecordSystem` / `ContentTextureRecordSystem` 的
 >   **内联 hecs 查询**改为契约层 `for_each*`（渲染层仍不认识 hecs）。
-> - **P5 分镜脚本**：`xcal-app::storyboard` 声明 §1.1 六条分镜（网格常驻 / 相机对象 /
+> - **P5 分镜脚本**：`zela-app::storyboard` 声明 §1.1 六条分镜（网格常驻 / 相机对象 /
 >   0–2s 曲线生长 / wait / 2.5–3.5s 镜头推进 / 3.5–4.5s 公式浮现）；
 >   原 2D demo（振动圆 / sin 曲线相位 / 圆↔方 / `x²`↔`x³`）被分镜取代，3D demo 不动。
 > - **P5 实测修（引擎缺陷，非分镜问题）**：**零长度路径 lyon 不产出几何** ——
@@ -817,8 +817,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 
 ### 相机控制与合成器滤镜（K 线 / C 线）
 
-> 两条**无交集**的线：K 线在 `xcal-scene` / `xcal-egui` / `xcal-app`，C 线在
-> `xcal-render` / `xcal-render-backends`。执行中**未发生文件冲突**。
+> 两条**无交集**的线：K 线在 `zela-scene` / `zela-egui` / `zela-app`，C 线在
+> `zela-render` / `zela-render-backends`。执行中**未发生文件冲突**。
 
 **K 线（相机控制）**
 
@@ -831,7 +831,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   其余 no-op（`PanZoom`：Pan/Zoom；`Orbit`：Orbit/Dolly；`Fps`：Look/Move；`Path`：全部忽略）。
 >   `SceneEvent::Camera` 的 `layer` 字段因此**未被消费**（单视口 + 模式互不重叠）。
 > - **K1 FPS**：新增命令 `Look{delta_yaw,delta_pitch}` / `Move{delta:Vec3}`（x=右/y=上/z=前）
->   + 组件 `xc_object::FpsView{yaw,pitch}`（**显式存朝向**：增量旋转会漂移且 pitch 无法 clamp）
+>   + 组件 `ze_object::FpsView{yaw,pitch}`（**显式存朝向**：增量旋转会漂移且 pitch 无法 clamp）
 >   + 纯函数 `apply_fps`；pitch 钳 `±FPS_PITCH_LIMIT = π/2 − 0.01`。
 > - **K2 轨迹相机**：`Path` 模式**忽略全部交互命令**（与既有语义注释一致）；
 >   轨迹**未新增 Curve 变体** —— `Keyframes`/`Sampled` 已能驱动 `Framing2D.center` /
@@ -926,7 +926,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （`[0,1]` 与不带 reveal **逐位一致**）、`reveal_interval_covers_middle_only`
 >   （`[0.3,0.7]` 中段可见、两端无像素）。
 > - **端到端**：整图注册回归（`full_system_graph_assembles_without_borrow_conflicts`
->   加 `RevealQueue`，13 个 System 无冲突）、真实 `cargo run -p xcal-app` 跑 1700+ 帧无 panic、
+>   加 `RevealQueue`，13 个 System 无冲突）、真实 `cargo run -p zela-app` 跑 1700+ 帧无 panic、
 >   强制重编后零新增 warning。
 > - **分镜表达同步改变**：分镜 3 / 6 从 `MorphShape`（整条曲线从一点"绽开"）改为
 >   `Reveal`（笔尖沿路径推进）—— 这才是 §0.1 要的 Write 类效果；形变管线仍在（GPU 用例覆盖）。
@@ -954,35 +954,35 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   证据：`headless_path_matches_egui_path_bit_for_bit`（内容层 + 2D + 3D 三层齐全、
 >   空链与非空链各跑一遍，两条路径的目标纹理**逐字节相同**）。
 >   **导出未做**（记账）：只到"抓一帧 → RGBA8"；且无 seek ⇒ 只能实时录制。
-> - **W2 依赖图与文档修正**：8 条**漏画的** mermaid 边补齐（`xcal_render → xcal_schedule`
->   / `xcal_render → xc_scene_contract` / `xcal_render_backends → xc_object` /
->   `xcal_scene → xc_render_ir` / `xcal_scene → xc_scene_contract` /
->   `xc_object → xc_scene_contract` / `xc_object → xc_macro` / `xcal_app → xc_object`），
+> - **W2 依赖图与文档修正**：8 条**漏画的** mermaid 边补齐（`zela_render → zela_schedule`
+>   / `zela_render → ze_scene_contract` / `zela_render_backends → ze_object` /
+>   `zela_scene → ze_render_ir` / `zela_scene → ze_scene_contract` /
+>   `ze_object → ze_scene_contract` / `ze_object → ze_macro` / `zela_app → ze_object`），
 >   并**程序化比对**（解析每个 `[dependencies]`，dev-deps 不计入）：mermaid **59 条 ⇔
->   Cargo.toml 59 条，零缺零余**。顺带扫出两处 FanIn/FanOut 漂移（`xcal-render` 8→9、
->   `xcal-schedule` 3→4，同源于漏边）与两处 README 自相矛盾（`xc-vertex` 的
->   stride 20 / `xcal-render-backends` 的"预建 9 条管线"）——均已修。
+>   Cargo.toml 59 条，零缺零余**。顺带扫出两处 FanIn/FanOut 漂移（`zela-render` 8→9、
+>   `zela-schedule` 3→4，同源于漏边）与两处 README 自相矛盾（`ze-vertex` 的
+>   stride 20 / `zela-render-backends` 的"预建 9 条管线"）——均已修。
 > - **W3 节点编辑器排期记账**：见上文「已知未接线项」新增行 —— **已排期（当前冻结）**、
 >   触发条件是**UI 接口与交互层稳定之后**、**预告破坏性变更**；并记一条约束：
 >   任何跨层接口设计**不得**以"将来节点编辑器要用"为理由。
-> - **W4 `xcal-scene` 的 `glam::` 收敛**：43 处 → **0 处代码引用**（改用 `xc_notion`
+> - **W4 `zela-scene` 的 `glam::` 收敛**：43 处 → **0 处代码引用**（改用 `ze_notion`
 >   或场景层出口 `crate::types`），仅剩 **2 行说明性注释**（`types.rs` 历史沿革 /
 >   `transform.rs` 的"Y 翻转只有一份"约定）—— 按纪律**不为凑 grep 删注释**。
 >   `types.rs` **未**补 `Mat3/Mat4/Quat` 转发：`transform.rs` 的 11 处只有 Vec2/Vec3，
 >   不需要新增类型（不留纸面能力）。
 >   2026-10-19 收口后全仓 `*.rs` 中 `glam::` **出现 25 次**
 >   （口径：含注释、含 3 个豁免 crate；不含 `.md` 文档提及；不含根 `Cargo.toml`
->   workspace 声明）：`xc-notion` 定义侧 6 + 节点图组 17 + `xcal-scene` 注释 2。
->   `xcal-scene` 的 `glam` 依赖已在同批从 Cargo.toml 删除。
+>   workspace 声明）：`ze-notion` 定义侧 6 + 节点图组 17 + `zela-scene` 注释 2。
+>   `zela-scene` 的 `glam` 依赖已在同批从 Cargo.toml 删除。
 
 **N 线（准备阶段二：对象组织与可见性 N1–N6）**
 
 > 解决"对象怎么被组织、怎么被引用、怎么被看见"——补词汇（Transform 通道 / 淡入淡出 /
-> 出场退场 / 箭头 / 文字）的地基。四者全部落在**契约层 `xc-scene-contract`**（+ `Opacity`
-> 在 `xc-render-ir`），与 `Parent` 同一判据："描述场景中的关系，不是数学概念"。
+> 出场退场 / 箭头 / 文字）的地基。四者全部落在**契约层 `ze-scene-contract`**（+ `Opacity`
+> 在 `ze-render-ir`），与 `Parent` 同一判据："描述场景中的关系，不是数学概念"。
 >
 > - **N1 `Name`**：`Name(pub String)`，缺席 = 匿名。查找走
->   `xcal_scene::contract::find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`
+>   `zela_scene::contract::find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`
 >   （`for_each::<Name>` 遍历、返回**第一个**命中）—— **契约层不新增 trait 方法**
 >   （加方法要动 4 个实现，成本不匹配收益；几十个对象的 O(n) 足够）。
 > - **N2 `Group` / `GroupId`**：纯标签（**只含标识、不含变换**，这是与 `Parent` 的根本
@@ -997,7 +997,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   **与图层总闸的优先级**：`UiConfig::show_2d` / `show_3d` 是**图层级总闸**（关掉整层
 >   不画、不看对象 tag），**总闸优先**；总闸开后才轮到对象级 `Visibility`
 >   （两处注释各写一句：`build_scene_view` 与 `record_scene_tagged`）。
-> - **N4 `Opacity`**：`Opacity(pub f32)` 在 `xc-render-ir`（样式侧），缺席 = 1.0，
+> - **N4 `Opacity`**：`Opacity(pub f32)` 在 `ze-render-ir`（样式侧），缺席 = 1.0，
 >   **显式 `impl Default` = `FULL`**（不 derive，以免得到 `0.0` 全透明这种危险缺省）。
 >   通道 = 组件 + target `OpacityValue`（`Scalar → Opacity.0`）+ 目标类别变体
 >   （**T0-② 已删除**，照 `Camera2DFraming` 的"单 target 按变体分派"口径）。
@@ -1006,7 +1006,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   计划 §6.2.4 写的"`rgb` 与 `a` 同乘"对直色是**错的** —— 同乘会被 GPU 再乘一次 `a`，
 >   预乘后 `rgb` 变成 `o²` 档（`o = 0.5` 时应得 `r ≈ a ≈ 128`，那样只得 `r ≈ 64`）。
 >   "同乘"法则只适用于**已预乘**的数据（合成器 per-layer opacity）。
->   施加点**唯一**：`xcal_render::draw::apply_opacity`（`o == 1.0` 逐位早退 ⇒ 未挂组件画面不变）。
+>   施加点**唯一**：`zela_render::draw::apply_opacity`（`o == 1.0` 逐位早退 ⇒ 未挂组件画面不变）。
 > - **N5 录制过滤接线**：`record_group` 加 `camera_tag: Option<ObjectId>` + `GroupVisibility`，
 >   闭包内先判可见性（不可见者连降级都不做）、再降级、最后施加不透明度。
 >   新增 `record_scene_tagged(scene, camera, camera_tag, groups, queue)` ——
@@ -1025,9 +1025,9 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `opacity_half_premultiplies_and_has_no_dark_halo`（`o = 0.5` ⇒ 预乘后 `r ≈ a ≈ 128`、
 >   全图 `|r − a| ≤ 2` 无黑边）、`opacity_zero_yields_no_pixels`（`o = 0` ⇒ 零像素）。
 >   这些用例**走完整录制路径**（`record_scene_tagged` 消费真实 ECS 场景 → 队列 → 后端 →
->   回读），为此 `xcal-render-backends` 增 `hecs` **dev-dependency**（库本体仍不认识 hecs）。
+>   回读），为此 `zela-render-backends` 增 `hecs` **dev-dependency**（库本体仍不认识 hecs）。
 > - **端到端**：整图注册回归（`full_system_graph_assembles_without_borrow_conflicts`，
->   13 个 System 无冲突）、真实 `cargo run -p xcal-app` 跑 2700+ 帧无 panic、
+>   13 个 System 无冲突）、真实 `cargo run -p zela-app` 跑 2700+ 帧无 panic、
 >   清缓存重编后 `cargo check --workspace --all-targets` **零新增 warning**。
 > - **记账（本轮明确不做）**：运行时创建 / 销毁对象（`ctx.commands` 仍零消费方 ——
 >   一旦引入，`⟲ 重新播放` = `seek(0)` 的"状态由 `t` 唯一决定"前提会坏，**这是引入
@@ -1039,12 +1039,12 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **一处登记缺口顺带补上**：`Reveal` 此前**未进 `add_known` 白名单**（R 线遗留）——
 >   漏登记会让 `spawn_dyn` 静默返回 `None`；本轮与 `Name`/`Group`/`Visibility`/`Opacity`
 >   一并 `arm!`。
-> - **能力测试 demo**（N 线之后追加）：`xcal-app` 增 `capability_demo.rs`，用**最小场景**
->   （两条曲线 + 一个对照组）把四项能力各跑一遍；`--demo` / `XCAL_DEMO=1` 切换
+> - **能力测试 demo**（N 线之后追加）：`zela-app` 增 `capability_demo.rs`，用**最小场景**
+>   （两条曲线 + 一个对照组）把四项能力各跑一遍；`--demo` / `ZELA_DEMO=1` 切换
 >   （`SceneChoice`）。**它不是作品，是能力检验** —— 每条能力落在一处、GPU 像素判据
 >   两两互斥（实测：组全开 `sin`=714 / `cos`=643 / 对照组=0；隐藏 `GROUP_COS` ⇒
 >   `cos`=**0** 而 `sin` **仍为 714**；`Opacity = 0` ⇒ `cos`=0 / `sin` 仍 714）。
->   三条实测教训见该模块头注与 `xcal-app/README.md`：① 光挂 `Group` **不会**随组开关走
+>   三条实测教训见该模块头注与 `zela-app/README.md`：① 光挂 `Group` **不会**随组开关走
 >   （还要 `Visibility::of_group`，两组件正交）；② 两条曲线相交 ⇒ 像素读数互相污染
 >   （demo 里竖直错开）；③ `Opacity` 组件缺席时 `OpacityValue` **静默跳过**（动画静默失效）。
 

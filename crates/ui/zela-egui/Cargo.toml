@@ -1,0 +1,40 @@
+[package]
+name = "zela-egui"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zela-scene = { path = "../../scene/zela-scene" }
+# 事件订阅方（FrameProgress）实现 Pod 的 EventSink。
+ze-pod = { path = "../../pod/ze-pod" }
+# ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。
+zela-schedule = { path = "../../schedule/zela-schedule" }
+# 仅用 2D 冻结管线（draw/components），不需要 zela-render 的 wgpu feature。
+zela-render = { path = "../../render/zela-render", default-features = false }
+# 图层合成 egui_wgpu 回调（SceneCompositorCallback）位于 backends crate。
+# 关掉 backends 的默认 features，改由本 crate 显式转发 egui-wgpu（编译期门控）。
+zela-render-backends = { path = "../../render/zela-render-backends", default-features = false, features = ["egui-wgpu"] }
+ze-macro = { path = "../../kernel/ze-macro" }
+# S3-1：GPU 2D 路径需要以 Rect2D（渲染层规范的 2D 矩形）声明回调视口。
+ze-notion = { path = "../../kernel/ze-notion" }
+# 场景对象层：图元 newtype（Circle / Path / Line / Rect）的定义在此。
+ze-object = { path = "../../object/ze-object" }
+
+egui.workspace = true
+# A5：GUI 帧体 / 窗口参数归位到 UI 层，需要 eframe 的 `App` 无关宿主类型。
+eframe.workspace = true
+egui-wgpu.workspace = true
+hecs.workspace = true
+derive-new.workspace = true
+derive_builder.workspace = true
+# health overlay 的 F10 快照日志（与 zela-schedule telemetry 同源）。
+tracing.workspace = true
+
+[dev-dependencies]
+egui.workspace = true
+
+[features]
+# S4.1：旧 CPU 2D 回放路径及其编译期 feature 已删除，本 crate 无自有 feature。
+default = []

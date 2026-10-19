@@ -1,0 +1,36 @@
+[package]
+name = "zela-web"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 浏览器薄壳：**唯一**允许碰 DOM / WebGPU 初始化的地方。
+# 非 wasm 目标下本 crate 为空（实现整体 `#![cfg(target_arch = "wasm32")]`）。
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+zela-playback = { path = "../../app/zela-playback", default-features = false }
+zela-render-backends = { path = "../../render/zela-render-backends", default-features = false, features = ["wgpu"] }
+zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
+
+wgpu.workspace = true
+# 版本由 Cargo 解析；构建用 `wasm-pack`（自动下载与锁文件匹配的 wasm-bindgen CLI）。
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Location",
+    "Navigator",
+    "Gpu",
+    "Response",
+    "UrlSearchParams",
+    "console",
+] }

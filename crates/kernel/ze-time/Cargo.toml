@@ -1,0 +1,23 @@
+[package]
+name = "ze-time"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+description = "Pure-logic clock tree + animation curves + director (zero render/UI deps)"
+
+# 依赖铁律：ze-time 在 kernel 层
+#   ✅ ze-notion — 唯一数学入口（Vec2/Vec3 等由它 re-export）+ 几何插值原语
+#      （serde feature 让 Vec2/Vec3/Path2D 可随 AnimValue 序列化）
+#   ✅ serde — 序列化（ClockForest / Curve 可导出）
+#   ✅ thiserror — 错误类型
+#   ❌ glam — **不得直接依赖**；数学类型一律经 ze-notion（全仓唯一出口）
+#   ❌ ze-content（语义配对不得下沉） / hecs / egui / wgpu / 任何 zela-* — 绝对禁止
+[dependencies]
+ze-notion = { path = "../ze-notion", features = ["serde"] }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

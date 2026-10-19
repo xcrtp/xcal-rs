@@ -1,35 +1,35 @@
 {
   "version": 1,
-  "description": "xcal-rs workspace architecture declaration. Used for documentation; cargo-archtest (single-crate module tool) does not yet support workspace-level crate layers. See ARCHITECTURE.md for the canonical rules.",
+  "description": "zela workspace architecture declaration. Used for documentation; cargo-archtest (single-crate module tool) does not yet support workspace-level crate layers. See ARCHITECTURE.md for the canonical rules.",
   "layers": [
     {
       "name": "kernel",
       "path": "crates/kernel",
-      "prefix": "xc-",
-      "description": "纯计算/数据，无 egui/渲染/领域依赖；xc-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
-      "crates": ["xc-notion", "xc-render-ir", "xc-scene-contract", "xc-time", "xc-content", "xc-prerender", "xc-vertex", "xc-resource", "xc-macro"]
+      "prefix": "ze-",
+      "description": "纯计算/数据，无 egui/渲染/领域依赖；ze-prerender 属例外——kernel 层唯一的重 crate，重型引擎依赖必须 feature-gated",
+      "crates": ["ze-notion", "ze-render-ir", "ze-scene-contract", "ze-time", "ze-content", "ze-prerender", "ze-vertex", "ze-resource", "ze-macro"]
     },
     {
       "name": "pod",
       "path": "crates/pod",
-      "prefix": "xc-",
-      "description": "领域无关的 Pod 层。核心组（xc-pod / xc-pod-binding / xc-pod-macro）平台无关、必须过 wasm gate；语言适配器组（xc-pod-lua / xc-pod-py）依赖 mlua / pyo3，不得进 wasm gate。xc-pod-tests 是测试专用 crate（publish = false，不进 wasm gate、不被生产依赖）。全部生产依赖均不含任何 xcal-*",
-      "crates": ["xc-pod", "xc-pod-binding", "xc-pod-macro", "xc-pod-lua", "xc-pod-py", "xc-pod-tests"],
+      "prefix": "ze-",
+      "description": "领域无关的 Pod 层。核心组（ze-pod / ze-pod-binding / ze-pod-macro）平台无关、必须过 wasm gate；语言适配器组（ze-pod-lua / ze-pod-py）依赖 mlua / pyo3，不得进 wasm gate。ze-pod-tests 是测试专用 crate（publish = false，不进 wasm gate、不被生产依赖）。全部生产依赖均不含任何 zela-*",
+      "crates": ["ze-pod", "ze-pod-binding", "ze-pod-macro", "ze-pod-lua", "ze-pod-py", "ze-pod-tests"],
       "subgroups": [
         {
           "name": "core",
-          "crates": ["xc-pod", "xc-pod-binding", "xc-pod-macro"],
+          "crates": ["ze-pod", "ze-pod-binding", "ze-pod-macro"],
           "wasm_gate": true
         },
         {
           "name": "language-adapters",
-          "crates": ["xc-pod-lua", "xc-pod-py"],
+          "crates": ["ze-pod-lua", "ze-pod-py"],
           "wasm_gate": false,
           "reason": "mlua 需要 C 工具链；pyo3 需要系统 Python"
         },
         {
           "name": "tests",
-          "crates": ["xc-pod-tests"],
+          "crates": ["ze-pod-tests"],
           "wasm_gate": false,
           "reason": "测试 / 基准专用（publish = false）；被它依赖不等于生产边"
         }
@@ -38,76 +38,76 @@
     {
       "name": "object",
       "path": "crates/object",
-      "prefix": "xc-",
-      "description": "场景对象层（M3）：用户可见的场景对象（图元 newtype / 相机 / 变换）；只依赖 kernel，禁止依赖任何 xcal-*",
-      "crates": ["xc-object"]
+      "prefix": "ze-",
+      "description": "场景对象层（M3）：用户可见的场景对象（图元 newtype / 相机 / 变换）；只依赖 kernel，禁止依赖任何 zela-*",
+      "crates": ["ze-object"]
     },
     {
       "name": "graph",
       "path": "crates/graph",
-      "prefix": "xc-",
-      "description": "图论 + 节点结构契约，禁止依赖 egui/xcal-*/领域类型",
+      "prefix": "ze-",
+      "description": "图论 + 节点结构契约，禁止依赖 egui/zela-*/领域类型",
       "crates": [
-        "xc-node",
-        "xc-graph-algo",
-        "xc-graph-eval",
-        "xc-node-schema",
-        "xc-node-schema-macros"
+        "ze-node",
+        "ze-graph-algo",
+        "ze-graph-eval",
+        "ze-node-schema",
+        "ze-node-schema-macros"
       ]
     },
     {
       "name": "schedule",
       "path": "crates/schedule",
-      "prefix": "xcal-",
+      "prefix": "zela-",
       "description": "通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry），不含任何场景/渲染概念",
-      "crates": ["xcal-schedule"]
+      "crates": ["zela-schedule"]
     },
     {
       "name": "scene",
       "path": "crates/scene",
-      "prefix": "xcal-",
+      "prefix": "zela-",
       "description": "场景层：ECS 场景数据（Scene / 组件）+ 场景 System + UI↔场景 domain 契约 + Pod domain（SceneApi / ContentApi）；不依赖任何渲染后端",
-      "crates": ["xcal-scene"]
+      "crates": ["zela-scene"]
     },
     {
       "name": "render",
       "path": "crates/render",
-      "prefix": "xcal-",
+      "prefix": "zela-",
       "description": "渲染抽象（trait / 队列 / 三角化）+ 具体后端实现（场景层已归位到 crates/scene/）",
       "crates": [
-        "xcal-render",
-        "xcal-render-backends"
+        "zela-render",
+        "zela-render-backends"
       ]
     },
     {
       "name": "ui",
       "path": "crates/ui",
-      "prefix": "xcal-",
+      "prefix": "zela-",
       "description": "egui 前端 + 编辑器状态机",
       "crates": [
-        "xcal-egui",
-        "xcal-node-editor",
-        "xcal-node-egui",
-        "xcal-node-egui-ui"
+        "zela-egui",
+        "zela-node-editor",
+        "zela-node-egui",
+        "zela-node-egui-ui"
       ]
     },
     {
       "name": "app",
       "path": "crates/app",
-      "prefix": "xcal-",
+      "prefix": "zela-",
       "description": "应用组装层（唯一可执行入口）",
-      "crates": ["xcal-app"]
+      "crates": ["zela-app"]
     }
   ],
   "rules": [
     {
       "rule": "NoReverseDependency",
-      "description": "xc-* crate 禁止依赖任何 xcal-* crate 或 egui/wgpu",
+      "description": "ze-* crate 禁止依赖任何 zela-* crate 或 egui/wgpu",
       "enforced_by": "cargo check + 人工 review（cargo-archtest 暂未适配 workspace 级）"
     },
     {
       "rule": "NoAppDependency",
-      "description": "xcal-* crate 禁止依赖 xcal-app",
+      "description": "zela-* crate 禁止依赖 zela-app",
       "enforced_by": "cargo check（Cargo.toml 依赖声明禁止即可）"
     },
     {
@@ -117,7 +117,7 @@
     },
     {
       "rule": "NoPodDomainDependency",
-      "description": "crates/pod 下任一 crate（含两个语言适配器与测试 crate）的生产依赖边中不得出现任何 xcal-*；dev 边不计入",
+      "description": "crates/pod 下任一 crate（含两个语言适配器与测试 crate）的生产依赖边中不得出现任何 zela-*；dev 边不计入",
       "enforced_by": "CI: cargo metadata 扫描 crates/pod/* 的生产依赖"
     },
     {
