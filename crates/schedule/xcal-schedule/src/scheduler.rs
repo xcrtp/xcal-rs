@@ -25,7 +25,7 @@ use crate::context::ExecutorContext;
 use crate::resource::Resources;
 use crate::system::{ErasedSystem, InitSystem, System};
 #[cfg(feature = "telemetry")]
-use crate::telemetry::{FrameClock, FrameReport, InstantClock, SystemTelemetry};
+use crate::telemetry::{FrameClock, FrameReport, SystemTelemetry, ZeroClock};
 
 // ─── Phase 枚举 ───────────────────────────────────────────────────────────
 
@@ -89,12 +89,11 @@ pub struct Scheduler {
     tracker: BorrowTracker,
     #[cfg(feature = "telemetry")]
     telemetry: TelemetryState,
-    /// 计时时间源：`None` ⇒ 首次推帧时惰性落到 [`InstantClock`]。
-    ///
-    /// 浏览器入口必须在第一次 `run_frame` 前 [`Scheduler::set_clock`]，
-    /// 否则 `Instant::now()` 在 wasm 上会 panic。
+    /// 计时时间源。**默认 [`ZeroClock`]**（不注入也安全，耗时恒 0）；
+    /// native 宿主注入 [`crate::telemetry::InstantClock`]，浏览器注入
+    /// `performance.now()` 实现。
     #[cfg(feature = "telemetry")]
-    clock: Option<Box<dyn FrameClock>>,
+    clock: Box<dyn FrameClock>,
 }
 
 impl Scheduler {
@@ -108,7 +107,7 @@ impl Scheduler {
             #[cfg(feature = "telemetry")]
             telemetry: TelemetryState::default(),
             #[cfg(feature = "telemetry")]
-            clock: None,
+            clock: Box::new(ZeroClock),
         }
     }
 
@@ -229,15 +228,9 @@ impl Scheduler {
             ..Default::default()
         };
 
-        // telemetry：确保时间源就绪（未注入 ⇒ 惰性用 native `Instant`）。
-        // 取出不可变借用后，循环里只调用 `clock.now()`，不再碰 `self.clock`。
+        // telemetry：取时间源（默认已就绪；注入过的实现优先）。
         #[cfg(feature = "telemetry")]
-        let clock: &dyn FrameClock = {
-            if self.clock.is_none() {
-                self.clock = Some(Box::new(InstantClock::new()));
-            }
-            self.clock.as_deref().expect("时间源刚刚初始化")
-        };
+        let clock: &dyn FrameClock = &*self.clock;
 
         for phase in Phase::all() {
             let phase_idx = phase_index(phase);
@@ -310,14 +303,13 @@ impl Scheduler {
 
     // ─── Telemetry 访问（feature = "telemetry"）──────────────
 
-    /// 注入计时时间源。
+    /// 注入计时时间源（覆盖默认的 [`ZeroClock`]）。
     ///
-    /// 必须在第一次 [`Scheduler::run_frame`] **之前**调用；浏览器端用
-    /// `performance.now()` 的实现替换默认的 [`InstantClock`]（wasm 上
-    /// `Instant::now()` 会 panic）。native 不调用时行为与注入前一致。
+    /// native 宿主注入 [`crate::telemetry::InstantClock`]；浏览器注入
+    /// `performance.now()` 实现。**不注入是安全的**：耗时恒 0，不会 panic。
     #[cfg(feature = "telemetry")]
     pub fn set_clock<C: FrameClock + 'static>(&mut self, clock: C) {
-        self.clock = Some(Box::new(clock));
+        self.clock = Box::new(clock);
     }
 
     /// Scheduler 启动以来执行的帧数（telemetry 关闭时不可用）。
@@ -366,6 +358,18 @@ mod tests {
         let mut sched = Scheduler::new(hecs::World::new(), Resources::new());
         let count = sched.run_frame(0.016);
         assert_eq!(count, 0);
+    }
+
+    /// **W3 验收**：不注入时钟时默认是安全零时钟 —— 推帧只产生 0 耗时，
+    /// 不构造 `Instant`（wasm 上也不会 panic）。
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn default_clock_is_zero_and_safe() {
+        let mut sched = Scheduler::new(hecs::World::new(), Resources::new());
+        sched.add_system(Phase::Input, sys::<(), ()>(|_| {}));
+        sched.run_frame(0.016);
+        assert_eq!(sched.tick(), 1);
+        assert_eq!(sched.frame_report().total_duration, std::time::Duration::ZERO);
     }
 
     /// **S3 验收**：时间源可注入 —— 推进多帧只读注入的时钟，
@@ -543,6 +547,8 @@ mod tests {
     #[test]
     fn test_telemetry_frame_report_records_systems() {
         let mut sched = Scheduler::new(hecs::World::new(), Resources::new());
+        // 默认是安全零时钟；本用例要断言真实耗时 ⇒ 显式注入 native 时钟。
+        sched.set_clock(crate::telemetry::InstantClock::new());
         sched.add_system(Phase::Input, sys::<(), ()>(|_ctx| {}));
         sched.add_system(Phase::FrameEnd, sys::<(), ()>(|_ctx| {}));
 

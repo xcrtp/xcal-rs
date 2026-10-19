@@ -16,7 +16,7 @@ mod frame_report;
 mod log;
 mod snapshot;
 
-pub use clock::{FrameClock, InstantClock};
+pub use clock::{FrameClock, InstantClock, ZeroClock};
 pub use frame_report::{FrameReport, SystemTelemetry};
 pub use log::init_tracing;
 pub use snapshot::{

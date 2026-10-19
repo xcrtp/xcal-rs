@@ -430,6 +430,9 @@ fn build_runtime(
     resources.insert(ComposerQueue::new());
 
     let mut scheduler = Scheduler::new(world, resources);
+    // W3：核心默认是安全零时钟（wasm 上不会 panic）；native 宿主显式注入真实
+    // 时钟，保持 telemetry 输出与注入前一致。
+    scheduler.set_clock(xcal_schedule::telemetry::InstantClock::new());
     register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
 
     Ok(Runtime {
