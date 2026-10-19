@@ -26,6 +26,41 @@ function ConvertTo-JsonString([string] $value) {
     return '"' + $escaped + '"'
 }
 
+function Get-PlatformName {
+    if ($IsWindows -or $env:OS -eq "Windows_NT") { return "windows" }
+    if ($IsMacOS) { return "macos" }
+    return "linux"
+}
+
+# 解析清单的 payload-hash 列：
+#   -              不校验
+#   <64 位 hex>    所有平台都断言（payload 不含平台相关内容时）
+#   windows:hash,… 仅断言匹配平台；未列出的平台打印后跳过
+#                  （content.text 烘焙的字形轮廓依赖系统字体 ⇒ hash 平台相关）
+function Resolve-ExpectedPayloadHash([string] $spec, [string] $platform, [string] $where) {
+    if ($spec -eq "-") { return $null }
+
+    if ($spec -match '^[0-9a-fA-F]{64}$') {
+        return [pscustomobject]@{ Hash = $spec.ToLowerInvariant(); Skipped = $null }
+    }
+
+    $pairs = @{}
+    foreach ($item in $spec.Split(',')) {
+        $pair = $item.Split(':', 2)
+        if ($pair.Count -ne 2 -or
+            $pair[0] -notmatch '^(windows|macos|linux)$' -or
+            $pair[1] -notmatch '^[0-9a-fA-F]{64}$') {
+            throw ("{0} 非法 payload-hash 规格：{1}（期望 -、64 位十六进制，或 windows:hash,linux:hash）" -f $where, $spec)
+        }
+        $pairs[$pair[0].ToLowerInvariant()] = $pair[1].ToLowerInvariant()
+    }
+
+    if ($pairs.ContainsKey($platform)) {
+        return [pscustomobject]@{ Hash = $pairs[$platform]; Skipped = $null }
+    }
+    return [pscustomobject]@{ Hash = $null; Skipped = ("清单未提供 {0} 的 payload hash" -f $platform) }
+}
+
 Push-Location $repo
 try {
     New-Item -ItemType Directory -Force -Path $www | Out-Null
@@ -35,6 +70,9 @@ try {
 
     # ── Demo 集：清单（单一真源）→ www/<id>.xsb，并断言 payload hash ──────
     # 先编译（快）再 wasm-pack（慢）：断言失败要尽早失败。
+    $platform = Get-PlatformName
+    Write-Host "[demo] payload hash 断言平台：$platform"
+
     $demos = @()
     $lineNumber = 0
     foreach ($raw in Get-Content -LiteralPath $manifest -Encoding UTF8) {
@@ -88,8 +126,13 @@ try {
             throw "未从 xcal-compile 输出解析到 payload hash（$id）"
         }
         $actual = $match.Groups[1].Value
-        if ($expected -ne "-" -and $actual -ne $expected) {
-            throw "payload hash 不符（$id）：`n  实测 = $actual`n  清单 = $expected"
+        $resolved = Resolve-ExpectedPayloadHash $expected $platform "manifest.txt:$lineNumber"
+        $expectedHash = if ($null -ne $resolved) { $resolved.Hash } else { $null }
+        if ($null -ne $expectedHash -and $actual -ne $expectedHash) {
+            throw "payload hash 不符（$id / $platform）：`n  实测 = $actual`n  期望 = $expectedHash"
+        }
+        if ($null -ne $resolved -and $null -ne $resolved.Skipped) {
+            Write-Host "[demo] $id 跳过 payload 断言：$($resolved.Skipped)"
         }
         Write-Host "[demo] $id payload $actual"
 

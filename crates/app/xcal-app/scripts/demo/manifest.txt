@@ -6,8 +6,13 @@
 #   script        相对 crates/app/xcal-app/scripts/ 的脚本路径
 #                 （初期直接指向根目录作品，不移动它们：xtask 对拍依赖原路径）
 #   payload-hash  可选；`-` 表示不校验。非 `-` 时编译后断言 payload hash，
-#                 不符即 fail（保证公网 bundle 就是 native 验证过的同一个）。
+#                 不符即 fail（保证公网 bundle 就是该平台 native 验证过的同一个）。
+#
+#                 **payload 含 content.text 烘焙的字形轮廓，依赖系统字体**
+#                 ⇒ 同一作品的 hash 在 Windows / Linux 上必然不同。这不是构建错误。
+#                 单个 64 位十六进制 = 所有平台都断言（payload 与字体无关时）；
+#                 平台化写法：windows:<hash>,linux:<hash>（未列出的平台打印后跳过）。
 #
 # id            title              script          payload-hash
-fourier         傅里叶级数展开      fourier.lua     991068e3e4da72038181a11c8adec58784d9d7ee21059d39076ad29507771cc4
+fourier         傅里叶级数展开      fourier.lua     windows:991068e3e4da72038181a11c8adec58784d9d7ee21059d39076ad29507771cc4,linux:fe2d1ebcddd3c9119712cbbfb3da34ac62ad93338eb5822a28540c52321c0fb4
 storyboard      分镜演示            storyboard.lua  -
