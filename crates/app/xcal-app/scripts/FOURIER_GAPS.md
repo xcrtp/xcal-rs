@@ -74,11 +74,36 @@ demo 逐位不变。
 形状枚举，因此 Custom 不是合适落点（它没有逐帧几何更新通道）。
 `Shape2D::Group` 仍返回空几何；白名单测试把它明确列为「不启用」。
 
+### WASM 跨端对拍（第二阶段记账）
+
+1. **未达成项：跨编译目标逐位相同**。
+   - native `fourier` = `fd40329f…690d`；浏览器（Chrome WebGPU）= `bec735…1e279c`。
+   - **已知可接受**：结构 216/216 一致；仅 **1/216 帧、1 个像素**不同
+     （RGB 绝对差 `(43,26,10)`，MAD 0.000086）。不是缺陷、不是回归。
+   - **根因**：仍指向 CPU 求值链路的跨目标末位差异（相机/几何变换）；
+     `sin/cos` 的具体实现差异**未被坐实**——`f32/f64` 位模式 64 点探针完全一致。
+   - **排除项**：FMA 收缩（主段插值 `from=0.0` ⇒ FMA 安全；全仓 `mul_add` 零命中；
+     第 103 帧相机静止）；GPU 回读 / WebGPU 光栅化（绘制指纹在 GPU 之前已不同）。
+   - **将来若要攻**：提供自己的 `rotation_z(rad)` 绕开 glam 内部三角函数；
+     **代价是 native 基线作废并重录**，需重新评估性价比。
+   - **判别实验（留档，未执行）**：opt-level 梯度——debug 也分歧 ⇒ libm；
+     仅 opt>0 分歧 ⇒ FMA/向量化。
+   - **判据与工具**：`xcal-playback/examples/fingerprint.rs`
+     （`manifest` 结构清单 / `compare` 结构硬失败 + 数值容差），
+     阈值与实测值见 `FRAME_HASH_BASELINES.md`。
+
+> **确定性口径**：本仓库谈“确定性”必须分层——同目标可复现（✅ 最硬）、
+> 跨端结构一致（✅ 硬判据）、跨端逐位相同（❌ 已知可接受）。
+> 详见 `FRAME_HASH_BASELINES.md` 的「确定性口径」一节；三层混用会误判为核心保证退化。
+
 ---
 
 ## 当前硬验收结果
 
 - `fourier.lua` / `fourier.py`：**216 帧 / 7.2s**，SHA256 相同；
 - `storyboard.lua`：**135 帧 / 4.5s**，SHA256 与 S1–S6 前一致；
+- 同目标（`--script` vs `--bundle`）：fourier / storyboard 序列哈希均不变；
+- 跨端结构：216/216 一致（聚合哈希 `43410ed978eb2690`）；
+- 跨端逐位：1/216 帧、1 个像素差异（已知可接受，MAD 0.000086）；
 - `cargo check --workspace --all-targets`：0 warning；
 - `cargo test --workspace -- --test-threads=1`：全绿（含本清单所有新用例）。
