@@ -151,7 +151,9 @@ let style = circle.apply(&(
 只写子侧的 `Parent`，`Children` 的维护策略由装配层决定（契约层不强制双向同步）。
 
 > **S5 已接线**：`TransformHierarchySystem`（`zela-scene`）每帧按拓扑序累乘出
-> `WorldTransforms`（`Transform2D`），`SceneRecordSystem` / `RevealRecordSystem` 消费；
+> `WorldTransforms`（S1 起存 **3D 世界矩阵 `Transform3D`**，2D 消费方经 `get2d`
+> 读投影视图），`SceneRecordSystem` / `RevealRecordSystem` 消费，`SceneRecord3DSystem`
+> 同消费（3D 录制读 `Reads = (WorldTransforms,)`）；
 > 环路写入 `TransformHierarchyError` 资源。相关缺口见根目录 `GAPS.md`。
 > `push` 不查重 —— 去重是装配层策略。
 

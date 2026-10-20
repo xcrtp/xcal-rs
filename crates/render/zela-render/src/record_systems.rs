@@ -657,4 +657,102 @@ mod tests {
         assert_eq!((stroke.r(), stroke.g(), stroke.b()), (10, 20, 30));
         assert_eq!(stroke.a(), 100, "200 * 0.5 = 100");
     }
+
+    // ─── S1：3D 录制消费 `WorldTransforms` ─────────────────────────────────
+
+    /// **S1-5 #2**：父子两级 3D，`DrawQueue3D` 的 model 矩阵 = **累乘结果**（不是 local）。
+    #[test]
+    fn record_3d_consumes_world_transforms() {
+        use zela_scene::contract::object_id_of;
+        use zela_scene::scene::primitives::wireframe_cube;
+        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+
+        let parent_geom = Arc::new(wireframe_cube(1.0));
+        let child_geom = Arc::new(wireframe_cube(0.5));
+        let mut world = World::new();
+        let parent = world.spawn((
+            Arc::clone(&parent_geom),
+            ze_object::Transform {
+                position: ze_notion::Vec3::new(10.0, 0.0, 0.0),
+                ..ze_object::Transform::default()
+            },
+        ));
+        let parent_id = object_id_of(parent);
+        // 子 local 平移 (0,5,0)，挂在 (10,0,0) 的父下 ⇒ 世界 = (10,5,0)。
+        // 若系统不吃 WorldTransforms（旧行为），子 model 会停在 local (0,5,0)。
+        let child = world.spawn((
+            Arc::clone(&child_geom),
+            ze_object::Transform {
+                position: ze_notion::Vec3::new(0.0, 5.0, 0.0),
+                ..ze_object::Transform::default()
+            },
+            ze_scene_contract::Parent(parent_id),
+        ));
+        let _child_id = object_id_of(child);
+
+        let mut res = Resources::new();
+        res.insert(DrawQueue3D::new());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::Prepare, TransformHierarchySystem);
+        sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let q = sched.resources().get::<DrawQueue3D>().unwrap();
+        assert_eq!(q.mesh_count(), 2);
+        // 用 Arc 指针精确指认父 / 子 mesh（不依赖查询顺序）。
+        let mut parent_origin = None;
+        let mut child_origin = None;
+        for m in q.meshes() {
+            if Arc::ptr_eq(&m.geometry, &parent_geom) {
+                parent_origin = Some(m.transform.transform_point3(ze_notion::Vec3::ZERO));
+            } else if Arc::ptr_eq(&m.geometry, &child_geom) {
+                child_origin = Some(m.transform.transform_point3(ze_notion::Vec3::ZERO));
+            }
+        }
+        assert_eq!(
+            parent_origin,
+            Some(ze_notion::Vec3::new(10.0, 0.0, 0.0)),
+            "无父 ⇒ 世界 = local"
+        );
+        assert_eq!(
+            child_origin,
+            Some(ze_notion::Vec3::new(10.0, 5.0, 0.0)),
+            "子 model 必须是累乘结果，不是 local"
+        );
+    }
+
+    /// **S1-5 #3**：无 `Parent` 时 3D model 与旧 `transform.matrix()` **逐位相同**（回退不变性）。
+    #[test]
+    fn no_parent_3d_model_is_bitwise_local() {
+        use zela_scene::contract::object_id_of;
+        use zela_scene::scene::primitives::wireframe_cube;
+        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+
+        let tr = ze_object::Transform {
+            position: ze_notion::Vec3::new(1.0, -2.0, 3.0),
+            rotation: ze_notion::Quat::from_rotation_z(0.7),
+            scale: ze_notion::Vec3::new(2.0, 0.5, 1.0),
+        };
+        let expected = tr.matrix();
+        let mut world = World::new();
+        let e = world.spawn((Arc::new(wireframe_cube(1.0)), tr));
+        let _id = object_id_of(e);
+
+        let mut res = Resources::new();
+        res.insert(DrawQueue3D::new());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::Prepare, TransformHierarchySystem);
+        sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let q = sched.resources().get::<DrawQueue3D>().unwrap();
+        assert_eq!(q.mesh_count(), 1);
+        assert_eq!(
+            q.meshes()[0].transform,
+            expected,
+            "无 Parent 时 3D model 必须逐位等于 local matrix"
+        );
+    }
 }

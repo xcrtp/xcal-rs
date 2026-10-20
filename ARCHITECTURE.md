@@ -541,6 +541,9 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > **S5 已把 `Parent` 移出本表**：`TransformHierarchySystem` 每帧产出 `WorldTransforms`，
 > `SceneRecordSystem` / `RevealRecordSystem` 已消费（详见
 > [`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs)）。
+> **S1 换型为 3D**：`WorldTransforms` 只存 `Transform3D`（Mat4 单一真源），2D 消费方经
+> `get2d` 读投影视图（丢 `z`，见 `GAPS.md` R-21）；`SceneRecord3DSystem` 同消费
+> （`Reads = (WorldTransforms,)`），3D 父子层级已接线。
 
 | 项 | 位置 | 现状 | 何时接 |
 |---|---|---|---|

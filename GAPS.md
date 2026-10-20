@@ -3,7 +3,7 @@
 > **唯一记账入口**。散落在 `FOURIER_GAPS.md`、`WASM_PORT_SURVEY.md` 与各 crate
 > README / `ARCHITECTURE.md` 的「仍缺 / 已知未接线」统一汇总到这里。
 >
-> 更新：2026-10-19（融合前盘点与收尾）。
+> 更新：2026-10-19（融合前盘点与收尾）；2026-10-20（S1：G-101 关闭 + R-21 记账）。
 > `FOURIER_GAPS.md` 保留为 **fourier 作品快照**；`WASM_PORT_SURVEY.md` 保留为
 > **当时的探测证据**，两者正文都注明总账在本文件。
 >
@@ -29,7 +29,7 @@
 
 | 编号 | 缺口 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| **G-101** | `WorldTransforms` 只有 2D 仿射；3D 录制只读 local `Transform`，3D 父子层级未接线 | 场景层 → 渲染层 | **升格（原 F-02）** | [`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs#L33-L52) 仅 `Transform2D`；[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs#L280-L299) 的 3D 录制 `Reads = ()`，只取 `Transform::matrix()` |
+| **G-101** | `WorldTransforms` 只有 2D 仿射；3D 录制只读 local `Transform`，3D 父子层级未接线 | 场景层 → 渲染层 | **升格（原 F-02）→ S1 已关闭** | 关闭于 S1：结构层提交 `84cabeb`（[`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs#L39-L65) 改存 `Transform3D` + `get2d` 投影）、消费方接线提交 `3ed493f`（[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs) 3D 录制 `Reads = (WorldTransforms,)`）；像素对拍 fourier / storyboard 与基线逐位一致（冻结态通过） |
 
 > **为什么是 P0**：只要融合要求 2D 与 3D 对象进入**同一父子层级**（或 3D 对象跟随
 > 父对象变换），当前 3D 录制不消费 `WorldTransforms` 就直接失效。若融合只做
@@ -111,8 +111,9 @@
 | R-18 | `ze-pod-lua` / `ze-pod-py` wasm 未做 | 两个 README | 范围外 | 浏览器只回放 ZSB，不运行脚本；不进 wasm gate |
 | R-19 | 节点图组直接依赖 glam（数学入口第二套）：`zela-node-editor`(10) / `zela-node-egui`(6) / `zela-node-egui-ui`(1) | 节点图组 | 仍成立（不违规，记账） | 三者不依赖 `ze-notion`，按 M0 不违规；CI 已显式豁免并注明理由。**触发条件：合成图（ComposerGraph）接入场景前，必须先统一到 `ze-notion`**；此前不改代码（当前零消费方，避免为未发生的需求付代价） |
 | R-20 | `Shape2D::Custom` 在结构指纹 topo 中统一输出 `"custom"`，不同 `SpecId` 的自定义图元在结构层不可区分 | 结构对拍 | 仍成立（记账，不修代码） | 现状可接受：spec 是具名字符串（非注册序号），且当前仓库**没有 Custom 的生产者**（只有测试），不影响对拍。**触发条件：Custom 出现真实生产者时，须把 spec 名写进 topo** |
+| R-21 | `Transform3D::to_affine2d` 是**投影**：`z` 平移与 xy↔z 耦合被丢弃（D4） | 理念层 `ze-notion` | 仍成立（记账，行为如此） | [`transform.rs`](crates/kernel/ze-notion/src/transform.rs#L115-L134) doc 已写明"投影，非同构"；2D 对象挂 3D 父下是 S6 的目标形态，本轮不报错也不兜底。**消亡条件：S6 之后复核**（2D 进 3D 后该投影是否还有消费方） |
 
-**C 段小计**：可清 3（含 2 条纯文档漂移 + `Parent`）· 仍成立 15 · 排期 1（计入仍成立）·
+**C 段小计**：可清 3（含 2 条纯文档漂移 + `Parent`）· 仍成立 16 · 排期 1（计入仍成立）·
 范围外 1。
 
 ---
@@ -121,15 +122,15 @@
 
 | 类别 | 数量 |
 |---|---|
-| 升格为 P0（融合前置） | 1（F-02 / G-101） |
-| 可清 | 10（A 1 + B 6 + C 3） |
+| 升格为 P0（融合前置） | 1（F-02 / G-101，**G-101 已关闭**） |
+| 可清 | 11（A 1 + B 6 + C 3 + G-101） |
 | 描述不准，已改写 | 1（F-01） |
 | 降格 | 1（W-05） |
-| 仍成立 | 27（A 11 + C 15 + 排期 1） |
+| 仍成立 | 28（A 11 + C 16 + 排期 1） |
 | 范围外 | 3（B 2 + C 1） |
 | 待定 | 1（统一相机 / 深度合成模型） |
 
-共 **43 条**：A 段 14（作品）+ B 段 9（WASM 探测）+ C 段 20（README/ARCHITECTURE）；G-101 是 F-02 的升格形态，不重复计数。
+共 **44 条**：A 段 14（作品）+ B 段 9（WASM 探测）+ C 段 21（README/ARCHITECTURE）；G-101 是 F-02 的升格形态，不重复计数。
 
 维护约定：
 
