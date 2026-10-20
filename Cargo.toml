@@ -73,7 +73,7 @@ wgpu = "30"
 glam = "0.33.6"
 pollster = "0.3"
 
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0" }
 # 序列帧导出：最小 PNG 编码器（全仓此前零图像库）。
 png = "0.17"

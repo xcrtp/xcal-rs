@@ -28,6 +28,102 @@ pub struct Vec2 {
     pub y: f32,
 }
 
+// ─── 3D（B1-D 脚本层入口）──────────────────────────────────────────────
+
+/// 三维点（3D pod）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Vec3")]
+pub struct Vec3 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// 四维点（3D pod；旋转四元数 xyzw 等）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Vec4")]
+pub struct Vec4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+/// 3D 相机参数（B1-D）。`aspect` 缺省由渲染视口提供（每帧覆盖），
+/// 故不暴露；近 / 远裁剪固定 0.1 / 100（与 demo3d 一致）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Camera3D")]
+pub struct Camera3D {
+    pub eye: Vec3,
+    pub target: Vec3,
+    pub up: Vec3,
+    pub fov_y: f32,
+}
+
+/// 立方体网格参数（B1-D）。**参数化构造器**：只传半边长，不传顶点数组 ——
+/// 顶点由宿主侧 `wireframe_cube` / `solid_cube` 生成（B1-D 硬约束）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Cube")]
+pub struct Cube {
+    /// 半边长（模型空间中心在原点）。
+    pub half_extent: f32,
+    /// `false` ⇒ 线框（`wireframe_cube`，默认）；`true` ⇒ 实体（`solid_cube`）。
+    pub solid: bool,
+}
+
+/// 3D 摆放（B1-D）。映射到原生 `Transform`（单一真源：位置 / 旋转 / 缩放
+/// 都在摆放组件上）。**不扩展** 2D 的 `Transform { x, y, z }` —— 那会破坏
+/// 冻结的 fourier / storyboard 脚本（Lua 绑定要求全字段）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Transform3D")]
+pub struct Transform3D {
+    pub position: Vec3,
+    /// 旋转四元数（xyzw，glam 约定）；恒等旋转为 `(0, 0, 0, 1)`。
+    pub rotation: Vec4,
+    pub scale: Vec3,
+}
+
+/// 3D 着色变体（脚本枚举）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.ShaderVariant")]
+pub enum ShaderVariant {
+    Flat,
+    Lambert,
+    Pbr,
+}
+
+/// 3D 材质参数（B1-D；B1-C PBR 字段）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Material3D")]
+pub struct Material3D {
+    pub color: Color,
+    pub variant: ShaderVariant,
+    /// 金属度 [0,1]（仅 `variant = Pbr` 消费）。
+    pub metallic: f32,
+    /// 粗糙度 [0,1]（仅 `variant = Pbr` 消费；默认 0.5）。
+    pub roughness: f32,
+}
+
+/// 光源类型。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.LightKind")]
+pub enum LightKind {
+    /// 方向光：`direction` 是光传播方向（世界空间，从光源指向场景）。
+    Directional { direction: Vec3 },
+    /// 点光：`range` 是有效半径（世界单位）。**不带 position** —— 位置由
+    /// 同一对象的 `Transform` 提供（B1 铁律 3：单一真源）。
+    Point { range: f32 },
+}
+
+/// 光源参数（B1-D）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Light")]
+pub struct Light {
+    pub kind: LightKind,
+    pub color: Color,
+    pub intensity: f32,
+}
+
 /// 圆组件。
 #[derive(Clone, Copy, Debug, PartialEq, PodType)]
 #[pod_type(name = "zela.Circle")]

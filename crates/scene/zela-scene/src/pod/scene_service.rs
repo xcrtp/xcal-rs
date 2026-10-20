@@ -17,10 +17,10 @@ use crate::scene::components::Reveal as NativeReveal;
 use crate::scene_script::{
     Handle as ScriptHandle, SceneEncoder, SceneScript, handle_ref,
 };
-use ze_notion::{Color32, Vec2 as NotionVec2, Vec3 as NotionVec3};
+use ze_notion::{Color32, Quat, Vec2 as NotionVec2, Vec3 as NotionVec3};
 use ze_object::{
-    Arrow as NativeArrow, Axes2D as NativeAxes2D, Circle as NativeCircle, Framing2D,
-    Path as NativePath, TickSpec, Transform as NativeTransform,
+    Arrow as NativeArrow, Axes2D as NativeAxes2D, Camera3D as NativeCamera3D, Circle as NativeCircle,
+    Framing2D, Path as NativePath, Projection, TickSpec, Transform as NativeTransform,
 };
 use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use ze_render_ir::{FillSolid, MeasureSpace, Opacity as NativeOpacity, StrokeSolid};
@@ -28,9 +28,12 @@ use ze_scene_contract::{Components, Name as NativeName, Parent as NativeParent};
 
 use crate::pod::content_service::PathStore;
 use crate::pod::types::{
-    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, LineStyle, Name, Opacity, Parent, Path, PathShape,
-    Polyline, Reveal, RevealPath, Stroke, Transform, TransformChannel,
+    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Light, LightKind, LineStyle,
+    Material3D, Name, Opacity, Parent, Path, PathShape, Polyline, Reveal, RevealPath, ShaderVariant,
+    Stroke, Transform, Transform3D, TransformChannel,
 };
+use crate::scene::components::{Light as NativeLight, Material3D as NativeMaterial3D};
+use ze_render_ir::ShaderVariant as NativeShaderVariant;
 
 /// 注入时使用的 Service 名（与 `LuaPod::requirements()` 对应）。
 pub const SERVICE_NAME: &str = "scene";
@@ -168,6 +171,37 @@ impl SceneServicePod {
             "zela.Camera2D",
             "ze_pod_core.Handle",
             scene_camera2d,
+        );
+        // ── 3D（B1-D）──────────────────────────────────────────────────
+        registry.register_fn1_named::<Camera3D, Handle>(
+            "zela.scene::camera3d",
+            "zela.Camera3D",
+            "ze_pod_core.Handle",
+            scene_camera3d,
+        );
+        registry.register_fn1_named::<Cube, Handle>(
+            "zela.scene::cube",
+            "zela.Cube",
+            "ze_pod_core.Handle",
+            scene_cube,
+        );
+        registry.register_fn1_named::<Material3D, Handle>(
+            "zela.scene::material3d",
+            "zela.Material3D",
+            "ze_pod_core.Handle",
+            scene_material3d,
+        );
+        registry.register_fn1_named::<Light, Handle>(
+            "zela.scene::light",
+            "zela.Light",
+            "ze_pod_core.Handle",
+            scene_light,
+        );
+        registry.register_fn1_named::<Transform3D, Handle>(
+            "zela.scene::transform3d",
+            "zela.Transform3D",
+            "ze_pod_core.Handle",
+            scene_transform3d,
         );
         registry.register_fn1_named::<Reveal, Handle>(
             "zela.scene::reveal",
@@ -382,6 +416,94 @@ fn scene_camera2d(pod: &dyn Pod, camera: Camera2D) -> Handle {
             NotionVec2::new(camera.center.x, camera.center.y),
             camera.scale,
         ))])
+}
+
+// ─── 3D（B1-D）：结构化值 → 场景组件 ──────────────────────────────────
+
+fn scene_camera3d(pod: &dyn Pod, camera: Camera3D) -> Handle {
+    // `aspect` 固定 16:9：渲染时被视口宽高比覆盖（`view_projection(viewport.aspect())`）。
+    let native = NativeCamera3D::new(
+        NotionVec3::new(camera.eye.x, camera.eye.y, camera.eye.z),
+        NotionVec3::new(camera.target.x, camera.target.y, camera.target.z),
+        NotionVec3::new(camera.up.x, camera.up.y, camera.up.z),
+        Projection::perspective(camera.fov_y, 16.0 / 9.0, 0.1, 100.0),
+    );
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(native)])
+}
+
+fn scene_cube(pod: &dyn Pod, cube: Cube) -> Handle {
+    // **参数化构造器**：顶点由宿主生成（B1-D 硬约束），脚本不传顶点数组。
+    let mesh = std::sync::Arc::new(if cube.solid {
+        crate::scene::primitives::solid_cube(cube.half_extent)
+    } else {
+        crate::scene::primitives::wireframe_cube(cube.half_extent)
+    });
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(mesh)])
+}
+
+fn scene_material3d(pod: &dyn Pod, material: Material3D) -> Handle {
+    let mut native = NativeMaterial3D::color(color32(material.color));
+    native.variant = match material.variant {
+        ShaderVariant::Flat => NativeShaderVariant::Flat,
+        ShaderVariant::Lambert => NativeShaderVariant::Lambert,
+        ShaderVariant::Pbr => NativeShaderVariant::Pbr,
+    };
+    native.metallic = material.metallic;
+    native.roughness = material.roughness;
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(native)])
+}
+
+fn scene_light(pod: &dyn Pod, light: Light) -> Handle {
+    let color = color32(light.color);
+    let native = match light.kind {
+        LightKind::Directional { direction } => NativeLight::directional_with(
+            NotionVec3::new(direction.x, direction.y, direction.z),
+            color,
+            light.intensity,
+        ),
+        LightKind::Point { range } => NativeLight::point_with(range, color, light.intensity),
+    };
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(native)])
+}
+
+/// `Transform3D` → 原生 `Transform`（同一摆放组件，单一真源）。
+fn scene_transform3d(pod: &dyn Pod, transform: Transform3D) -> Handle {
+    let native = NativeTransform {
+        position: NotionVec3::new(
+            transform.position.x,
+            transform.position.y,
+            transform.position.z,
+        ),
+        // pod 字段顺序即 glam 四元数 xyzw。
+        rotation: Quat::from_xyzw(
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.rotation.z,
+            transform.rotation.w,
+        ),
+        scale: NotionVec3::new(transform.scale.x, transform.scale.y, transform.scale.z),
+    };
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(native)])
 }
 
 fn scene_reveal(pod: &dyn Pod, reveal: Reveal) -> Handle {

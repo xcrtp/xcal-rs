@@ -994,6 +994,158 @@ mod tests {
         parts.join("|")
     }
 
+    /// demo3d 作品的对象全集（B1-D）：3D 装配组件 + Transform。
+    fn demo3d_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
+        use ze_object::{Camera3D, Transform};
+        use zela_scene::contract::{ObjectId, SceneRead};
+        use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
+
+        let mut ids: Vec<ObjectId> = Vec::new();
+        scene.for_each::<Camera3D>(|id, _| ids.push(id));
+        scene.for_each::<Arc<MeshGeometry>>(|id, _| ids.push(id));
+        scene.for_each::<Material3D>(|id, _| ids.push(id));
+        scene.for_each::<Light>(|id, _| ids.push(id));
+        scene.for_each::<Transform>(|id, _| ids.push(id));
+        ids.sort_by_key(|id| id.index);
+        ids.dedup();
+        ids
+    }
+
+    /// demo3d 作品的逐组件指纹（B1-D）：对象级通用指纹 + 3D 组件值。
+    ///
+    /// 网格比 **内容**（顶点 / 法线 / UV / 索引 / 拓扑）而不比 `id`：
+    /// `id` 是进程内唯一且随 ZSB 往返被序列化保留，两则必等；内容比较
+    /// 才是"还原后的几何必须与脚本产物一致"的强口径。
+    fn demo3d_fingerprint(
+        scene: &Scene,
+        id: zela_scene::contract::ObjectId,
+    ) -> String {
+        use ze_object::{Camera3D, Transform};
+        use zela_scene::contract::SceneRead;
+        use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
+
+        let mut parts = vec![object_fingerprint(scene, id)];
+        if let Some(text) = scene.with::<Camera3D, _>(id, |c| {
+            let (fov, aspect, near, far) = match c.projection {
+                ze_object::Projection::Perspective {
+                    fov_y,
+                    aspect,
+                    near,
+                    far,
+                } => (Some(fov_y), aspect, near, far),
+                ze_object::Projection::Orthographic {
+                    extent: _,
+                    aspect,
+                    near,
+                    far,
+                } => (None, aspect, near, far),
+            };
+            format!(
+                "camera3d(eye={},{},{},target={},{},{},up={},{},{},fov={},aspect={},near={},far={})",
+                qf(c.eye.x),
+                qf(c.eye.y),
+                qf(c.eye.z),
+                qf(c.target.x),
+                qf(c.target.y),
+                qf(c.target.z),
+                qf(c.up.x),
+                qf(c.up.y),
+                qf(c.up.z),
+                fov.map(qf)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "ortho".to_string()),
+                qf(aspect),
+                qf(near),
+                qf(far)
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Arc<MeshGeometry>, _>(id, |m| {
+            let verts: Vec<String> = m
+                .positions
+                .iter()
+                .map(|v| format!("({},{},{})", qf(v.x), qf(v.y), qf(v.z)))
+                .collect();
+            let norms: Vec<String> = m
+                .normals
+                .iter()
+                .flatten()
+                .map(|v| format!("({},{},{})", qf(v.x), qf(v.y), qf(v.z)))
+                .collect();
+            let uvs: Vec<String> = m
+                .uvs
+                .iter()
+                .flatten()
+                .map(|v| format!("({},{})", qf(v.x), qf(v.y)))
+                .collect();
+            let idx: Vec<String> = m
+                .indices
+                .iter()
+                .flatten()
+                .map(|i| i.to_string())
+                .collect();
+            format!(
+                "mesh(top={:?},v=[{}],n=[{}],uv=[{}],i=[{}])",
+                m.topology,
+                verts.join(";"),
+                norms.join(";"),
+                uvs.join(";"),
+                idx.join(";")
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Material3D, _>(id, |m| {
+            format!(
+                "material({},variant={:?},metallic={},roughness={},tex={:?},uv={:?},normal={:?})",
+                rgba(m.color),
+                m.variant,
+                qf(m.metallic),
+                qf(m.roughness),
+                m.texture,
+                m.uv_projection,
+                m.normal_map
+            )
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Light, _>(id, |l| {
+            let kind = match l.kind {
+                zela_scene::scene::components::LightKind::Directional { direction } => format!(
+                    "dir({},{},{})",
+                    qf(direction.x),
+                    qf(direction.y),
+                    qf(direction.z)
+                ),
+                zela_scene::scene::components::LightKind::Point { range } => {
+                    format!("point({})", qf(range))
+                }
+            };
+            format!("light({},{}:{})", kind, rgba(l.color), qf(l.intensity))
+        }) {
+            parts.push(text);
+        }
+        if let Some(text) = scene.with::<Transform, _>(id, |t| {
+            format!(
+                "transform({},{},{},rot={},{},{},{},scale={},{},{})",
+                qf(t.position.x),
+                qf(t.position.y),
+                qf(t.position.z),
+                qf(t.rotation.x),
+                qf(t.rotation.y),
+                qf(t.rotation.z),
+                qf(t.rotation.w),
+                qf(t.scale.x),
+                qf(t.scale.y),
+                qf(t.scale.z)
+            )
+        }) {
+            parts.push(text);
+        }
+        parts.join("|")
+    }
+
     fn binding_rows(
         forest: &ClockForest,
         bindings: &BindingTable,
@@ -1312,6 +1464,75 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             binding_rows(&recipe_a.forest, &recipe_a.bindings, &ids_a),
             binding_rows(&recipe_b.forest, &recipe_b.bindings, &ids_b),
             "时序 / 曲线 / target 必须一致"
+        );
+    }
+
+    /// **B1-D 验收**：3D 场景的 ZSB 三路径同构。
+    ///
+    /// demo3d.lua（Camera3D / Cube / Transform3D / Material3D / Light）经
+    /// `script → .zsb → 还原`，装配产物与直接脚本**逐字节 / 逐对象 / 逐组件**相等。
+    /// 前提：3D 组件（`Arc<MeshGeometry>` / `Material3D` / `Light`）必须已在
+    /// `known_component_table!` 登记且派生 serde —— 否则 bundle 编码即失败。
+    #[test]
+    fn bundle_roundtrip_matches_script_path_3d() {
+        use ze_prerender::placeholder_engine;
+        use zela_scene_bundle::{Bundle, MetaInput};
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("脚本 Pod 装配成功");
+        let script = assembly
+            .run_script(include_str!("../scripts/demo3d.lua"))
+            .expect("Lua 3D 脚本执行成功");
+
+        let available = available_runtime_caps();
+        let bundle = Bundle::encode(
+            &script,
+            MetaInput {
+                capabilities: available.capabilities.clone(),
+                required_capabilities: required_playback_capabilities(),
+                pods: available.pods.clone(),
+                required_pods: required_playback_pods(),
+                downgrades: Vec::new(),
+                source_sha256: None,
+            },
+        )
+        .expect("编码 ZSB（3D 组件必须可序列化）");
+
+        let bytes = bundle.to_bytes();
+        let decoded = Bundle::from_bytes(&bytes).expect("解析 ZSB");
+        decoded.check_restorable(&available).expect("可还原");
+        let restored = decoded.script().expect("还原 SceneScript");
+
+        // 最强口径：规范 JSON 逐字节相同。
+        assert_eq!(
+            script.to_json().expect("serialize"),
+            restored.to_json().expect("serialize"),
+            "还原后的 3D 装配产物必须与原始脚本完全一致"
+        );
+
+        let mut scene_a = Scene::new();
+        let mut scene_b = Scene::new();
+        let recipe_a = script.clone().commit(&mut scene_a).expect("commit a");
+        let recipe_b = restored.commit(&mut scene_b).expect("commit b");
+        let ids_a = demo3d_ids(&scene_a);
+        let ids_b = demo3d_ids(&scene_b);
+        assert_eq!(ids_a.len(), ids_b.len(), "3D 对象数必须一致");
+        assert_eq!(
+            ids_a
+                .iter()
+                .map(|id| demo3d_fingerprint(&scene_a, *id))
+                .collect::<Vec<_>>(),
+            ids_b
+                .iter()
+                .map(|id| demo3d_fingerprint(&scene_b, *id))
+                .collect::<Vec<_>>(),
+            "逐对象 3D 组件指纹必须一致"
+        );
+        // 3D 动画（Rotation / Position 并行 + Scale）：时序、曲线、target 必须一致。
+        assert_eq!(
+            binding_rows(&recipe_a.forest, &recipe_a.bindings, &ids_a),
+            binding_rows(&recipe_b.forest, &recipe_b.bindings, &ids_b),
+            "3D 动画时序 / 曲线 / target 必须一致"
         );
     }
 

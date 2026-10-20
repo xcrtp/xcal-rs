@@ -11,8 +11,9 @@
 
 use crate::animation::TargetKind;
 use crate::pod::types::{
-    Arrow, Axes2D, Camera2D, Circle, Curve, Fill, Formula, Name, Opacity, Parent, PathList,
-    PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform, TransformChannel,
+    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Formula, Light, Material3D, Name,
+    Opacity, Parent, PathList, PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform,
+    Transform3D, TransformChannel,
 };
 use ze_pod_core::Handle;
 use ze_pod_macro::capability;
@@ -20,7 +21,7 @@ use ze_pod_macro::capability;
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(
     namespace = "zela.scene",
-    version = "4",
+    version = "5",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -33,6 +34,21 @@ pub struct SceneApi<'a> {
 
     /// 构造 2D 相机取景组件。
     pub camera2d: fn(&'a dyn Pod, camera: Camera2D) -> Handle,
+
+    /// 构造 3D 相机组件（B1-D）。
+    pub camera3d: fn(&'a dyn Pod, camera: Camera3D) -> Handle,
+
+    /// 构造立方体网格组件（B1-D，**参数化**：只传半边长，顶点由宿主生成）。
+    pub cube: fn(&'a dyn Pod, cube: Cube) -> Handle,
+
+    /// 构造 3D 材质组件（B1-D；`metallic` / `roughness` 仅 Pbr 变体消费）。
+    pub material3d: fn(&'a dyn Pod, material: Material3D) -> Handle,
+
+    /// 构造光源组件（B1-D；**不带 position** —— 位置由同对象的 `Transform` 提供）。
+    pub light: fn(&'a dyn Pod, light: Light) -> Handle,
+
+    /// 构造 3D 摆放组件（B1-D；位置 / 四元数旋转 / 缩放，映射到原生 `Transform`）。
+    pub transform3d: fn(&'a dyn Pod, transform: Transform3D) -> Handle,
 
     /// 构造书写动画组件（点表是 `Array<Vec2>`）。
     pub reveal: fn(&'a dyn Pod, reveal: Reveal) -> Handle,

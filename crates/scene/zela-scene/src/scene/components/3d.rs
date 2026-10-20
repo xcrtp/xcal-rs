@@ -54,7 +54,7 @@ fn next_geometry_id() -> u64 {
 /// assert_eq!(mesh.positions.len(), 3);
 /// assert!(mesh.indices.is_none());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MeshGeometry {
     /// 顶点位置（模型空间）。
     pub positions: Vec<Vec3>,
@@ -145,7 +145,7 @@ impl MeshGeometry {
 /// assert_eq!(m.roughness, 0.5);
 /// assert!(m.normal_map.is_none());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Material3D {
     /// 整体颜色（无纹理时的着色来源，有纹理时作为调制色）。
     pub color: Color32,
@@ -200,7 +200,7 @@ impl Material3D {
 ///
 /// 光照计算在渲染层统一消费：`SceneRecord3DSystem` 每帧把它录进
 /// `LightQueue`，后端据此上传**场景级** light uniform buffer。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Light {
     /// 光源类型（方向光 / 点光）。
     pub kind: LightKind,
@@ -211,7 +211,7 @@ pub struct Light {
 }
 
 /// 光源类型。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LightKind {
     /// 方向光：`direction` 是光传播方向（**世界空间**，从光源指向场景）。
     Directional { direction: Vec3 },
@@ -262,6 +262,21 @@ impl Light {
 mod tests {
     use super::*;
     use crate::types::Color32;
+    use std::sync::Arc;
+
+    /// B1-D 探针：`Arc<MeshGeometry>` 必须可序列化（ZSB bundle 往返的前提）。
+    #[test]
+    fn arc_mesh_geometry_serializable_probe() {
+        let mesh = Arc::new(MeshGeometry::new(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            Some(vec![0, 1, 2]),
+            PrimitiveTopology::Triangles,
+        ));
+        let json = serde_json::to_string(&mesh).expect("Arc<MeshGeometry> 必须可序列化");
+        let back: Arc<MeshGeometry> =
+            serde_json::from_str(&json).expect("Arc<MeshGeometry> 必须可反序列化");
+        assert_eq!(back.positions.len(), 3);
+    }
 
     #[test]
     fn test_mesh_geometry_and_material3d_independent() {
