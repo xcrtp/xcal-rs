@@ -532,6 +532,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 两条已退出限制：3D 两个 pass 均挂 `Depth32Float` 深度附件（`wgpu_3d::DEPTH_FORMAT`）；
 > 旧 CPU 2D 回放（`egui_2d`）已在 S4.1 删除，2D 统一走 `wgpu_2d` 离屏 + 合成。
 
+> **B1 批次（2026-10-21）已落地**（详见 `GAPS.md` D 段）：
+> - **光照数据化**：`cube.wgsl` 的 `LIGHT_DIR` / `AMBIENT` 硬编码已删，改场景级 light
+>   uniform buffer 驱动；`Light` 不带 position（位置走 `Transform` → `WorldTransforms`）。
+> - **点光 / PBR**：Point light（range 窗口衰减，超限显式报错）；`ShaderVariant::Pbr`
+>   （metallic-roughness，线性空间，法线贴图走**屏幕空间 TBN**，铁律 4 未改顶点格式）。
+> - **脚本层 3D 入口**：`camera3d` / `cube` / `parametric_surface` / `material3d` / `light`
+>   参数化构造器（不传顶点数组）⇒ 3D 首入 `--script == --bundle` 对拍网。
+> - **pipeline 按需构建（B1-E）**：废弃 `(topology, variant)` 笛卡尔积预建，改
+>   `get_or_create_pipeline` + 缓存，key 四维定齐 `(topology, variant, cull_mode, blending)`；
+>   **不静默（B1-F）**：静默回退 Lambert 已结构性删除，点列表改 `panic!` 显式报错。
+
 ### 已知未接线项（Known unwired，记账非缺陷）
 
 以下各项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。

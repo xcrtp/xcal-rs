@@ -13,9 +13,9 @@
 # Vulkan headless，640×480 @ 30fps；`--script` 与 `--bundle` 两条路径逐位相同
 # （S1 零扰动补证：ff2751d 与 ba75687 两侧均复现本值，见 GAPS.md G-101 补证）
 # device = windows / RTX 4060 Laptop
-# reason: S0-3 基线滑动窗口落地：首条 slotA 数据（S0-1 补证值），像素未变 @ pending
-# slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ ba75687
-# slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ ba75687
+# reason: B1 演进态重录：光照数据化+PBR+脚本3D入口+pipeline按需构建（B1-A~F 落地）；fourier/storyboard 像素与 ba75687 逐位一致（B1-E/F 未改像素），同跑次 script==bundle 绿 @ pending
+# slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 7a9299f
+# slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 7a9299f
 # slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ pending
 # slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ pending
 fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ pending
@@ -26,8 +26,8 @@ storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
 # device = windows / RTX 4060 Laptop
-# reason: S0-3 基线滑动窗口落地：首条 slotA 数据（S0-1 补证值），像素未变 @ pending
-# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ ba75687
+# reason: B1 演进态重录：光照数据化+PBR+脚本3D入口+pipeline按需构建（B1-A~F 落地）；fourier/storyboard 像素与 ba75687 逐位一致（B1-E/F 未改像素），同跑次 script==bundle 绿 @ pending
+# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 7a9299f
 # slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ pending
 smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ pending
 

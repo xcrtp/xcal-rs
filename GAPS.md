@@ -121,6 +121,25 @@
 
 ---
 
+## D. B1 批次记账（光照数据化与 PBR，2026-10-21）
+
+> 计划《S1收尾与B1_光照数据化与PBR执行计划.md》B1-A~F 已全部落地（逐笔提交）。
+> 本段：**已关闭**（硬编码 / 静默兜底类缺口）与**新增能力**。像素为演进态
+> （`baselines.txt` 的 reason + 提交号见 §统计后的维护约定与录制段）。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| B-01 | `cube.wgsl` 硬编码光源（`LIGHT_DIR` / `AMBIENT`）→ 场景级 light uniform buffer 驱动 | 着色器 | **已关闭（B1-A）** | 提交 `5743460`；`Light` 组件不带 position（单一真源，位置走 `Transform` → `WorldTransforms`） |
+| B-02 | 点光缺失：新增 Point light（`range` 窗口衰减避免 1/d² 爆炸）；数量超编译期上限 ⇒ **显式报错** | 渲染 | 新增能力（B1-B） | 提交 `8efc515`；位置走 `Transform` → `WorldTransforms`（S1 已通） |
+| B-03 | PBR 缺失：新增 `ShaderVariant::Pbr`（metallic-roughness，线性空间）；法线贴图走**屏幕空间 TBN**（Mikkelsen） | 渲染 | 新增能力（B1-C） | 提交 `1970c2d`；铁律 4 未改顶点格式（无 tangent 属性槽） |
+| B-04 | 脚本层无 3D 入口（3D 场景硬编码在 `authored/demo3d.rs`）→ `camera3d` / `cube` / `parametric_surface` / `material3d` / `light` **参数化构造器** | 脚本 → 场景 | **已关闭（B1-D）** | 提交 `6d4a1c9`；不传顶点数组（`MeshGeometry` 无 `Serialize`，撞"图元可序列化"硬限制）⇒ 3D 首入 `--script == --bundle` 对拍网；demo 入册提交 `6c3376e` |
+| B-05 | pipeline `(topology, variant)` **笛卡尔积预建**（3×2=6 条，随 variant 数爆炸）→ `get_or_create_pipeline` **按需构建 + 缓存** | 渲染后端 | **已关闭（B1-E）** | 提交 `797c914`；key 四维定齐 `(topology, variant, cull_mode, blending)` —— B2 只增取值不再动机制；结构判据 `test_b1e_pipelines_built_on_demand`（0→1→1→2→3） |
+| B-06 | pipeline 未命中**静默回退 Lambert**（仅 debug 断言）+ 点列表**静默丢弃** | 渲染后端 | **已关闭（B1-E/F）** | `797c914` 结构性删除回退（get_or_create 无"漏建"状态）；`7a9299f` 点列表改 `panic!` 显式报错（不静默铁律 2），`test_b1f_points_topology_panics_explicitly` |
+
+**D 段小计**：已关闭 4 · 新增能力 2（不计入缺口类别）。
+
+---
+
 ## 统计与维护约定
 
 | 类别 | 数量 |
@@ -134,6 +153,7 @@
 | 待定 | 1（统一相机 / 深度合成模型） |
 
 共 **44 条**：A 段 14（作品）+ B 段 9（WASM 探测）+ C 段 21（README/ARCHITECTURE）；G-101 是 F-02 的升格形态，不重复计数。
+D 段（B1 批次记账）6 条：已关闭 4 · 新增能力 2 —— 不计入缺口类别（见上表下方 D 段小计）。
 
 维护约定：
 
