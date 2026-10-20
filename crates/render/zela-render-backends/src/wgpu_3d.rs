@@ -113,6 +113,32 @@ const VERTEX_UV_OFFSET: u64 = 12;
 /// 法线属性在顶点内的字节偏移（紧随 uv 之后）。
 const VERTEX_NORMAL_OFFSET: u64 = 20;
 
+/// RC.1/RC 补充：3D 顶点布局 = 位置（Float32x3 @0）+ UV（Float32x2 @12）+ 法线（Float32x3 @20）。
+/// B1-E 起静态化：pipeline **按需构建**（`get_or_create_pipeline`）时不再借用
+/// `new()` 的局部数组，直接引用本 static。铁律 4 —— 不加任何属性槽。
+const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: VERTEX_UV_OFFSET,
+        shader_location: 1,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x3,
+        offset: VERTEX_NORMAL_OFFSET,
+        shader_location: 2,
+    },
+];
+static VERTEX_LAYOUT: [Option<wgpu::VertexBufferLayout<'static>>; 1] = [Some(wgpu::VertexBufferLayout {
+    array_stride: VERTEX_STRIDE,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &VERTEX_ATTRIBUTES,
+})];
+
 /// 未指定纹理时使用的兜底纹理 id（1×1 透明黑）。
 const DEFAULT_TEXTURE_ID: u64 = 0;
 
@@ -125,27 +151,47 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 // ─── D2：着色变体 → pipeline 表 ─────────────────────────────────────────────
 
-/// 后端预建 pipeline 时遍历的全部着色变体。
-///
-/// ⚠️ 新增 [`ShaderVariant`] 变体时**必须**同步扩此数组（否则该变体查表落空，会
-/// `debug_assert` 并回退到 `Lambert`）。与 `compositor.rs` 的
-/// `(LayerBlend, Conversion)` 双层预建同一写法。
-const SHADER_VARIANTS: [ShaderVariant; 3] = [
-    ShaderVariant::Lambert,
-    ShaderVariant::Flat,
-    ShaderVariant::Pbr,
-];
-
 /// 着色变体 → 片元入口名（`@fragment fn`）的映射。
 ///
 /// wgpu 无"动态入口点"，故变体只能靠"同一 shader module 的多个 `fs_*` 入口 + 各自
-/// 预建的 pipeline"实现。`ShaderVariant` 定义在数据层 zela-scene（不得引用 wgpu），
+/// 的 pipeline"实现。`ShaderVariant` 定义在数据层 zela-scene（不得引用 wgpu），
 /// 因此该映射是后端侧的自由函数而非 `ShaderVariant` 的固有方法。
+/// 该 match 是**穷尽**的 —— 新增变体漏写入口即编译失败（B1-E 起以此替代原
+/// `SHADER_VARIANTS` 预建穷举测试：按需构建下不再有"预建表"可漏）。
 fn variant_entry_point(variant: ShaderVariant) -> &'static str {
     match variant {
         ShaderVariant::Flat => "fs_flat",
         ShaderVariant::Lambert => "fs_lambert",
         ShaderVariant::Pbr => "fs_pbr",
+    }
+}
+
+/// B1-E：pipeline **按需构建**的查表键。四个维度一次定齐：
+/// `(topology, variant, cull_mode, blending)` —— B2（S5+S6 语义）只增取值，
+/// 不再改这套机制。`cull_mode` / `blend` 当前由拓扑与默认材质语义推导
+/// （见 [`topology_cull_mode`]），后续可改为从材质 / 图元属性取值。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PipelineKey {
+    topology: PrimitiveTopology,
+    variant: ShaderVariant,
+    cull_mode: Option<wgpu::Face>,
+    blend: wgpu::BlendState,
+}
+
+/// 拓扑 → 背面剔除（当前：三角形剔除背面，线段/点不剔除）。
+fn topology_cull_mode(topology: PrimitiveTopology) -> Option<wgpu::Face> {
+    match topology {
+        PrimitiveTopology::Triangles => Some(wgpu::Face::Back),
+        PrimitiveTopology::Lines | PrimitiveTopology::Points => None,
+    }
+}
+
+/// IR 图元拓扑 → wgpu 图元拓扑（IR 枚举在数据层，不引用 wgpu，转换在后端侧）。
+fn to_wgpu_topology(topology: PrimitiveTopology) -> wgpu::PrimitiveTopology {
+    match topology {
+        PrimitiveTopology::Triangles => wgpu::PrimitiveTopology::TriangleList,
+        PrimitiveTopology::Lines => wgpu::PrimitiveTopology::LineList,
+        PrimitiveTopology::Points => wgpu::PrimitiveTopology::PointList,
     }
 }
 
@@ -192,6 +238,9 @@ pub struct PreparedDraw3D {
     pub topology: PrimitiveTopology,
     /// 着色变体：与 `topology` 一起构成 pipeline 表的查表键。
     pub variant: ShaderVariant,
+    /// B1-E：混合状态 —— pipeline 查表键的第四维。当前恒为 `REPLACE`
+    /// （不透明），B2 起可改从材质语义取值。
+    pub blend: wgpu::BlendState,
     pub uniform_offset: u32,
     pub bind_group: wgpu::BindGroup,
 }
@@ -244,13 +293,17 @@ pub struct WgpuBackend3D {
     queue: wgpu::Queue,
     /// 管线目标格式（3D 离屏纹理沿用该格式，合成器据此判域）。
     format: wgpu::TextureFormat,
-    /// 预建的渲染管线表：`(topology, variant)` → pipeline。
+    /// B1-E：**按需构建**的渲染管线缓存：key = `(topology, variant, cull_mode, blending)`。
     ///
-    /// 所有变体共用同一条 `pipeline_layout` 与同一 bind group layout（uniform /
-    /// texture / sampler 三槽），故只需一张表。**已知限制**：若将来某变体需要额外
-    /// 资源槽（粗糙度贴图 / 环境图），需引入第二套 bind group layout 与对应的
-    /// pipeline 族，本表不再够用。
-    pipelines: HashMap<(PrimitiveTopology, ShaderVariant), wgpu::RenderPipeline>,
+    /// 只有实际绘制过的 key 才建管线（不再预建笛卡尔积）。所有变体共用同一条
+    /// `pipeline_layout` 与同一 bind group layout，故只需一张表。**已知限制**：
+    /// 若将来某变体需要额外资源槽（粗糙度贴图 / 环境图），需引入第二套 bind
+    /// group layout 与对应的 pipeline 族，本表不再够用。
+    pipelines: Mutex<HashMap<PipelineKey, wgpu::RenderPipeline>>,
+    /// 按需创建 pipeline 所需：同一 shader module（多个 `fs_*` 入口共用）。
+    shader: wgpu::ShaderModule,
+    /// 按需创建 pipeline 所需：共用 pipeline layout。
+    pipeline_layout: wgpu::PipelineLayout,
     bind_group_layout: wgpu::BindGroupLayout,
     /// 材质采样器（binding 2）。
     sampler: wgpu::Sampler,
@@ -291,7 +344,8 @@ unsafe impl Send for WgpuBackend3D {}
 unsafe impl Sync for WgpuBackend3D {}
 
 impl WgpuBackend3D {
-    /// 用给定 WGSL 源码构造后端（按 `(topology, variant)` 预建管线表）。
+    /// 用给定 WGSL 源码构造后端。pipeline **不预建**（B1-E：按需构建 + 缓存，
+    /// 见 [`Self::get_or_create_pipeline`] —— 构造后缓存为空，首次绘制才建）。
     // 体检第 9 项（观察，暂不改）：本函数约 210 行，可按
     // 「bind group layout → 管线表 → 默认纹理」拆分。
     pub fn new(
@@ -373,98 +427,10 @@ impl WgpuBackend3D {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // RC.1: 顶点 = 位置（Float32x3 @0）+ UV（Float32x2 @12）。
-        // RC 补充: 追加法线（Float32x3 @20）供 shader 做 Lambert 着色。
-        let vertex_layout = [Some(wgpu::VertexBufferLayout {
-            array_stride: VERTEX_STRIDE,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: VERTEX_UV_OFFSET,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: VERTEX_NORMAL_OFFSET,
-                    shader_location: 2,
-                },
-            ],
-        })];
-
-        let make_pipeline = |topology: wgpu::PrimitiveTopology,
-                             cull_mode: Option<wgpu::Face>,
-                             fs_entry: &'static str,
-                             label: &'static str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &vertex_layout,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fs_entry),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    cull_mode,
-                    ..Default::default()
-                },
-                // RC.3：深度测试（Less：近处像素深度更小者胜出），写入深度。
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-
-        // 预建全部 `(topology, variant)` 组合（三角形 + 线段；点列表当前无 pipeline）。
-        let mut pipelines: HashMap<(PrimitiveTopology, ShaderVariant), wgpu::RenderPipeline> =
-            HashMap::new();
-        for variant in SHADER_VARIANTS {
-            let fs_entry = variant_entry_point(variant);
-            // 三角形：背面剔除。
-            pipelines.insert(
-                (PrimitiveTopology::Triangles, variant),
-                make_pipeline(
-                    wgpu::PrimitiveTopology::TriangleList,
-                    Some(wgpu::Face::Back),
-                    fs_entry,
-                    "zela-3d-pipeline-triangles",
-                ),
-            );
-            // 线段：无剔除。
-            pipelines.insert(
-                (PrimitiveTopology::Lines, variant),
-                make_pipeline(
-                    wgpu::PrimitiveTopology::LineList,
-                    None,
-                    fs_entry,
-                    "zela-3d-pipeline-lines",
-                ),
-            );
-        }
+        // B1-E：pipeline **不在此预建** —— 顶点布局是 static（`VERTEX_LAYOUT`），
+        // pipeline 按需构建 + 缓存在 `get_or_create_pipeline`（key 四维定齐）。
+        // 原 `(topology, variant)` 笛卡尔积预建已删除：pipeline 数不再随 variant
+        // 数爆炸（结构判据）。
 
         // RC.1: 1×1 **透明黑**兜底纹理 —— 材质无纹理时绑定它。着色式为预乘 over
         // （`tex + color * (1 - tex.a)`），`tex = (0,0,0,0)` 时退化为 `color`。
@@ -572,7 +538,9 @@ impl WgpuBackend3D {
             device,
             queue,
             format,
-            pipelines,
+            pipelines: Mutex::new(HashMap::new()),
+            shader,
+            pipeline_layout,
             bind_group_layout,
             sampler,
             default_texture_view,
@@ -852,8 +820,10 @@ impl WgpuBackend3D {
             vertex_count: u32,
             index_count: u32,
             topology: PrimitiveTopology,
-            /// 着色变体（pipeline 表的查表键的一半）。
+            /// 着色变体（pipeline 查表键之一）。
             variant: ShaderVariant,
+            /// B1-E：混合状态（pipeline 查表键第四维）。当前恒 `REPLACE`。
+            blend: wgpu::BlendState,
             uniform_offset: u32,
             /// 材质纹理 id（bind group 的缓存键）。
             texture_id: u64,
@@ -955,6 +925,7 @@ impl WgpuBackend3D {
                 index_count: cached_copy.index_count,
                 topology: cached_copy.topology,
                 variant: md.material.variant,
+                blend: wgpu::BlendState::REPLACE,
                 uniform_offset: offset_bytes,
                 texture_id: md
                     .material
@@ -1039,6 +1010,7 @@ impl WgpuBackend3D {
                 topology: cached_copy.topology,
                 // line 默认走 Lambert（法线填 (0,0,1) → lit = 1，外观不受光照影响）。
                 variant: ShaderVariant::Lambert,
+                blend: wgpu::BlendState::REPLACE,
                 uniform_offset: offset_bytes,
                 // line 无材质纹理 → 绑定 1×1 **透明黑**兜底纹理（`DEFAULT_TEXTURE_ID = 0`
                 // 未注册，`resolve_texture_view` 回退），着色式退化为 `color * lit`。
@@ -1088,6 +1060,7 @@ impl WgpuBackend3D {
                     index_count: s.index_count,
                     topology: s.topology,
                     variant: s.variant,
+                    blend: s.blend,
                     uniform_offset: s.uniform_offset,
                     bind_group,
                 }
@@ -1104,23 +1077,20 @@ impl WgpuBackend3D {
     /// 把已准备的绘制命令录制进外部 render pass（egui 回调路径）。
     pub fn record_prepared<'a>(&self, draws: &[PreparedDraw3D], rpass: &mut wgpu::RenderPass<'a>) {
         for d in draws {
-            // 点列表当前无 pipeline —— 维持既有行为：跳过。
+            // 点列表当前无 pipeline —— 维持既有行为：跳过（B1-F 改显式报错）。
             if d.topology == PrimitiveTopology::Points {
                 continue;
             }
-            // 查表选 pipeline（`(topology, variant)`）。未命中（变体未预建）时回退到
-            // 同拓扑的 Lambert，避免未知变体导致画面消失；debug 下断言以暴露漏建。
-            let key = (d.topology, d.variant);
-            let Some(pipeline) = self.pipelines.get(&key).or_else(|| {
-                debug_assert!(
-                    self.pipelines.contains_key(&key),
-                    "3D pipeline 未预建：{key:?}；已回退到 Lambert（请补齐变体 / fs 入口 / pipeline 表）",
-                );
-                self.pipelines.get(&(d.topology, ShaderVariant::Lambert))
-            }) else {
-                continue;
+            // B1-E：按需构建 + 缓存（key 四维：topology / variant / cull_mode / blending）。
+            // 每个 draw 必然命中（未命中即创建）—— 原「回退 Lambert」路径已结构性消失。
+            let key = PipelineKey {
+                topology: d.topology,
+                variant: d.variant,
+                cull_mode: topology_cull_mode(d.topology),
+                blend: d.blend,
             };
-            rpass.set_pipeline(pipeline);
+            let pipeline = self.get_or_create_pipeline(key);
+            rpass.set_pipeline(&pipeline);
             // G6: dynamic uniform offset 传入 set_bind_group 的 offsets。
             rpass.set_bind_group(0, &d.bind_group, &[d.uniform_offset]);
             rpass.set_vertex_buffer(0, d.vertex_buffer.slice(..));
@@ -1131,6 +1101,66 @@ impl WgpuBackend3D {
                 rpass.draw(0..d.vertex_count, 0..1);
             }
         }
+    }
+
+    /// B1-E：按需构建 + 缓存 pipeline（key 四维：topology / variant / cull_mode / blending）。
+    ///
+    /// 命中直接返回缓存克隆；未命中则创建并缓存。**无回退路径** —— 与预建时代
+    /// 「查表落空回退 Lambert」不同，这里不存在"漏建"状态（不静默，铁律 2）。
+    /// wgpu 30 的 `create_render_pipeline` 不可失败（内部校验失败即 panic，且携带
+    /// key 化的 label），故创建路径本身就是显式报错。
+    fn get_or_create_pipeline(&self, key: PipelineKey) -> wgpu::RenderPipeline {
+        let mut cache = self.pipelines.lock().expect("pipelines poisoned");
+        if let Some(p) = cache.get(&key) {
+            return p.clone();
+        }
+        let label = format!("zela-3d-pipeline-{key:?}");
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&label),
+                layout: Some(&self.pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &VERTEX_LAYOUT,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.shader,
+                    entry_point: Some(variant_entry_point(key.variant)),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.format,
+                        blend: Some(key.blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: to_wgpu_topology(key.topology),
+                    cull_mode: key.cull_mode,
+                    ..Default::default()
+                },
+                // RC.3：深度测试（Less：近处像素深度更小者胜出），写入深度。
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+        cache.insert(key, pipeline.clone());
+        pipeline
+    }
+
+    /// B1-E 结构判据：当前已按需构建的 pipeline 数（= 实际绘制过的 key 数，
+    /// 而非 `variant × topology` 笛卡尔积）。验证"pipeline 数不随 variant 数爆炸"。
+    pub fn pipeline_count(&self) -> usize {
+        self.pipelines.lock().expect("pipelines poisoned").len()
     }
 
     /// C3：把一个 3D 图层渲染到**自己的离屏纹理**（透明清屏）。
@@ -1453,33 +1483,6 @@ mod tests {
         let backend =
             WgpuBackend3D::with_default_shader(ctx.device(), ctx.queue(), ctx.target_format());
         Some((gpu, backend, ctx))
-    }
-
-    // ── P0-1：SHADER_VARIANTS 穷举（纯 CPU，无需 GPU） ────────────────
-
-    /// 编译期穷举：`ShaderVariant` 新增变体而此处未更新 → 编译失败。
-    fn all_variants() -> [ShaderVariant; 3] {
-        // 显式列出每个变体；漏一个即非穷尽 match → 编译失败。
-        match ShaderVariant::Lambert {
-            ShaderVariant::Lambert => {}
-            ShaderVariant::Flat => {}
-            ShaderVariant::Pbr => {}
-        }
-        [ShaderVariant::Lambert, ShaderVariant::Flat, ShaderVariant::Pbr]
-    }
-
-    /// `SHADER_VARIANTS` 必须覆盖 `ShaderVariant` 的全部变体。
-    ///
-    /// 证伪：从 `SHADER_VARIANTS` 删一项 → 本测试变红。
-    #[test]
-    fn shader_variants_array_is_exhaustive() {
-        for v in all_variants() {
-            assert!(
-                SHADER_VARIANTS.contains(&v),
-                "{v:?} 未在 SHADER_VARIANTS 中注册"
-            );
-        }
-        assert_eq!(SHADER_VARIANTS.len(), all_variants().len());
     }
 
     // ── B1-A：光源 uniform 打包（纯 CPU，无需 GPU） ─────────────────────
@@ -2165,6 +2168,102 @@ mod tests {
         assert_ne!(
             center_flat, center_lambert,
             "切换 ShaderVariant 必须改变输出像素"
+        );
+    }
+
+    /// B1-E 结构判据：pipeline **按需构建**且缓存命中 —— 只建实际绘制过的 key。
+    ///
+    /// 证伪：若仍走 `(variant, topology)` 笛卡尔积预建，构造后即有 3×2=6 条；
+    /// 本测试要求构造后 0 条，并只随实际绘制递增（0 → 1 → 1 → 2 → 3）。
+    #[test]
+    fn test_b1e_pipelines_built_on_demand() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        assert_eq!(
+            backend.pipeline_count(),
+            0,
+            "B1-E：构造后不应预建任何 pipeline（非笛卡尔积）"
+        );
+
+        let geometry = std::sync::Arc::new(parametric_surface(
+            SurfaceFn::new((-0.5, 0.5), (-0.5, 0.5), |_, _| 0.0),
+            1,
+            1,
+        ));
+
+        // ① Lambert 三角形 → 第 1 条。
+        let mut lambert = Material3D::color(Color32::WHITE);
+        lambert.variant = ShaderVariant::Lambert;
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(30),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                lambert.clone(),
+            )],
+        );
+        assert_eq!(backend.pipeline_count(), 1, "只建 Lambert 三角形 1 条");
+
+        // ② 同 key 再画一遍 → 命中缓存，不新建。
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(31),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                lambert,
+            )],
+        );
+        assert_eq!(backend.pipeline_count(), 1, "同 key 命中缓存，不再建");
+
+        // ③ Pbr 三角形（同拓扑、不同变体）→ 第 2 条。
+        let mut pbr = Material3D::color(Color32::WHITE);
+        pbr.variant = ShaderVariant::Pbr;
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(32),
+            size,
+            &[MeshDraw::new(std::sync::Arc::clone(&geometry), Mat4::IDENTITY, pbr)],
+        );
+        assert_eq!(backend.pipeline_count(), 2);
+
+        // ④ 线段（不同拓扑、无剔除）→ 第 3 条。
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-b1e-lines-encoder"),
+            });
+        let _frame = backend.render_layer_offscreen(
+            &mut encoder,
+            LayerId(33),
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            Viewport::full(size, size),
+            &[],
+            &[LineDraw::new(
+                Vec3::new(-0.5, 0.0, 0.5),
+                Vec3::new(0.5, 0.0, 0.5),
+                Color32::WHITE,
+            )],
+            &[],
+            &[],
+        );
+        ctx.submit(encoder.finish());
+        ctx.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll 失败");
+        assert_eq!(
+            backend.pipeline_count(),
+            3,
+            "3 条 = 实际绘制过的 key 数，而非 3 variant × 2 topology = 6 条预建"
         );
     }
 
