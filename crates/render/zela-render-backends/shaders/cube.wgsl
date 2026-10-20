@@ -1,9 +1,11 @@
-// cube.wgsl — 3D 默认着色器（RC.1：纹理 over 颜色；RC 补充：头顶 Lambert 着色）。
+// cube.wgsl — 3D 默认着色器（RC.1：纹理 over 颜色；RC 补充：头顶 Lambert 着色；
+// B1-A：光照数据化 —— 光源从硬编码常量改为场景级 uniform 驱动）。
 //
 // 绑定（group 0）：
 //   binding 0 = Uniforms（mvp + color，dynamic offset）
 //   binding 1 = texture_2d<f32>
 //   binding 2 = sampler
+//   binding 3 = Lights（场景级光源，非 dynamic —— 所有 draw 共享一份）
 //
 // 纹理合成：**墨迹 over 已受光材质色**（`tex` 是 decal，不参与光照）
 //   albedo = tex.rgb + color.rgb * lit * (1 - tex.a)
@@ -12,13 +14,17 @@
 //   - 透明处 `tex = (0,0,0,0)` → albedo = color * lit（材质色，保留明暗起伏）
 //     —— 曲面本体可见，且与"纯色 3D + Lambert"完全一致；
 //   - 墨迹处 `tex = (1,1,1,1)`（白墨）→ albedo = white —— 公式是**标签**，
-//     恒为纯白，不被曲面明暗压暗（AMBIENT=0.2 时不会变深灰）。
+//     恒为纯白，不被曲面明暗压暗（ambient=0.2 时不会变深灰）。
 // 材质未指定纹理时，后端绑定 1×1 **透明黑**兜底纹理（`tex = (0,0,0,0)`），
 // 上式退化为 `color * lit`，因此既有"纯色 3D"画面的结果不变。
 //
-// 光照：以固定头顶方向 L = (0, 0, 1)（模型空间）做 Lambert。未携带法线的几何
-// （线框立方体等）在打包时法线填 (0, 0, 1)，与 L 点积为 1 → lit = 1，外观逐像素
-// 不变；只有真实曲面（法线随位置变化）才产生明暗起伏。故无需额外开关。
+// 光照（B1-A）：方向光数组来自 binding 3 的场景级 uniform（`lights.counts.x` 个，
+// 上限 `MAX_LIGHTS`）。默认场景（无 `Light` 组件）时后端兜底写入
+// **单方向光 `(0,0,1)` + ambient 0.2**，与本文件 B1-A 之前的硬编码
+// `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` 逐位一致。方向光方向为世界空间
+// （物体无旋转时等于模型空间，见后端注释）；未携带法线的几何（线框立方体等）
+// 在打包时法线填 `(0,0,1)`，与默认光点积为 1 → lit = 1，外观逐像素不变；
+// 只有真实曲面（法线随位置变化）才产生明暗起伏。故无需额外开关。
 //
 // 着色变体（对应 ShaderVariant）：同一 shader module 通过不同 @fragment 入口提供
 // 多种着色方程，后端按 (topology, variant) 预建 pipeline 并查表选择：
@@ -31,13 +37,21 @@ struct Uniforms {
     color: vec4<f32>,
 };
 
+// 场景级光源（B1-A，binding 3，非 dynamic）。
+// counts.x = 方向光数量；counts.y = 环境光占比（ambient）。
+// dirs[i].xyz = 光方向（世界空间，从光源指向场景）；dirs[i].w = 强度。
+// colors[i] = 光的颜色（rgb；alpha 不参与光照）。
+const MAX_LIGHTS: u32 = 4u;
+struct Lights {
+    counts: vec4<f32>,
+    dirs: array<vec4<f32>, 4>,
+    colors: array<vec4<f32>, 4>,
+};
+
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var t: texture_2d<f32>;
 @group(0) @binding(2) var s: sampler;
-
-// 头顶平行光方向（模型空间）与环境光占比。
-const LIGHT_DIR: vec3<f32> = vec3<f32>(0.0, 0.0, 1.0);
-const AMBIENT: f32 = 0.2;
+@group(0) @binding(3) var<uniform> lights: Lights;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -74,7 +88,13 @@ fn fs_flat(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_lambert(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex = textureSample(t, s, in.uv);
     let n = normalize(in.normal);
-    let lit = AMBIENT + (1.0 - AMBIENT) * max(dot(n, LIGHT_DIR), 0.0);
+    // 环境光 + 全部方向光的朗伯项累加（B1-A）。默认场景 = 单方向光 (0,0,1)
+    // 纯白强度 1，逐位等于旧硬编码 `lit = AMBIENT + (1-AMBIENT)*max(dot(n, L), 0.0)`。
+    var lit = vec3<f32>(lights.counts.y);
+    for (var i = 0u; i < u32(lights.counts.x); i = i + 1u) {
+        let lam = max(dot(n, lights.dirs[i].xyz), 0.0);
+        lit += (1.0 - lights.counts.y) * lights.dirs[i].w * lam * lights.colors[i].rgb;
+    }
     // `color * lit * (1 - tex.a)`：光照只调制材质色；墨迹（预乘 alpha）直接盖上，
     // 不被 `lit` 压暗（否则最暗处公式会变成 0.2 的深灰）。
     let albedo = tex.rgb + in.color.rgb * lit * (1.0 - tex.a);

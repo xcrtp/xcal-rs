@@ -26,6 +26,7 @@ pub mod draw;
 pub mod draw_queue_3d;
 pub mod filters;
 pub mod frame;
+pub mod light_queue;
 pub mod painter_2d;
 pub mod painter_3d;
 pub mod record_systems;
@@ -75,6 +76,7 @@ pub use ze_notion::MeasureSpace;
 // ─── 3D 队列 / 绘制器 ─────────────────────────────────────────────────────
 pub use draw_queue_3d::{DrawQueue3D, LineDraw, MeshDraw};
 pub use painter_3d::Painter3D;
+pub use light_queue::{DirectionalLightRecord, LightQueue};
 
 // ─── 视口（纯数据） ───────────────────────────────────────────────────────
 pub use viewport::Viewport;

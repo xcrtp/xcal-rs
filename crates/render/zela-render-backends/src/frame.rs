@@ -7,7 +7,7 @@
 // 本模块**不依赖 `zela-scene`**（S2 CI 规则）：`SceneLayer` 定义在 `zela-render`。
 
 use ze_object::LayerKind;
-use zela_render::{FrameInputs, SceneLayer};
+use zela_render::{FrameInputs, LightQueue, SceneLayer};
 
 use crate::scene_callback::SceneCompositorCallback;
 use crate::wgpu_2d::{Recorded2D, snapshot_queue};
@@ -46,12 +46,15 @@ pub fn build_scene_callback(input: FrameInputs<'_>) -> Option<SceneCompositorCal
         .map(|queue| queue.0.clone())
         .unwrap_or_default();
     let filters = input.filters.cloned().unwrap_or_default();
+    // 光源可缺席（默认光照）—— 用栈上默认空队列兜底，语义与 `LightQueue::new()` 相同。
+    let default_lights = LightQueue::new();
 
     Some(SceneCompositorCallback::new(
         input.viewport,
         layers,
         input.queue_2d,
         input.queue_3d,
+        input.lights.unwrap_or(&default_lights),
         content,
         morphs,
         reveals,

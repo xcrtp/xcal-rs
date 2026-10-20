@@ -12,6 +12,8 @@ pub use ze_resource::render_backend::{AccessError, GpuHandle, GpuResourceId};
 
 #[cfg(feature = "wgpu")]
 use crate::render_layer::RenderLayer;
+#[cfg(feature = "wgpu")]
+use crate::light_queue::DirectionalLightRecord;
 
 // ─── RenderBackend trait（资源型，wgpu） ──────────────────────────────────
 
@@ -63,6 +65,14 @@ pub trait RenderBackend3D {
     /// begin render pass（目标 = layer.target，clear 黑色）→
     /// 绘制 `layer.draw_queue` 全部内容 → end pass。
     ///
+    /// `lights` 为本帧场景光源快照（空 = 默认光照；B1-A 起显式传入，
+    /// 保证 `--script == --bundle` 下灯光可对拍）。
+    ///
     /// 调用方负责提交 encoder（`queue.submit`）。
-    fn submit_layer(&self, layer: &RenderLayer, encoder: &mut wgpu::CommandEncoder);
+    fn submit_layer(
+        &self,
+        layer: &RenderLayer,
+        encoder: &mut wgpu::CommandEncoder,
+        lights: &[DirectionalLightRecord],
+    );
 }

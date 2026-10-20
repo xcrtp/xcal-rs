@@ -18,7 +18,7 @@ use zela_scene::domain::{LayerBlend, LayerId, LayerKind};
 use zela_scene::scene::components::{Material3D, MeshGeometry};
 use ze_object::{Camera3D, Projection};
 use zela_scene::scene::primitives::wireframe_cube;
-use zela_render::{DrawQueue, DrawQueue3D};
+use zela_render::{DrawQueue, DrawQueue3D, LightQueue};
 use zela_render_backends::{
     Compositor, SceneCompositorCallback, SceneLayer, WgpuBackend3D,
 };
@@ -63,11 +63,13 @@ impl eframe::App for Cube3dApp {
             opacity: 1.0,
         }];
         let queue_2d = DrawQueue::new(); // 本 demo 无 2D 图层
+        let lights = LightQueue::new(); // 默认光照：单方向光 (0,0,1) + ambient 0.2
         let callback = SceneCompositorCallback::new(
             viewport,
             layers,
             &queue_2d,
             &queue,
+            &lights,
             Vec::new(),
             Vec::new(),
             // R0：本 demo 不含书写动画项。

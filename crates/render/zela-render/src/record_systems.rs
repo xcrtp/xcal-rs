@@ -46,7 +46,7 @@ use std::sync::Arc;
 use zela_scene::contract::{SceneRead, WorldView};
 use zela_scene::domain::ContentTextureSpec;
 use zela_scene::scene::components::{
-    ContentTextureItem, Material3D, MeshGeometry, MorphShape, Reveal,
+    ContentTextureItem, Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal,
 };
 use zela_scene::transform_hierarchy::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
@@ -59,6 +59,7 @@ use crate::draw::{
     push_reveal_item, record_path_stroke, record_scene_tagged_with, visible_for,
 };
 use crate::draw_queue_3d::DrawQueue3D;
+use crate::light_queue::{DirectionalLightRecord, LightQueue};
 use crate::view_rect::ViewRect;
 use ze_render_ir::StrokeSolid;
 // N5：组级开关（可缺席资源 ⇒ 缺席 = 所有组可见）。
@@ -274,7 +275,8 @@ impl System for ContentTextureRecordSystem {
 // ─── SceneRecord3DSystem（A6：从 app 归位到渲染层）─────────────────────────
 
 /// 3D 图层录制（RenderCommit）：每帧清空 [`DrawQueue3D`]，把世界中的全部
-/// `Arc<MeshGeometry>`（带可选 [`Material3D`] 与可选 [`Transform`]）录进队列。
+/// `Arc<MeshGeometry>`（带可选 [`Material3D`] 与可选 [`Transform`]）录进队列；
+/// 同时把世界中的全部 [`Light`] 组件录进 [`LightQueue`]（B1-A 光照数据化）。
 ///
 /// 几何以 `Arc` 持有：此处仅克隆引用计数，不再深拷贝顶点数据。
 pub struct SceneRecord3DSystem;
@@ -282,10 +284,29 @@ impl System for SceneRecord3DSystem {
     // S1：3D 录制改消费 `WorldTransforms`（世界矩阵优先，缺席回退 local ——
     // 缺席行为逐位不变）。Reads 变更影响 system 注册相位，见 `register_record_systems`。
     type Reads = (WorldTransforms,);
-    type Writes = (DrawQueue3D,);
+    // B1-A：新增写集 `LightQueue`（光源快照；缺资源时由 `init_resources` 注入默认空队列）。
+    type Writes = (DrawQueue3D, LightQueue);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let worlds = ctx.get::<WorldTransforms>().cloned();
+        // 光源：清空并录制。方向光的 `direction` 声明在组件内（**单一真源**：
+        // `Light` 不带 position；B1-B 点光位置走 `Transform` → `WorldTransforms`）。
+        ctx.with_world_and_resource_mut::<LightQueue, _>(|world, lights| {
+            lights.clear();
+            let scene = WorldView::new(world);
+            scene.for_each::<Light>(|_, light| {
+                // B1-B 将追加 `LightKind::Point`（位置走 Transform → WorldTransforms）。
+                match light.kind {
+                    LightKind::Directional { direction } => {
+                        lights.directional.push(DirectionalLightRecord::new(
+                            direction,
+                            light.color,
+                            light.intensity,
+                        ));
+                    }
+                }
+            });
+        });
         ctx.with_world_and_resource_mut::<DrawQueue3D, _>(|world, queue| {
             queue.clear();
             let scene = WorldView::new(world);
@@ -754,5 +775,48 @@ mod tests {
             expected,
             "无 Parent 时 3D model 必须逐位等于 local matrix"
         );
+    }
+
+    /// **B1-A 验收**：世界中的 `Light` 组件被录进 `LightQueue`（方向光逐字段保留，
+    /// 颜色归一化到 [0,1]、强度原样）。`Light` **不带 position**（单一真源）。
+    #[test]
+    fn record_directional_lights_into_queue() {
+        use ze_notion::Color32;
+
+        let mut world = World::new();
+        world.spawn((
+            Light::directional_with(ze_notion::Vec3::new(0.0, 0.0, 1.0), Color32::WHITE, 1.0),
+        ));
+        world.spawn((
+            Light::directional_with(
+                ze_notion::Vec3::new(-1.0, 0.5, 0.2),
+                Color32::new(255, 128, 0, 255),
+                2.0,
+            ),
+        ));
+
+        let mut res = Resources::new();
+        res.insert(DrawQueue3D::new());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let lq = sched.resources().get::<LightQueue>().unwrap();
+        assert_eq!(lq.directional.len(), 2);
+        // 第一光：(0,0,1) 纯白强度 1
+        assert_eq!(
+            lq.directional[0].direction,
+            ze_notion::Vec3::new(0.0, 0.0, 1.0)
+        );
+        assert_eq!(lq.directional[0].color, [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(lq.directional[0].intensity, 1.0);
+        // 第二光：颜色归一化、强度保留
+        assert_eq!(
+            lq.directional[1].direction,
+            ze_notion::Vec3::new(-1.0, 0.5, 0.2)
+        );
+        assert_eq!(lq.directional[1].color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        assert_eq!(lq.directional[1].intensity, 2.0);
     }
 }

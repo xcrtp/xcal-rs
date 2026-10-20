@@ -268,6 +268,7 @@ mod tests {
             }],
             &q,
             &DrawQueue3D::new(),
+            &zela_render::LightQueue::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

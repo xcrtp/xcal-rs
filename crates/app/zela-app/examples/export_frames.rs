@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use ze_notion::{Rect2D, Vec2};
 use zela_app::export::{ExportSpec, export_sequence};
 use zela_app::{build_script_runtime, language_from_path};
-use zela_render::{DrawQueue, DrawQueue3D, PostFilterChain, ViewRect};
+use zela_render::{DrawQueue, DrawQueue3D, LightQueue, PostFilterChain, ViewRect};
 use zela_render_backends::{RenderContext, SceneCompositorCallback};
 use zela_scene::DriverCommand;
 use zela_scene::contract::WorldView;
@@ -133,6 +133,7 @@ fn main() {
                     Vec::new(),
                     &DrawQueue::new(),
                     &DrawQueue3D::new(),
+                    &LightQueue::new(),
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),

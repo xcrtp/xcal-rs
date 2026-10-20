@@ -72,16 +72,17 @@ let ctx = RenderContext::from_render_state(rs);
   `UniformArena`（256B 对齐 dynamic offset），使用 `wgpu 30` 新 API
   （`draw(0..n, 0..1)` 范围语法）。
 - **每帧流程**：
-  1. `prepare_draws(&device, &queue, view_proj, &meshes, &lines) -> Frame3DData`
-     按几何版本/内容寻址复用 vertex buffer、uniform 走 arena，生成 Vec\<PreparedDraw3D\>
+  1. `prepare_draws(&device, &queue, view_proj, &meshes, &lines, &lights) -> Frame3DData`
+     按几何版本/内容寻址复用 vertex buffer、uniform 走 arena，生成 Vec\<PreparedDraw3D\>；
+     `lights` 每帧覆写**场景级**光源 uniform（binding 3，空 = 默认光照）
   2. `record_prepared(&mut rpass, &draws)` 提交 draw
-  3. `render_layer_offscreen(encoder, layer_id, view_proj, viewport, meshes, lines)`
+  3. `render_layer_offscreen(encoder, layer_id, view_proj, viewport, meshes, lines, lights)`
      渲染到该图层**自己的离屏纹理 + 深度纹理**（透明清屏），交合成器按声明序混合
 - **Cube WGSL Shader**：位于 `shaders/cube.wgsl`，单 VS + FS；VS 输入
   `vec3<f32>` 位置 + `vec2<f32>` UV + `vec3<f32>` 法线，FS 返回
-  `color * lit * textureSample(t, s, uv)`，其中 `lit` 为固定头顶方向
-  `L = (0,0,1)` 的 Lambert（`ambient = 0.2`）；无法线几何 `lit = 1` 故外观不变
-  （RC 补充）。
+  `color * lit * textureSample(t, s, uv)`，其中 `lit` 为场景级光源 uniform 驱动
+  的多方向光 Lambert（B1-A：默认场景 = 单方向光 `(0,0,1)` + `ambient = 0.2`，
+  与旧硬编码逐位一致）；无法线几何 `lit = 1` 故外观不变（RC 补充）。
 - 兼容 `glam 0.33`：经唯一数学入口 `ze_notion::proj` 使用
   `directx::perspective` / `orthographic` 与 `look_at_mat4`
   （移除旧 `perspective_rh` / `look_at_rh`）。
@@ -98,10 +99,12 @@ let ctx = RenderContext::from_render_state(rs);
 > `paint()` 拿到**同一帧**，于是把同一张离屏纹理画两遍（现象：顺序 A 只见 3D、
 > 顺序 B 只见 2D）。合成本就是"一次性消费全部图层"的操作，结构上不该每层一个回调。
 
-- `SceneCompositorCallback::new(viewport_points, layers, queue_2d, queue_3d, content, morphs)`：
+- `SceneCompositorCallback::new(viewport_points, layers, queue_2d, queue_3d, lights, content, morphs, reveals, filters)`：
   `layers` 是**有效序**（翻转开关已生效）的 `Vec<SceneLayer { id, kind, blend, opacity }>`；
+  `lights` 是本帧光源快照（B1-A；空 = 默认光照）；
   `content` 是内容纹理层（S3-3）的当帧快照（层 id → 已降级的 2D 命令）；
-  `morphs` 是形变项（S4.3）快照，随 2D 图层走形变管线。
+  `morphs` 是形变项（S4.3）快照，随 2D 图层走形变管线；
+  `reveals` 是书写动画项（R0）快照；`filters` 是合成后滤镜链。
 - `prepare`：逐层渲染离屏（2D → `WgpuBackend2D`，3D → `WgpuBackend3D::render_layer_offscreen`）
   → 按**声明序**收集全部 `CompositeOp` → **一次** `Compositor::prepare` → 单个
   `CompositeFrame`，与各层 uniform arena buffer（保活）一起存入 TypeMap 的

@@ -20,7 +20,8 @@ use zela_scene::domain::{
 use zela_schedule::resource::Resources;
 
 use crate::{
-    ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, PostFilterChain, RevealQueue, ViewRect,
+    ContentTextureQueue, DrawQueue, DrawQueue3D, LightQueue, MorphQueue, PostFilterChain,
+    RevealQueue, ViewRect,
 };
 
 /// 一个**后端中立**的图层声明：只带合成所需的最小信息。
@@ -165,6 +166,8 @@ pub struct FrameInputs<'a> {
     pub queue_2d: &'a DrawQueue,
     /// 当帧 3D 队列。
     pub queue_3d: &'a DrawQueue3D,
+    /// 当帧光源快照（可缺席 ⇒ 后端兜底默认光照）。
+    pub lights: Option<&'a LightQueue>,
     /// 内容纹理层的当帧录制结果（可缺席）。
     pub content: Option<&'a ContentTextureQueue>,
     /// 形变项（可缺席）。
@@ -203,6 +206,7 @@ pub fn build_frame_inputs<'a>(
         flip_layer_order: options.flip_layer_order,
         queue_2d,
         queue_3d,
+        lights: res.get::<LightQueue>(),
         content: res.get::<ContentTextureQueue>(),
         morphs: res.get::<MorphQueue>(),
         reveals: res.get::<RevealQueue>(),

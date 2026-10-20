@@ -27,7 +27,7 @@
 
 use ze_object::LayerKind;
 use ze_render_ir::LayerId;
-use zela_render::{DrawQueue, DrawQueue3D, MorphItem, PostFilterChain, RevealItem, Viewport};
+use zela_render::{DirectionalLightRecord, DrawQueue, DrawQueue3D, LightQueue, MorphItem, PostFilterChain, RevealItem, Viewport};
 use zela_render::draw_queue_3d::{LineDraw, MeshDraw};
 use ze_notion::{Rect2D, Vec2 as GeoVec2};
 
@@ -82,6 +82,9 @@ pub struct SceneCompositorCallback {
     /// 3D mesh / line 快照（仅当有效序中存在 3D 图层时才采集）。
     meshes_3d: Vec<MeshDraw>,
     lines_3d: Vec<LineDraw>,
+    /// B1-A：3D 光源快照（仅当有效序中存在 3D 图层时才采集）。
+    /// 空 ⇒ 后端兜底默认光照（单方向光 (0,0,1) + ambient 0.2）。
+    lights_3d: Vec<DirectionalLightRecord>,
     /// 形变项快照（S4.3）：`from`/`to` 常量 + 逐帧 `t`，由 2D 图层用形变管线渲染。
     morphs: Vec<MorphItem>,
     /// 书写动画项快照（R0）：路径常量 + 逐帧区间 `[start, end]`，由 2D 图层渲染。
@@ -89,7 +92,7 @@ pub struct SceneCompositorCallback {
 }
 
 impl SceneCompositorCallback {
-    /// 从视口矩形、图层声明（有效序）与两个绘制队列构造。
+    /// 从视口矩形、图层声明（有效序）、两个绘制队列与光源队列构造。
     ///
     /// 只快照**有效序里真的存在**的那一类队列（S4.1 后仅内容纹理层那个例外），
     /// 避免白拷一份用不到的几何。
@@ -98,6 +101,7 @@ impl SceneCompositorCallback {
         layers: Vec<SceneLayer>,
         queue_2d: &DrawQueue,
         queue_3d: &DrawQueue3D,
+        lights: &LightQueue,
         content: Vec<(LayerId, Vec<Recorded2D>)>,
         morphs: Vec<MorphItem>,
         reveals: Vec<RevealItem>,
@@ -112,6 +116,12 @@ impl SceneCompositorCallback {
             content,
             meshes_3d: if needs_3d { queue_3d.meshes().to_vec() } else { Vec::new() },
             lines_3d: if needs_3d { queue_3d.lines().to_vec() } else { Vec::new() },
+            // B1-A：光源快照（仅 3D 图层存在时采集；空 ⇒ 后端默认光照）。
+            lights_3d: if needs_3d {
+                lights.directional.clone()
+            } else {
+                Vec::new()
+            },
             // 形变项属于 2D 图层；没有 2D 图层时无处渲染，直接丢弃。
             morphs: if needs_2d { morphs } else { Vec::new() },
             // 书写动画项同理（R0）。
@@ -371,6 +381,7 @@ impl SceneCompositorCallback {
                             viewport,
                             &self.meshes_3d,
                             &self.lines_3d,
+                            &self.lights_3d,
                         )
                     }) else {
                         continue;
@@ -658,6 +669,7 @@ mod tests {
             layers,
             &DrawQueue::new(),
             &queue_3d,
+            &LightQueue::new(),
             content,
             Vec::new(),
             Vec::new(),
@@ -864,6 +876,7 @@ mod tests {
                 layers.clone(),
                 &queue_2d,
                 &queue_3d,
+                &LightQueue::new(),
                 content.clone(),
                 Vec::new(),
                 Vec::new(),
