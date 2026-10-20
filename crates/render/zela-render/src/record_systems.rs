@@ -213,11 +213,11 @@ impl System for RevealRecordSystem {
                 if !visible_for(&scene, id, camera_tag, &groups) {
                     return;
                 }
-                // S2（G4）+ S5：Reveal 消费**世界**变换（世界累乘优先，缺席回退 local）。
+                // S2（G4）+ S5：Reveal 消费**世界**变换（S1：2D 读投影视图；世界累乘优先，缺席回退 local）。
                 let local = scene.with::<ze_object::Transform, _>(id, |tr| tr.to_affine2d());
                 let transform = worlds
                     .as_ref()
-                    .and_then(|w| w.get(id).copied())
+                    .and_then(|w| w.get2d(id))
                     .or(local);
                 let path = match transform {
                     Some(transform) => reveal.path.transformed(&transform),
@@ -279,10 +279,13 @@ impl System for ContentTextureRecordSystem {
 /// 几何以 `Arc` 持有：此处仅克隆引用计数，不再深拷贝顶点数据。
 pub struct SceneRecord3DSystem;
 impl System for SceneRecord3DSystem {
-    type Reads = ();
+    // S1：3D 录制改消费 `WorldTransforms`（世界矩阵优先，缺席回退 local ——
+    // 缺席行为逐位不变）。Reads 变更影响 system 注册相位，见 `register_record_systems`。
+    type Reads = (WorldTransforms,);
     type Writes = (DrawQueue3D,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        let worlds = ctx.get::<WorldTransforms>().cloned();
         ctx.with_world_and_resource_mut::<DrawQueue3D, _>(|world, queue| {
             queue.clear();
             let scene = WorldView::new(world);
@@ -292,8 +295,13 @@ impl System for SceneRecord3DSystem {
                 let material = scene
                     .with::<Material3D, _>(id, |material| *material)
                     .unwrap_or_default();
-                let model = scene
-                    .with::<Transform, _>(id, |transform| transform.matrix())
+                // S1：世界矩阵优先（父子累乘结果）；缺席该对象 / WorldTransforms ⇒ local，
+                // 逐位等于旧行为（`transform.matrix()`）。
+                let model = worlds
+                    .as_ref()
+                    .and_then(|w| w.get(id))
+                    .map(|t| t.matrix)
+                    .or_else(|| scene.with::<Transform, _>(id, |transform| transform.matrix()))
                     .unwrap_or(ze_notion::Mat4::IDENTITY);
                 items.push((Arc::clone(mesh), model, material));
             });
