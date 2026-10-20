@@ -532,11 +532,11 @@ fn record_group<S, A, B>(
         if !visible_for(scene, id, camera_tag, groups) {
             return;
         }
-        // S5：优先用父子累乘的**世界仿射**；缺席 WorldTransforms / 该对象 ⇒ local。
+        // S5：优先用父子累乘的**世界矩阵**（S1：2D 读投影视图）；缺席 WorldTransforms / 该对象 ⇒ local。
         // 无 `Parent` 时 WorldTransforms 存的就是 local 的逐位拷贝 ⇒ 默认行为不变。
         let local = scene.with::<Transform, _>(id, |tr| tr.to_affine2d());
         let obj = worlds
-            .and_then(|w| w.get(id).copied())
+            .and_then(|w| w.get2d(id))
             .or(local);
         let world_t = match obj {
             Some(obj) => obj.compose(*t),
