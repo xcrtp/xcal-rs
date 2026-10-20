@@ -16,3 +16,7 @@
 # id            title              script          payload-hash
 fourier         傅里叶级数展开      fourier.lua     f8ed3eae3a4212edd2235d2975a77cf8bae118a104a96074cc420ae40ee3c210
 storyboard      分镜演示            storyboard.lua  - 
+demo3d          3D 场景             demo3d.lua      - 
+pendulum        钟摆动画            pendulum.lua    - 
+orbit           公转行星            orbit.lua       - 
+spring          弹跳小球            spring.lua      - 

@@ -103,3 +103,8 @@ scene.spawn({
         fov_y = 1.1,
     },
 })
+
+-- 2D 相机（渲染器的 2D 通道要求 Framing2D；本场景无 2D 可绘制对象，仅占位）。
+scene.spawn({
+    Camera2D { center = Vec2 { x = 0.0, y = 0.0 }, scale = 55.0 },
+})
