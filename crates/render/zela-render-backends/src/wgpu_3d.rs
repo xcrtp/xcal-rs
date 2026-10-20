@@ -1077,9 +1077,13 @@ impl WgpuBackend3D {
     /// 把已准备的绘制命令录制进外部 render pass（egui 回调路径）。
     pub fn record_prepared<'a>(&self, draws: &[PreparedDraw3D], rpass: &mut wgpu::RenderPass<'a>) {
         for d in draws {
-            // 点列表当前无 pipeline —— 维持既有行为：跳过（B1-F 改显式报错）。
+            // B1-F（不静默）：点列表在 3D 路径不受支持 —— **显式报错**，不得静默丢弃。
+            // 现状：全仓没有点列表生产者（`cube` / `parametric_surface` 只产三角形与
+            // 线段），一旦触发即说明新增了后端未支持的图元类型，必须当面暴露。
             if d.topology == PrimitiveTopology::Points {
-                continue;
+                panic!(
+                    "不静默：3D 后端不支持点列表拓扑（PrimitiveTopology::Points），拒绝绘制而非静默丢弃"
+                );
             }
             // B1-E：按需构建 + 缓存（key 四维：topology / variant / cull_mode / blending）。
             // 每个 draw 必然命中（未命中即创建）—— 原「回退 Lambert」路径已结构性消失。
@@ -2264,6 +2268,45 @@ mod tests {
             backend.pipeline_count(),
             3,
             "3 条 = 实际绘制过的 key 数，而非 3 variant × 2 topology = 6 条预建"
+        );
+    }
+
+    /// **B1-F 验收（真实设备）**：点列表拓扑 ⇒ **必须显式报错**，不得静默跳过
+    /// （铁律 2「不静默」：丢弃一个 draw 而不报错，会让"画面少东西"无从查起）。
+    ///
+    /// 证伪：若恢复「静默 continue」，本 `should_panic` 测试变红。
+    #[test]
+    #[should_panic(expected = "不静默")]
+    fn test_b1f_points_topology_panics_explicitly() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        let geometry = std::sync::Arc::new(MeshGeometry::new(
+            vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            None,
+            PrimitiveTopology::Points,
+        ));
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-b1f-points-encoder"),
+            });
+        // render_layer_offscreen 内部走 record_prepared，遇到 Points 必须 panic。
+        let _frame = backend.render_layer_offscreen(
+            &mut encoder,
+            LayerId(40),
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            Viewport::full(size, size),
+            &[MeshDraw::new(
+                geometry,
+                Mat4::IDENTITY,
+                Material3D::color(Color32::WHITE),
+            )],
+            &[],
+            &[],
+            &[],
         );
     }
 
