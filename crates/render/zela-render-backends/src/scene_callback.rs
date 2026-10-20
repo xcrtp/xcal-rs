@@ -27,7 +27,10 @@
 
 use ze_object::LayerKind;
 use ze_render_ir::LayerId;
-use zela_render::{DirectionalLightRecord, DrawQueue, DrawQueue3D, LightQueue, MorphItem, PostFilterChain, RevealItem, Viewport};
+use zela_render::{
+    DirectionalLightRecord, DrawQueue, DrawQueue3D, LightQueue, MorphItem, PointLightRecord,
+    PostFilterChain, RevealItem, Viewport,
+};
 use zela_render::draw_queue_3d::{LineDraw, MeshDraw};
 use ze_notion::{Rect2D, Vec2 as GeoVec2};
 
@@ -85,6 +88,8 @@ pub struct SceneCompositorCallback {
     /// B1-A：3D 光源快照（仅当有效序中存在 3D 图层时才采集）。
     /// 空 ⇒ 后端兜底默认光照（单方向光 (0,0,1) + ambient 0.2）。
     lights_3d: Vec<DirectionalLightRecord>,
+    /// B1-B：3D **点光**快照（同样仅 3D 图层存在时采集；空 ⇒ 无点光）。
+    points_3d: Vec<PointLightRecord>,
     /// 形变项快照（S4.3）：`from`/`to` 常量 + 逐帧 `t`，由 2D 图层用形变管线渲染。
     morphs: Vec<MorphItem>,
     /// 书写动画项快照（R0）：路径常量 + 逐帧区间 `[start, end]`，由 2D 图层渲染。
@@ -119,6 +124,12 @@ impl SceneCompositorCallback {
             // B1-A：光源快照（仅 3D 图层存在时采集；空 ⇒ 后端默认光照）。
             lights_3d: if needs_3d {
                 lights.directional.clone()
+            } else {
+                Vec::new()
+            },
+            // B1-B：点光快照（同样仅 3D 图层存在时采集）。
+            points_3d: if needs_3d {
+                lights.points.clone()
             } else {
                 Vec::new()
             },
@@ -382,6 +393,7 @@ impl SceneCompositorCallback {
                             &self.meshes_3d,
                             &self.lines_3d,
                             &self.lights_3d,
+                            &self.points_3d,
                         )
                     }) else {
                         continue;

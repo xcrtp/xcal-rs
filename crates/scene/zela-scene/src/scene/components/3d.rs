@@ -166,13 +166,14 @@ impl Material3D {
 ///
 /// **单一真源**（B1 铁律 3）：本组件**不带 position** —— 光源的位置由
 /// `Transform` → `WorldTransforms`（S1 已接通）提供，避免"位置"出现两份定义。
-/// 方向光无位置概念，其 `direction` 直接声明在组件上。
+/// 方向光无位置概念，其 `direction` 直接声明在组件上；点光的 `range` 是衰减
+/// 半径（**世界单位**），位置走 `Transform`。
 ///
 /// 光照计算在渲染层统一消费：`SceneRecord3DSystem` 每帧把它录进
 /// `LightQueue`，后端据此上传**场景级** light uniform buffer。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Light {
-    /// 光源类型（方向光 / 点光[B1-B]）。
+    /// 光源类型（方向光 / 点光）。
     pub kind: LightKind,
     /// 光的颜色（RGB 调制；alpha 恒 1，不参与光照）。
     pub color: Color32,
@@ -185,6 +186,9 @@ pub struct Light {
 pub enum LightKind {
     /// 方向光：`direction` 是光传播方向（**世界空间**，从光源指向场景）。
     Directional { direction: Vec3 },
+    /// 点光（B1-B）：`range` 是有效半径（世界单位，超出即衰减到 0）。
+    /// **不带 position** —— 位置由同一对象的 `Transform`（→ `WorldTransforms`）提供。
+    Point { range: f32 },
 }
 
 impl Light {
@@ -201,6 +205,24 @@ impl Light {
     pub fn directional_with(direction: Vec3, color: Color32, intensity: f32) -> Self {
         Self {
             kind: LightKind::Directional { direction },
+            color,
+            intensity,
+        }
+    }
+
+    /// 构造点光（强度 1.0、纯白）。位置不在本组件，由 `Transform` 提供。
+    pub fn point(range: f32) -> Self {
+        Self {
+            kind: LightKind::Point { range },
+            color: Color32::WHITE,
+            intensity: 1.0,
+        }
+    }
+
+    /// 构造点光（自定义颜色与强度）。
+    pub fn point_with(range: f32, color: Color32, intensity: f32) -> Self {
+        Self {
+            kind: LightKind::Point { range },
             color,
             intensity,
         }

@@ -76,7 +76,7 @@ pub use ze_notion::MeasureSpace;
 // ─── 3D 队列 / 绘制器 ─────────────────────────────────────────────────────
 pub use draw_queue_3d::{DrawQueue3D, LineDraw, MeshDraw};
 pub use painter_3d::Painter3D;
-pub use light_queue::{DirectionalLightRecord, LightQueue};
+pub use light_queue::{DirectionalLightRecord, LightQueue, PointLightRecord};
 
 // ─── 视口（纯数据） ───────────────────────────────────────────────────────
 pub use viewport::Viewport;

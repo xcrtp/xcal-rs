@@ -59,7 +59,7 @@ use crate::draw::{
     push_reveal_item, record_path_stroke, record_scene_tagged_with, visible_for,
 };
 use crate::draw_queue_3d::DrawQueue3D;
-use crate::light_queue::{DirectionalLightRecord, LightQueue};
+use crate::light_queue::{DirectionalLightRecord, LightQueue, PointLightRecord};
 use crate::view_rect::ViewRect;
 use ze_render_ir::StrokeSolid;
 // N5：组级开关（可缺席资源 ⇒ 缺席 = 所有组可见）。
@@ -289,19 +289,36 @@ impl System for SceneRecord3DSystem {
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
         let worlds = ctx.get::<WorldTransforms>().cloned();
-        // 光源：清空并录制。方向光的 `direction` 声明在组件内（**单一真源**：
-        // `Light` 不带 position；B1-B 点光位置走 `Transform` → `WorldTransforms`）。
+        // 光源：清空并录制。方向光的 `direction` 声明在组件内；点光（B1-B）的
+        // **位置**由 `Transform` → `WorldTransforms` 解析 —— `Light` 组件本身
+        // 不带 position（单一真源，铁律 3）。
         ctx.with_world_and_resource_mut::<LightQueue, _>(|world, lights| {
             lights.clear();
             let scene = WorldView::new(world);
-            scene.for_each::<Light>(|_, light| {
-                // B1-B 将追加 `LightKind::Point`（位置走 Transform → WorldTransforms）。
+            scene.for_each::<Light>(|id, light| {
                 match light.kind {
                     LightKind::Directional { direction } => {
                         lights.directional.push(DirectionalLightRecord::new(
                             direction,
                             light.color,
                             light.intensity,
+                        ));
+                    }
+                    LightKind::Point { range } => {
+                        // 位置解析：世界矩阵优先（父子累乘的平移列），缺席
+                        // WorldTransforms / 该对象 ⇒ local `Transform::position`，
+                        // 再无 ⇒ 原点（缺位置对象默认在原点，不静默丢弃光源）。
+                        let position = worlds
+                            .as_ref()
+                            .and_then(|w| w.get(id))
+                            .map(|t| t.matrix.transform_point3(ze_notion::Vec3::ZERO))
+                            .or_else(|| scene.with::<Transform, _>(id, |t| t.position))
+                            .unwrap_or_default();
+                        lights.points.push(PointLightRecord::new(
+                            position,
+                            light.color,
+                            light.intensity,
+                            range,
                         ));
                     }
                 }
@@ -818,5 +835,55 @@ mod tests {
         );
         assert_eq!(lq.directional[1].color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
         assert_eq!(lq.directional[1].intensity, 2.0);
+    }
+
+    /// **B1-B 验收**：点光被录进 `LightQueue.points`，且位置**来自世界矩阵**
+    /// （父子累乘），而非 `Light` 组件字段（单一真源：Light 不带 position）。
+    #[test]
+    fn record_point_lights_resolve_world_position() {
+        use ze_notion::Color32;
+        use zela_scene::contract::object_id_of;
+        use zela_scene::scene::components::Light;
+        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+
+        let mut world = World::new();
+        // 父平移 (10, 0, 0)；点光挂在父下，local 平移 (0, 5, 0)
+        // ⇒ 世界位置 = (10, 5, 0)。
+        let parent = world.spawn((
+            ze_object::Transform {
+                position: ze_notion::Vec3::new(10.0, 0.0, 0.0),
+                ..ze_object::Transform::default()
+            },
+        ));
+        let parent_id = object_id_of(parent);
+        world.spawn((
+            Light::point_with(3.0, Color32::new(255, 128, 0, 255), 2.0),
+            ze_object::Transform {
+                position: ze_notion::Vec3::new(0.0, 5.0, 0.0),
+                ..ze_object::Transform::default()
+            },
+            ze_scene_contract::Parent(parent_id),
+        ));
+
+        let mut res = Resources::new();
+        res.insert(DrawQueue3D::new());
+        let mut sched = Scheduler::new(world, res);
+        // 世界矩阵由 TransformHierarchySystem 累乘（Prepare 相位，早于录制）。
+        sched.add_system(Phase::Prepare, TransformHierarchySystem);
+        sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let lq = sched.resources().get::<LightQueue>().unwrap();
+        assert_eq!(lq.points.len(), 1);
+        let p = &lq.points[0];
+        // 世界位置 = 父 (10,0,0) + local (0,5,0) = (10,5,0)。
+        assert_eq!(p.position, ze_notion::Vec3::new(10.0, 5.0, 0.0));
+        // range / 颜色（归一化）/ 强度原样保留。
+        assert_eq!(p.range, 3.0);
+        assert_eq!(p.color, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+        assert_eq!(p.intensity, 2.0);
+        // 方向光队列不受影响（此场景无方向光）。
+        assert!(lq.directional.is_empty());
     }
 }

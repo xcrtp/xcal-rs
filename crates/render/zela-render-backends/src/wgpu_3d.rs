@@ -60,16 +60,17 @@ use crate::gpu_util::{UniformArena, bytes_of};
 use ze_notion::Color32;
 use zela_render::draw_queue_3d::{LineDraw, MeshDraw};
 use zela_render::{
-    DirectionalLightRecord, GpuHandle, RenderBackend3D, RenderLayer, RenderTarget, ResourceCache,
-    ResourceKey, Viewport,
+    DirectionalLightRecord, GpuHandle, PointLightRecord, RenderBackend3D, RenderLayer,
+    RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
 
-/// 默认着色器（cube.wgsl）：uniform = mat4 mvp + vec4 color，纹理 = 颜色调制。
+/// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");
 
-/// uniform 块大小：mat4x4（64 字节）+ vec4（16 字节）。
-pub const UNIFORM_SIZE: u64 = 80;
+/// uniform 块大小：mat4x4 mvp（64）+ mat4x4 model（64）+ vec4 color（16）= 144 字节。
+/// `model` 供片元取**世界位置**（B1-B 点光衰减用），顶点着色 `world_pos = model * pos`。
+pub const UNIFORM_SIZE: u64 = 144;
 
 /// `min_binding_size` 的常量形式：`UNIFORM_SIZE` 非零在编译期即可判定，
 /// 避免调用点出现"不可能失败"的运行时 `unwrap()`。
@@ -78,15 +79,18 @@ const UNIFORM_MIN_BINDING_SIZE: NonZeroU64 = match NonZeroU64::new(UNIFORM_SIZE)
     None => panic!("UNIFORM_SIZE must be non-zero"),
 };
 
-// ─── B1-A：场景级光源 uniform（binding 3，非 dynamic，所有 draw 共享一份）───
+// ─── B1-A/B：场景级光源 uniform（binding 3，非 dynamic，所有 draw 共享一份）───
 
-/// 场景级光源 uniform 块大小：`counts`(16) + `MAX_DIRECTIONAL_LIGHTS`×方向光(64)
-/// + `MAX_DIRECTIONAL_LIGHTS`×颜色(64) = 144 字节。与 `cube.wgsl` 的 `Lights`
-/// 结构逐字段对应。
-pub const LIGHT_UNIFORM_SIZE: u64 = 144;
+/// 场景级光源 uniform 块大小：`counts`(16) + 方向光 dirs(4×16=64)
+/// + 方向光 colors(64) + 点光 pos/强度(4×16=64) + 点光 color/range(64) = 272 字节。
+/// 与 `cube.wgsl` 的 `Lights` 结构逐字段对应（全部 `vec4<f32>`，无对齐陷阱）。
+pub const LIGHT_UNIFORM_SIZE: u64 = 272;
 
 /// 方向光数量上限（**编译期常量**，超限显式报错 —— 铁律 2：不静默丢弃）。
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
+
+/// 点光数量上限（B1-B，**编译期常量**，超限显式报错 —— 铁律 2）。
+pub const MAX_POINT_LIGHTS: usize = 4;
 
 /// `LIGHT_UNIFORM_SIZE` 的常量形式（同 `UNIFORM_MIN_BINDING_SIZE`）。
 const LIGHT_MIN_BINDING_SIZE: NonZeroU64 = match NonZeroU64::new(LIGHT_UNIFORM_SIZE) {
@@ -692,9 +696,15 @@ impl WgpuBackend3D {
         guard.get(&layer_id).expect("depth target").view.clone()
     }
 
-    /// 写入 uniform 块（mvp 64 字节 + color 16 字节 = 80 字节）。
-    pub fn write_uniforms(queue: &wgpu::Queue, buffer: &wgpu::Buffer, mvp: Mat4, color: Color32) {
-        queue.write_buffer(buffer, 0, &uniform_bytes(mvp, color));
+    /// 写入 uniform 块（mvp 64 + model 64 + color 16 = 144 字节）。
+    pub fn write_uniforms(
+        queue: &wgpu::Queue,
+        buffer: &wgpu::Buffer,
+        mvp: Mat4,
+        model: Mat4,
+        color: Color32,
+    ) {
+        queue.write_buffer(buffer, 0, &uniform_bytes(mvp, model, color));
     }
 
     /// 推进 mesh_cache 的「延迟销毁」提交帧计数器（destroyer.on_submit）。
@@ -724,11 +734,12 @@ impl WgpuBackend3D {
         meshes: &[MeshDraw],
         lines: &[LineDraw],
         lights: &[DirectionalLightRecord],
+        point_lights: &[PointLightRecord],
     ) -> Frame3DData {
-        // B1-A：每帧覆写场景级光源 uniform。**空灯光 = 默认光照**（单方向光
+        // B1-A/B：每帧覆写场景级光源 uniform。**空灯光 = 默认光照**（单方向光
         // (0,0,1) + ambient 0.2，与硬编码时代逐位一致）；超限**显式报错**
         // （铁律 2：不静默丢弃）。
-        let bytes = if lights.is_empty() {
+        let bytes = if lights.is_empty() && point_lights.is_empty() {
             default_light_bytes()
         } else {
             assert!(
@@ -736,7 +747,12 @@ impl WgpuBackend3D {
                 "方向光数量 {} 超过上限 {MAX_DIRECTIONAL_LIGHTS}（不静默丢弃，请调整场景光源数）",
                 lights.len(),
             );
-            pack_light_bytes(lights, DEFAULT_AMBIENT)
+            assert!(
+                point_lights.len() <= MAX_POINT_LIGHTS,
+                "点光数量 {} 超过上限 {MAX_POINT_LIGHTS}（不静默丢弃，请调整场景光源数）",
+                point_lights.len(),
+            );
+            pack_light_bytes(lights, point_lights, DEFAULT_AMBIENT)
         };
         queue.write_buffer(&self.light_buffer, 0, &bytes);
 
@@ -841,7 +857,8 @@ impl WgpuBackend3D {
             };
 
             let mvp = view_proj * md.transform;
-            let bytes = uniform_bytes(mvp, md.material.color);
+            // B1-B：`model` 单独入 uniform，片元据此算世界位置（点光衰减用）。
+            let bytes = uniform_bytes(mvp, md.transform, md.material.color);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -917,7 +934,8 @@ impl WgpuBackend3D {
                 copy
             };
 
-            let bytes = uniform_bytes(view_proj, line.color);
+            // line 顶点已是世界空间坐标 ⇒ `model = IDENTITY`，`world_pos = pos`。
+            let bytes = uniform_bytes(view_proj, Mat4::IDENTITY, line.color);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -1033,8 +1051,17 @@ impl WgpuBackend3D {
         meshes: &[MeshDraw],
         lines: &[LineDraw],
         lights: &[DirectionalLightRecord],
+        point_lights: &[PointLightRecord],
     ) -> Layer3DFrame {
-        let frame = self.prepare_draws(&self.device, &self.queue, view_proj, meshes, lines, lights);
+        let frame = self.prepare_draws(
+            &self.device,
+            &self.queue,
+            view_proj,
+            meshes,
+            lines,
+            lights,
+            point_lights,
+        );
         let offscreen = self.offscreen_view(&self.device, layer_id, viewport);
         // RC.3：本层深度目标（与离屏颜色目标同尺寸），清为最远（1.0）。
         let depth_view = self.depth_view(&self.device, layer_id, viewport.w, viewport.h);
@@ -1087,6 +1114,7 @@ impl RenderBackend3D for WgpuBackend3D {
         layer: &RenderLayer,
         encoder: &mut wgpu::CommandEncoder,
         lights: &[DirectionalLightRecord],
+        point_lights: &[PointLightRecord],
     ) {
         let view_proj = layer.camera.view_projection(layer.viewport.aspect());
         let frame = self.prepare_draws(
@@ -1096,6 +1124,7 @@ impl RenderBackend3D for WgpuBackend3D {
             layer.draw_queue.meshes(),
             layer.draw_queue.lines(),
             lights,
+            point_lights,
         );
 
         // RC.3：本层深度目标（尺寸取自颜色目标），清为最远（1.0）。
@@ -1141,36 +1170,41 @@ impl RenderBackend3D for WgpuBackend3D {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-/// 组装 uniform 字节：mat4 列主序 64 字节 + vec4 16 字节。
-fn uniform_bytes(mvp: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
+/// 组装 uniform 字节：mat4 mvp（64，列主序）+ mat4 model（64）+ vec4 color（16）。
+fn uniform_bytes(mvp: Mat4, model: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
     let mut data = [0u8; UNIFORM_SIZE as usize];
     let m = mvp.to_cols_array();
     data[..64].copy_from_slice(bytes_of(&m));
+    let model_cols = model.to_cols_array();
+    data[64..128].copy_from_slice(bytes_of(&model_cols));
     let c = [
         color.r() as f32 / 255.0,
         color.g() as f32 / 255.0,
         color.b() as f32 / 255.0,
         color.a() as f32 / 255.0,
     ];
-    data[64..].copy_from_slice(bytes_of(&c));
+    data[128..].copy_from_slice(bytes_of(&c));
     data
 }
 
-/// 组装**场景级**光源 uniform 字节：`counts`(16) + `MAX_DIRECTIONAL_LIGHTS`×方向光
-/// (64) + `MAX_DIRECTIONAL_LIGHTS`×颜色(64) = 144 字节，与 `cube.wgsl` 的 `Lights`
-/// 结构逐字段对应（全部 `vec4<f32>`，无对齐陷阱）。
+/// 组装**场景级**光源 uniform 字节，与 `cube.wgsl` 的 `Lights` 结构逐字段对应
+/// （全部 `vec4<f32>`，无对齐陷阱）。
 ///
-/// 布局（下标单位 = f32）：
-/// - `[0..4]`  = counts（x = 方向光数量，y = ambient，z/w = 0）
-/// - `[4..20]` = dirs：每光 `vec4(xyz = 光方向[世界空间], w = 强度)`
-/// - `[20..36]`= colors：每光 `vec4(rgba)`
+/// 布局（下标单位 = f32；共 `LIGHT_UNIFORM_SIZE / 4 = 68` 个 f32）：
+/// - `[0..4]`   = counts（x = 方向光数，y = ambient，z = 点光数，w = 0）
+/// - `[4..20]`  = dirs：每方向光 `vec4(xyz = 光方向[世界空间], w = 强度)`
+/// - `[20..36]` = dir_colors：每方向光 `vec4(rgba)`
+/// - `[36..52]` = points：每点光 `vec4(xyz = 位置[世界空间], w = 强度)`
+/// - `[52..68]` = point_colors：每点光 `vec4(rgb, w = range)`
 fn pack_light_bytes(
     lights: &[DirectionalLightRecord],
+    point_lights: &[PointLightRecord],
     ambient: f32,
 ) -> [u8; LIGHT_UNIFORM_SIZE as usize] {
     let mut words = [0f32; (LIGHT_UNIFORM_SIZE / 4) as usize];
     words[0] = lights.len() as f32;
     words[1] = ambient;
+    words[2] = point_lights.len() as f32;
     for (i, l) in lights.iter().take(MAX_DIRECTIONAL_LIGHTS).enumerate() {
         let d = &l.direction;
         words[4 + i * 4] = d.x;
@@ -1182,16 +1216,28 @@ fn pack_light_bytes(
         words[22 + i * 4] = l.color[2];
         words[23 + i * 4] = l.color[3];
     }
+    for (i, p) in point_lights.iter().take(MAX_POINT_LIGHTS).enumerate() {
+        let pos = &p.position;
+        words[36 + i * 4] = pos.x;
+        words[37 + i * 4] = pos.y;
+        words[38 + i * 4] = pos.z;
+        words[39 + i * 4] = p.intensity;
+        words[52 + i * 4] = p.color[0];
+        words[53 + i * 4] = p.color[1];
+        words[54 + i * 4] = p.color[2];
+        words[55 + i * 4] = p.range;
+    }
     let mut data = [0u8; LIGHT_UNIFORM_SIZE as usize];
     data.copy_from_slice(bytes_of(words.as_slice()));
     data
 }
 
-/// 默认光照字节：单方向光 `(0,0,1)` 纯白强度 1 + ambient 0.2 ——
+/// 默认光照字节：单方向光 `(0,0,1)` 纯白强度 1 + ambient 0.2、零点光 ——
 /// 与 B1-A 之前的硬编码 `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` **逐位一致**。
 fn default_light_bytes() -> [u8; LIGHT_UNIFORM_SIZE as usize] {
     pack_light_bytes(
         &[DirectionalLightRecord::new(ze_notion::Vec3::Z, Color32::WHITE, 1.0)],
+        &[],
         DEFAULT_AMBIENT,
     )
 }
@@ -1368,7 +1414,7 @@ mod tests {
                 0.5,
             ),
         ];
-        let data = pack_light_bytes(&lights, 0.2);
+        let data = pack_light_bytes(&lights, &[], 0.2);
         assert_eq!(word_at(&data, 0), 2.0);
         // 第二光 dirs[1] = (0, 1, 0, 0.5)
         assert_eq!(word_at(&data, 8), 0.0);
@@ -1380,6 +1426,32 @@ mod tests {
         assert_eq!(word_at(&data, 25), 0.0);
         assert_eq!(word_at(&data, 26), 0.0);
         assert_eq!(word_at(&data, 27), 1.0);
+    }
+
+    /// 点光打包布局（B1-B）：`counts.z` = 点光数；`points[i] = (位置, 强度)`；
+    /// `point_colors[i] = (rgb, range)` —— 与 `cube.wgsl` 的 `Lights` 逐字段对应。
+    #[test]
+    fn test_pack_light_bytes_point() {
+        let point = PointLightRecord::new(
+            ze_notion::Vec3::new(1.0, 2.0, 3.0),
+            Color32::new(0, 255, 0, 255),
+            2.0,
+            4.0,
+        );
+        let data = pack_light_bytes(&[], &[point], 0.2);
+        assert_eq!(word_at(&data, 2), 1.0); // counts.z = 点光数
+        // points[0] = (1, 2, 3, 强度 2)
+        assert_eq!(word_at(&data, 36), 1.0);
+        assert_eq!(word_at(&data, 37), 2.0);
+        assert_eq!(word_at(&data, 38), 3.0);
+        assert_eq!(word_at(&data, 39), 2.0);
+        // point_colors[0] = (0, 1, 0, range 4)
+        assert_eq!(word_at(&data, 52), 0.0);
+        assert_eq!(word_at(&data, 53), 1.0);
+        assert_eq!(word_at(&data, 54), 0.0);
+        assert_eq!(word_at(&data, 55), 4.0);
+        // 方向光区域不受影响（counts.x = 0）。
+        assert_eq!(word_at(&data, 0), 0.0);
     }
 
     // ── G2：几何缓存键单测（纯 CPU，headless，无需 GPU） ──────────────
@@ -1501,6 +1573,7 @@ mod tests {
             backend.queue(),
             &buffer,
             Mat4::IDENTITY,
+            Mat4::IDENTITY,
             Color32::new(255, 255, 255, 255),
         );
 
@@ -1539,7 +1612,7 @@ mod tests {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("test-encoder"),
             });
-        backend.submit_layer(&layer, &mut encoder, &[]);
+        backend.submit_layer(&layer, &mut encoder, &[], &[]);
         backend.notify_submit();
         ctx.submit(encoder.finish());
     }
@@ -1566,6 +1639,7 @@ mod tests {
             LayerId(0),
             Mat4::IDENTITY,
             viewport,
+            &[],
             &[],
             &[],
             &[],
@@ -1666,6 +1740,7 @@ mod tests {
             queue.meshes(),
             queue.lines(),
             &[],
+            &[],
         );
         assert_eq!(frame.draws.len(), 2);
         // wireframe_cube 是 Lines 拓扑（第一个 draw）。
@@ -1708,6 +1783,7 @@ mod tests {
             queue.meshes(),
             queue.lines(),
             &[],
+            &[],
         );
         // 内容应当是 10+2=12 个 draw。
         assert_eq!(f0.draws.len(), 12);
@@ -1730,6 +1806,7 @@ mod tests {
                 Mat4::IDENTITY,
                 queue.meshes(),
                 queue.lines(),
+                &[],
                 &[],
             );
             backend.notify_submit();
@@ -2004,6 +2081,7 @@ mod tests {
             draws,
             &[],
             &[],
+            &[],
         );
         ctx.submit(encoder.finish());
         ctx.device()
@@ -2021,7 +2099,7 @@ mod tests {
         pixels[i..i + 4].try_into().expect("pixel bytes")
     }
 
-    /// 以**给定相机与光源**渲染一组网格到离屏目标并回读像素（B1-A 用）。
+    /// 以**给定相机与光源**渲染一组网格到离屏目标并回读像素（B1-A/B 用）。
     fn render_with_camera_lights(
         backend: &WgpuBackend3D,
         ctx: &RenderContext,
@@ -2030,6 +2108,7 @@ mod tests {
         camera: &Camera3D,
         draws: &[MeshDraw],
         lights: &[DirectionalLightRecord],
+        point_lights: &[PointLightRecord],
     ) -> Vec<u8> {
         let mut encoder = ctx
             .device()
@@ -2044,6 +2123,7 @@ mod tests {
             draws,
             &[],
             lights,
+            point_lights,
         );
         ctx.submit(encoder.finish());
         ctx.device()
@@ -2065,7 +2145,7 @@ mod tests {
         camera: &Camera3D,
         draws: &[MeshDraw],
     ) -> Vec<u8> {
-        render_with_camera_lights(backend, ctx, layer_id, size, camera, draws, &[])
+        render_with_camera_lights(backend, ctx, layer_id, size, camera, draws, &[], &[])
     }
 
     /// **B1-A 验收（真实设备）**：同一曲面在**两个不同方向光**下像素不同；
@@ -2092,7 +2172,16 @@ mod tests {
         )];
 
         let px_default = render_with_camera(&backend, &ctx, LayerId(1), 64, &camera, &draws);
-        let px_up = render_with_camera_lights(&backend, &ctx, LayerId(2), 64, &camera, &draws, &up_light);
+        let px_up = render_with_camera_lights(
+            &backend,
+            &ctx,
+            LayerId(2),
+            64,
+            &camera,
+            &draws,
+            &up_light,
+            &[],
+        );
         let px_side = render_with_camera_lights(
             &backend,
             &ctx,
@@ -2101,6 +2190,7 @@ mod tests {
             &camera,
             &draws,
             &side_light,
+            &[],
         );
 
         assert_eq!(
@@ -2142,12 +2232,87 @@ mod tests {
             &[],
             &[],
             &lights,
+            &[],
         );
     }
 
     /// 非透明像素数（画面覆盖面积的代理量）。
     fn coverage(pixels: &[u8]) -> usize {
         pixels.chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+
+    /// **B1-B 验收（真实设备）**：点光数量超上限 ⇒ **显式报错**（铁律 2：
+    /// 不静默丢弃）。`MAX_POINT_LIGHTS + 1` 个点光必须 panic。
+    #[test]
+    #[should_panic(expected = "超过上限")]
+    fn test_point_light_over_limit_panics() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let mut points = Vec::new();
+        for _ in 0..=MAX_POINT_LIGHTS {
+            points.push(PointLightRecord::new(
+                ze_notion::Vec3::ZERO,
+                Color32::WHITE,
+                1.0,
+                2.0,
+            ));
+        }
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("test-3d-point-over-limit-encoder"),
+            });
+        let _ = backend.render_layer_offscreen(
+            &mut encoder,
+            LayerId(0),
+            Mat4::IDENTITY,
+            Viewport::full(64, 64),
+            &[],
+            &[],
+            &[],
+            &points,
+        );
+    }
+
+    /// **B1-B 验收（真实设备）**：点光距离衰减 —— 同一平面上，靠近光源的像素
+    /// 显著亮于远离光源（超出 range 的像素只剩环境光）。这是"点光真的随距离
+    /// 衰减"的像素级证据，而非只断言 uniform 打包。
+    #[test]
+    fn test_point_light_distance_falloff() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 64u32;
+        let camera = Camera3D::new(
+            ze_notion::Vec3::new(0.0, 0.0, 3.0),
+            ze_notion::Vec3::ZERO,
+            ze_notion::Vec3::Y,
+            Projection::perspective(std::f32::consts::FRAC_PI_3, 1.0, 0.1, 100.0),
+        );
+        // 大平面（半边长 2.0，屏幕 64px 内全被覆盖）：点光悬在平面正上方 (0,0,1)，
+        // range 2.0 ⇒ 中心（距离 1）有衰减项，屏幕角落（距离 > 2）只剩 ambient。
+        let draws = vec![flat_plane(2.0, 2.0, 0.0, Color32::new(255, 255, 255, 255))];
+        let point = [PointLightRecord::new(
+            ze_notion::Vec3::new(0.0, 0.0, 1.0),
+            Color32::WHITE,
+            1.0,
+            2.0,
+        )];
+        let px = render_with_camera_lights(&backend, &ctx, LayerId(1), size, &camera, &draws, &[], &point);
+        // 屏幕中心 = 平面中心（光源正下方，距离 1）。
+        let center = pixel_at(&px, size, size / 2, size / 2);
+        // 屏幕左上角 = 平面左上角附近（距离 > range ⇒ 衰减到 0）。
+        let corner = pixel_at(&px, size, 0, 0);
+        // 白色光下三通道相等，取通道 0 比较即可（Bgra8 字节序）。
+        assert!(
+            center[0] > corner[0],
+            "点光近处应显著亮于远处：center={:?} corner={:?}",
+            center,
+            corner
+        );
+        // 近处至少是"ambient + 明显衰减项"（远大于纯 ambient 0.2 的 sRGB ≈ 124）。
+        assert!(center[0] > 150, "光源正下方应明显亮于环境光：{:?}", center);
     }
 
     /// **K 线 GPU 像素级验收**（P 阶段教训：不得只断言组件字段变化）。

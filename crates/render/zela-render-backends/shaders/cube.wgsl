@@ -1,8 +1,9 @@
 // cube.wgsl — 3D 默认着色器（RC.1：纹理 over 颜色；RC 补充：头顶 Lambert 着色；
-// B1-A：光照数据化 —— 光源从硬编码常量改为场景级 uniform 驱动）。
+// B1-A：光照数据化 —— 光源从硬编码常量改为场景级 uniform 驱动；
+// B1-B：点光 —— `model` 入 uniform，片元取世界位置做距离衰减）。
 //
 // 绑定（group 0）：
-//   binding 0 = Uniforms（mvp + color，dynamic offset）
+//   binding 0 = Uniforms（mvp + model + color，dynamic offset）
 //   binding 1 = texture_2d<f32>
 //   binding 2 = sampler
 //   binding 3 = Lights（场景级光源，非 dynamic —— 所有 draw 共享一份）
@@ -18,13 +19,16 @@
 // 材质未指定纹理时，后端绑定 1×1 **透明黑**兜底纹理（`tex = (0,0,0,0)`），
 // 上式退化为 `color * lit`，因此既有"纯色 3D"画面的结果不变。
 //
-// 光照（B1-A）：方向光数组来自 binding 3 的场景级 uniform（`lights.counts.x` 个，
-// 上限 `MAX_LIGHTS`）。默认场景（无 `Light` 组件）时后端兜底写入
-// **单方向光 `(0,0,1)` + ambient 0.2**，与本文件 B1-A 之前的硬编码
-// `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` 逐位一致。方向光方向为世界空间
-// （物体无旋转时等于模型空间，见后端注释）；未携带法线的几何（线框立方体等）
-// 在打包时法线填 `(0,0,1)`，与默认光点积为 1 → lit = 1，外观逐像素不变；
-// 只有真实曲面（法线随位置变化）才产生明暗起伏。故无需额外开关。
+// 光照（B1-A/B）：方向光与点光数组都来自 binding 3 的场景级 uniform
+// （`counts.x` 个方向光 + `counts.z` 个点光，各上限 `MAX_LIGHTS`）。默认场景
+// （无 `Light` 组件）时后端兜底写入**单方向光 `(0,0,1)` + ambient 0.2**，
+// 与本文件 B1-A 之前的硬编码 `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` 逐位一致。
+// 方向光方向为世界空间（物体无旋转时等于模型空间，见后端注释）；未携带法线
+// 的几何（线框立方体等）在打包时法线填 `(0,0,1)`，与默认光点积为 1 → lit = 1，
+// 外观逐像素不变；只有真实曲面（法线随位置变化）才产生明暗起伏。
+// 点光（B1-B）位置为**世界空间**，片元位置 `world_pos = model * pos` 也按世界
+// 空间计算（`model` 是 mesh 的模型矩阵）；衰减为 **range 窗口**
+// `att = clamp(1 - dist²/range², 0, 1)`，避免 1/d² 在 d→0 爆炸。
 //
 // 着色变体（对应 ShaderVariant）：同一 shader module 通过不同 @fragment 入口提供
 // 多种着色方程，后端按 (topology, variant) 预建 pipeline 并查表选择：
@@ -34,18 +38,23 @@
 
 struct Uniforms {
     mvp: mat4x4<f32>,
+    model: mat4x4<f32>,
     color: vec4<f32>,
 };
 
-// 场景级光源（B1-A，binding 3，非 dynamic）。
-// counts.x = 方向光数量；counts.y = 环境光占比（ambient）。
-// dirs[i].xyz = 光方向（世界空间，从光源指向场景）；dirs[i].w = 强度。
-// colors[i] = 光的颜色（rgb；alpha 不参与光照）。
+// 场景级光源（B1-A/B，binding 3，非 dynamic）。
+// counts.x = 方向光数量；counts.y = 环境光占比（ambient）；counts.z = 点光数量。
+// dirs[i].xyz = 方向光方向（世界空间，从光源指向场景）；dirs[i].w = 强度。
+// colors[i] = 方向光颜色（rgb；alpha 不参与光照）。
+// points[i].xyz = 点光位置（世界空间）；points[i].w = 点光强度。
+// point_colors[i] = 点光颜色（rgb；w = range 有效半径）。
 const MAX_LIGHTS: u32 = 4u;
 struct Lights {
     counts: vec4<f32>,
     dirs: array<vec4<f32>, 4>,
     colors: array<vec4<f32>, 4>,
+    points: array<vec4<f32>, 4>,
+    point_colors: array<vec4<f32>, 4>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -58,6 +67,7 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) normal: vec3<f32>,
+    @location(3) world_pos: vec3<f32>,
 };
 
 @vertex
@@ -71,6 +81,8 @@ fn vs_main(
     out.color = u.color;
     out.uv = uv;
     out.normal = normal;
+    // B1-B：世界位置（点光衰减用）。line 的 model = 恒等 ⇒ world_pos = pos。
+    out.world_pos = (u.model * vec4<f32>(pos, 1.0)).xyz;
     return out;
 }
 
@@ -94,6 +106,16 @@ fn fs_lambert(in: VertexOutput) -> @location(0) vec4<f32> {
     for (var i = 0u; i < u32(lights.counts.x); i = i + 1u) {
         let lam = max(dot(n, lights.dirs[i].xyz), 0.0);
         lit += (1.0 - lights.counts.y) * lights.dirs[i].w * lam * lights.colors[i].rgb;
+    }
+    // B1-B：点光 —— range 窗口衰减 `att = clamp(1 - dist²/range², 0, 1)`；
+    // `max(dist2, 1e-6)` 护 normalize（光源贴片元时 d 近零）。
+    for (var i = 0u; i < u32(lights.counts.z); i = i + 1u) {
+        let d = lights.points[i].xyz - in.world_pos;
+        let dist2 = dot(d, d);
+        let inv = 1.0 / sqrt(max(dist2, 1e-6));
+        let lam = max(dot(n, d * inv), 0.0);
+        let att = clamp(1.0 - dist2 / (lights.point_colors[i].w * lights.point_colors[i].w), 0.0, 1.0);
+        lit += (1.0 - lights.counts.y) * lights.points[i].w * att * lam * lights.point_colors[i].rgb;
     }
     // `color * lit * (1 - tex.a)`：光照只调制材质色；墨迹（预乘 alpha）直接盖上，
     // 不被 `lit` 压暗（否则最暗处公式会变成 0.2 的深灰）。
