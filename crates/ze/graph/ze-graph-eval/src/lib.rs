@@ -3,7 +3,7 @@
 //! Depends only on `zela-node`. Provides the default [`LazyPullEval`] strategy
 //! (reverse-dependency lazy evaluation with dirty propagation and error
 //! recovery) plus a concrete [`DefaultExecContext`] backing the
-//! [`ExecContext`] trait.
+//! [`ze_node_core::ExecContext`] trait.
 
 #![forbid(unsafe_code)]
 

@@ -8,4 +8,4 @@ description = "语言无关的 Pod 绑定驱动：能力计划 / 调用编排 / 
 
 [dependencies]
 # 零额外依赖：绑定驱动只认识 `ze-pod-core` 的 schema 与值模型。
-ze-pod-core = { path = "../ze-pod-core", version = "0.1.0" }
+ze-pod-core = { path = "../ze-pod-core", version = "0.1.1" }

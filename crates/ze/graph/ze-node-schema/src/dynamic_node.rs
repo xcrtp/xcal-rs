@@ -5,8 +5,8 @@
 //! assembles a [`DynamicObject`] field-by-field at runtime and wraps it in a
 //! `DynamicNode`. Because `DynamicNode` implements both [`ze_node_core::Node`] and
 //! [`crate::NodeSpec`], it is a first-class graph citizen: it can be connected,
-//! evaluated by [`crate::LazyPullEval`](ze_graph_eval::LazyPullEval) (via the
-//! host's `NodeExecutor`), and edited from the same property UI as declarative
+//! evaluated by `ze_graph_eval::LazyPullEval` (via the host's `NodeExecutor`),
+//! and edited from the same property UI as declarative
 //! nodes — all without recompiling.
 //!
 //! Evaluation semantics are intentionally host-defined: a `DynamicNode` only

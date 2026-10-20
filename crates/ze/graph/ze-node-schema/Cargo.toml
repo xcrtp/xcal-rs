@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Property model layer for ze-node-core (NodeSpec / Property / NodeRegistry / DynamicObject). No egui dependency."
 
 [dependencies]
-ze-node-core = { path = "../ze-node-core", version = "0.1.0" }
-ze-node-schema-macros = { path = "../ze-node-schema-macros", version = "0.1.0" }
+ze-node-core = { path = "../ze-node-core", version = "0.1.1" }
+ze-node-schema-macros = { path = "../ze-node-schema-macros", version = "0.1.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

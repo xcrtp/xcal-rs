@@ -5912,7 +5912,7 @@ dependencies = [
 
 [[package]]
 name = "ze-content"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "ze-notion",
@@ -5920,14 +5920,14 @@ dependencies = [
 
 [[package]]
 name = "ze-graph-algo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-node-core",
 ]
 
 [[package]]
 name = "ze-graph-eval"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-graph-algo",
  "ze-node-core",
@@ -5935,7 +5935,7 @@ dependencies = [
 
 [[package]]
 name = "ze-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5944,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "ze-node"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-graph-algo",
  "ze-graph-eval",
@@ -5954,7 +5954,7 @@ dependencies = [
 
 [[package]]
 name = "ze-node-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive_more",
  "serde",
@@ -5964,7 +5964,7 @@ dependencies = [
 
 [[package]]
 name = "ze-node-schema"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5977,7 +5977,7 @@ dependencies = [
 
 [[package]]
 name = "ze-node-schema-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5990,7 +5990,7 @@ dependencies = [
 
 [[package]]
 name = "ze-notion"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "serde",
@@ -5998,7 +5998,7 @@ dependencies = [
 
 [[package]]
 name = "ze-object"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive-new",
  "derive_builder",
@@ -6012,7 +6012,7 @@ dependencies = [
 
 [[package]]
 name = "ze-pod"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-pod-binding",
  "ze-pod-core",
@@ -6021,21 +6021,21 @@ dependencies = [
 
 [[package]]
 name = "ze-pod-binding"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-pod-core",
 ]
 
 [[package]]
 name = "ze-pod-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-pod-macro",
 ]
 
 [[package]]
 name = "ze-pod-lua"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mlua",
  "serde_json",
@@ -6046,7 +6046,7 @@ dependencies = [
 
 [[package]]
 name = "ze-pod-macro"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6056,7 +6056,7 @@ dependencies = [
 
 [[package]]
 name = "ze-pod-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "ze-pod-binding",
@@ -6066,7 +6066,7 @@ dependencies = [
 
 [[package]]
 name = "ze-pod-tests"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "serde_json",
@@ -6079,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "ze-prerender"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive_more",
  "ecow",
@@ -6095,7 +6095,7 @@ dependencies = [
 
 [[package]]
 name = "ze-render-ir"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6104,11 +6104,11 @@ dependencies = [
 
 [[package]]
 name = "ze-resource"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ze-scene-contract"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "ze-notion",
@@ -6117,7 +6117,7 @@ dependencies = [
 
 [[package]]
 name = "ze-time"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6127,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "ze-vertex"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6136,7 +6136,7 @@ dependencies = [
 
 [[package]]
 name = "zela"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ze-node",
  "ze-pod",
@@ -6144,7 +6144,7 @@ dependencies = [
 
 [[package]]
 name = "zela-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive-new",
  "derive_builder",
@@ -6172,7 +6172,7 @@ dependencies = [
 
 [[package]]
 name = "zela-compile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "zela-app",
  "zela-scene-bundle",
@@ -6180,7 +6180,7 @@ dependencies = [
 
 [[package]]
 name = "zela-egui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive-new",
  "derive_builder",
@@ -6201,7 +6201,7 @@ dependencies = [
 
 [[package]]
 name = "zela-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -6215,7 +6215,7 @@ dependencies = [
 
 [[package]]
 name = "zela-node-editor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "thiserror 2.0.20",
@@ -6225,7 +6225,7 @@ dependencies = [
 
 [[package]]
 name = "zela-node-egui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -6242,7 +6242,7 @@ dependencies = [
 
 [[package]]
 name = "zela-node-egui-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -6254,7 +6254,7 @@ dependencies = [
 
 [[package]]
 name = "zela-playback"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hecs",
  "png 0.17.16",
@@ -6272,7 +6272,7 @@ dependencies = [
 
 [[package]]
 name = "zela-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive-new",
  "derive_builder",
@@ -6297,7 +6297,7 @@ dependencies = [
 
 [[package]]
 name = "zela-render-backends"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -6317,7 +6317,7 @@ dependencies = [
 
 [[package]]
 name = "zela-scene"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "derive-new",
  "derive_builder",
@@ -6342,7 +6342,7 @@ dependencies = [
 
 [[package]]
 name = "zela-scene-bundle"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -6352,7 +6352,7 @@ dependencies = [
 
 [[package]]
 name = "zela-schedule"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "hecs",
@@ -6364,7 +6364,7 @@ dependencies = [
 
 [[package]]
 name = "zela-web"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

@@ -13,8 +13,8 @@ python = ["dep:pyo3"]
 
 [dependencies]
 # 只依赖机制层：**生产边不含任何 `zela-*`**。
-ze-pod-core = { path = "../ze-pod-core", version = "0.1.0" }
-ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.0" }
-ze-pod-macro = { path = "../ze-pod-macro", version = "0.1.0" }
+ze-pod-core = { path = "../ze-pod-core", version = "0.1.1" }
+ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.1" }
+ze-pod-macro = { path = "../ze-pod-macro", version = "0.1.1" }
 
 pyo3 = { version = "0.30", optional = true, features = ["auto-initialize"] }

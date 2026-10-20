@@ -7,6 +7,6 @@ repository.workspace = true
 description = "Graph algorithms (topo sort, dirty propagation, SCC) for ze-node-core"
 
 [dependencies]
-ze-node-core = { path = "../ze-node-core", version = "0.1.0" }
+ze-node-core = { path = "../ze-node-core", version = "0.1.1" }
 
 [dev-dependencies]

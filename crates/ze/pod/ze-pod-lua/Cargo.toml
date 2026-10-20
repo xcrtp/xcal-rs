@@ -8,8 +8,8 @@ description = "纯 Lua 适配器（mlua）：能力注入 + 宿主→脚本入�
 
 [dependencies]
 # 只依赖机制层：**生产边不含任何 `zela-*`**。
-ze-pod-core = { path = "../ze-pod-core", version = "0.1.0" }
-ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.0" }
+ze-pod-core = { path = "../ze-pod-core", version = "0.1.1" }
+ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.1" }
 
 # Lua 5.4 解释器**编进二进制**（vendored）⇒ 部署零运行时依赖。
 mlua = { version = "0.12", default-features = false, features = [
