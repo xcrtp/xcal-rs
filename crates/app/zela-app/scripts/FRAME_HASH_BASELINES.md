@@ -8,7 +8,7 @@
 实现：[`zela_scene_bundle::frame_hash::FrameSequenceHash`](../../../scene/zela-scene-bundle/src/frame_hash.rs)
 
 - 像素：RGBA8、行优先、左上原点、行距 `width*4`、直色（非预乘）；
-- `state0 = SHA-256("XCAL-FRAME-SEQ-V1" || width_le_u32 || height_le_u32)`；
+- `state0 = SHA-256("ZELA-FRAME-SEQ-V1" || width_le_u32 || height_le_u32)`；
 - `state_{i+1} = SHA-256(state_i || i_le_u32 || SHA-256(frame_i))`；
 - 输出 `hex(state_n)`（小写 64 字符）。
 
@@ -63,7 +63,7 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 > 因此 CI 只断言 `--script == --bundle`（`--skip-baseline`），**不比对**本文件的
 > 哈希；基线回归由录制设备（RTX 4060）上的 `cargo verify` 负责。
 
-## 基线（2026-10-19，Windows / RTX 4060 Laptop）
+## 基线（2026-10-20，Windows / RTX 4060 Laptop）
 
 **哈希值的唯一真源是 [`baselines.txt`](baselines.txt)**；本文件只解释口径，
 不重复写哈希。三个基线**都要保留**，来源不同、用途不同：
@@ -77,6 +77,9 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 
 > `[browser]` 段**绝不参与自动比对**：本机跑不出浏览器产物，
 > 纳入比对只会让本机永远红，并诱导人去"修"一个不该修的东西。
+>
+> 当前 `[browser]` 的 fourier 值录于旧域分隔符时期，尚未用
+> `ZELA-FRAME-SEQ-V1` 重录；在重录前它只作为历史存档，不代表当前口径。
 
 > **两者不同是已知可接受项**，不是缺陷、不是回归。原因见下节：
 > 单帧 1 个像素的 GPU/求值末位差异，被 SHA-256 链放大成整串不同。

@@ -7,21 +7,23 @@
 # [smoke]   短对拍（PR / --fast）：不符即 fail；**不是**完整基线的等价替代
 # [browser] 仅留档：本机跑不出浏览器产物，**绝不**参与自动比对
 #
-# 记录环境：2026-10-19，Windows / RTX 4060 Laptop
+# 记录环境：2026-10-20，Windows / RTX 4060 Laptop（ZELA-FRAME-SEQ-V1）
 
 [native]
 # Vulkan headless，640×480 @ 30fps；`--script` 与 `--bundle` 两条路径逐位相同
-fourier = fd40329fe6d18045265e801b5a8b0459926f461b73489e8208ff2779ad2a690d
-storyboard = 7e1a46e89dbad7fcf5a3f955fab56fa7dc85e2b8127c8acfe449b7131a1e4e43
+fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759
+storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974
 
 [smoke]
 # 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
-smoke = 779c909d126eb47406b3994f536612e15158fa4a2df136b29be41be3da29b1be
+smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档
 # 网页 bundle 使用 typst-assets v0.14.2 的确定字体（ZELA_TYPST_FONT_DIR），
-# 因此字形轮廓不再随系统字体变化；本值录于 2026-10-19。
+# 因此字形轮廓不再随系统字体变化。
+# 注意：下面这个值录于旧域分隔符时期，尚未用 ZELA-FRAME-SEQ-V1 重录；
+# 仅存档，不参与自动比对。
 fourier = 3f4ef2012403ab2d3bfad3c265860c2ebd8b7eb890b092b797742250122c677a

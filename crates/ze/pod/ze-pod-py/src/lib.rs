@@ -12,7 +12,7 @@
 //
 // ```text
 // Python → 宿主：装配期。注入的 `scene.*` / `content.*` 由 `calls()` 自动生成；
-// 宿主 → Python：Pod::call("xcal.python::run", [source])（erased 慢路径）。
+// 宿主 → Python：Pod::call("zela.python::run", [source])（erased 慢路径）。
 // ```
 //
 // # 职责
@@ -33,14 +33,14 @@ pub mod export;
 pub use export::{export_docs, pyi_files};
 
 /// 宿主 → Python 脚本的唯一入口（erased）。
-pub const RUN_PATH: &str = "xcal.python::run";
+pub const RUN_PATH: &str = "zela.python::run";
 /// `run` 的完整函数名（含参数 / 返回类型；`Broker::run_with` 用）。
-pub const RUN_ENTRY: &str = "xcal.python::run(String) -> Any";
+pub const RUN_ENTRY: &str = "zela.python::run(String) -> Any";
 /// 入口 Service 的约定名（与 `ze-pod-lua` 相同的协议，不是 crate 依赖）。
 pub const ENTRY_SERVICE: &str = "scene";
 /// 入口 Service 的内部交接函数（不是脚本可见 API）。
-pub const RESET_PATH: &str = "xcal.scene::__reset";
-pub const FINISH_PATH: &str = "xcal.scene::__finish";
+pub const RESET_PATH: &str = "zela.scene::__reset";
+pub const FINISH_PATH: &str = "zela.scene::__finish";
 
 /// `Array<f32>` 的具名载体（orphan 规则：不能为 `Vec<f32>` 实现外部 trait）。
 #[derive(Clone, Debug, PartialEq)]
@@ -64,7 +64,7 @@ impl IntoPodTypeName for FloatList {
 
 /// Python Pod 提供给宿主的批量能力。
 #[capability(
-    namespace = "xcal.python",
+    namespace = "zela.python",
     version = "1",
     description = "Python 适配器的装配期批量能力",
     bindings

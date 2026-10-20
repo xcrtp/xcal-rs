@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! 脚本 → 宿主：scene.dot / scene.emit / scene.kind（注入的 mini Service）
-//! 宿主 → 脚本：Broker::run_with("lua", "xcal.script::run(String) -> Any")
+//! 宿主 → 脚本：Broker::run_with("lua", "zela.script::run(String) -> Any")
 //! ```
 
 #![allow(dead_code)] // capability 的 inherent 方法不全部调用。
@@ -71,8 +71,8 @@ struct MiniPod {
     rec: RefCell<Recorded>,
 }
 
-const RESET_PATH: &str = "xcal.scene::__reset";
-const FINISH_PATH: &str = "xcal.scene::__finish";
+const RESET_PATH: &str = "zela.scene::__reset";
+const FINISH_PATH: &str = "zela.scene::__finish";
 
 impl MiniPod {
     fn new() -> Self {

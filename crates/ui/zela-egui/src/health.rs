@@ -5,7 +5,7 @@
 // - overlay 展示 FPS / 帧耗时（p99 环形缓冲）/ 实体数 / System 数 /
 //   draw call 数 / 粗略内存估计，数据来源为 Scheduler 的 FrameReport。
 // - F10 把当前 World + Resources 通过 SnapshotRegistry 导出为 pretty JSON，
-//   写入当前工作目录 `xcal_snapshot_tick{N}.json`，用于 bug 复现与状态对比。
+//   写入当前工作目录 `zela_snapshot_tick{N}.json`，用于 bug 复现与状态对比。
 //
 // A5：本模块从 `zela-app` 归位到 UI 层（它含 egui 绘制，属于 UI）。
 
@@ -178,7 +178,7 @@ impl HealthOverlay {
             });
     }
 
-    /// 导出当前 World 快照到 `xcal_snapshot_tick{tick}.json`。
+    /// 导出当前 World 快照到 `zela_snapshot_tick{tick}.json`。
     pub fn dump_snapshot(
         &self,
         world: &hecs::World,
@@ -186,7 +186,7 @@ impl HealthOverlay {
         tick: u64,
     ) -> std::io::Result<PathBuf> {
         let snapshot = self.registry.snapshot(world, resources, tick);
-        let path = PathBuf::from(format!("xcal_snapshot_tick{tick}.json"));
+        let path = PathBuf::from(format!("zela_snapshot_tick{tick}.json"));
         write_snapshot_json(&path, &snapshot)?;
         Ok(path)
     }

@@ -56,7 +56,7 @@ ze-node-core (trait / Graph)   →   ze-graph-algo (Topo / Dirty / SCC)
 ```rust
 use ze_graph_eval::{LazyPullEval, DefaultExecContext};
 use ze_graph_algo::{BfsDirtyTracker, KahnSorter};
-use xcal_node::{Graph, SimpleGraph, OutputSocketId, NodeId,
+use ze_node::{Graph, SimpleGraph, OutputSocketId, NodeId,
                 ExecutorFactory, DynNodeExecutor, EvalStrategy};
 
 // ── 1) 建图（略） ──

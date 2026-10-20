@@ -3,10 +3,10 @@
 //! # 输入
 //!
 //! ```ignore
-//! #[capability(namespace = "xcal.math", version = "1", description = "数学函数")]
+//! #[capability(namespace = "zela.math", version = "1", description = "数学函数")]
 //! struct MathPod<'a> {
 //!     sin: fn(&'a dyn Pod, f32) -> f32,
-//!     #[pod_type(param0 = "xcal.Path2D", ret = "xcal.Vec2")]
+//!     #[pod_type(param0 = "zela.Path2D", ret = "zela.Vec2")]
 //!     sample: fn(&'a dyn Pod, Path2D, f32) -> Vec2,
 //!     // 方法语义：次参为 `Handle` ⇒ receiver（C 风格 `obj_method(pod, obj, args)`）
 //!     bounds: fn(&'a dyn Pod, Handle) -> f32,
@@ -302,7 +302,7 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
         if s.params.is_empty() || !s.description.is_empty() {
             return None;
         }
-        let ident = format_ident!("__XC_VM_MISSING_DOC_{}_{}", name, s.ident);
+        let ident = format_ident!("__ZELA_VM_MISSING_DOC_{}_{}", name, s.ident);
         let msg = format!(
             "capability 函数 `{}` 缺少 `///` 文档（只有 `///` 会在编译期保留）",
             s.ident
@@ -318,9 +318,9 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
     // 并行数组的**编译期长度断言**：`docs()` 与 `signatures()` 必须逐条对应。
     // 泛型 capability 的签名依赖类型参数 ⇒ 断言必须是**关联常量**
     // （模块级 `const` 不能引用泛型参数）；由 `signatures()` 引用以强制求值。
-    let sigs_const = format_ident!("__XC_VM_SIGS_{}", name);
-    let docs_const = format_ident!("__XC_VM_DOCS_{}", name);
-    let len_check_const = format_ident!("__XC_VM_LEN_CHECK_{}", name);
+    let sigs_const = format_ident!("__ZELA_VM_SIGS_{}", name);
+    let docs_const = format_ident!("__ZELA_VM_DOCS_{}", name);
+    let len_check_const = format_ident!("__ZELA_VM_LEN_CHECK_{}", name);
 
     // ── from_negotiated()：按序取回裸 fn 指针并写入字段 ──────────────────
     let inits = specs.iter().enumerate().map(|(i, s)| {
@@ -332,8 +332,8 @@ fn expand(args: &MetaArgs, input: ItemStruct) -> syn::Result<TokenStream2> {
     });
 
     // ── 绑定生成（`bindings`）：FnIo + 类型擦除调用 + `calls()` ─────────
-    let io_const = format_ident!("__XC_VM_IO_{}", name);
-    let calls_const = format_ident!("__XC_VM_CALLS_{}", name);
+    let io_const = format_ident!("__ZELA_VM_IO_{}", name);
+    let calls_const = format_ident!("__ZELA_VM_CALLS_{}", name);
     let (binding_fns, binding_consts, binding_impl, binding_asserts) = if args.bindings {
         let io_entries = specs.iter().map(|s| {
             let params = s.params.iter().enumerate().map(|(i, ty)| {
@@ -655,7 +655,7 @@ fn parse_pod_type_attrs(
             continue;
         }
         match &attr.meta {
-            // `#[pod_type = "xcal.Path2D"]` ⇒ 只覆盖返回类型。
+            // `#[pod_type = "zela.Path2D"]` ⇒ 只覆盖返回类型。
             syn::Meta::NameValue(nv) => match &nv.value {
                 syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(s),

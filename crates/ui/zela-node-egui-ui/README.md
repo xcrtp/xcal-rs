@@ -152,7 +152,7 @@ pub fn spawn_menu(
 
 ```rust
 use eframe;
-use xcal_node::{Node, NodeRegistry};
+use ze_node::{Node, NodeRegistry};
 use ze_node_schema_macros::NodeSpec;
 use zela_node_editor::Editor;
 use zela_node_egui::{BezierRenderer, NodeGraphApp};

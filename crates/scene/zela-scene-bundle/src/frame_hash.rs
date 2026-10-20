@@ -13,7 +13,7 @@
 //
 // - 像素布局：RGBA8、行优先、左上原点、行距 `width * 4`（无对齐填充）、
 //   8-bit 直色（非预乘）；
-// - `state0 = SHA-256("XCAL-FRAME-SEQ-V1" || width_le_u32 || height_le_u32)`；
+// - `state0 = SHA-256("ZELA-FRAME-SEQ-V1" || width_le_u32 || height_le_u32)`；
 // - `digest_i = SHA-256(frame_i)`；
 // - `state_{i+1} = SHA-256(state_i || i_le_u32 || digest_i)`；
 // - 最终值 = `hex(state_n)`（小写十六进制，64 字符）。
@@ -36,7 +36,7 @@ impl FrameSequenceHash {
     /// 以画布尺寸初始化（尺寸参与初始状态）。
     pub fn new(width: u32, height: u32) -> Self {
         let mut init = Vec::with_capacity(32);
-        init.extend_from_slice(b"XCAL-FRAME-SEQ-V1");
+        init.extend_from_slice(b"ZELA-FRAME-SEQ-V1");
         init.extend_from_slice(&width.to_le_bytes());
         init.extend_from_slice(&height.to_le_bytes());
         Self {
@@ -90,7 +90,7 @@ mod tests {
         h.push_frame(&[0, 255, 0, 255]);
         assert_eq!(
             h.hex(),
-            "8b24fa5eedc2aa958d8689a7d4deb5cee58a9ede1288630878f7f2faa0c0eba0",
+            "7716117571aeb0172735668f994d56e6c039cfedb890fa2c12023a576a380f0c",
             "算法或编码变化会破坏跨运行时对拍"
         );
         assert_eq!(h.frames(), 2);

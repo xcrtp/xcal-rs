@@ -29,13 +29,13 @@ ze-pod-core（机制：Pod / Handle / Capability / Injector）
 use ze_pod_core::Pod;
 use ze_pod_macro::capability;
 
-#[capability(namespace = "xcal.math", version = "1", description = "数学函数", bindings)]
+#[capability(namespace = "zela.math", version = "1", description = "数学函数", bindings)]
 struct MathPod<'a> {
     /// sin(x)
     sin: fn(&'a dyn Pod, x: f32) -> f32,
 
     /// 2D 路径采样
-    #[pod_type(param0 = "xcal.Path2D", ret = "xcal.Vec2")]
+    #[pod_type(param0 = "zela.Path2D", ret = "zela.Vec2")]
     sample: fn(&'a dyn Pod, Path2D, t: f32) -> Vec2,
 
     /// 方法语义：次参为 `Handle` ⇒ receiver
@@ -82,7 +82,7 @@ struct MathPod<'a> {
 
 | 标注 | 作用 |
 |------|------|
-| `#[pod_type = "xcal.Vec2"]` | 只覆盖返回类型名 |
+| `#[pod_type = "zela.Vec2"]` | 只覆盖返回类型名 |
 | `#[pod_type(param0 = "...")]` | 覆盖第 0 个业务参数的类型名 |
 | `#[pod_type(paramN = "...", ret = "...")]` | 同时覆盖参数与返回 |
 
@@ -96,14 +96,14 @@ struct MathPod<'a> {
 use ze_pod_macro::PodType;
 
 #[derive(Clone, PodType)]
-#[pod_type(name = "xcal.Style")]
+#[pod_type(name = "zela.Style")]
 struct Style {
     width: f32,
     color: Color,
 }
 
 #[derive(Clone, PodType)]
-#[pod_type(name = "xcal.Target")]
+#[pod_type(name = "zela.Target")]
 enum Target {
     RevealRange,
     Phase { omega: f32 },

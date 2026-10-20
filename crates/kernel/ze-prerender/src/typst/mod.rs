@@ -50,7 +50,7 @@ pub fn compile(
     world.set_original_source(src.text.clone());
     world.set_body_offset(body_offset);
 
-    if std::env::var_os("XC_PRERENDER_DUMP_SRC").is_some() {
+    if std::env::var_os("ZELA_PRERENDER_DUMP_SRC").is_some() {
         tracing::debug!(
             "[ze-prerender::typst] wrapped source:\n----------\n{}\n----------",
             wrapped_src

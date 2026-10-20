@@ -30,7 +30,7 @@ use crate::{ENTRY_SERVICE, FINISH_PATH, FloatList, PythonApi, RESET_PATH, RUN_PA
 /// Python 模块名必须**每个 PyPod 唯一**：`PyImport_ExecCodeModuleEx` 会复用
 /// `sys.modules` 里的同名模块，多实例会共享 globals。
 static NEXT_MODULE: AtomicU64 = AtomicU64::new(1);
-/// `sys.modules` 里的 `xcal.*` 别名是进程级的；脚本执行期间必须串行，
+/// `sys.modules` 里的 `zela.*` 别名是进程级的；脚本执行期间必须串行，
 /// 否则两个 PyPod 会互相覆盖。锁在 GIL 内获取 ⇒ 不会与解释器锁形成死锁。
 static PY_RUN_LOCK: Mutex<()> = Mutex::new(());
 
@@ -126,7 +126,7 @@ impl<'py> ValueCodec for PyCodec<'py> {
                 ScalarKind::Bool => ScalarValue::Bool(bound.extract::<bool>()?),
                 ScalarKind::String => ScalarValue::String(bound.extract::<String>()?),
             })),
-            TypeSpec::Opaque(_) => Err(PyErr::new::<PyTypeError, _>("期望 xcal 句柄（PyHandle）")),
+            TypeSpec::Opaque(_) => Err(PyErr::new::<PyTypeError, _>("期望 zela 句柄（PyHandle）")),
             TypeSpec::Array { elem } => {
                 let list = bound.cast::<PyList>()?;
                 let mut values = Vec::with_capacity(list.len());
@@ -262,7 +262,7 @@ fn make_ctor<'py>(
 /// 一个已注册能力的绑定器（泛型在注册时单态化，运行时只留 fn 指针）。
 type BindFn = for<'py> fn(Python<'py>, &PyPod, &str, Arc<dyn SyncPod>) -> PyResult<()>;
 
-/// 确保包链存在（如 `xcal`），返回最末一级包模块。
+/// 确保包链存在（如 `zela`），返回最末一级包模块。
 fn ensure_package(py: Python<'_>, this: &PyPod, path: &str) -> PyResult<Py<PyModule>> {
     let existing = this
         .packages
@@ -288,7 +288,7 @@ fn ensure_package(py: Python<'_>, this: &PyPod, path: &str) -> PyResult<Py<PyMod
     Ok(module)
 }
 
-/// 把一个 capability 绑定为 `xcal.scene` 这样的真实模块，并挂到包树上。
+/// 把一个 capability 绑定为 `zela.scene` 这样的真实模块，并挂到包树上。
 fn bind_capability<C: Capability<'static>>(
     py: Python<'_>,
     this: &PyPod,
@@ -308,7 +308,7 @@ fn bind_capability<C: Capability<'static>>(
         service_module.setattr(item.signature.name, function)?;
     }
 
-    // `xcal.scene`：挂到父包上；同时保留根解释器模块上的短名（旧脚本兼容）。
+    // `zela.scene`：挂到父包上；同时保留根解释器模块上的短名（旧脚本兼容）。
     if let Some((parent_path, name)) = namespace.rsplit_once('.') {
         let parent = ensure_package(py, this, parent_path)?;
         parent.bind(py).setattr(name, &service_module)?;
@@ -325,7 +325,7 @@ fn bind_capability<C: Capability<'static>>(
 
 /// 自动注册所有可达类型的构造器（组件 / 值 / 枚举）。
 ///
-/// 类型按 `TypeSpec` 的全名归位：`xcal.Circle` ⇒ 根模块 + `xcal` 包 + 当前 capability 模块。
+/// 类型按 `TypeSpec` 的全名归位：`zela.Circle` ⇒ 根模块 + `zela` 包 + 当前 capability 模块。
 fn register_types(
     py: Python<'_>,
     this: &PyPod,
@@ -422,9 +422,9 @@ pub struct PyPod {
     binders: Mutex<BTreeMap<String, BinderEntry>>,
     /// 已注入 Service 的线程安全视图（`Drop` 时随 `Arc` 一起释放）。
     slots: Mutex<HashMap<String, Arc<dyn SyncPod>>>,
-    /// capability 包树（`xcal` 等）；脚本执行前安装到 `sys.modules`。
+    /// capability 包树（`zela` 等）；脚本执行前安装到 `sys.modules`。
     packages: Mutex<BTreeMap<String, Py<PyModule>>>,
-    /// capability 模块（`xcal.scene` 等）；脚本可用 `import xcal.scene`。
+    /// capability 模块（`zela.scene` 等）；脚本可用 `import zela.scene`。
     modules: Mutex<BTreeMap<String, Py<PyModule>>>,
 }
 
@@ -470,7 +470,7 @@ impl PyPod {
             py_inject_sync,
         );
         registry.register_fn3_named::<f32, f32, u32, FloatList>(
-            "xcal.python::linspace",
+            "zela.python::linspace",
             "f32",
             "f32",
             "u32",
@@ -478,7 +478,7 @@ impl PyPod {
             py_linspace,
         );
         registry.register_fn3_named::<f32, f32, f32, ()>(
-            "xcal.python::make_dot",
+            "zela.python::make_dot",
             "f32",
             "f32",
             "f32",
@@ -678,7 +678,7 @@ fn py_run(pod: &dyn Pod, args: &[&dyn Any]) -> Result<Box<dyn Any>, PodError> {
     run_impl(pod, source)
 }
 
-/// 把本 Pod 的 `xcal` 包树安装到 `sys.modules`，使脚本可显式 `import`。
+/// 把本 Pod 的 `zela` 包树安装到 `sys.modules`，使脚本可显式 `import`。
 fn install_modules(py: Python<'_>, this: &PyPod) -> PyResult<()> {
     let sys = py.import("sys")?;
     let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
@@ -717,7 +717,7 @@ fn run_impl(pod: &dyn Pod, source: String) -> Result<Box<dyn Any>, PodError> {
 
     // 在模块自己的 globals 里执行：脚本能直接看到注入的 `scene` / `content` 与类型构造器。
     Python::attach(|py| -> PyResult<()> {
-        // `sys.modules["xcal"]` 是进程级的：安装 + 执行必须原子（见 PY_RUN_LOCK）。
+        // `sys.modules["zela"]` 是进程级的：安装 + 执行必须原子（见 PY_RUN_LOCK）。
         // RunGuard 同时做同线程重入探测（当前不存在合法重入路径）。
         let _run = RunGuard::acquire()
             .map_err(|error| PyErr::new::<PyRuntimeError, _>(error.to_string()))?;

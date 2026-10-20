@@ -56,7 +56,7 @@ python = ["dep:pyo3"]
 
 ```text
 Python → 宿主：装配期。注入的 scene.* / content.* 由 calls() 自动生成；
-宿主 → Python：Pod::call("xcal.python::run", [source])（erased 慢路径）。
+宿主 → Python：Pod::call("zela.python::run", [source])（erased 慢路径）。
 ```
 
 | 入口 | 形式 | 说明 |
@@ -64,9 +64,9 @@ Python → 宿主：装配期。注入的 scene.* / content.* 由 calls() 自动
 | `PyPod::register_capability::<C>(service, required)` | 原生 | 装配期注册一个能力的 Python 绑定器 |
 | `PyPod::run::<T>(source)` | 原生 | 执行 Python 源码，取回入口 Service 的产物 `T` |
 | `Broker::run_with("python", RUN_ENTRY, &[&source])` | 原生 | App 的推荐路径（装配与执行分离） |
-| `Pod::call("xcal.python::run")` | erased | 不依赖 `ze-pod-py` 类型的宿主 |
+| `Pod::call("zela.python::run")` | erased | 不依赖 `ze-pod-py` 类型的宿主 |
 
-内部交接函数 `xcal.scene::__reset` / `__finish` 不是脚本可见 API，只走 `Pod::call`：
+内部交接函数 `zela.scene::__reset` / `__finish` 不是脚本可见 API，只走 `Pod::call`：
 
 - 每轮 `run` 前调用入口服务的 `__reset`；
 - 脚本执行完后调用 `__finish`，约定返回 `Result<Box<dyn Any>, String>`。
@@ -77,11 +77,11 @@ Python → 宿主：装配期。注入的 scene.* / content.* 由 calls() 自动
 
 | 常量 | 值 |
 |------|-----|
-| `RUN_PATH` | `xcal.python::run` |
-| `RUN_ENTRY` | `xcal.python::run(String) -> Any` |
+| `RUN_PATH` | `zela.python::run` |
+| `RUN_ENTRY` | `zela.python::run(String) -> Any` |
 | `ENTRY_SERVICE` | `scene` |
-| `RESET_PATH` | `xcal.scene::__reset` |
-| `FINISH_PATH` | `xcal.scene::__finish` |
+| `RESET_PATH` | `zela.scene::__reset` |
+| `FINISH_PATH` | `zela.scene::__finish` |
 
 ---
 
@@ -95,7 +95,7 @@ let python = Arc::new(PyPod::new()?);
 python.register_capability::<SceneApi>("scene", true);
 python.register_capability::<ContentApi>("content", true);
 
-// Broker 按 requirements 注入：Python 侧出现真实的 xcal.scene / xcal.content 模块
+// Broker 按 requirements 注入：Python 侧出现真实的 zela.scene / zela.content 模块
 let script = r#"
 shapes = [Circle(x=0.0, y=0.0, r=1.0)]
 scene.spawn(shapes)
@@ -105,7 +105,7 @@ let out: MyRecord = python.run(script)?;
 
 - `required = false` ⇒ 该 Service 是 **optional**：没有提供者也能装配，
   只是 Python 侧不会出现对应模块；
-- 能力模块按 namespace 落位：`xcal.scene` / `xcal.content` / `xcal.python`；
+- 能力模块按 namespace 落位：`zela.scene` / `zela.content` / `zela.python`；
 - 组件类型（单 `Struct` 参数 + `Opaque` 返回）在 Python 侧是**构造器函数**，
   返回 `PyHandle`；`Enum` 生成模块级常量与变体构造器；
 - Python 侧调用注入能力时经由 `PyHandle` / `PyPodValue`，
@@ -133,7 +133,7 @@ let out: MyRecord = python.run(script)?;
 - Python 侧闭包只捕获一个**槽位号**，真正的 `Arc<dyn Pod>` 放在
   thread-local 服务表里（Python 调用始终在同一线程 + GIL 下）；
 - 每个 `PyPod` 的模块名唯一（`sys.modules` 会复用同名模块）；
-- 脚本执行期间 `sys.modules["xcal"]` 是进程级共享的，故安装 + 执行
+- 脚本执行期间 `sys.modules["zela"]` 是进程级共享的，故安装 + 执行
   在 `PY_RUN_LOCK` 下串行；
 - 全程不用 `unsafe`（`#![forbid(unsafe_code)]`）。
 
@@ -160,13 +160,13 @@ let written = ze_pod_py::export_docs(dir, &capabilities)?;
 落盘布局与 capability 命名空间一致：
 
 ```
-xcal/__init__.pyi     # Handle + 共享类型 + 子模块再导出
-xcal/scene.pyi
-xcal/content.pyi
-xcal/python.pyi
+zela/__init__.pyi     # Handle + 共享类型 + 子模块再导出
+zela/scene.pyi
+zela/content.pyi
+zela/python.pyi
 ```
 
-这样 `import xcal.scene` / `from xcal import scene` 与普通 Python 模块一致；
+这样 `import zela.scene` / `from zela import scene` 与普通 Python 模块一致；
 JSON 真源在 `ze-pod-binding`，本 crate 只做翻译，不维护第二份类型表。
 `.pyi` 生成**不依赖 pyo3**，因此无 `python` feature 也能运行。
 
@@ -181,7 +181,7 @@ cargo test -p ze-pod-py --features python  # 需要系统 Python（pyo3）
 
 `src/export.rs` 的 3 个测试验证：
 
-- `.pyi` 路径跟随 capability namespace（`xcal/scene.pyi` 等）；
+- `.pyi` 路径跟随 capability namespace（`zela/scene.pyi` 等）；
 - 根包声明 `Handle`、组件构造器是函数、子模块再导出；
 - capability 模块再导出 `Handle`，组件类型映射为 `Any`。
 

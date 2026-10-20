@@ -49,7 +49,7 @@ struct AddF32 {
 
 ```rust
 // 1) impl Node for AddF32  —— OnceLock 静态 meta/inputs/outputs
-impl ::xcal_node::Node for AddF32 {
+impl ::ze_node::Node for AddF32 {
     fn meta(&self) -> &'static NodeMeta {
         static M: OnceLock<NodeMeta> = OnceLock::new();
         M.get_or_init(|| NodeMeta::new("demo.add.f32", "Add (f32)", 1))
@@ -92,7 +92,7 @@ impl Default for AddF32 { fn default() -> Self { Self { gain: 1.0, tint: [255,25
 // 4) 关联函数 + 常量
 impl AddF32 {
     pub const CATEGORY: &'static str = "Math";
-    pub fn default_node() -> Box<dyn ::xcal_node::Node> { Box::<Self>::default() }
+    pub fn default_node() -> Box<dyn ::ze_node::Node> { Box::<Self>::default() }
 }
 ```
 

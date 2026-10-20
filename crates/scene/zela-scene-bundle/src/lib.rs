@@ -43,7 +43,8 @@ pub const MAGIC: &[u8; 4] = b"ZSB1";
 ///
 /// v2：Meta 增加 `required_pods`（回放期所需），`pods` 降级为装配期诊断字段。
 /// v3：项目改名 XSB → ZSB；魔数与版本号同步，避免 "ZSB1 + version 2" 的自相矛盾。
-pub const CONTAINER_VERSION: u16 = 3;
+/// v4：类型标签命名空间统一为 `zela.*`（payload 内容变化，旧 payload 不兼容）。
+pub const CONTAINER_VERSION: u16 = 4;
 /// payload 的格式标识（写入 Meta）。
 pub const PAYLOAD_FORMAT: &str = "zsb.script/1";
 const HEADER_LEN: usize = 24;

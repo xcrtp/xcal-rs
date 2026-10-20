@@ -37,7 +37,7 @@ pub fn lua_ls(capabilities: &[CapabilityDocs]) -> String {
     let types = ze_pod_binding::reachable_types(capabilities);
 
     let mut out =
-        String::from("---@meta\n\n---@class Handle xcal 场景句柄（组件 / 对象 / 曲线 / 动作）\n\n");
+        String::from("---@meta\n\n---@class Handle zela 场景句柄（组件 / 对象 / 曲线 / 动作）\n\n");
 
     // ── 类型（一次）────────────────────────────────────────────────────
     for (&full_name, &spec) in &types {

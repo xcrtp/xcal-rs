@@ -69,7 +69,7 @@ pub fn collect_types(
     }
 }
 
-/// `"xcal.Color"` → `"Color"`（语言侧全局名用短名）。
+/// `"zela.Color"` → `"Color"`（语言侧全局名用短名）。
 pub fn short_name(full: &'static str) -> &'static str {
     full.rsplit(|c| c == '.' || c == ':').next().unwrap_or(full)
 }

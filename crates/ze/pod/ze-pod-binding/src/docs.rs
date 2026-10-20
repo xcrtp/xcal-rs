@@ -144,7 +144,7 @@ fn spec_def(spec: &'static TypeSpec) -> String {
 pub fn capabilities_json(capabilities: &[CapabilityDocs]) -> String {
     let types = reachable_types(capabilities);
     let mut out = String::new();
-    out.push_str("{\n  \"api\": \"xcal.script\",\n  \"capabilities\": {\n");
+    out.push_str("{\n  \"api\": \"zela.script\",\n  \"capabilities\": {\n");
 
     for (cap_index, capability) in capabilities.iter().enumerate() {
         if cap_index > 0 {

@@ -47,7 +47,7 @@ pub struct Scene {
     /// `apply_deferred()`（或 `into_world()`）时统一应用 —— 避免"边遍历边删"。
     ///
     /// ⚠️ 运行时（场景已 `into_world()` 交给调度器）的延迟命令走另一条路径：
-    /// Resource `xc_scene::deferred::DeferredCommands` + `FrameEnd` 相位的
+    /// Resource `zela_scene::deferred::DeferredCommands` + `FrameEnd` 相位的
     /// `DeferredApplySystem`（本字段那时已随 `into_world` 消耗掉）。
     deferred: Vec<DeferredCmd>,
 }

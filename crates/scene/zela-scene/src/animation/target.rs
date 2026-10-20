@@ -144,7 +144,7 @@ impl TargetCtor for TransformValue {
 ///
 /// 注意：它不能叫 `Target` —— 同名 trait 已存在（本枚举是"目标种类"）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
-#[pod_type(name = "xcal.Target")]
+#[pod_type(name = "zela.Target")]
 pub enum TargetKind {
     CircleRadius,
     Phase,

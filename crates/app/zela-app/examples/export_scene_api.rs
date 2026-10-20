@@ -6,7 +6,7 @@
 //!
 //! 产物写到 `target/scene_api/`：
 //! - `scene_api.json` / `scene_api.lua`（`ze-pod-lua`）；
-//! - `xcal/__init__.pyi` / `xcal/scene.pyi` / `xcal/content.pyi` / `xcal/python.pyi`
+//! - `zela/__init__.pyi` / `zela/scene.pyi` / `zela/content.pyi` / `zela/python.pyi`
 //!   （`ze-pod-py`，路径与 capability 命名空间一致）。
 
 use ze_pod_core::Capability;

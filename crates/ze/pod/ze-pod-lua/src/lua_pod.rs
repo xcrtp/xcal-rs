@@ -5,7 +5,7 @@
 // ```text
 // 脚本 → 宿主：装配期。两个 Service（scene / content）经 Injector 注入；
 //              Lua 侧 `scene.*` / `content.*` 与类型构造器由 `calls()` 自动生成。
-// 宿主 → 脚本：Pod::call("xcal.script::run", [source])（erased 慢路径）。
+// 宿主 → 脚本：Pod::call("zela.script::run", [source])（erased 慢路径）。
 // ```
 //
 // # Injector 的第二次真实使用
@@ -25,14 +25,14 @@ use ze_pod_core::{Capability, FunctionId, QualifiedName, ServiceRequirement, Pod
 pub const REQUIREMENTS_PATH: &str = "ze_pod_core::injector::requirements";
 pub const INJECT_PATH: &str = "ze_pod_core::injector::inject";
 /// 宿主 → 脚本的唯一入口（erased）。
-pub const RUN_PATH: &str = "xcal.script::run";
+pub const RUN_PATH: &str = "zela.script::run";
 /// `run` 的完整函数名（含参数 / 返回类型；`Broker::run_with` 用）。
-pub const RUN_ENTRY: &str = "xcal.script::run(String) -> Any";
+pub const RUN_ENTRY: &str = "zela.script::run(String) -> Any";
 /// 入口 Service 的约定名（解释器与"场景录制器"之间的协议，不是 crate 依赖）。
 pub const ENTRY_SERVICE: &str = "scene";
 /// 入口 Service 的内部交接函数（不是脚本可见 API）。
-pub const RESET_PATH: &str = "xcal.scene::__reset";
-pub const FINISH_PATH: &str = "xcal.scene::__finish";
+pub const RESET_PATH: &str = "zela.scene::__reset";
+pub const FINISH_PATH: &str = "zela.scene::__finish";
 
 type RequirementsFn = fn(&dyn Pod) -> Vec<ServiceRequirement>;
 type InjectFn = fn(&dyn Pod, String, Arc<dyn Pod>) -> Result<(), PodError>;

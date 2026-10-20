@@ -19,7 +19,7 @@ use ze_pod_macro::capability;
 
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(
-    namespace = "xcal.scene",
+    namespace = "zela.scene",
     version = "4",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
@@ -97,7 +97,7 @@ pub struct SceneApi<'a> {
 /// 返回 `Array<Path>`（**按阅读顺序**）：脚本据此决定 spawn 几个对象；
 /// "阅读顺序" 归宿主（内容服务）决定，不在脚本里复制排序语义。
 #[capability(
-    namespace = "xcal.content",
+    namespace = "zela.content",
     version = "1",
     description = "脚本可见的内容编译接口（公式 / 文字 → 描边路径数组）",
     bindings

@@ -50,7 +50,7 @@ for (name, spec) in &plan.types {
 }
 
 // 「单参数是该结构体 + 返回不透明句柄」⇒ 组件构造器
-if let Some(ctor) = plan.component_ctor("xcal.Circle") {
+if let Some(ctor) = plan.component_ctor("zela.Circle") {
     let out = (ctor.call)(&*pod, &[value])?; // 类型擦除调用
 }
 ```
@@ -114,7 +114,7 @@ let types = reachable_types(&capabilities);
 
 ```json
 {
-  "api": "xcal.script",
+  "api": "zela.script",
   "capabilities": { "<name>": { "version": "...", "description": "...", "functions": [ ... ] } },
   "types": [ { "kind": "struct|enum", "name": "...", "fields": [ ... ] } ]
 }

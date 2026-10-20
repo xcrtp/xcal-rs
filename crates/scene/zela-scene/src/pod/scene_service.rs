@@ -38,9 +38,9 @@ pub const SERVICE_NAME: &str = "scene";
 pub const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 内部交接函数：把录制结果取走并重置（不是脚本可见 API）。
-pub const FINISH_PATH: &str = "xcal.scene::__finish";
+pub const FINISH_PATH: &str = "zela.scene::__finish";
 /// 内部交接函数：丢弃上一轮录制状态（每次 `run` 前调用）。
-pub const RESET_PATH: &str = "xcal.scene::__reset";
+pub const RESET_PATH: &str = "zela.scene::__reset";
 
 /// 一个"动画动作"：**目标**（枚举或 Transform 通道）+ 已转换的曲线。
 #[derive(Clone)]
@@ -152,95 +152,95 @@ impl SceneServicePod {
 
         // ── 组件构造（单结构体参数 ⇒ 自动生成 `Circle { ... }` 等构造器）────
         registry.register_fn1_named::<Circle, Handle>(
-            "xcal.scene::circle",
-            "xcal.Circle",
+            "zela.scene::circle",
+            "zela.Circle",
             "ze_pod_core.Handle",
             scene_circle,
         );
         registry.register_fn1_named::<Stroke, Handle>(
-            "xcal.scene::stroke",
-            "xcal.Stroke",
+            "zela.scene::stroke",
+            "zela.Stroke",
             "ze_pod_core.Handle",
             scene_stroke,
         );
         registry.register_fn1_named::<Camera2D, Handle>(
-            "xcal.scene::camera2d",
-            "xcal.Camera2D",
+            "zela.scene::camera2d",
+            "zela.Camera2D",
             "ze_pod_core.Handle",
             scene_camera2d,
         );
         registry.register_fn1_named::<Reveal, Handle>(
-            "xcal.scene::reveal",
-            "xcal.Reveal",
+            "zela.scene::reveal",
+            "zela.Reveal",
             "ze_pod_core.Handle",
             scene_reveal,
         );
         registry.register_fn1_named::<Polyline, Handle>(
-            "xcal.scene::polyline",
-            "xcal.Polyline",
+            "zela.scene::polyline",
+            "zela.Polyline",
             "ze_pod_core.Handle",
             scene_polyline,
         );
-        registry.register_fn1::<Parent, Handle>("xcal.scene::parent", scene_parent);
-        registry.register_fn1::<Name, Handle>("xcal.scene::name", scene_name);
-        registry.register_fn1::<Opacity, Handle>("xcal.scene::opacity", scene_opacity);
+        registry.register_fn1::<Parent, Handle>("zela.scene::parent", scene_parent);
+        registry.register_fn1::<Name, Handle>("zela.scene::name", scene_name);
+        registry.register_fn1::<Opacity, Handle>("zela.scene::opacity", scene_opacity);
         registry.register_fn1_named::<Axes2D, Handle>(
-            "xcal.scene::axes2d",
-            "xcal.Axes2D",
+            "zela.scene::axes2d",
+            "zela.Axes2D",
             "ze_pod_core.Handle",
             scene_axes2d,
         );
         registry.register_fn1_named::<Arrow, Handle>(
-            "xcal.scene::arrow",
-            "xcal.Arrow",
+            "zela.scene::arrow",
+            "zela.Arrow",
             "ze_pod_core.Handle",
             scene_arrow,
         );
         registry.register_fn1_named::<Fill, Handle>(
-            "xcal.scene::fill",
-            "xcal.Fill",
+            "zela.scene::fill",
+            "zela.Fill",
             "ze_pod_core.Handle",
             scene_fill,
         );
         registry.register_fn1_named::<Transform, Handle>(
-            "xcal.scene::transform",
-            "xcal.Transform",
+            "zela.scene::transform",
+            "zela.Transform",
             "ze_pod_core.Handle",
             scene_transform,
         );
         registry.register_fn1_named::<RevealPath, Handle>(
-            "xcal.scene::reveal_path",
-            "xcal.RevealPath",
+            "zela.scene::reveal_path",
+            "zela.RevealPath",
             "ze_pod_core.Handle",
             scene_reveal_path,
         );
         registry.register_fn1_named::<PathShape, Handle>(
-            "xcal.scene::path_shape",
-            "xcal.PathShape",
+            "zela.scene::path_shape",
+            "zela.PathShape",
             "ze_pod_core.Handle",
             scene_path_shape,
         );
 
         // ── 对象 ────────────────────────────────────────────────────────
-        registry.register_fn1::<Vec<Handle>, Handle>("xcal.scene::spawn", scene_spawn);
-        registry.register_fn1::<Handle, ()>("xcal.scene::despawn", scene_despawn);
+        registry.register_fn1::<Vec<Handle>, Handle>("zela.scene::spawn", scene_spawn);
+        registry.register_fn1::<Handle, ()>("zela.scene::despawn", scene_despawn);
 
         // ── 动画：目标枚举 + 曲线枚举 ───────────────────────────────────
-        registry.register_fn2::<TargetKind, Curve, Handle>("xcal.scene::clip", scene_clip);
+        registry.register_fn2::<TargetKind, Curve, Handle>("zela.scene::clip", scene_clip);
         registry.register_fn2::<TransformChannel, Curve, Handle>(
-            "xcal.scene::clip_transform",
+            "zela.scene::clip_transform",
             scene_clip_transform,
         );
         registry.register_fn3_named::<Handle, Handle, f64, ()>(
-            "xcal.scene::animate",
+            "zela.scene::animate",
             "ze_pod_core.Handle",
             "ze_pod_core.Handle",
             "f64",
             "()",
             scene_animate,
         );
-        registry.register_fn2::<Handle, Handle, ()>("xcal.scene::parallel", scene_parallel);
-        registry.register_fn1::<f64, ()>("xcal.scene::wait", scene_wait);
+        registry.register_fn2::<Handle, Handle, ()>("zela.scene::parallel", scene_parallel);
+        registry.register_fn1::<f64, ()>("zela.scene::wait", scene_wait);
 
         // ── 内部交接（不是脚本可见 API；走 erased / `Pod::call`）────────────
         registry.register_erased(

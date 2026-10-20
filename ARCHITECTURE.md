@@ -269,7 +269,7 @@ Instability = FanOut / (FanIn + FanOut)；0 = 底层稳定，1 = 高层易变。
 ```
 App / zela-render ──submit(Advance { dt })──► DriverPod（持有 Scheduler + 相机）
                                                   │
-                                                  ├─ publish_topic("xcal.driver.events")
+                                                  ├─ publish_topic("zela.driver.events")
                                                   │    FrameFinished / Advanced / Error
                                                   │        └─ 按 PodId 升序 typed 调用 EventSink<E>::on_event
                                                   └─ 每帧 run_frame(dt)
@@ -583,7 +583,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > **脚本 Pod（2026-10-17，C3 消费；D 线后归位到 `crates/ze/pod/ze-pod-lua`）**：
 > 它是 `ze-pod-core` 的第一个**非原生 Pod** 生产消费方 —— 方向是**脚本在装配期产出
 > `SceneScript`**（脚本 → 宿主经 `Injector` 注入的 `SceneApi` typed 函数；宿主 → 脚本
-> 经 erased `Pod::call("xcal.script::run")`），**不参与每帧采样**。
+> 经 erased `Pod::call("zela.script::run")`），**不参与每帧采样**。
 > 依赖图 / FanIn-FanOut 表**已包含** `ze-pod-core` / `ze-pod-macro` / `ze-pod-binding` /
 > `ze-pod-lua` / `ze-pod-py`（2026-10-18 按 `cargo metadata` 口径重算，见文末备注）。
 > 实际边：`zela-scene → ze-pod-core / ze-pod-macro`（`math_pod`）、
@@ -655,16 +655,16 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   两个语言适配器**不进 wasm gate**（mlua 需 C 工具链、pyo3 需系统 Python）。
 >
 > **Python 脚本与文档（2026-10-17，D+ 线）**：
-> - `ze-pod-py` 补 `run` 入口（`xcal.python::run(String) -> Any`），协议与 Lua 版同形
+> - `ze-pod-py` 补 `run` 入口（`zela.python::run(String) -> Any`），协议与 Lua 版同形
 >   （入口服务 `__reset` / `__finish`）：Python 脚本在注入后的模块 globals 里执行；
 > - App 新增 `scripts/storyboard.py` 与 `--python`（`SceneChoice::PythonStoryboard`），
 >   与硬编码分镜逐对象 / 逐绑定等价（25 对象 / 9 绑定）；
 > - **Python Pod 默认开启**：`zela-app` 的 `default` features 含 `python`
 >   （需要系统 Python；关闭后 Lua 路径仍可用）；
 > - 文档导出新增按 capability 命名空间落盘的 `.pyi`
->   （`xcal/__init__.pyi` / `xcal/scene.pyi` / `xcal/content.pyi` / `xcal/python.pyi`）；
->   `ze-pod-py` 同时把 capability 注册为真实的 `xcal.*` 模块并安装到 `sys.modules`，
->   脚本可 `import xcal.scene` / `from xcal import scene, Circle`；
+>   （`zela/__init__.pyi` / `zela/scene.pyi` / `zela/content.pyi` / `zela/python.pyi`）；
+>   `ze-pod-py` 同时把 capability 注册为真实的 `zela.*` 模块并安装到 `sys.modules`，
+>   脚本可 `import zela.scene` / `from zela import scene, Circle`；
 > - 多 `PyPod` 实例使用**唯一模块名**（`PyImport_ExecCodeModuleEx` 会复用同名模块，
 >   否则实例间会共享 globals），并对 `sys.modules` 的安装 + 执行加锁串行化。
 >

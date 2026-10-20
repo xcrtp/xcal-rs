@@ -18,15 +18,15 @@
 #
 # 注：`from` 是 Python 关键字，Arrow / Curve.Ramp 的该字段用**位置参数**传入。
 #
-# capability 是**普通 Python 模块**：可以 `import xcal.scene` / `from xcal import ...`，
-# 运行前由宿主把 `xcal` 包树安装到 `sys.modules`。
+# capability 是**普通 Python 模块**：可以 `import zela.scene` / `from zela import ...`，
+# 运行前由宿主把 `zela` 包树安装到 `sys.modules`。
 
 import math
 
-import xcal
-import xcal.content as content
-import xcal.scene as scene
-from xcal import (
+import zela
+import zela.content as content
+import zela.scene as scene
+from zela import (
     Arrow,
     Axes2D,
     Camera2D,

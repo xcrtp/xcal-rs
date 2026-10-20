@@ -3,12 +3,12 @@
 //! 支持 namespace 与重载 ⇒ 不能只用短名：
 //!
 //! ```text
-//! "xcal.math.sin(f32) -> f32"
+//! "zela.math.sin(f32) -> f32"
 //! "ns::path::overloaded(f32) -> f32"
 //! "ns::path::overloaded(Vec2) -> Vec2"     ← 重载：靠签名区分
 //! ```
 //!
-//! 短名与限定名**互不匹配**：`sin` 与 `xcal.math::sin` 是两个不同的名字。
+//! 短名与限定名**互不匹配**：`sin` 与 `zela.math::sin` 是两个不同的名字。
 
 use std::fmt;
 
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn parse_and_format_round_trip() {
         let inputs = [
-            "xcal.math::sin(f32) -> f32",
+            "zela.math::sin(f32) -> f32",
             "ns::path::overloaded(Vec2) -> Vec2",
             "sin(f32) -> f32",
             "no_args() -> bool",
@@ -149,10 +149,10 @@ mod tests {
     #[test]
     fn short_name_does_not_match_qualified_name() {
         let short = QualifiedName::parse("sin(f32) -> f32").unwrap();
-        let qualified = QualifiedName::parse("xcal.math::sin(f32) -> f32").unwrap();
+        let qualified = QualifiedName::parse("zela.math::sin(f32) -> f32").unwrap();
         assert_ne!(short, qualified, "短名与限定名不得互配");
         assert_eq!(short.namespace(), "");
-        assert_eq!(qualified.namespace(), "xcal.math");
+        assert_eq!(qualified.namespace(), "zela.math");
         assert_eq!(qualified.name(), "sin");
     }
 

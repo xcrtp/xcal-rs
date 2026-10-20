@@ -64,13 +64,13 @@ pub fn math_pod() -> &'static SharedPod {
     static MATH_POD: OnceLock<SharedPod> = OnceLock::new();
     MATH_POD.get_or_init(|| {
         let mut pod = RegistryPod::new();
-        pod.register_fn1("xcal.math.sin", |_: &dyn Pod, x: f32| x.sin());
-        pod.register_fn1("xcal.math.cos", |_: &dyn Pod, x: f32| x.cos());
-        pod.register_fn1("xcal.math.tan", |_: &dyn Pod, x: f32| x.tan());
-        pod.register_fn1("xcal.math.abs", |_: &dyn Pod, x: f32| x.abs());
-        pod.register_fn1("xcal.math.sqrt", |_: &dyn Pod, x: f32| x.sqrt());
-        pod.register_fn1("xcal.math.exp", |_: &dyn Pod, x: f32| x.exp());
-        pod.register_fn1("xcal.math.ln", |_: &dyn Pod, x: f32| x.ln());
+        pod.register_fn1("zela.math.sin", |_: &dyn Pod, x: f32| x.sin());
+        pod.register_fn1("zela.math.cos", |_: &dyn Pod, x: f32| x.cos());
+        pod.register_fn1("zela.math.tan", |_: &dyn Pod, x: f32| x.tan());
+        pod.register_fn1("zela.math.abs", |_: &dyn Pod, x: f32| x.abs());
+        pod.register_fn1("zela.math.sqrt", |_: &dyn Pod, x: f32| x.sqrt());
+        pod.register_fn1("zela.math.exp", |_: &dyn Pod, x: f32| x.exp());
+        pod.register_fn1("zela.math.ln", |_: &dyn Pod, x: f32| x.ln());
         Arc::new(pod)
     })
 }

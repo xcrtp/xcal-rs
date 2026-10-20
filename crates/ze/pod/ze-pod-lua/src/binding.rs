@@ -224,7 +224,7 @@ fn handle_of(value: &AnyUserData) -> mlua::Result<ze_pod_core::Handle> {
     value
         .borrow::<LuaHandle>()
         .map(|handle| handle.0)
-        .map_err(|_| mlua::Error::RuntimeError("期望 xcal 场景句柄（userdata）".to_string()))
+        .map_err(|_| mlua::Error::RuntimeError("期望 zela 场景句柄（userdata）".to_string()))
 }
 
 fn scalar_from_lua(value: &Value, kind: ScalarKind) -> mlua::Result<PodValue> {

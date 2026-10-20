@@ -53,7 +53,7 @@ impl CapabilityMeta {
 /// `params` / `ret` 是稳定类型名；完整函数名由 [`FnSig::qualified`] 惰性拼出。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FnSig {
-    /// namespace（可为空串；`"xcal.math"` / `"ns::path"`）。
+    /// namespace（可为空串；`"zela.math"` / `"ns::path"`）。
     pub namespace: &'static str,
     /// 函数名（不含 namespace）。
     pub name: &'static str,

@@ -557,7 +557,7 @@ impl Broker {
     /// 在已装配完成的图上，调用 `target` 的零参 `entry`，取回 `T`。
     ///
     /// 入口名必须是**完整函数名**（含参数与返回类型），例如
-    /// `"xcal.script::run(String) -> Any"`；带参入口用 [`Self::run_with`]。
+    /// `"zela.script::run(String) -> Any"`；带参入口用 [`Self::run_with`]。
     pub fn run<T: 'static>(&self, target: &str, entry: &str) -> Result<T, BrokerError> {
         self.run_with(target, entry, &[])
     }

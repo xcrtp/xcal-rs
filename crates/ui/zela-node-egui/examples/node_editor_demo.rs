@@ -492,7 +492,7 @@ fn install_cjk_fonts(ctx: &egui::Context) {
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions::default();
     eframe::run_native(
-        "xcal node editor demo",
+        "zela node editor demo",
         options,
         Box::new(|cc| {
             install_cjk_fonts(&cc.egui_ctx);

@@ -102,7 +102,7 @@ pub trait CycleDetector  { fn detect<G: Graph>(g: &G) -> Result<(), CycleError>;
 ## 使用示例：手动构造一张图
 
 ```rust
-use xcal_node::*;
+use ze_node::*;
 
 // 1) 定义节点
 struct Constant { value: f32 }

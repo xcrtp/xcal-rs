@@ -101,8 +101,8 @@ impl ContentServicePod {
     pub fn new(engine: Arc<InMemoryEngine>, paths: PathStore) -> Self {
         let id = PodId::next();
         let mut registry = RegistryPod::new();
-        registry.register_fn1::<Formula, PathList>("xcal.content::formula", content_formula);
-        registry.register_fn1::<Text, PathList>("xcal.content::text", content_text);
+        registry.register_fn1::<Formula, PathList>("zela.content::formula", content_formula);
+        registry.register_fn1::<Text, PathList>("zela.content::text", content_text);
         Self {
             id,
             registry,

@@ -32,13 +32,13 @@ fn scene_choice() -> SceneChoice {
 }
 
 fn main() -> eframe::Result<()> {
-    // 结构化日志：过滤器由 ZELA_LOG 控制（默认 xcal=debug,warn）。
+    // 结构化日志：过滤器由 ZELA_LOG 控制（默认 zela=debug,warn）。
     zela_schedule::telemetry::init_tracing();
 
     let choice = scene_choice();
 
     eframe::run_native(
-        "xcal",
+        "zela",
         ui::window_options(),
         Box::new(move |cc| Ok(Box::new(App::new_with_scene(cc, choice)?))),
     )

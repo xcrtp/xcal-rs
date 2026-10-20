@@ -127,7 +127,7 @@ pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, Res
 // GpuHandle / GpuResourceId / AccessError 是纯 Any 包装 + 类型，无 wgpu 依赖，始终可用。
 pub use render_backend::{AccessError, GpuHandle, GpuResourceId};
 
-// 为下游用户提供与原 xcal::scene::comp::{StrokeSolid, FillSolid} 一致的访问
+// 为下游用户提供与原 zela::scene::comp::{StrokeSolid, FillSolid} 一致的访问
 // 通过在 scene 根重新导出 components + render 组件。
 pub mod scene {
     pub use crate::components;

@@ -15,13 +15,13 @@ use ze_object::FunctionGraph;
 use ze_pod_core::RegistryPod;
 
 const NAMES: [&str; 7] = [
-    "xcal.math.sin",
-    "xcal.math.cos",
-    "xcal.math.tan",
-    "xcal.math.abs",
-    "xcal.math.sqrt",
-    "xcal.math.exp",
-    "xcal.math.ln",
+    "zela.math.sin",
+    "zela.math.cos",
+    "zela.math.tan",
+    "zela.math.abs",
+    "zela.math.sqrt",
+    "zela.math.exp",
+    "zela.math.ln",
 ];
 
 const INPUTS: [f32; 6] = [-2.0, -0.5, 0.0, 0.3, 1.0, 2.5];
@@ -37,7 +37,7 @@ fn all_builtins_are_registered_in_the_pod() {
         );
     }
     assert!(
-        builtin_f32("xcal.math.nope").is_none(),
+        builtin_f32("zela.math.nope").is_none(),
         "未注册的名字必须返回 None"
     );
 }
@@ -46,13 +46,13 @@ fn all_builtins_are_registered_in_the_pod() {
 #[test]
 fn pod_path_matches_std_math_bit_for_bit() {
     for (name, expected) in [
-        ("xcal.math.sin", f32::sin as fn(f32) -> f32),
-        ("xcal.math.cos", f32::cos),
-        ("xcal.math.tan", f32::tan),
-        ("xcal.math.abs", f32::abs),
-        ("xcal.math.sqrt", f32::sqrt),
-        ("xcal.math.exp", f32::exp),
-        ("xcal.math.ln", f32::ln),
+        ("zela.math.sin", f32::sin as fn(f32) -> f32),
+        ("zela.math.cos", f32::cos),
+        ("zela.math.tan", f32::tan),
+        ("zela.math.abs", f32::abs),
+        ("zela.math.sqrt", f32::sqrt),
+        ("zela.math.exp", f32::exp),
+        ("zela.math.ln", f32::ln),
     ] {
         let via_pod = builtin_f32(name).expect("Pod 路径");
         for x in INPUTS {
@@ -71,7 +71,7 @@ fn pod_function_is_send_sync_and_deep_cloneable() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<FunctionX2Y<f32, f32>>();
 
-    let a = builtin_f32("xcal.math.sin").unwrap();
+    let a = builtin_f32("zela.math.sin").unwrap();
     let b = a.clone();
     assert!(!Arc::ptr_eq(&a.f, &b.f), "深克隆必须产生新的 Arc");
     assert_eq!((a.f)(0.7).to_bits(), (b.f)(0.7).to_bits());
@@ -83,7 +83,7 @@ fn pod_function_is_send_sync_and_deep_cloneable() {
 fn empty_pod_cannot_provide_functions() {
     let empty: SharedPod = Arc::new(RegistryPod::new());
     assert!(
-        function_from_pod::<f32, f32>(&empty, "xcal.math.sin").is_none(),
+        function_from_pod::<f32, f32>(&empty, "zela.math.sin").is_none(),
         "移除 Pod 注册后必须失败"
     );
 }
@@ -92,7 +92,7 @@ fn empty_pod_cannot_provide_functions() {
 #[test]
 fn deserialized_builtin_is_auto_bound() {
     let components: Components = vec![Box::new(FunctionGraph::new(
-        FunctionX2Y::named("xcal.math.sin", |x: f32| x.sin()),
+        FunctionX2Y::named("zela.math.sin", |x: f32| x.sin()),
         Sampler1D::new(0.0f32, 1.0, 0.25),
     ))];
     let decoded =

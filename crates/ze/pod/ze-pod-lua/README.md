@@ -36,7 +36,7 @@ app:        zela-app（静态插件清单 → Broker 装配 → run → commit�
 
 ```text
 脚本 → 宿主：Lua 调注入进来的能力表（如 scene.*）；宿主侧是原生 Rust Service。
-宿主 → 脚本：Pod::call("xcal.script::run", [source])（erased 慢路径）。
+宿主 → 脚本：Pod::call("zela.script::run", [source])（erased 慢路径）。
 ```
 
 | 入口 | 形式 | 说明 |
@@ -44,9 +44,9 @@ app:        zela-app（静态插件清单 → Broker 装配 → run → commit�
 | `LuaPod::register_capability::<C>(service, required)` | 原生 | 装配期注册一个能力的 Lua 绑定器 |
 | `LuaPod::run::<T>(source)` | 原生 | 执行 Lua，取回入口 Service 的产物 `T` |
 | `Broker::run_with("lua", RUN_ENTRY, &[&source])` | 原生 | App 的推荐路径（装配与执行分离） |
-| `Pod::call("xcal.script::run")` | erased | 不依赖 `ze-pod-lua` 类型的宿主 |
+| `Pod::call("zela.script::run")` | erased | 不依赖 `ze-pod-lua` 类型的宿主 |
 
-内部交接函数 `xcal.scene::__reset` / `__finish` 不是脚本可见 API，只走 `Pod::call`：
+内部交接函数 `zela.scene::__reset` / `__finish` 不是脚本可见 API，只走 `Pod::call`：
 
 - 每轮 `run` 前调用入口服务的 `__reset`；
 - 脚本执行完后调用 `__finish`，约定返回 `Result<Box<dyn Any>, String>`。

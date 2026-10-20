@@ -5,6 +5,10 @@ Painter 抽象、egui UI overlay、3D 渲染层，以及语言无关的 Pod 边�
 （Lua / Python 在装配期编排场景）。同一套装配尾也能在浏览器（WebGPU / WASM）
 回放 ZSB。
 
+> **改名说明（仓库中唯一保留旧名的位置）**：本项目原名 `xcal-rs`，crate
+> 前缀为 `xc-` / `xcal-`；2026-10 重命名为 `zela`，前缀改为 `ze-` /
+> `zela-`。代码、字符串、脚本与配置中不再出现旧前缀。
+
 ## Quick Start
 
 > 目标：**5 分钟内看到第一个 mp4**。命令都在仓库根目录执行。

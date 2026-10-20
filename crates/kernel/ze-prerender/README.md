@@ -117,7 +117,7 @@ let engine = InMemoryEngine::new("latex", compile);
 
 ## 调试
 
-设置环境变量 `XC_PRERENDER_DUMP_SRC` 会把包表前缀后的完整 wrapped source
+设置环境变量 `ZELA_PRERENDER_DUMP_SRC` 会把包表前缀后的完整 wrapped source
 打印到 stderr，便于定位 Typst 诊断信息。
 
 ---

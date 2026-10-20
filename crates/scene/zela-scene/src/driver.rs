@@ -39,11 +39,11 @@ use crate::TimeState;
 use crate::director_state::DirectorState;
 
 /// Driver 事件的 topic 名（订阅方在 `attach_sink` 时登记为成员）。
-pub const EVENT_TOPIC: &str = "xcal.driver.events";
+pub const EVENT_TOPIC: &str = "zela.driver.events";
 
 /// 驱动命令（命令枚举由 domain 注入泛型 capability）。
 #[derive(Clone, Debug, PartialEq, ze_pod_macro::PodType)]
-#[pod_type(name = "xcal.driver.DriverCommand")]
+#[pod_type(name = "zela.driver.DriverCommand")]
 pub enum DriverCommand {
     /// 推进一帧（精确 `dt` 秒）。
     Advance {
@@ -68,7 +68,7 @@ pub enum DriverCommand {
 
 /// 驱动事件（只用于观测，不参与帧推进）。
 #[derive(Clone, Debug, PartialEq, ze_pod_macro::PodType)]
-#[pod_type(name = "xcal.driver.DriverEvent")]
+#[pod_type(name = "zela.driver.DriverEvent")]
 pub enum DriverEvent {
     /// 一帧完成（`frame` 从 1 开始，`t` 是帧末全局时间）。
     FrameFinished {

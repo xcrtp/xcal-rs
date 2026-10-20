@@ -1192,7 +1192,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             .iter()
             .map(|c| c.name.as_str())
             .collect();
-        assert_eq!(names, vec!["xcal.scene"], "只用到 scene，不得含 content");
+        assert_eq!(names, vec!["zela.scene"], "只用到 scene，不得含 content");
 
         // fourier 用 content.text 生成标题 ⇒ scene + content。
         let compiled = compile_script(
@@ -1205,8 +1205,8 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             .iter()
             .map(|c| c.name.as_str())
             .collect();
-        assert!(names.contains(&"xcal.scene"), "names = {names:?}");
-        assert!(names.contains(&"xcal.content"), "names = {names:?}");
+        assert!(names.contains(&"zela.scene"), "names = {names:?}");
+        assert!(names.contains(&"zela.content"), "names = {names:?}");
     }
 
     /// **S4 验收**：`CompiledScript.pods` 与 capabilities 同口径 ——
@@ -1431,10 +1431,10 @@ scene.animate(o, scene.clip_transform(TransformChannel.Rotation, Curve.Keyframes
         );
     }
 
-    /// **D+ 验收**：capability 是普通 Python 模块 —— `import xcal.scene` 可用。
+    /// **D+ 验收**：capability 是普通 Python 模块 —— `import zela.scene` 可用。
     #[cfg(feature = "python")]
     #[test]
-    fn python_script_can_import_xcal_modules() {
+    fn python_script_can_import_zela_modules() {
         use ze_prerender::placeholder_engine;
 
         let assembly =
@@ -1442,12 +1442,12 @@ scene.animate(o, scene.clip_transform(TransformChannel.Rotation, Curve.Keyframes
         let script = assembly
             .run_python_script(
                 r#"
-import xcal
-import xcal.scene as scene2
-from xcal import Circle, scene
-from xcal.scene import spawn
+import zela
+import zela.scene as scene2
+from zela import Circle, scene
+from zela.scene import spawn
 
-assert xcal.scene is scene2
+assert zela.scene is scene2
 assert scene.spawn is spawn
 
 scene.spawn([Circle(x=0.0, y=0.0, r=1.0)])

@@ -19,10 +19,10 @@
 
 import math
 
-import xcal
-import xcal.content as content
-import xcal.scene as scene
-from xcal import (
+import zela
+import zela.content as content
+import zela.scene as scene
+from zela import (
     Arrow,
     Axes2D,
     Camera2D,

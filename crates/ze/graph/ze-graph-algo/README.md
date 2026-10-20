@@ -20,9 +20,9 @@
 
 ```rust
 use ze_graph_algo::KahnSorter;
-use xcal_node::{TopoSort, SimpleGraph, ConnectError};
+use ze_node::{TopoSort, SimpleGraph, ConnectError};
 
-fn eval_eager<G: xcal_node::Graph>(g: &G) -> Result<(), xcal_node::CycleError> {
+fn eval_eager<G: ze_node::Graph>(g: &G) -> Result<(), ze_node::CycleError> {
     let order: Vec<_> = KahnSorter::sort(g)?;
     for n in order { /* execute node n */ }
     Ok(())
@@ -41,7 +41,7 @@ match eval_eager(&g) {
 
 ```rust
 use ze_graph_algo::BfsDirtyTracker;
-use xcal_node::{DirtyTracker, Graph, SimpleGraph};
+use ze_node::{DirtyTracker, Graph, SimpleGraph};
 
 let g: &SimpleGraph = /* ... */;
 
@@ -65,9 +65,9 @@ tracker.clear();
 
 ```rust
 use ze_graph_algo::TarjanSccDetector;
-use xcal_node::{CycleDetector, Graph};
+use ze_node::{CycleDetector, Graph};
 
-fn can_connect<G: Graph>(g: &G, from: xcal_node::OutputSocketId, to: xcal_node::InputSocketId) -> bool {
+fn can_connect<G: Graph>(g: &G, from: ze_node::OutputSocketId, to: ze_node::InputSocketId) -> bool {
     // 1) 临时连
     // 2) 环检测
     // 3) 真有环就回滚（Editor::can_connect 在 zela-node-editor 中实现）

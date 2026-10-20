@@ -4,13 +4,13 @@
 // 本文件只负责把同一份 schema 翻译成 Python 类型存根（不依赖 pyo3）。
 //
 // ```text
-// xcal.scene   → xcal/scene.pyi
-// xcal.content → xcal/content.pyi
-// xcal.python  → xcal/python.pyi
-//                xcal/__init__.pyi（Handle + 共享类型 + 子模块再导出）
+// zela.scene   → zela/scene.pyi
+// zela.content → zela/content.pyi
+// zela.python  → zela/python.pyi
+//                zela/__init__.pyi（Handle + 共享类型 + 子模块再导出）
 // ```
 //
-// 这样 `import xcal.scene` / `from xcal import scene` 与普通 Python 模块一致。
+// 这样 `import zela.scene` / `from zela import scene` 与普通 Python 模块一致。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -58,7 +58,7 @@ fn package_ancestors(module: &str) -> Vec<String> {
     packages
 }
 
-/// capability 的模块路径：优先取函数签名里的 namespace（如 `xcal.scene`）。
+/// capability 的模块路径：优先取函数签名里的 namespace（如 `zela.scene`）。
 fn capability_path(capability: &CapabilityDocs) -> String {
     capability
         .calls
@@ -211,7 +211,7 @@ fn render_type(
 
 /// 生成按 capability 路径组织的 `.pyi` 文件树。
 ///
-/// key 是相对路径（`/` 分隔），例如 `xcal/__init__.pyi` / `xcal/scene.pyi`。
+/// key 是相对路径（`/` 分隔），例如 `zela/__init__.pyi` / `zela/scene.pyi`。
 pub fn pyi_files(capabilities: &[CapabilityDocs]) -> BTreeMap<String, String> {
     let types = ze_pod_binding::reachable_types(capabilities);
 
@@ -237,7 +237,7 @@ pub fn pyi_files(capabilities: &[CapabilityDocs]) -> BTreeMap<String, String> {
         .keys()
         .next()
         .map(|module| root_of(module).to_string())
-        .unwrap_or_else(|| "xcal".to_string());
+        .unwrap_or_else(|| "zela".to_string());
 
     // 类型 → 所属包（类型名去掉最后一段）。
     let mut type_home: BTreeMap<&'static str, String> = BTreeMap::new();
@@ -432,14 +432,14 @@ mod tests {
     use ze_pod_macro::{PodType, capability};
 
     #[derive(Clone, Debug, PartialEq, PodType)]
-    #[pod_type(name = "xcal.Dot")]
+    #[pod_type(name = "zela.Dot")]
     struct Dot {
         x: f32,
         y: f32,
     }
 
     #[allow(dead_code)] // capability 的 inherent 方法不全部调用。
-    #[capability(namespace = "xcal.scene", bindings)]
+    #[capability(namespace = "zela.scene", bindings)]
     struct MiniScene<'a> {
         /// 创建一个点组件。
         dot: fn(&'a dyn ze_pod_core::Pod, shape: Dot) -> Handle,
@@ -465,15 +465,15 @@ mod tests {
     #[test]
     fn pyi_paths_follow_capability_namespaces() {
         let files = files();
-        assert!(files.contains_key("xcal/__init__.pyi"));
-        assert!(files.contains_key("xcal/scene.pyi"));
-        assert!(files.contains_key("xcal/python.pyi"));
+        assert!(files.contains_key("zela/__init__.pyi"));
+        assert!(files.contains_key("zela/scene.pyi"));
+        assert!(files.contains_key("zela/python.pyi"));
     }
 
     #[test]
     fn pyi_root_declares_handle_and_types() {
         let files = files();
-        let root = &files["xcal/__init__.pyi"];
+        let root = &files["zela/__init__.pyi"];
         assert!(root.contains("class Handle:"));
         assert!(root.contains("def Dot("), "组件构造器应是函数");
         assert!(root.contains("from . import scene as scene"));
@@ -483,11 +483,11 @@ mod tests {
     #[test]
     fn pyi_capability_module_reexports_types() {
         let files = files();
-        let scene = &files["xcal/scene.pyi"];
-        assert!(scene.contains("from xcal import Handle"));
+        let scene = &files["zela/scene.pyi"];
+        assert!(scene.contains("from zela import Handle"));
         assert!(scene.contains("def dot("));
         assert!(scene.contains("-> Handle: ..."));
-        // 组件类型映射为 Any，不产生 `from xcal import Dot`。
+        // 组件类型映射为 Any，不产生 `from zela import Dot`。
         assert!(!scene.contains("import Dot"));
     }
 }
