@@ -4,32 +4,26 @@
 //! cargo verify               # full：check + test + wasm + structure + smoke + hashes
 //! cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
 //! cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
+//! cargo verify --record --reason <text>
+//!                            # 录制设备重录基线（见 lib.rs：两槽窗口 / 强制 reason）
 //! ```
 //!
 //! 设计约束（见「本机验证入口 xtask 执行计划」）：
 //! - 零第三方依赖（不引 clap / toml），保证 xtask 自身编译快；
 //! - 本机与 CI 的差异必须**显式打印**：pyo3 不可用时降级、jq 缺失时跳过；
-//! - `baselines.txt` 的 `[native]` 段自动比对，`[browser]` 段**仅留档**。
+//! - `baselines.txt` 的 `[native]` 段自动比对，`[browser]` 段**仅留档**；
+//! - 门禁级逻辑（解析器 / 选项 / 重录改写）在 `lib.rs`，`tests/` 配用例。
 //!
 //! 本 crate 是**独立 workspace**（`xtask/Cargo.toml` 中的空 `[workspace]`），
 //! 因此不会被根 workspace 的 `--workspace` 或 wasm gate 收进去。
 
-use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const USAGE: &str = "\
-用法：
-  cargo verify               # full：check + test + wasm + structure + smoke + hashes
-  cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
-  cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
-
-对拍选项：
-  --skip-baseline            # 只断言 --script == --bundle，不比对基线
-                             # （用于无匹配 GPU 的 CI；会显式打印，不静默）";
+use xtask::{apply_record, load_baselines, Options, Step};
 
 /// wasm gate 的 kernel 组（与 CI 名单逐字一致）。
 const KERNEL_CRATES: &[&str] = &[
@@ -85,97 +79,6 @@ const JQ_GLAM: &str = r#"
 | select(.name == "glam")
 | "\($n) -> glam"
 "#;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Step {
-    Check,
-    Test,
-    Wasm,
-    Structure,
-    Smoke,
-    Hashes,
-}
-
-impl Step {
-    const ALL: [Step; 6] = [
-        Step::Check,
-        Step::Test,
-        Step::Wasm,
-        Step::Structure,
-        Step::Smoke,
-        Step::Hashes,
-    ];
-
-    fn name(self) -> &'static str {
-        match self {
-            Step::Check => "check",
-            Step::Test => "test",
-            Step::Wasm => "wasm",
-            Step::Structure => "structure",
-            Step::Smoke => "smoke",
-            Step::Hashes => "hashes",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Step> {
-        Step::ALL.into_iter().find(|step| step.name() == value)
-    }
-}
-
-struct Options {
-    fast: bool,
-    step: Option<Step>,
-    skip_baseline: bool,
-}
-
-impl Options {
-    fn parse(raw: &[String]) -> Result<Self, String> {
-        let mut fast = false;
-        let mut step = None;
-        let mut skip_baseline = false;
-        let mut index = 0;
-        while index < raw.len() {
-            match raw[index].as_str() {
-                "--help" | "-h" => return Err(USAGE.to_string()),
-                "--fast" => fast = true,
-                "--skip-baseline" => skip_baseline = true,
-                "--step" => {
-                    index += 1;
-                    let value = raw
-                        .get(index)
-                        .ok_or_else(|| format!("--step 需要一个名字\n{USAGE}"))?;
-                    let parsed = Step::parse(value)
-                        .ok_or_else(|| format!("未知 step：{value}\n{USAGE}"))?;
-                    if step.is_some() {
-                        return Err("--step 只能给一次".to_string());
-                    }
-                    step = Some(parsed);
-                }
-                other => return Err(format!("未知参数：{other}\n{USAGE}")),
-            }
-            index += 1;
-        }
-        if fast && step.is_some() {
-            return Err("--fast 与 --step 不能同时使用".to_string());
-        }
-        Ok(Self {
-            fast,
-            step,
-            skip_baseline,
-        })
-    }
-
-    fn steps(&self) -> Vec<Step> {
-        if self.fast {
-            // 短对拍是 smoke test，不是完整基线的等价替代（见 smoke.lua 的注释）。
-            return vec![Step::Check, Step::Test, Step::Smoke];
-        }
-        match self.step {
-            Some(step) => vec![step],
-            None => Step::ALL.to_vec(),
-        }
-    }
-}
 
 /// pyo3（Python Pod）在本机是否可用。
 ///
@@ -277,6 +180,9 @@ fn main() {
 
 fn run(options: &Options) -> Result<(), String> {
     let root = repo_root()?;
+    if options.record {
+        return run_record(&root, options);
+    }
     let plan = FeaturePlan::detect();
 
     println!("[xtask] 仓库根：{}", root.display());
@@ -319,6 +225,92 @@ fn repo_root() -> Result<PathBuf, String> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| format!("无法从 {} 推断仓库根", manifest.display()))
+}
+
+// ─── step: record（基线重录，仅录制设备） ────────────────────────────────────
+
+/// `--record --reason <text>`：重录 `baselines.txt`（基线策略 §九）。
+///
+/// 流程：
+/// 1. 设备门禁：`ZELA_RECORD_DEVICE` 未设置 ⇒ 显式报错，不静默；
+/// 2. 硬门禁：smoke + hashes 全量对拍，`--script == --bundle` 必须绿；
+/// 3. 回填旧 `pending` 槽的 commit（当前 HEAD）并轮换 slotA/slotB（纯逻辑在
+///    `xtask::apply_record`，有 tests 覆盖）；
+/// 4. 写入后重新解析自校验。
+fn run_record(root: &Path, options: &Options) -> Result<(), String> {
+    let device = env::var("ZELA_RECORD_DEVICE").unwrap_or_default();
+    if device.trim().is_empty() {
+        return Err(format!(
+            "--record 只允许在录制设备执行（基线策略 §四.1：沙盒 / CI / lavapipe / 其他 GPU 一律不得写入基线）\n  \
+             本机未设置 ZELA_RECORD_DEVICE ⇒ 拒绝写入，不静默。\n  \
+             若确认本机是录制设备（Windows / RTX 4060 Laptop），设置后重跑：\n  \
+             \x20 $env:ZELA_RECORD_DEVICE = \"windows / RTX 4060 Laptop\""
+        ));
+    }
+    let reason = options.reason.as_deref().unwrap_or_default();
+
+    let baseline_path = scripts_dir(root).join("baselines.txt");
+    prepare_hashes_dir(root)?;
+    announce_baselines(&baseline_path);
+    println!("[xtask] --record：检测到 ZELA_RECORD_DEVICE={device}，仅录制设备可执行");
+
+    // 1) 硬门禁：同一跑次 script == bundle 必须绿（smoke + hashes 全量）。
+    let smoke_hash = compare_script_vs_bundle(root, "smoke", "320x240", None)?;
+    let fourier_hash = compare_script_vs_bundle(root, "fourier", "640x480", None)?;
+    let storyboard_hash = compare_script_vs_bundle(root, "storyboard", "640x480", None)?;
+
+    // 2) 回填 commit：当前 HEAD（重录发生在提交前，commit 待回填）。
+    let head = git_short_head(root)?;
+    println!("[xtask] --record：回填候选 commit = {head}（旧槽位无 commit 或 pending 时回填）");
+
+    // 3) 改写文件（纯函数，逻辑在 lib.rs，tests/ 覆盖）。
+    let text = fs::read_to_string(&baseline_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
+    let records = [
+        ("smoke".to_string(), "smoke".to_string(), smoke_hash),
+        ("native".to_string(), "fourier".to_string(), fourier_hash),
+        (
+            "native".to_string(),
+            "storyboard".to_string(),
+            storyboard_hash,
+        ),
+    ];
+    let next = apply_record(&text, &device, reason, &head, &records)?;
+    fs::write(&baseline_path, next)
+        .map_err(|error| format!("写入 {} 失败：{error}", baseline_path.display()))?;
+
+    // 4) 自校验：重录后的文件必须能重新解析。
+    let baselines = load_baselines(&baseline_path)?;
+    for (key, hash) in &baselines.native {
+        println!("[xtask] [native] {key} = {hash}（commit 待回填）");
+    }
+    for (key, hash) in &baselines.smoke {
+        println!("[xtask] [smoke] {key} = {hash}（commit 待回填）");
+    }
+    println!(
+        "[xtask] 已重录 {}：reason 已写入，commit 待回填",
+        baseline_path.display()
+    );
+    Ok(())
+}
+
+fn git_short_head(root: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("无法运行 git：{error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git rev-parse --short HEAD 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if head.is_empty() {
+        return Err("git rev-parse --short HEAD 输出为空".to_string());
+    }
+    Ok(head)
 }
 
 // ─── step: check ────────────────────────────────────────────────────────────
@@ -631,7 +623,8 @@ fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
                 .as_str(),
         )
     };
-    compare_script_vs_bundle(root, "smoke", "320x240", expected)
+    let _ = compare_script_vs_bundle(root, "smoke", "320x240", expected)?;
+    Ok(())
 }
 
 fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
@@ -652,7 +645,7 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
                     .as_str(),
             )
         };
-        compare_script_vs_bundle(root, work, "640x480", expected)?;
+        let _ = compare_script_vs_bundle(root, work, "640x480", expected)?;
     }
     Ok(())
 }
@@ -687,7 +680,7 @@ fn compare_script_vs_bundle(
     work: &str,
     size: &str,
     expected: Option<&str>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let script_rel = format!("crates/app/zela-app/scripts/{work}.lua");
     let zsb_rel = format!("target/xtask/hashes/{work}.zsb");
     let script_path = root.join(&script_rel);
@@ -726,12 +719,10 @@ fn compare_script_vs_bundle(
             println!("[xtask] {work}: script == bundle == 基线（{script_hash}）");
         }
         None => {
-            println!(
-                "[xtask] {work}: script == bundle（{script_hash}）；--skip-baseline：未比对基线"
-            );
+            println!("[xtask] {work}: script == bundle（{script_hash}）");
         }
     }
-    Ok(())
+    Ok(script_hash)
 }
 
 fn compile_bundle(root: &Path, script: &str, out: &str) -> Result<(), String> {
@@ -807,72 +798,7 @@ fn parse_frame_hash(text: &str) -> Option<String> {
     None
 }
 
-/// `baselines.txt` 的分段视图。
-struct Baselines {
-    /// 完整对拍（fourier / storyboard），不符即 fail。
-    native: BTreeMap<String, String>,
-    /// 短对拍（smoke），不符即 fail；边界见 `step_smoke`。
-    smoke: BTreeMap<String, String>,
-}
-
-fn load_baselines(path: &Path) -> Result<Baselines, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
-    let mut section = String::new();
-    let mut baselines = Baselines {
-        native: BTreeMap::new(),
-        smoke: BTreeMap::new(),
-    };
-
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
-            section = name.trim().to_string();
-            continue;
-        }
-        let (key, value) = line.split_once('=').ok_or_else(|| {
-            format!(
-                "{}:{}：无法解析（期望 `key = value` 或 `[section]`）",
-                path.display(),
-                index + 1
-            )
-        })?;
-        let key = key.trim();
-        let value = value.trim();
-        match section.as_str() {
-            // 新增可比对 section 必须在这里显式注册：未知 section 会响亮失败。
-            "native" | "smoke" => {
-                if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err(format!(
-                        "{}:{}：`{key}` 不是 64 位十六进制哈希",
-                        path.display(),
-                        index + 1
-                    ));
-                }
-                let map = if section == "native" {
-                    &mut baselines.native
-                } else {
-                    &mut baselines.smoke
-                };
-                map.insert(key.to_string(), value.to_ascii_lowercase());
-            }
-            // 浏览器基线仅留档：本机跑不出来，**绝不**参与自动比对。
-            "browser" => {}
-            other => {
-                return Err(format!(
-                    "{}:{}：未知 section `[{other}]`",
-                    path.display(),
-                    index + 1
-                ));
-            }
-        }
-    }
-
-    Ok(baselines)
-}
+/// `baselines.txt` 的解析与重录改写已迁至 `lib.rs`（门禁级代码，`tests/` 配用例）。
 
 // ─── 进程工具 ───────────────────────────────────────────────────────────────
 
