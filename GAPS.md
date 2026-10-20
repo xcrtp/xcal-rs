@@ -30,6 +30,9 @@
 | 编号 | 缺口 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
 | **G-101** | `WorldTransforms` 只有 2D 仿射；3D 录制只读 local `Transform`，3D 父子层级未接线 | 场景层 → 渲染层 | **升格（原 F-02）→ S1 已关闭** | 关闭于 S1：结构层提交 `84cabeb`（[`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs#L39-L65) 改存 `Transform3D` + `get2d` 投影）、消费方接线提交 `3ed493f`（[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs) 3D 录制 `Reads = (WorldTransforms,)`）；像素对拍 fourier / storyboard 与基线逐位一致（冻结态通过） |
+| **G-101 补证（S0-1，2026-10-20）** | S1 零扰动已实证：h_after（HEAD `ba75687`，S1 后）== h_before（`ff2751d`，S1 前）== 同一对哈希 fourier `b6eaa864933847ff…` / storyboard `6de42d6b15943c…`（均用当前 ZELA 口径重跑）。注：计划原定 h_before 取 `84cabeb^`，但该中间提交 `3ed493f` 不可编译（record_systems 已接线而 draw.rs 仍传 Mat3），故取真正可编译的 S1 前 `ff2751d`（`3ed493f^`）—— 以代码为准，见执行报告 §六.4 |
+
+> **消息误标注明（S0-4）**：`3ed493f` 的提交消息写「WorldTransforms 换型为 3D（结构层）」，实际内容只是 `record_systems.rs` 的消费方接线（结构层本体在 `84cabeb`）。该提交已在 `origin/feat/2d3d-fusion` 上（共享分支），故不改写历史，仅在此记账。
 
 > **为什么是 P0**：只要融合要求 2D 与 3D 对象进入**同一父子层级**（或 3D 对象跟随
 > 父对象变换），当前 3D 录制不消费 `WorldTransforms` 就直接失效。若融合只做

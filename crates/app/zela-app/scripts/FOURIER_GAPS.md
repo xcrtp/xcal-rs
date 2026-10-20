@@ -47,8 +47,10 @@ demo 逐位不变。
    本身也用它；缺口只在脚本入口 —— `zela_scene::pod::types::Curve::Keyframes`
    目前是 `Vec<ScalarKey>`，只能写标量。位置/向量的多关键帧编排仍要靠
    `Ramp2`（仅两端）或多段。
-2. **`WorldTransforms` 只有 2D 仿射**（**2D/3D 融合前置 P0**，见 `GAPS.md` G-101）：
-   3D `SceneRecord3DSystem` 仍只读 local `Transform`，3D 父子层级未接线。
+2. ~~**`WorldTransforms` 只有 2D 仿射**~~ **已关闭（S1，2026-10-20）**：
+   `WorldTransforms` 已换型存 `Transform3D`，2D 消费方经 `get2d` 投影视图读取；
+   3D `SceneRecord3DSystem` 已改读 `(WorldTransforms,)`，3D 父子层级已接线。
+   零扰动已实证（S0-1 补证，见 `GAPS.md` G-101）。
 3. **`MorphRecordSystem` / `ContentTextureRecordSystem` 不消费世界变换**：
    Text（Path）与向量（Arrow/Reveal/Circle）已覆盖，但形变/内容纹理对象在
    `Parent` 下不会跟随。
