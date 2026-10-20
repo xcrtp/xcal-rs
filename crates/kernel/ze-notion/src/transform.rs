@@ -112,6 +112,27 @@ impl Transform3D {
     }
 }
 
+impl Transform3D {
+    /// **2D 投影视图**（S1 / D4）：取左上 2×2 线性子块 + xy 平移 ⇒ [`Transform2D`]。
+    ///
+    /// ⚠️ **这是投影，不是同构**：`z` 平移与 xy↔z 耦合被**丢弃**（不报错，
+    /// 铁律 3"不静默"在此以 doc + `GAPS.md` 记账满足）。"2D 对象挂 3D 父下"
+    /// 是 S6 的目标形态，本轮若报错会提前堵死该路径。
+    ///
+    /// 组合顺序与 [`Transform2D`] 的约定一致（scale → rotation → translation），
+    /// 3×3 齐次第三行恒为 `(0, 0, 1)`。
+    pub fn to_affine2d(&self) -> Transform2D {
+        let m = self.matrix;
+        Transform2D {
+            matrix: Mat3::from_cols(
+                Vec3::new(m.x_axis.x, m.x_axis.y, 0.0),
+                Vec3::new(m.y_axis.x, m.y_axis.y, 0.0),
+                Vec3::new(m.w_axis.x, m.w_axis.y, 1.0),
+            ),
+        }
+    }
+}
+
 impl From<Mat4> for Transform3D {
     fn from(matrix: Mat4) -> Self {
         Self::from_matrix(matrix)
@@ -167,5 +188,49 @@ mod tests {
         // 绕 +Y 旋转 90°：+X → -Z（右手系）。
         assert!((p.z + 1.0).abs() < 1e-5, "got {p:?}");
         assert!(p.x.abs() < 1e-5);
+    }
+
+    // ─── S1：`Transform3D::to_affine2d`（2D 投影视图）───────────────────────
+
+    #[test]
+    fn test_3d_to_affine2d_identity() {
+        assert_eq!(
+            Transform3D::identity().to_affine2d(),
+            Transform2D::identity()
+        );
+    }
+
+    #[test]
+    fn test_3d_to_affine2d_xy_translation_kept() {
+        let t = Transform3D::translate(Vec3::new(10.0, -5.0, 0.0));
+        assert_eq!(
+            t.to_affine2d(),
+            Transform2D::translate(Vec2::new(10.0, -5.0))
+        );
+    }
+
+    /// 绕 Z 旋转：投影出的 2D 矩阵与 `Transform2D::rotate` 逐位一致
+    /// （glam 的 `Mat3::from_rotation_z` / `Mat4::from_rotation_z` 共用 `sin_cos`）。
+    #[test]
+    fn test_3d_to_affine2d_rotation_z_matches_2d_rotate() {
+        for theta in [0.0, 0.1, 2.7, std::f32::consts::FRAC_PI_2, std::f32::consts::PI] {
+            let t3 = Transform3D::from_matrix(Mat4::from_rotation_z(theta));
+            assert_eq!(
+                t3.to_affine2d(),
+                Transform2D::rotate(theta),
+                "θ = {theta}"
+            );
+        }
+    }
+
+    /// **D4 铁证**：`z` 平移被丢弃 —— xy 部分保持不变，z 不出现在 2D 矩阵里。
+    #[test]
+    fn test_3d_to_affine2d_drops_z_translation() {
+        let t = Transform3D::translate(Vec3::new(1.0, 2.0, 5.0));
+        assert_eq!(
+            t.to_affine2d(),
+            Transform2D::translate(Vec2::new(1.0, 2.0)),
+            "z 平移必须被投影丢弃"
+        );
     }
 }

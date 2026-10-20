@@ -9,7 +9,7 @@
 // - 本类型：**ECS 摆放组件**（position / rotation / scale 三个字段），
 //   `matrix()` 才把它折算成数学矩阵。
 
-use ze_notion::{Mat4, Quat, Transform2D, Vec3};
+use ze_notion::{Mat4, Quat, Transform2D, Transform3D, Vec3};
 
 /// 3D 实体变换：平移 + 旋转 + 缩放（glam 原生类型）。
 ///
@@ -45,6 +45,13 @@ impl Transform {
         Transform2D::scale(self.scale.truncate())
             .compose(Transform2D::rotate(self.rotation_about_z()))
             .compose(Transform2D::translate(self.position.truncate()))
+    }
+
+    /// **3D 仿射**（S1）：折算为理念层 [`Transform3D`] —— 完整 4×4，
+    /// 与 [`Transform::matrix`] **逐位一致**（`Transform3D::from_matrix` 原样包装）。
+    /// 2D 消费方从它投影（[`Transform3D::to_affine2d`]），世界变换单一真源（铁律 4）。
+    pub fn to_affine3d(&self) -> Transform3D {
+        Transform3D::from_matrix(self.matrix())
     }
 
     /// 从 `Quat` 取**绕 Z 轴**的旋转角（弧度）。
@@ -114,5 +121,75 @@ mod tests {
     #[test]
     fn identity_transform_is_identity_affine2d() {
         assert_eq!(Transform::default().to_affine2d(), Transform2D::identity());
+    }
+
+    // ─── S1：`Transform::to_affine3d` ──────────────────────────────────────
+
+    /// `to_affine3d` 与 `matrix()` **逐位一致**（单一真源：Mat4 是唯一世界变换）。
+    #[test]
+    fn to_affine3d_matrix_is_bitwise_matrix() {
+        let t = Transform {
+            position: Vec3::new(1.0, -2.0, 3.0),
+            rotation: Quat::from_rotation_z(0.7),
+            scale: Vec3::new(2.0, 0.5, 1.0),
+        };
+        assert_eq!(t.to_affine3d().matrix, t.matrix());
+    }
+
+    /// 默认 ⇒ 3D 恒等仿射。
+    #[test]
+    fn default_to_affine3d_is_identity() {
+        assert_eq!(
+            Transform::default().to_affine3d(),
+            Transform3D::identity()
+        );
+    }
+
+    /// **S1-0 探针固化**：`to_affine3d` 投影出的 2D 子块 vs `to_affine2d`。
+    ///
+    /// 实测（2026-10-20，Windows）：θ ∈ {0, 0.1, TAU, 2TAU} 逐位相等；
+    /// θ = 2.7 有 2 个元素差 2 ulp；θ = π/2、π 的近零分量差（最大 ulp
+    /// 6710331，绝对差 < 1e-7）。此处把 fourier 命中的角度断言为**逐位相等**，
+    /// 其余按 ulp 上界断言 —— 不写模糊的"接近"。
+    #[test]
+    fn to_affine3d_xy_subblock_vs_to_affine2d() {
+        let tau = std::f32::consts::TAU;
+        for theta in [0.0, 0.1, tau, 2.0 * tau] {
+            let t = Transform {
+                rotation: Quat::from_rotation_z(theta),
+                ..Transform::default()
+            };
+            assert_eq!(
+                t.to_affine3d().to_affine2d(),
+                t.to_affine2d(),
+                "θ = {theta} 必须逐位相等"
+            );
+        }
+
+        // θ = 2.7：S1-0 实测最大 2 ulp（f32）。
+        let t = Transform {
+            rotation: Quat::from_rotation_z(2.7),
+            ..Transform::default()
+        };
+        let a = t.to_affine3d().to_affine2d().matrix.to_cols_array();
+        let b = t.to_affine2d().matrix.to_cols_array();
+        let max_ulp = [0, 1, 3, 4, 6, 7]
+            .iter()
+            .map(|&i| ulp_diff(a[i], b[i]))
+            .max()
+            .unwrap();
+        assert!(max_ulp <= 2, "θ=2.7 max_ulp 应 ≤ 2，实际 {max_ulp}");
+    }
+
+    fn ulp_diff(x: f32, y: f32) -> u32 {
+        if x == y {
+            return 0;
+        }
+        let ix = x.to_bits() as i64;
+        let iy = y.to_bits() as i64;
+        if (ix < 0) != (iy < 0) {
+            return u32::MAX;
+        }
+        (ix - iy).unsigned_abs() as u32
     }
 }
