@@ -119,7 +119,8 @@ impl MeshGeometry {
     }
 }
 
-/// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影 + 着色变体。
+/// 3D 材质组件：颜色 + 可选纹理句柄 + 无 UV 几何的兜底 UV 投影 + 着色变体
+/// （B1-C：PBR 的 metallic / roughness / 法线贴图）。
 ///
 /// 只描述"看起来什么颜色/贴什么纹理"，不含几何数据（几何见 [`MeshGeometry`]）。
 ///
@@ -139,8 +140,12 @@ impl MeshGeometry {
 /// assert!(m.texture.is_none());
 /// // 默认着色变体为朗伯漫反射。
 /// assert_eq!(m.variant, ShaderVariant::Lambert);
+/// // PBR 字段默认值：非金属 + 粗糙 0.5 + 无法线贴图。
+/// assert_eq!(m.metallic, 0.0);
+/// assert_eq!(m.roughness, 0.5);
+/// assert!(m.normal_map.is_none());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material3D {
     /// 整体颜色（无纹理时的着色来源，有纹理时作为调制色）。
     pub color: Color32,
@@ -150,10 +155,34 @@ pub struct Material3D {
     pub uv_projection: UvProjection,
     /// 着色变体（片元着色方程的选择）。
     pub variant: ShaderVariant,
+    /// 金属度 [0,1]（B1-C，仅 `variant == Pbr` 消费；其他变体忽略）。
+    /// 0 = 电介质（F0 = 0.04），1 = 金属（F0 = 反照率）。
+    pub metallic: f32,
+    /// 粗糙度 [0,1]（B1-C，仅 `variant == Pbr` 消费）。默认 0.5（中等粗糙）。
+    pub roughness: f32,
+    /// 法线贴图句柄（B1-C，仅 `variant == Pbr` 消费）。缺省 = 平坦法线
+    /// （后端绑定 1×1 平坦法线兜底纹理，`nts = (0,0,1)`，TBN 变换后 ≈ 几何法线）。
+    pub normal_map: Option<TextureHandle>,
+}
+
+impl Default for Material3D {
+    fn default() -> Self {
+        Self {
+            // 与既有 `#[derive(Default)]` 行为一致：颜色取 `Color32::default()`。
+            color: Color32::default(),
+            texture: None,
+            uv_projection: UvProjection::default(),
+            variant: ShaderVariant::default(),
+            metallic: 0.0,
+            // 默认 0.5：PBR 默认**中等粗糙**（避免 0.0 的镜面高光对纯色材质过曝）。
+            roughness: 0.5,
+            normal_map: None,
+        }
+    }
 }
 
 impl Material3D {
-    /// 以单一颜色构造材质（无纹理、平面投影兜底）。
+    /// 以单一颜色构造材质（无纹理、平面投影兜底、非金属、粗糙 0.5）。
     pub fn color(color: Color32) -> Self {
         Self {
             color,

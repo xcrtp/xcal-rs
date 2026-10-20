@@ -58,4 +58,7 @@ pub enum ShaderVariant {
     /// 朗伯漫反射（默认）。
     #[default]
     Lambert,
+    /// 金属-粗糙度 PBR（B1-C）：GGX/Smith/Schlick，线性空间计算，
+    /// 法线贴图走**屏幕空间 TBN**（不改顶点格式）。
+    Pbr,
 }

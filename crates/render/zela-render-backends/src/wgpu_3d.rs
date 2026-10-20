@@ -68,9 +68,10 @@ use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");
 
-/// uniform 块大小：mat4x4 mvp（64）+ mat4x4 model（64）+ vec4 color（16）= 144 字节。
+/// uniform 块大小：mat4x4 mvp（64）+ mat4x4 model（64）+ vec4 color（16）
+/// + vec4 params（16，PBR metallic/roughness）= 160 字节。
 /// `model` 供片元取**世界位置**（B1-B 点光衰减用），顶点着色 `world_pos = model * pos`。
-pub const UNIFORM_SIZE: u64 = 144;
+pub const UNIFORM_SIZE: u64 = 160;
 
 /// `min_binding_size` 的常量形式：`UNIFORM_SIZE` 非零在编译期即可判定，
 /// 避免调用点出现"不可能失败"的运行时 `unwrap()`。
@@ -82,9 +83,10 @@ const UNIFORM_MIN_BINDING_SIZE: NonZeroU64 = match NonZeroU64::new(UNIFORM_SIZE)
 // ─── B1-A/B：场景级光源 uniform（binding 3，非 dynamic，所有 draw 共享一份）───
 
 /// 场景级光源 uniform 块大小：`counts`(16) + 方向光 dirs(4×16=64)
-/// + 方向光 colors(64) + 点光 pos/强度(4×16=64) + 点光 color/range(64) = 272 字节。
+/// + 方向光 colors(64) + 点光 pos/强度(4×16=64) + 点光 color/range(64)
+/// + camera(16，B1-C PBR 视线向量用) = 288 字节。
 /// 与 `cube.wgsl` 的 `Lights` 结构逐字段对应（全部 `vec4<f32>`，无对齐陷阱）。
-pub const LIGHT_UNIFORM_SIZE: u64 = 272;
+pub const LIGHT_UNIFORM_SIZE: u64 = 288;
 
 /// 方向光数量上限（**编译期常量**，超限显式报错 —— 铁律 2：不静默丢弃）。
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
@@ -128,7 +130,11 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// ⚠️ 新增 [`ShaderVariant`] 变体时**必须**同步扩此数组（否则该变体查表落空，会
 /// `debug_assert` 并回退到 `Lambert`）。与 `compositor.rs` 的
 /// `(LayerBlend, Conversion)` 双层预建同一写法。
-const SHADER_VARIANTS: [ShaderVariant; 2] = [ShaderVariant::Lambert, ShaderVariant::Flat];
+const SHADER_VARIANTS: [ShaderVariant; 3] = [
+    ShaderVariant::Lambert,
+    ShaderVariant::Flat,
+    ShaderVariant::Pbr,
+];
 
 /// 着色变体 → 片元入口名（`@fragment fn`）的映射。
 ///
@@ -139,6 +145,7 @@ fn variant_entry_point(variant: ShaderVariant) -> &'static str {
     match variant {
         ShaderVariant::Flat => "fs_flat",
         ShaderVariant::Lambert => "fs_lambert",
+        ShaderVariant::Pbr => "fs_pbr",
     }
 }
 
@@ -215,16 +222,16 @@ pub struct Layer3DFrame {
 
 // ─── WgpuBackend3D ──────────────────────────────────────────────────────────
 
-/// 材质 bind group 缓存（按纹理 id 索引）。
+/// 材质 bind group 缓存（key = (decal 纹理 id, 法线贴图 id)）。
 ///
-/// bind group 绑定 uniform arena buffer（binding 0）+ 纹理视图（binding 1）+ sampler
-/// （binding 2），因此其有效性取决于两者：`arena_generation` 记录创建时的
-/// [`UniformArena::generation`]，不一致即整体丢弃重建；纹理注册时也整体清空
-/// （见 [`WgpuBackend3D::register_texture`]）。
+/// bind group 绑定 uniform arena buffer（binding 0）+ decal 纹理视图（binding 1）
+/// + sampler（binding 2）+ 法线贴图视图（binding 4），因此其有效性取决于两者：
+/// `arena_generation` 记录创建时的 [`UniformArena::generation`]，不一致即整体
+/// 丢弃重建；纹理注册时也整体清空（见 [`WgpuBackend3D::register_texture`]）。
 #[derive(Default)]
 struct BindGroupCache {
     arena_generation: u64,
-    entries: HashMap<u64, wgpu::BindGroup>,
+    entries: HashMap<(u64, u64), wgpu::BindGroup>,
 }
 
 /// WGPU 3D 渲染后端（设备句柄 + 管线 + 绑定布局 + mesh 缓存 + uniform arena）。
@@ -249,6 +256,8 @@ pub struct WgpuBackend3D {
     sampler: wgpu::Sampler,
     /// 兜底纹理视图（1×1 透明黑，binding 1）：材质未指定纹理时使用。
     default_texture_view: wgpu::TextureView,
+    /// B1-C：1×1 **平坦法线**兜底纹理视图（材质无法线贴图时绑定）。
+    default_normal_view: wgpu::TextureView,
     /// B1-A：**场景级**光源 uniform buffer（binding 3，非 dynamic）。
     /// 所有 draw 共享一份；每帧 `prepare_draws` 按 [`LightQueue`] 覆写内容。
     light_buffer: wgpu::Buffer,
@@ -335,6 +344,18 @@ impl WgpuBackend3D {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: Some(LIGHT_MIN_BINDING_SIZE),
+                    },
+                    count: None,
+                },
+                // B1-C：binding 4 = **法线贴图**纹理（PBR 变体用；其他变体不采样）。
+                // 缺省绑定 1×1 平坦法线兜底纹理（`nts = (0,0,1)`）。
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -483,6 +504,48 @@ impl WgpuBackend3D {
         let default_texture_view =
             default_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // B1-C：1×1 **平坦法线**兜底纹理（128,128,255,255）—— 材质无法线贴图时
+        // 绑定它：解码 `nts = (0,0,1)`，TBN 变换后 ≈ 几何法线，PBR 退化为
+        // "无法线贴图的金属-粗糙度"（Lambert/Flat 变体不采样该绑定）。
+        // **必须用 unorm（非 sRGB）**：sRGB 纹理采样时硬件会自动解码到线性域，
+        // `(128,128,255)` 会变成 ≈ (0.216,0.216,1)，法线退化为斜向，破坏"缺省
+        // 法线 = 恒等"的约定。用户注册的法线贴图同理应使用非 sRGB 格式。
+        let default_normal_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("zela-3d-default-normal-texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_normal_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[128u8, 128, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let default_normal_view =
+            default_normal_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zela-3d-material-sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -494,16 +557,16 @@ impl WgpuBackend3D {
             ..Default::default()
         });
 
-        // B1-A：场景级光源 uniform buffer（binding 3）。初始写默认光照
-        // （单方向光 (0,0,1) + ambient 0.2）—— 与 B1-A 之前的硬编码逐位一致；
-        // 此后每帧 `prepare_draws` 按 LightQueue 覆写。
+        // B1-A/B/C：场景级光源 uniform buffer（binding 3）。初始写默认光照
+        // （单方向光 (0,0,1) + ambient 0.2 + 相机原点占位）—— 与 B1-A 之前的
+        // 硬编码逐位一致；此后每帧 `prepare_draws` 按 LightQueue 覆写（含相机位置）。
         let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("zela-3d-light-uniform"),
             size: LIGHT_UNIFORM_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&light_buffer, 0, &default_light_bytes());
+        queue.write_buffer(&light_buffer, 0, &default_light_bytes(ze_notion::Vec3::ZERO));
 
         Self {
             device,
@@ -513,6 +576,7 @@ impl WgpuBackend3D {
             bind_group_layout,
             sampler,
             default_texture_view,
+            default_normal_view,
             light_buffer,
             textures: Mutex::new(HashMap::new()),
             bind_groups: Mutex::new(BindGroupCache::default()),
@@ -567,12 +631,23 @@ impl WgpuBackend3D {
         }
     }
 
-    /// 创建材质 bind group：uniform（dynamic）+ 纹理视图 + sampler。
+    /// B1-C：解析**法线贴图**纹理视图：未注册的 id 回退到 1×1 平坦法线兜底纹理。
+    fn resolve_normal_view(&self, texture_id: u64) -> wgpu::TextureView {
+        let guard = self.textures.lock().expect("textures poisoned");
+        match guard.get(&texture_id) {
+            Some(view) => view.clone(),
+            None => self.default_normal_view.clone(),
+        }
+    }
+
+    /// 创建材质 bind group：uniform（dynamic）+ decal 纹理视图 + sampler
+    /// + 法线贴图视图（B1-C，binding 4）。
     fn create_material_bind_group(
         &self,
         device: &wgpu::Device,
         buffer: &wgpu::Buffer,
         view: &wgpu::TextureView,
+        normal_view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("zela-3d-material-bind-group"),
@@ -602,6 +677,11 @@ impl WgpuBackend3D {
                         offset: 0,
                         size: wgpu::BufferSize::new(LIGHT_UNIFORM_SIZE),
                     }),
+                },
+                // B1-C：法线贴图（PBR 变体采样；缺省 = 平坦法线兜底纹理）。
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
                 },
             ],
         })
@@ -696,15 +776,16 @@ impl WgpuBackend3D {
         guard.get(&layer_id).expect("depth target").view.clone()
     }
 
-    /// 写入 uniform 块（mvp 64 + model 64 + color 16 = 144 字节）。
+    /// 写入 uniform 块（mvp 64 + model 64 + color 16 + params 16 = 160 字节）。
     pub fn write_uniforms(
         queue: &wgpu::Queue,
         buffer: &wgpu::Buffer,
         mvp: Mat4,
         model: Mat4,
         color: Color32,
+        params: [f32; 4],
     ) {
-        queue.write_buffer(buffer, 0, &uniform_bytes(mvp, model, color));
+        queue.write_buffer(buffer, 0, &uniform_bytes(mvp, model, color, params));
     }
 
     /// 推进 mesh_cache 的「延迟销毁」提交帧计数器（destroyer.on_submit）。
@@ -731,16 +812,17 @@ impl WgpuBackend3D {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view_proj: Mat4,
+        camera_pos: ze_notion::Vec3,
         meshes: &[MeshDraw],
         lines: &[LineDraw],
         lights: &[DirectionalLightRecord],
         point_lights: &[PointLightRecord],
     ) -> Frame3DData {
-        // B1-A/B：每帧覆写场景级光源 uniform。**空灯光 = 默认光照**（单方向光
+        // B1-A/B/C：每帧覆写场景级光源 uniform。**空灯光 = 默认光照**（单方向光
         // (0,0,1) + ambient 0.2，与硬编码时代逐位一致）；超限**显式报错**
-        // （铁律 2：不静默丢弃）。
+        // （铁律 2：不静默丢弃）。`camera_pos` 一并写入（PBR 视线向量用）。
         let bytes = if lights.is_empty() && point_lights.is_empty() {
-            default_light_bytes()
+            default_light_bytes(camera_pos)
         } else {
             assert!(
                 lights.len() <= MAX_DIRECTIONAL_LIGHTS,
@@ -752,7 +834,7 @@ impl WgpuBackend3D {
                 "点光数量 {} 超过上限 {MAX_POINT_LIGHTS}（不静默丢弃，请调整场景光源数）",
                 point_lights.len(),
             );
-            pack_light_bytes(lights, point_lights, DEFAULT_AMBIENT)
+            pack_light_bytes(lights, point_lights, DEFAULT_AMBIENT, camera_pos)
         };
         queue.write_buffer(&self.light_buffer, 0, &bytes);
 
@@ -775,6 +857,8 @@ impl WgpuBackend3D {
             uniform_offset: u32,
             /// 材质纹理 id（bind group 的缓存键）。
             texture_id: u64,
+            /// B1-C：法线贴图纹理 id（与 `texture_id` 组成缓存键）。
+            normal_texture_id: u64,
         }
         let mut skeletons: Vec<Skeleton> = Vec::with_capacity(total_draws);
 
@@ -858,7 +942,9 @@ impl WgpuBackend3D {
 
             let mvp = view_proj * md.transform;
             // B1-B：`model` 单独入 uniform，片元据此算世界位置（点光衰减用）。
-            let bytes = uniform_bytes(mvp, md.transform, md.material.color);
+            // B1-C：`params` = (metallic, roughness, 0, 0)（PBR 变体消费；其余变体忽略）。
+            let params = [md.material.metallic, md.material.roughness, 0.0, 0.0];
+            let bytes = uniform_bytes(mvp, md.transform, md.material.color, params);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -873,6 +959,11 @@ impl WgpuBackend3D {
                 texture_id: md
                     .material
                     .texture
+                    .map(|t| t.id())
+                    .unwrap_or(DEFAULT_TEXTURE_ID),
+                normal_texture_id: md
+                    .material
+                    .normal_map
                     .map(|t| t.id())
                     .unwrap_or(DEFAULT_TEXTURE_ID),
             });
@@ -935,7 +1026,8 @@ impl WgpuBackend3D {
             };
 
             // line 顶点已是世界空间坐标 ⇒ `model = IDENTITY`，`world_pos = pos`。
-            let bytes = uniform_bytes(view_proj, Mat4::IDENTITY, line.color);
+            // B1-C：params 恒为 0（line 固定走 Lambert，不消费）。
+            let bytes = uniform_bytes(view_proj, Mat4::IDENTITY, line.color, [0.0; 4]);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -951,6 +1043,8 @@ impl WgpuBackend3D {
                 // line 无材质纹理 → 绑定 1×1 **透明黑**兜底纹理（`DEFAULT_TEXTURE_ID = 0`
                 // 未注册，`resolve_texture_view` 回退），着色式退化为 `color * lit`。
                 texture_id: DEFAULT_TEXTURE_ID,
+                // B1-C：line 无法线贴图 → 平坦法线兜底纹理。
+                normal_texture_id: DEFAULT_TEXTURE_ID,
             });
         }
 
@@ -976,12 +1070,14 @@ impl WgpuBackend3D {
         let draws_final: Vec<PreparedDraw3D> = skeletons
             .into_iter()
             .map(|s| {
-                let bind_group = match bg_guard.entries.get(&s.texture_id) {
+                let bg_key = (s.texture_id, s.normal_texture_id);
+                let bind_group = match bg_guard.entries.get(&bg_key) {
                     Some(bg) => bg.clone(),
                     None => {
                         let view = self.resolve_texture_view(s.texture_id);
-                        let bg = self.create_material_bind_group(device, &arena_buf_owned, &view);
-                        bg_guard.entries.insert(s.texture_id, bg.clone());
+                        let nv = self.resolve_normal_view(s.normal_texture_id);
+                        let bg = self.create_material_bind_group(device, &arena_buf_owned, &view, &nv);
+                        bg_guard.entries.insert(bg_key, bg.clone());
                         bg
                     }
                 };
@@ -1047,6 +1143,7 @@ impl WgpuBackend3D {
         encoder: &mut wgpu::CommandEncoder,
         layer_id: LayerId,
         view_proj: Mat4,
+        camera_pos: ze_notion::Vec3,
         viewport: Viewport,
         meshes: &[MeshDraw],
         lines: &[LineDraw],
@@ -1057,6 +1154,7 @@ impl WgpuBackend3D {
             &self.device,
             &self.queue,
             view_proj,
+            camera_pos,
             meshes,
             lines,
             lights,
@@ -1121,6 +1219,7 @@ impl RenderBackend3D for WgpuBackend3D {
             &self.device,
             &self.queue,
             view_proj,
+            layer.camera.eye,
             layer.draw_queue.meshes(),
             layer.draw_queue.lines(),
             lights,
@@ -1170,8 +1269,9 @@ impl RenderBackend3D for WgpuBackend3D {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-/// 组装 uniform 字节：mat4 mvp（64，列主序）+ mat4 model（64）+ vec4 color（16）。
-fn uniform_bytes(mvp: Mat4, model: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as usize] {
+/// 组装 uniform 字节：mat4 mvp（64，列主序）+ mat4 model（64）+ vec4 color（16）
+/// + vec4 params（16，`x = metallic, y = roughness`，B1-C PBR）。
+fn uniform_bytes(mvp: Mat4, model: Mat4, color: Color32, params: [f32; 4]) -> [u8; UNIFORM_SIZE as usize] {
     let mut data = [0u8; UNIFORM_SIZE as usize];
     let m = mvp.to_cols_array();
     data[..64].copy_from_slice(bytes_of(&m));
@@ -1183,23 +1283,26 @@ fn uniform_bytes(mvp: Mat4, model: Mat4, color: Color32) -> [u8; UNIFORM_SIZE as
         color.b() as f32 / 255.0,
         color.a() as f32 / 255.0,
     ];
-    data[128..].copy_from_slice(bytes_of(&c));
+    data[128..144].copy_from_slice(bytes_of(&c));
+    data[144..160].copy_from_slice(bytes_of(&params));
     data
 }
 
 /// 组装**场景级**光源 uniform 字节，与 `cube.wgsl` 的 `Lights` 结构逐字段对应
 /// （全部 `vec4<f32>`，无对齐陷阱）。
 ///
-/// 布局（下标单位 = f32；共 `LIGHT_UNIFORM_SIZE / 4 = 68` 个 f32）：
+/// 布局（下标单位 = f32；共 `LIGHT_UNIFORM_SIZE / 4 = 72` 个 f32）：
 /// - `[0..4]`   = counts（x = 方向光数，y = ambient，z = 点光数，w = 0）
 /// - `[4..20]`  = dirs：每方向光 `vec4(xyz = 光方向[世界空间], w = 强度)`
 /// - `[20..36]` = dir_colors：每方向光 `vec4(rgba)`
 /// - `[36..52]` = points：每点光 `vec4(xyz = 位置[世界空间], w = 强度)`
 /// - `[52..68]` = point_colors：每点光 `vec4(rgb, w = range)`
+/// - `[68..72]` = camera：`vec4(xyz = 相机位置[世界空间], w = 0)`（B1-C，PBR 视线向量）
 fn pack_light_bytes(
     lights: &[DirectionalLightRecord],
     point_lights: &[PointLightRecord],
     ambient: f32,
+    camera: ze_notion::Vec3,
 ) -> [u8; LIGHT_UNIFORM_SIZE as usize] {
     let mut words = [0f32; (LIGHT_UNIFORM_SIZE / 4) as usize];
     words[0] = lights.len() as f32;
@@ -1227,6 +1330,9 @@ fn pack_light_bytes(
         words[54 + i * 4] = p.color[2];
         words[55 + i * 4] = p.range;
     }
+    words[68] = camera.x;
+    words[69] = camera.y;
+    words[70] = camera.z;
     let mut data = [0u8; LIGHT_UNIFORM_SIZE as usize];
     data.copy_from_slice(bytes_of(words.as_slice()));
     data
@@ -1234,11 +1340,13 @@ fn pack_light_bytes(
 
 /// 默认光照字节：单方向光 `(0,0,1)` 纯白强度 1 + ambient 0.2、零点光 ——
 /// 与 B1-A 之前的硬编码 `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` **逐位一致**。
-fn default_light_bytes() -> [u8; LIGHT_UNIFORM_SIZE as usize] {
+/// `camera` 只被 PBR 视线向量消费（默认场景无 PBR 材质时不影响任何像素）。
+fn default_light_bytes(camera: ze_notion::Vec3) -> [u8; LIGHT_UNIFORM_SIZE as usize] {
     pack_light_bytes(
         &[DirectionalLightRecord::new(ze_notion::Vec3::Z, Color32::WHITE, 1.0)],
         &[],
         DEFAULT_AMBIENT,
+        camera,
     )
 }
 
@@ -1350,13 +1458,14 @@ mod tests {
     // ── P0-1：SHADER_VARIANTS 穷举（纯 CPU，无需 GPU） ────────────────
 
     /// 编译期穷举：`ShaderVariant` 新增变体而此处未更新 → 编译失败。
-    fn all_variants() -> [ShaderVariant; 2] {
+    fn all_variants() -> [ShaderVariant; 3] {
         // 显式列出每个变体；漏一个即非穷尽 match → 编译失败。
         match ShaderVariant::Lambert {
             ShaderVariant::Lambert => {}
             ShaderVariant::Flat => {}
+            ShaderVariant::Pbr => {}
         }
-        [ShaderVariant::Lambert, ShaderVariant::Flat]
+        [ShaderVariant::Lambert, ShaderVariant::Flat, ShaderVariant::Pbr]
     }
 
     /// `SHADER_VARIANTS` 必须覆盖 `ShaderVariant` 的全部变体。
@@ -1384,7 +1493,7 @@ mod tests {
     /// 与 B1-A 之前 `cube.wgsl` 硬编码 `LIGHT_DIR=(0,0,1)` / `AMBIENT=0.2` 逐位一致。
     #[test]
     fn test_default_light_bytes_layout() {
-        let data = default_light_bytes();
+        let data = default_light_bytes(ze_notion::Vec3::ZERO);
         assert_eq!(data.len(), LIGHT_UNIFORM_SIZE as usize);
         // counts = (1 方向光, ambient 0.2, 0, 0)
         assert_eq!(word_at(&data, 0), 1.0);
@@ -1401,6 +1510,11 @@ mod tests {
         assert_eq!(word_at(&data, 21), 1.0);
         assert_eq!(word_at(&data, 22), 1.0);
         assert_eq!(word_at(&data, 23), 1.0);
+        // camera（B1-C）= (0, 0, 0, 0)
+        assert_eq!(word_at(&data, 68), 0.0);
+        assert_eq!(word_at(&data, 69), 0.0);
+        assert_eq!(word_at(&data, 70), 0.0);
+        assert_eq!(word_at(&data, 71), 0.0);
     }
 
     /// 两方向光的打包布局：第二光写入 `dirs[1]` / `colors[1]`，方向/强度/颜色逐字段正确。
@@ -1414,7 +1528,7 @@ mod tests {
                 0.5,
             ),
         ];
-        let data = pack_light_bytes(&lights, &[], 0.2);
+        let data = pack_light_bytes(&lights, &[], 0.2, ze_notion::Vec3::ZERO);
         assert_eq!(word_at(&data, 0), 2.0);
         // 第二光 dirs[1] = (0, 1, 0, 0.5)
         assert_eq!(word_at(&data, 8), 0.0);
@@ -1438,7 +1552,7 @@ mod tests {
             2.0,
             4.0,
         );
-        let data = pack_light_bytes(&[], &[point], 0.2);
+        let data = pack_light_bytes(&[], &[point], 0.2, ze_notion::Vec3::ZERO);
         assert_eq!(word_at(&data, 2), 1.0); // counts.z = 点光数
         // points[0] = (1, 2, 3, 强度 2)
         assert_eq!(word_at(&data, 36), 1.0);
@@ -1452,6 +1566,11 @@ mod tests {
         assert_eq!(word_at(&data, 55), 4.0);
         // 方向光区域不受影响（counts.x = 0）。
         assert_eq!(word_at(&data, 0), 0.0);
+        // camera（B1-C）可打包：传入 (1,2,3) → words[68..71]。
+        let data2 = pack_light_bytes(&[], &[point], 0.2, ze_notion::Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(word_at(&data2, 68), 1.0);
+        assert_eq!(word_at(&data2, 69), 2.0);
+        assert_eq!(word_at(&data2, 70), 3.0);
     }
 
     // ── G2：几何缓存键单测（纯 CPU，headless，无需 GPU） ──────────────
@@ -1575,6 +1694,7 @@ mod tests {
             Mat4::IDENTITY,
             Mat4::IDENTITY,
             Color32::new(255, 255, 255, 255),
+            [0.0, 0.5, 0.0, 0.0],
         );
 
         // 附加断言：后端创建时 mesh_cache 空、arena stride 256、capacity 0。
@@ -1638,6 +1758,7 @@ mod tests {
             &mut encoder,
             LayerId(0),
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             viewport,
             &[],
             &[],
@@ -1737,6 +1858,7 @@ mod tests {
             ctx.device(),
             ctx.queue(),
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             queue.meshes(),
             queue.lines(),
             &[],
@@ -1780,6 +1902,7 @@ mod tests {
             ctx.device(),
             ctx.queue(),
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             queue.meshes(),
             queue.lines(),
             &[],
@@ -1804,6 +1927,7 @@ mod tests {
                 ctx.device(),
                 ctx.queue(),
                 Mat4::IDENTITY,
+                ze_notion::Vec3::ZERO,
                 queue.meshes(),
                 queue.lines(),
                 &[],
@@ -2077,6 +2201,7 @@ mod tests {
             &mut encoder,
             layer_id,
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             Viewport::full(size, size),
             draws,
             &[],
@@ -2119,6 +2244,7 @@ mod tests {
             &mut encoder,
             layer_id,
             camera.view_projection(1.0),
+            camera.eye,
             Viewport::full(size, size),
             draws,
             &[],
@@ -2228,6 +2354,7 @@ mod tests {
             &mut encoder,
             LayerId(0),
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             Viewport::full(64, 64),
             &[],
             &[],
@@ -2267,6 +2394,7 @@ mod tests {
             &mut encoder,
             LayerId(0),
             Mat4::IDENTITY,
+            ze_notion::Vec3::ZERO,
             Viewport::full(64, 64),
             &[],
             &[],
@@ -2313,6 +2441,144 @@ mod tests {
         );
         // 近处至少是"ambient + 明显衰减项"（远大于纯 ambient 0.2 的 sRGB ≈ 124）。
         assert!(center[0] > 150, "光源正下方应明显亮于环境光：{:?}", center);
+    }
+
+    // ── B1-C：PBR（真实设备） ─────────────────────────────────────────
+
+    /// 注册一张 1×1 法线贴图（`Rgba8Unorm`，**非 sRGB** —— 见 `new()` 注释：
+    /// sRGB 采样会自动解码到线性域，会破坏法线值）。
+    fn register_normal_map(
+        backend: &WgpuBackend3D,
+        ctx: &RenderContext,
+        id: u64,
+        texel: [u8; 4],
+    ) {
+        let texture = ctx.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("test-3d-normal-map"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        ctx.queue().write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texel,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        backend.register_texture(
+            id,
+            texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        );
+    }
+
+    /// **B1-C 验收（真实设备）**：PBR 变体接线成功的像素级证据 ——
+    /// 1. 同一曲面，`Pbr` 与 `Lambert` 像素不同（GGX 高光 + 线性域 albedo）；
+    /// 2. `metallic` 切换（0 ↔ 1）改变像素（金属无漫反射项）；
+    /// 3. 法线贴图（倾斜法线）改变像素（屏幕空间 TBN 生效）；
+    /// 4. 同一带法线贴图场景，**相机位置**改变像素（PBR 是视点相关的，
+    ///    证明 `Lights.camera` 真的进入 uniform 并参与计算）。
+    #[test]
+    fn test_pbr_metal_roughness_normal_map_change_pixels() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 64u32;
+        let camera = Camera3D::new(
+            ze_notion::Vec3::new(0.0, 0.0, 3.0),
+            ze_notion::Vec3::ZERO,
+            ze_notion::Vec3::Y,
+            Projection::perspective(std::f32::consts::FRAC_PI_3, 1.0, 0.1, 100.0),
+        );
+        // 正对 +Z 的平面（UV 随位置变化 ⇒ 屏幕空间 TBN 非退化）。
+        let plane = std::sync::Arc::new(parametric_surface(
+            SurfaceFn::new((-1.0, 1.0), (-1.0, 1.0), |_, _| 0.0),
+            1,
+            1,
+        ));
+
+        let lambert = Material3D::color(Color32::WHITE); // 默认 Lambert
+        let mut pbr_dielectric = Material3D::color(Color32::WHITE);
+        pbr_dielectric.variant = ShaderVariant::Pbr; // metallic 0 / roughness 0.5
+        let mut pbr_metal = Material3D::color(Color32::WHITE);
+        pbr_metal.variant = ShaderVariant::Pbr;
+        pbr_metal.metallic = 1.0;
+
+        let draw = |material: Material3D| {
+            MeshDraw::new(std::sync::Arc::clone(&plane), Mat4::IDENTITY, material)
+        };
+
+        // 1) Pbr ≠ Lambert（默认光照、同一相机）。
+        let px_lambert =
+            render_with_camera(&backend, &ctx, LayerId(31), size, &camera, &[draw(lambert)]);
+        let px_pbr =
+            render_with_camera(&backend, &ctx, LayerId(32), size, &camera, &[draw(pbr_dielectric)]);
+        assert_ne!(px_lambert, px_pbr, "Pbr 与 Lambert 必须产生不同像素");
+
+        // 2) metallic 0 ↔ 1（同为 Pbr）。
+        let px_metal =
+            render_with_camera(&backend, &ctx, LayerId(33), size, &camera, &[draw(pbr_metal)]);
+        assert_ne!(px_pbr, px_metal, "metallic 0 与 1 必须产生不同像素");
+
+        // 3) 法线贴图：1×1 倾斜法线（(255,128,255) → nts ≈ (1, 0, 1)，法线朝 +X 斜 45°）。
+        register_normal_map(&backend, &ctx, 7, [255, 128, 255, 255]);
+        let mut pbr_bumped = Material3D::color(Color32::WHITE);
+        pbr_bumped.variant = ShaderVariant::Pbr;
+        pbr_bumped.normal_map = Some(TextureHandle::new(7));
+        let px_bump =
+            render_with_camera(&backend, &ctx, LayerId(34), size, &camera, &[draw(pbr_bumped)]);
+        assert_ne!(px_pbr, px_bump, "法线贴图必须改变 PBR 像素（屏幕空间 TBN 生效）");
+
+        // 4) 视点相关：同一带法线贴图场景，换相机位置 ⇒ 像素改变。
+        let camera2 = Camera3D::new(
+            ze_notion::Vec3::new(2.0, 0.0, 3.0),
+            ze_notion::Vec3::ZERO,
+            ze_notion::Vec3::Y,
+            Projection::perspective(std::f32::consts::FRAC_PI_3, 1.0, 0.1, 100.0),
+        );
+        let px_bump2 =
+            render_with_camera(&backend, &ctx, LayerId(35), size, &camera2, &[draw(pbr_bumped)]);
+        assert_ne!(
+            px_bump, px_bump2,
+            "相机位置必须改变 PBR 像素（视线向量进入 uniform）"
+        );
+    }
+
+    /// B1-C：uniform `params`（metallic/roughness）字节打包位置 ——
+    /// mvp(0..16) + model(16..32) + color(32..36) + params(36..40)。
+    #[test]
+    fn test_uniform_bytes_params_packing() {
+        let data = uniform_bytes(
+            Mat4::IDENTITY,
+            Mat4::IDENTITY,
+            Color32::WHITE,
+            [0.25, 0.75, 0.0, 0.0],
+        );
+        assert_eq!(data.len(), UNIFORM_SIZE as usize);
+        assert_eq!(word_at(&data, 36), 0.25);
+        assert_eq!(word_at(&data, 37), 0.75);
+        assert_eq!(word_at(&data, 38), 0.0);
+        assert_eq!(word_at(&data, 39), 0.0);
     }
 
     /// **K 线 GPU 像素级验收**（P 阶段教训：不得只断言组件字段变化）。

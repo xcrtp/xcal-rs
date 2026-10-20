@@ -389,6 +389,8 @@ impl SceneCompositorCallback {
                             encoder,
                             layer.id,
                             view_proj,
+                            // B1-C：相机世界位置 → 场景级 uniform（PBR 视线向量用）。
+                            camera.eye,
                             viewport,
                             &self.meshes_3d,
                             &self.lines_3d,
