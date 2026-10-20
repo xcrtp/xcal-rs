@@ -118,8 +118,8 @@ try {
         }
 
         $parts = $line -split '\s+'
-        if ($parts.Count -lt 3 -or $parts.Count -gt 4) {
-            throw "manifest.txt:$lineNumber 期望 3~4 列（id title script [payload-hash]），实际 $($parts.Count) 列：$line"
+        if ($parts.Count -lt 3) {
+            throw "manifest.txt:$lineNumber 期望 ≥3 列（id title… script [payload-hash]），实际 $($parts.Count) 列：$line"
         }
 
         $id = $parts[0]
