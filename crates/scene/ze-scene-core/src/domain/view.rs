@@ -7,8 +7,8 @@
 // B 不阻塞 S3，S3 也不用等 B。
 
 use crate::object::Camera2D;
-
 use crate::types::Color32;
+use ze_scene_contract::ObjectId;
 
 // S2：合成概念已下沉。
 // - `LayerId` / `LayerBlend` / `TextureHandle` → `ze-render-ir`
@@ -57,18 +57,68 @@ impl LayerDescriptor {
 
 /// 内容纹理层的配置（S3-3）：图层声明与内容录制都从这里取，是唯一真相来源。
 ///
-/// ⚠️ **只支持一个内容纹理层**（R4）：本资源是单份。若将来需要多个内容纹理，
-/// 需改成 `HashMap<LayerId, ContentTextureSpec>`，本轮不做（YAGNI）。
+/// **B3 Step 4c-2**：单份 → 按 id 索引的容器（[`ContentTextureSpecs`]）。
+/// `LayerId` / `TextureHandle` 由 **Surface 的 `ObjectId` 稳定派生**（不是图层位置），
+/// 因此增删其它图层不会让内容层 id 漂移。
 #[derive(Debug, Clone, Copy)]
 pub struct ContentTextureSpec {
+    /// 归属 Surface；`None` = 旧式单份（过渡期，Step 4c-4 后生产路径不再使用）。
+    pub surface: Option<ObjectId>,
     /// 内容相机：`rect` 为**纹理矩形**（世界 → 纹理坐标的映射）。
     pub camera: Camera2D,
     /// 纹理尺寸（物理像素）。
     pub size_px: [u32; 2],
-    /// 该层渲染到的纹理句柄；3D 材质用**同一句柄**引用它。
-    pub texture: TextureHandle,
     /// 是否参与合成。默认 `false`（仅作纹理源）；`true` 用于调试直视纹理。
     pub composite: bool,
+}
+
+impl ContentTextureSpec {
+    /// 稳定图层 id：Surface 派生；旧式单份用保留常量。
+    pub fn layer_id(&self) -> LayerId {
+        match self.surface {
+            Some(surface) => content_layer_id(surface),
+            None => LAYER_ID_CONTENT_LEGACY,
+        }
+    }
+
+    /// 稳定纹理句柄：与 `layer_id` 同一条 id 链派生（3D 材质用同一句柄引用）。
+    pub fn texture_handle(&self) -> TextureHandle {
+        match self.surface {
+            Some(surface) => content_texture_handle(surface),
+            None => TextureHandle::new(crate::object::CONTENT_TEXTURE_ID),
+        }
+    }
+}
+
+/// 内容纹理层容器（按 `LayerId` 索引；支持多个 Surface 同时存在）。
+#[derive(Debug, Clone, Default)]
+pub struct ContentTextureSpecs(pub Vec<ContentTextureSpec>);
+
+impl ContentTextureSpecs {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// 视口图层的固定 id（不再用 `layers.len()` 位置分配）。
+pub const LAYER_ID_VIEWPORT_2D: LayerId = LayerId(0);
+pub const LAYER_ID_VIEWPORT_3D: LayerId = LayerId(1);
+/// 旧式单份内容层的保留 id（Step 4c-4 后生产路径不再使用）。
+pub const LAYER_ID_CONTENT_LEGACY: LayerId = LayerId(2);
+
+/// Surface 内容层的 id 基址（与视口 / 旧式 id 不重叠）。
+const CONTENT_LAYER_ID_BASE: u32 = 1 << 20;
+/// Surface 纹理句柄基址（避开 `CONTENT_TEXTURE_ID = 1`）。
+const CONTENT_TEXTURE_ID_BASE: u64 = 1 << 32;
+
+/// `ObjectId → LayerId` 的**唯一**映射（内容层）。
+pub fn content_layer_id(surface: ObjectId) -> LayerId {
+    LayerId(CONTENT_LAYER_ID_BASE + surface.index)
+}
+
+/// `ObjectId → TextureHandle` 的**唯一**映射（内容层）。
+pub fn content_texture_handle(surface: ObjectId) -> TextureHandle {
+    TextureHandle::new(CONTENT_TEXTURE_ID_BASE + u64::from(surface.index))
 }
 
 /// 合成器清屏色默认值（与改动前 2D 图层内的背景矩形一致）。

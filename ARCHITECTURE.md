@@ -633,6 +633,10 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **Direct 路由**（`zela_render::surface_route`）：仅 `Renderer3D` 走 Direct；
 >   失败（缺 renderer / 环 / Screen 映射 / Reveal·Morph·ContentTexture / 派生失败）
 >   写进 `DrawQueue::surface_errors()`，不静默。
+> - **Texture 契约链（B3 Step 4c-2）**：`ContentTextureSpecs` / `ContentTextureQueue`
+>   均为多实例容器；`ObjectId → LayerId → TextureHandle` 由
+>   `content_layer_id` / `content_texture_handle` **单一映射**派生，
+>   视口图层改用固定 id（不再 `layers.len()` 位置分配）。
 > - **Texture 路径（Step 4）与作品迁移（Step 5）尚未执行**：需要每帧编排
 >   （`SceneCompositorCallback`）+ 纹理分辨率/过滤进契约（E-08 放大）。
 

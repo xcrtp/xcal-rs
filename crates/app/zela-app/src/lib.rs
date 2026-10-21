@@ -12,17 +12,14 @@
 use std::sync::Arc;
 
 use ze_notion::Rect2D;
-use ze_scene_core::{
-    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
-};
+use ze_scene_core::{CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle};
 use zela_render_backends::RenderContext;
 pub use zela_scene_ecs::Result;
 use zela_scene_ecs::animation::BindingTable;
 use zela_scene_ecs::contract::GroupVisibility;
-use zela_scene_ecs::domain::ContentTextureSpec;
+use zela_scene_ecs::domain::{ContentTextureSpec, ContentTextureSpecs};
 use zela_scene_ecs::scene::Scene;
 use zela_scene_ecs::errors::Error;
-use zela_scene_ecs::scene::components::TextureHandle;
 use zela_scene_ecs::ClockForest;
 
 // 装配尾已下沉到 `zela-playback`；以下导入只服务于本 crate 的回归测试与
@@ -348,7 +345,7 @@ fn build_runtime(
         build_scene_source(&mut scene, &engine, &source)?;
 
     // S3-3 内容纹理（仅 demo3d）：配置（唯一真相来源）。
-    let content_texture = demo3d.as_ref().map(|demo| {
+    let content_textures = demo3d.as_ref().map(|demo| {
         // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
         let content_camera = demo.content_camera.unwrap_or_else(|| {
             Camera2D::new(
@@ -363,12 +360,13 @@ fn build_runtime(
                 ),
             )
         });
-        ContentTextureSpec {
+        ContentTextureSpecs(vec![ContentTextureSpec {
+            // 过渡期：demo3d 尚未声明 Surface（Step 4c-4 才迁移）。
+            surface: None,
             camera: content_camera,
             size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
-            texture: TextureHandle::new(CONTENT_TEXTURE_ID),
             composite: false,
-        }
+        }])
     });
 
     // **装配尾唯一实现**位于 `zela-playback`（脚本路径与 `--bundle` / 浏览器共用）。
@@ -380,7 +378,7 @@ fn build_runtime(
         group_visibility,
         duration: script_duration,
         camera3d: demo3d.as_ref().map(|demo| demo.camera3d),
-        content_texture,
+        content_textures,
     };
     let runtime = zela_playback::assemble_runtime(render_ctx, assembly);
     install_native_clock(&runtime);

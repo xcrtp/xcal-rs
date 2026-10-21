@@ -45,11 +45,12 @@ use std::sync::Arc;
 
 use ze_scene_contract::SceneRead;
 use ze_scene_hecs::WorldView;
-use ze_scene_core::domain::ContentTextureSpec;
+use ze_scene_core::domain::ContentTextureSpecs;
+use ze_render_ir::StrokeSolid;
 use ze_scene_core::components::{
     ContentTextureItem, Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal,
 };
-use ze_scene_core::WorldTransforms;
+use ze_scene_core::{WorldTransforms, resolve_surface};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -62,7 +63,6 @@ use crate::draw::{
 use crate::draw_queue_3d::DrawQueue3D;
 use crate::light_queue::{DirectionalLightRecord, LightQueue, PointLightRecord};
 use crate::view_rect::ViewRect;
-use ze_render_ir::StrokeSolid;
 // N5：组级开关（可缺席资源 ⇒ 缺席 = 所有组可见）。
 use ze_scene_contract::GroupVisibility;
 
@@ -250,25 +250,42 @@ impl System for RevealRecordSystem {
 /// （唯一换算点在 zela-render 内）。
 pub struct ContentTextureRecordSystem;
 impl System for ContentTextureRecordSystem {
-    type Reads = (ContentTextureSpec,);
+    type Reads = (ContentTextureSpecs,);
     type Writes = (ContentTextureQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
-        let Some(spec) = ctx.get::<ContentTextureSpec>().copied() else {
+        let Some(specs) = ctx.get::<ContentTextureSpecs>().cloned() else {
             return;
         };
+        if specs.is_empty() {
+            return;
+        }
 
-        ctx.with_world_and_resource_mut::<ContentTextureQueue, _>(|world, queue| {
-            queue.0.clear();
+        ctx.with_world_and_resource_mut::<ContentTextureQueue, _>(|world, queues| {
+            queues.0.clear();
             let scene = WorldView::new(world);
-            // `for_each_pair_opt`：标记缺席（`None`）的对象被过滤掉。
-            scene.for_each_pair_opt::<Path, StrokeSolid, ContentTextureItem>(
-                |_, path, stroke, mark| {
-                    if mark.is_some() {
-                        record_path_stroke(&mut queue.0, path, stroke, &spec.camera);
-                    }
-                },
-            );
+            // B3 Step 4c-2：多实例。每份 spec 一个内容层；
+            // `surface = Some(id)` 时只收该 Surface 名下的 `ContentTextureItem`，
+            // `None` 是旧式单份（过渡期，Step 4c-4 后生产路径不再使用）。
+            for spec in &specs.0 {
+                let layer = spec.layer_id();
+                let queue = queues.queue_mut(layer);
+                scene.for_each_pair_opt::<Path, StrokeSolid, ContentTextureItem>(
+                    |id, path, stroke, mark| {
+                        if mark.is_none() {
+                            return;
+                        }
+                        if let Some(surface) = spec.surface {
+                            match resolve_surface(&scene, id) {
+                                Ok(Some(owner)) if owner.surface == surface => {}
+                                // 不属于该 Surface（或归属无效）⇒ 不录进这一层。
+                                _ => return,
+                            }
+                        }
+                        record_path_stroke(queue, path, stroke, &spec.camera);
+                    },
+                );
+            }
         });
     }
 }
@@ -401,7 +418,7 @@ mod tests {
     use ze_render_ir::Opacity;
     use ze_scene_contract::{GroupId, Visibility};
     use ze_scene_hecs::object_id_of;
-    use ze_scene_core::components::TextureHandle;
+    use ze_scene_core::domain::ContentTextureSpec;
     use ze_scene_core::types::Vec2;
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
@@ -559,13 +576,16 @@ mod tests {
         ));
 
         let tex_rect = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
-        let mut res = Resources::new();
-        res.insert(ContentTextureSpec {
+        let spec = ContentTextureSpec {
+            // 过渡期旧式单份（Step 4c-4 后改由 Surface 派生）。
+            surface: None,
             camera: ze_scene_core::Camera2D::new(Vec2::ZERO, 25.0, tex_rect),
             size_px: [512, 512],
-            texture: TextureHandle::new(1),
             composite: false,
-        });
+        };
+        let layer = spec.layer_id();
+        let mut res = Resources::new();
+        res.insert(ContentTextureSpecs(vec![spec]));
         res.insert(ContentTextureQueue::default());
 
         let mut sched = Scheduler::new(world, res);
@@ -573,10 +593,15 @@ mod tests {
         sched.init_resources();
         sched.run_frame(0.016);
 
-        let q = sched.resources().get::<ContentTextureQueue>().unwrap();
-        assert_eq!(q.0.len(), 1, "干扰项未被录制");
+        let q = sched
+            .resources()
+            .get::<ContentTextureQueue>()
+            .unwrap()
+            .get(layer)
+            .unwrap();
+        assert_eq!(q.len(), 1, "干扰项未被录制");
         // 录到的点必须落在纹理矩形内（相机 = 纹理矩形，世界原点居中）。
-        for cmd in q.0.commands() {
+        for cmd in q.commands() {
             if let crate::shape::Shape2D::Path(p) = &cmd.shape {
                 for c in &p.commands {
                     if let PathCommand::MoveTo(pt) | PathCommand::LineTo(pt) = c {

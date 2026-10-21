@@ -17,7 +17,8 @@ pub use camera::{CameraCommand, CameraMode};
 pub use config::{UiConfig, ViewportCamera};
 pub use event::{InputEvents, SceneEvent, WidgetId, ids};
 pub use view::{
-    ContentHandle, ContentTextureSpec, DEFAULT_BACKGROUND, LayerBlend, LayerDescriptor, LayerId,
-    LayerKind, SceneView,
+    content_layer_id, content_texture_handle, ContentHandle, ContentTextureSpec,
+    ContentTextureSpecs, DEFAULT_BACKGROUND, LAYER_ID_CONTENT_LEGACY, LAYER_ID_VIEWPORT_2D,
+    LAYER_ID_VIEWPORT_3D, LayerBlend, LayerDescriptor, LayerId, LayerKind, SceneView,
 };
 pub use view_rect::ViewRect;

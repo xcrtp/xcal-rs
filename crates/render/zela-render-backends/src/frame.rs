@@ -27,15 +27,18 @@ pub fn build_scene_callback(input: FrameInputs<'_>) -> Option<SceneCompositorCal
     };
     let layers: Vec<SceneLayer> = order.iter().map(|&index| input.layers[index]).collect();
 
-    // 内容纹理层：单份队列快照 → 关联到唯一的 `ContentTexture` 图层 id。
+    // 内容纹理层：按 `LayerId` 取各自的当帧队列（B3 Step 4c-2：多实例）。
     let content: Vec<(ze_render_ir::LayerId, Vec<Recorded2D>)> = input
         .content
-        .map(|queue| {
-            let snapshot = snapshot_queue(&queue.0);
+        .map(|queues| {
             layers
                 .iter()
                 .filter(|layer| matches!(layer.kind, LayerKind::ContentTexture { .. }))
-                .map(|layer| (layer.id, snapshot.clone()))
+                .filter_map(|layer| {
+                    queues
+                        .get(layer.id)
+                        .map(|queue| (layer.id, snapshot_queue(queue)))
+                })
                 .collect()
         })
         .unwrap_or_default();

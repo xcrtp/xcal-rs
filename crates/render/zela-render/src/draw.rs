@@ -319,14 +319,27 @@ impl Default for DrawQueue {
     }
 }
 
-/// 内容纹理层（S3-3）的当帧录制结果。
+/// 内容纹理层（S3-3）的当帧录制结果（**按 `LayerId` 索引的容器**）。
 ///
 /// 内容层是**纹理源**而非显示层，其录制结果与主 2D 队列分开持有，
 /// 由 `SceneCompositorCallback` 渲染到独立纹理后交给 3D 材质采样。
 ///
-/// ⚠️ 单份资源 → 当前只支持**一个**内容纹理层（见 `ContentTextureSpec` 的 doc）。
+/// **B3 Step 4c-2**：单份 → 多份；键是 `ContentTextureSpec::layer_id()`
+/// （由 Surface 的 `ObjectId` 稳定派生，见 `ze_scene_core::domain::content_layer_id`）。
 #[derive(Default)]
-pub struct ContentTextureQueue(pub DrawQueue);
+pub struct ContentTextureQueue(pub std::collections::BTreeMap<ze_render_ir::LayerId, DrawQueue>);
+
+impl ContentTextureQueue {
+    /// 取某一内容层的当帧队列（不存在 ⇒ `None`）。
+    pub fn get(&self, id: ze_render_ir::LayerId) -> Option<&DrawQueue> {
+        self.0.get(&id)
+    }
+
+    /// 取或建某一内容层的队列（录制 System 用）。
+    pub fn queue_mut(&mut self, id: ze_render_ir::LayerId) -> &mut DrawQueue {
+        self.0.entry(id).or_default()
+    }
+}
 
 // ─── 形变绘制项（S4.3） ───────────────────────────────────────────────────
 

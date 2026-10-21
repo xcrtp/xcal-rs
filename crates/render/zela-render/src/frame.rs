@@ -15,7 +15,8 @@ use ze_notion::Rect2D;
 use ze_scene_core::{Camera2DHandle, Camera3D, LayerKind};
 use ze_scene_contract::SceneRead;
 use ze_scene_core::domain::{
-    ContentHandle, ContentTextureSpec, LayerBlend, LayerDescriptor, LayerId, SceneView,
+    ContentHandle, ContentTextureSpecs, LayerBlend, LayerDescriptor, LayerId, SceneView,
+    LAYER_ID_VIEWPORT_2D, LAYER_ID_VIEWPORT_3D,
 };
 use zela_schedule::resource::Resources;
 
@@ -96,7 +97,7 @@ pub fn build_scene_view(
         if let Some(handle) = res.get::<Camera2DHandle>() {
             if let Some(camera) = handle.resolve(scene, rect) {
                 view.layers.push(LayerDescriptor {
-                    id: LayerId(view.layers.len() as u32),
+                    id: LAYER_ID_VIEWPORT_2D,
                     kind: LayerKind::Viewport2D { camera },
                     content: ContentHandle::OPAQUE,
                     opacity: 1.0,
@@ -115,7 +116,7 @@ pub fn build_scene_view(
         });
         if let Some(camera) = first_camera {
             view.layers.push(LayerDescriptor {
-                id: LayerId(view.layers.len() as u32),
+                id: LAYER_ID_VIEWPORT_3D,
                 kind: LayerKind::Viewport3D { camera },
                 content: ContentHandle::OPAQUE,
                 opacity: 1.0,
@@ -125,19 +126,22 @@ pub fn build_scene_view(
     }
 
     // 内容纹理层（S3-3）：渲染到独立纹理供 3D 材质采样（默认不参与合成）。
-    if let Some(spec) = res.get::<ContentTextureSpec>() {
-        view.layers.push(LayerDescriptor {
-            id: LayerId(view.layers.len() as u32),
-            kind: LayerKind::ContentTexture {
-                camera: spec.camera,
-                size_px: spec.size_px,
-                texture: spec.texture,
-                composite: spec.composite,
-            },
-            content: ContentHandle::OPAQUE,
-            opacity: 1.0,
-            blend: LayerBlend::Alpha,
-        });
+    // B3 Step 4c-2：多实例；`LayerId` 由 Surface 的 ObjectId 稳定派生。
+    if let Some(specs) = res.get::<ContentTextureSpecs>() {
+        for spec in &specs.0 {
+            view.layers.push(LayerDescriptor {
+                id: spec.layer_id(),
+                kind: LayerKind::ContentTexture {
+                    camera: spec.camera,
+                    size_px: spec.size_px,
+                    texture: spec.texture_handle(),
+                    composite: spec.composite,
+                },
+                content: ContentHandle::OPAQUE,
+                opacity: 1.0,
+                blend: LayerBlend::Alpha,
+            });
+        }
     }
 
     view

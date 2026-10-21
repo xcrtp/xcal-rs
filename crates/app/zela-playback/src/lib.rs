@@ -32,7 +32,7 @@ use zela_render_backends::render_frame_headless;
 use zela_scene_ecs::animation::{Binding, BindingTable, CameraEye};
 use zela_scene_ecs::contract::{GroupVisibility, ObjectId, SceneRead, WorldView};
 use zela_scene_ecs::director_state::DirectorState;
-use zela_scene_ecs::domain::{ContentTextureSpec, InputEvents, UiConfig};
+use zela_scene_ecs::domain::{ContentTextureSpecs, InputEvents, UiConfig};
 use zela_scene_ecs::scene::Scene;
 use zela_scene_ecs::{
     ClockForest, ClockNode, ComposerQueue, Curve, DeferredCommands, DriverCommand, DriverPod,
@@ -84,8 +84,8 @@ pub struct SceneAssembly {
     pub duration: f64,
     /// 可选 3D 相机（GUI demo 用）。
     pub camera3d: Option<Camera3DHandle>,
-    /// 可选内容纹理规格（GUI demo 用）。
-    pub content_texture: Option<ContentTextureSpec>,
+    /// 可选内容纹理规格（GUI demo 用；B3 Step 4c-2 起为多实例容器）。
+    pub content_textures: Option<ContentTextureSpecs>,
 }
 
 /// **回放端能解释什么**：payload 是已烘焙的纯数据 ⇒ 只需要 scene 能力与 scene Pod。
@@ -136,7 +136,7 @@ pub fn build_bundle_runtime(render_ctx: RenderContext, bundle: &Bundle) -> Resul
             group_visibility: GroupVisibility::default(),
             duration,
             camera3d: None,
-            content_texture: None,
+            content_textures: None,
         },
     ))
 }
@@ -151,7 +151,7 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
         group_visibility,
         duration,
         camera3d,
-        content_texture,
+        content_textures,
     } = assembly;
 
     // 2D 相机取景绑定（`center` + `scale`）交给 `CameraDriveSystem` 托管。
@@ -199,8 +199,8 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
     resources.insert(InputEvents::default());
     resources.insert(DrawQueue::new());
     resources.insert(DrawQueue3D::new());
-    if let Some(spec) = content_texture {
-        resources.insert(spec);
+    if let Some(specs) = content_textures {
+        resources.insert(specs);
         resources.insert(ContentTextureQueue::default());
     }
     resources.insert(MorphQueue::default());
