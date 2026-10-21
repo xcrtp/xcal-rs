@@ -40,7 +40,7 @@ pub enum SurfaceRoute {
 }
 
 /// Surface 路由 / Direct 派生失败（显式错误）。
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SurfaceRecordError {
     #[error("对象 {id:?} 的 Surface 归属无效：{source}")]
     Route { id: ObjectId, source: SurfaceError },

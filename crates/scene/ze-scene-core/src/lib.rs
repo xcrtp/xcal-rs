@@ -57,7 +57,10 @@ pub use object::{
     spawn_camera2d, spawn_camera3d, uniform_scale,
 };
 
-pub use surface::{Surface, SurfaceError, SurfaceMapping, SurfaceOwner, SurfaceRenderer, resolve_surface};
+pub use surface::{
+    resolve_surface, resolve_surface_texture, Surface, SurfaceError, SurfaceMapping, SurfaceOwner,
+    SurfaceRenderer, SurfaceTexture, TextureFilter,
+};
 pub use time_state::TimeState;
 pub use transform::{Transform2D, Transform2DInto};
 pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};

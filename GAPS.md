@@ -159,7 +159,7 @@
 | E-05 | 透明物体无排序（无透明桶）→ 不透明先画、透明按 `ZOrder` 升序后画；透明 pipeline **不写深度**（R-A） | 渲染后端 | **已关闭（B2-3）** | `test_b2_3_transparent_bucket_orders_by_zorder`（对调 ZOrder 后主导色对调） |
 | E-06 | 共面 z-fighting → `ZOrder × Z_ORDER_EPSILON` 的 **normal offset**（不用常量 depth bias，D4） | 渲染后端 | **已关闭（B2-4）** | `test_b2_4_epsilon_from_zorder_resolves_coplanar`；`DepthBiasState::default()` 未改 |
 | E-07 | 3D 无 AA（1x）vs 2D 4x（#6/#8）→ 3D MSAA 4x（`DEFAULT_MSAA_SAMPLES`），采样数经 `new_with_samples` 由能力侧给定 | 渲染后端 | **已关闭（B2-5）** | `test_b2_5_msaa_4x_produces_partial_coverage`（4x 部分覆盖像素更多） |
-| E-08 | **纹理走样**：MSAA 治不了纹理采样走样（`Material3D.texture` / `ContentTexture` 进 3D 后会有） | 渲染后端 | **仍成立（已知缺口）** | 需要 **mipmap + 各向异性过滤**；本轮不做（计划 B2-5 记账要求）。B3 Step 4 的 Surface 纹理路径**未执行**，一旦落地会放大本条（2D 内容进 3D 同样走采样） |
+| E-08 | **纹理走样**：MSAA 治不了纹理采样走样（`Material3D.texture` / `ContentTexture` 进 3D 后会有） | 渲染后端 | **仍成立（已知缺口）** | 需要 **mipmap + 各向异性过滤**；本轮不做（计划 B2-5 记账要求）。B3 Step 4b 起 `SurfaceTexture` 显式声明 `filter` / `mipmap`（Fixed `texel_size`），但**mipmap 生成未实现** ⇒ 2D 内容进 3D 同样受本条约束 |
 | E-09 | 硬件 MSAA **resolve 的跨端确定性**是否为 `[browser]` 段"1 帧 1 像素"差异的贡献者 | 对拍 | **待验证（不是断言）** | 本轮无浏览器环境（D5：跨端重录推迟）；`[browser]` 段仍仅存档 |
 | E-10 | 2D 派生网格仅覆盖可直接三角化的图元（`Path` 需要 lyon；`Group` 需要递归） | 渲染管线 | **已关闭（B3 Step 1）** | 复用 `tessellate_with`：7 种图元可派生；剩余 `Polyline` / `Custom` 仍 `ShapeMeshError::Unsupported` 显式报错 |
 | E-11 | 双槽基线**没有差分视图**（两个孤立值，无法看出"当前值落在哪一槽"） | 对拍工具 | **已关闭（B2-6）** | xtask `render_diff_report`（诊断旁路，不参与门禁）；`diff_report_tests` 3 条 |
@@ -313,10 +313,11 @@
 | S2-03 | Direct + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | `ScreenMappingUnsupported`；不猜映射 |
 | S3-01 | 无 Surface 组件 / 归属判定 | 场景核心 | **已关闭（B3 Step 3）** | `Surface`（无 position）+ `SurfaceRenderer`；沿 `Parent` 链解析、visited 环检测；缺 renderer 显式错误 |
 | S3-02 | 默认 renderer 策略 | 场景核心 | **未拍（按计划延后）** | 计划要求用 Step 1 实测覆盖度反推；当前 7/9 图元可 Direct，但 Step 4/5 未做，暂不设默认 |
-| S4-01 | Texture 路径（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行** | 需改 `SceneCompositorCallback` 的每帧编排；并须先把纹理分辨率/过滤写进契约（E-08 放大） |
+| S4-01 | Texture 路径多实例（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行（4c/4d）** | 需把 `ContentTextureQueue` 单份泛化为 `HashMap<LayerId, _>` 并改 `SceneCompositorCallback` 遍历 |
+| S4-02 | `Renderer2D` 没有可表达的固定纹理契约 | 场景核心 | **已关闭（B3 Step 4b）** | `SurfaceTexture { texel_size, filter, mipmap }` + `camera_for`；缺声明 / 尺寸非法 / 宽高比不一致 ⇒ 显式错误 |
 | S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
 
-**J 段小计（B3，已执行部分）**：已关闭 8（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 9（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-02）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
 
 ---
 

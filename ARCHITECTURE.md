@@ -622,10 +622,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > **B3 批次（2026-10-21，进行中）**：Surface 双路径。
 > - **派生桥复用三角化器**：`derive_mesh` 统一走 `tessellate_with`（lyon），覆盖
 >   Rect / Circle / Ellipse / Polygon / Line / Path / Group；手写三角化已删除。
+>   fill / stroke **各一份网格与材质**（`Vec<DerivedMesh>`，不再丢描边）；
 >   2D 边法线（attrib0）丢弃，着色法线恒 +Z；`Polyline` / `Custom` 显式报错。
 > - **Surface 归属**（`ze_scene_core::surface`）：`Surface`（bounds / mapping / anchor，
 >   **无 position**）+ `SurfaceRenderer`（Renderer2D / Renderer3D，必填）。
 >   归属沿 `Parent` 链解析（不存 `surface_id`），visited 环检测；缺 renderer ⇒ 显式错误。
+> - **纹理契约**（B3 Step 4b）：`SurfaceTexture { texel_size(Fixed), filter, mipmap }`
+>   + `camera_for`（bounds → 整张纹理）；缺声明 / 尺寸非法 / 宽高比不一致 ⇒ 显式错误。
+>   `filter` / `mipmap` 不取后端默认值；mipmap **生成**仍未实现（E-08 仍成立）。
 > - **Direct 路由**（`zela_render::surface_route`）：仅 `Renderer3D` 走 Direct；
 >   失败（缺 renderer / 环 / Screen 映射 / Reveal·Morph·ContentTexture / 派生失败）
 >   写进 `DrawQueue::surface_errors()`，不静默。
