@@ -150,7 +150,7 @@ pub fn content_texture_specs(
             surface: id,
             camera,
             size_px: texture.texel_size,
-            composite: false,
+            composite: texture.composite,
         });
     }
     Ok(ContentTextureSpecs(specs))

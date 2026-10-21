@@ -78,6 +78,10 @@ pub struct SurfaceTexture {
     /// 内容适配边距：`None` = bounds 1:1 铺满；`Some(m)` = `Camera2D::fit_bounds` 语义
     /// （`m × min(W/bx, H/by)`，见 B3 Step 4c-3）。
     pub fit_margin: Option<f32>,
+    /// 是否把该内容层合成到屏幕（默认 `false`：只作纹理源）。
+    ///
+    /// B3 Step 2：能力矩阵作品需要"直视纹理"才能被像素对拍。
+    pub composite: bool,
 }
 
 impl SurfaceTexture {
@@ -87,12 +91,19 @@ impl SurfaceTexture {
             filter,
             mipmap,
             fit_margin: None,
+            composite: false,
         }
     }
 
     /// 指定适配边距（`fit_bounds` 语义；Step 4c-3）。
     pub fn with_fit_margin(mut self, margin: f32) -> Self {
         self.fit_margin = Some(margin);
+        self
+    }
+
+    /// 是否参与屏幕合成（Step 2）。
+    pub fn with_composite(mut self, composite: bool) -> Self {
+        self.composite = composite;
         self
     }
 
