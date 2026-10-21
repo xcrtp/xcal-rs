@@ -105,9 +105,11 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 | `[smoke]` | native（Vulkan headless） | smoke | 15 / 320×240 | 同上（PR / `--fast` 快速反馈） | ✅ 不符即 fail，但**不等价于完整基线** |
 | `[browser]` | 浏览器（Chrome WebGPU） | fourier | 216 / 640×480 | `zela-web` + `?compare=1` | ❌ **仅留档** |
 
-> `surface_matrix` / `atlas` 于 2026-10-22（B3 Step 5）首次登记：两项**没有旧值行**，
-> 因此 `baselines.txt` 里只有 `# slotB:` 与生效行，**没有 `# slotA:`** ——
-> 这不是漏写，而是"首次登记"的正常形态。
+> `surface_matrix` / `atlas` 于 2026-10-22（B3 Step 5）首次登记。首次登记时两项**没有旧值行**，
+> 只写 `# slotB:` 与生效行、**没有 `# slotA:`**（`--record` 允许"新增 key 直接登记"）。
+> 随后给作品 A 补了 `Path × Fill` 组合，做了第二次重录 ⇒ 现在 `surface_matrix` 的
+> `# slotA:` 是首次登记的 `38eb3d2d…`，`# slotB:`/生效行是补组合后的 `baafe1aa…`。
+> `atlas` 两次值相同，`slotA == slotB`。
 >
 > `surface_matrix` 只渲 1 帧（静态能力矩阵）：像素覆盖的是"全部组合同屏一次"，
 > 组合覆盖度的主判据是**非像素断言**（`ContentTextureQueue` 里每种组合都录到，
