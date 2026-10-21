@@ -23,11 +23,13 @@
 // `zela-render-backends::wgpu_3d` 的硬编码已改为契约翻译，见 wgpu_3d.rs。）
 
 pub mod aa;
+pub mod buffer;
 pub mod cache;
 pub mod check;
 pub mod layout;
 
 pub use aa::{AaModel, AaSlotSemantics, AttribSemantic};
+pub use buffer::{VertexBufferData, VertexBufferError, bytes_of};
 pub use cache::CacheStrategy;
 pub use check::{hash_bytes, hash_bytes_sampled, StaticConsistencyChecker};
 pub use layout::{AttribType, StepMode, VertexAttrib, VertexInputDesc, VertexLayout, VertexLayoutError};
