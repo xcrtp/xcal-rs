@@ -21,3 +21,5 @@ fusion          融合演示(双面+透明) fusion.lua      -
 pendulum        钟摆动画            pendulum.lua    - 
 orbit           公转行星            orbit.lua       - 
 spring          弹跳小球            spring.lua      - 
+surface_matrix  Surface能力矩阵      surface_matrix.lua  - 
+atlas           2D纹理进3D           atlas.lua       - 
