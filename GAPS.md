@@ -174,6 +174,23 @@
 
 ---
 
+## F. B3 批次记账（顶点生产与后端解耦，2026-10-21）
+
+> 计划《B3-0执行计划_顶点生产与后端解耦.md》：纯结构调整，**像素冻结**。
+> 目标是把"生产 + 打包"从 backend 移到渲染无关层，使组合从 N×M 降为 N+M。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| F-01 | 3D 顶点生产（`interleaved_pos_uv_normal` / `fallback_uvs` / line 内联）**全在后端私有函数** | 渲染后端 | **已关闭（B3-0b）** | 迁至 `zela-render::vertex_record`；`grep fn interleaved_pos_uv_normal\|fn fallback_uvs crates/render/zela-render-backends/` = 0；line 走 `line_vertex_buffer`（B7） |
+| F-02 | 2D 三角化调用与顶点打包在后端（`tessellate` + `bytes_of(&vertices)`） | 渲染后端 | **已关闭（B3-0c）** | `tessellate_to_buffers` / `morph_endpoint_buffers` / `tessellate_reveal_to_buffer`；后端只拼接字节（`CachedGeometry { data: VertexBufferData }`） |
+| F-03 | 三角化失败 `eprintln + continue`（静默跳过） | 渲染后端 | **已关闭（B3-0d）** | 改显式 panic；`gpu_unregistered_custom_shape_panics_explicitly`（`should_panic`） |
+| F-04 | 缓存结构 2D 两级 / 3D 一级**未统一** | 渲染后端 | **仍成立（B4：本批不动）** | 2D 仍 `geom_cache → batch_cache`；3D 仍一级 `CachedMeshBucket` |
+| F-05 | 顶点生产**未提前**到场景录制（2D 容差依赖相机 scale） | 渲染管线 | **仍成立（有意）** | 生产仍在渲染阶段执行，只是挪出 backend crate（计划 §一 的明确约束） |
+
+**F 段小计（B3-0）**：已关闭 3 · 仍成立 2（均为计划明确范围外/有意保留）。
+
+---
+
 ## 统计与维护约定
 
 | 类别 | 数量 |

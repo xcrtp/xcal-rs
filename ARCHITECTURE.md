@@ -561,6 +561,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `cargo verify --step hashes` 现覆盖 fourier / storyboard / demo3d。
 > - **能力指纹（B2-9）**：`hash(signatures())` × `version` 配对校验，挂 xtask `structure`。
 
+> **B3-0 前置批次（2026-10-21）已落地**（详见 `GAPS.md` F 段，**像素冻结**）：
+> - **生产与上传解耦**：新增 `ze_vertex::VertexBufferData{ layout, vertices: Vec<u8>, indices, vertex_count }`，
+>   生产端（`zela-render::vertex_record`）负责"几何 → 交错字节"，后端只做
+>   `create_buffer_init`（组合由 N×M 降为 N+M）。
+> - **3D 生产迁出**：`interleaved_pos_uv_normal` / `fallback_uvs` / line 顶点构造全部移到
+>   `zela-render::vertex_record`（后端零命中），内联构造删除（B7 单一真源）。
+> - **2D 打包迁出**：三角化调用与打包走 `tessellate_to_buffers` / `morph_endpoint_buffers` /
+>   `tessellate_reveal_to_buffer`；`CachedGeometry` 缓存 `VertexBufferData`（两级缓存不变，B4）。
+> - **不静默（B6）**：2D 三角化失败由 `eprintln + continue` 改为**显式错误**（有 `should_panic` 测试）。
+> - 2D stride 24 / 3D stride 32 未变（D1）；像素与 B2 结束时**逐位相同**。
+
 ### 已知未接线项（Known unwired，记账非缺陷）
 
 以下各项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。
