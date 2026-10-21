@@ -95,6 +95,11 @@ impl DrawItem {
 pub struct DrawQueue {
     items: Vec<DrawItem>,
     sorted: bool,
+    /// B3 Step 2：Surface 路由 / Direct 派生的**显式错误**（每帧由 2D 录制清空）。
+    ///
+    /// 不静默：归属环、缺 renderer、Direct 不支持的能力、派生失败都记在这里，
+    /// 由宿主读取（`surface_errors()`）；不影响队列载荷。
+    surface_errors: Vec<crate::surface_route::SurfaceRecordError>,
 }
 
 // ─── 组件 → Shape2D 转换（屏幕空间） ────────────────────────────────────────
@@ -112,6 +117,7 @@ impl DrawQueue {
         Self {
             items: Vec::new(),
             sorted: true,
+            surface_errors: Vec::new(),
         }
     }
 
@@ -119,7 +125,26 @@ impl DrawQueue {
         Self {
             items: Vec::with_capacity(capacity),
             sorted: true,
+            surface_errors: Vec::new(),
         }
+    }
+
+    /// 本帧的 Surface 路由 / Direct 派生错误（显式，不静默）。
+    pub fn surface_errors(&self) -> &[crate::surface_route::SurfaceRecordError] {
+        &self.surface_errors
+    }
+
+    /// 追加一条 Surface 路由错误（crate 内录制使用）。
+    pub(crate) fn push_surface_error(
+        &mut self,
+        error: crate::surface_route::SurfaceRecordError,
+    ) {
+        self.surface_errors.push(error);
+    }
+
+    /// 清空 Surface 路由错误（每帧 2D 录制开始时调用）。
+    pub fn clear_surface_errors(&mut self) {
+        self.surface_errors.clear();
     }
 
     /// 追加一条 2D 命令。O(1)，不立即排序。
@@ -274,6 +299,7 @@ impl DrawQueue {
     /// 清空整个队列（2D + 3D）；帧末统一清理用。
     pub fn clear(&mut self) {
         self.items.clear();
+        self.surface_errors.clear();
         self.sorted = true;
     }
 
@@ -559,6 +585,11 @@ fn record_group<S, A, B>(
         if !visible_for(scene, id, camera_tag, groups) {
             return;
         }
+        // B3 Step 2：Surface 显式路由。Renderer3D ⇒ 派生为网格（不再走 2D）；
+        // Renderer2D / 无 Surface ⇒ 默认 2D 路径（像素逐位不变）。
+        if crate::surface_route::try_record_direct(scene, id, a, b, z.copied(), worlds, queue) {
+            return;
+        }
         // S5：优先用父子累乘的**世界矩阵**（S1：2D 读投影视图）；缺席 WorldTransforms / 该对象 ⇒ local。
         // 无 `Parent` 时 WorldTransforms 存的就是 local 的逐位拷贝 ⇒ 默认行为不变。
         let local = scene.with::<Transform, _>(id, |tr| tr.to_affine2d());
@@ -643,6 +674,8 @@ pub fn record_scene_tagged_with<S: SceneRead>(
 ) {
     // 内容对象的默认绘制层级：同层（保持查询顺序）。
     const Z: f32 = 0.0;
+    // B3 Step 2：每帧重新收集 Surface 路由错误（显式，不静默）。
+    queue.clear_surface_errors();
     // 相机 → 屏幕的仿射（唯一降级点）。
     let t = camera.to_transform2d();
     let scale = camera.scale;

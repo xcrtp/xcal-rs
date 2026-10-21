@@ -619,6 +619,20 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   核心层因此完全不知道 hecs；ECS 用组件登记表实现具体分发。
 > - **单一真源不变**：`ZOrder` 仍只在 `ze-render-ir` 声明；`ze-object` crate 已删除。
 
+> **B3 批次（2026-10-21，进行中）**：Surface 双路径。
+> - **派生桥复用三角化器**：`derive_mesh` 统一走 `tessellate_with`（lyon），覆盖
+>   Rect / Circle / Ellipse / Polygon / Line / Path / Group；手写三角化已删除。
+>   2D 边法线（attrib0）丢弃，着色法线恒 +Z；`Polyline` / `Custom` 显式报错。
+> - **Surface 归属**（`ze_scene_core::surface`）：`Surface`（bounds / mapping / anchor，
+>   **无 position**）+ `SurfaceRenderer`（Renderer2D / Renderer3D，必填）。
+>   归属沿 `Parent` 链解析（不存 `surface_id`），visited 环检测；缺 renderer ⇒ 显式错误。
+> - **Direct 路由**（`zela_render::surface_route`）：仅 `Renderer3D` 走 Direct；
+>   失败（缺 renderer / 环 / Screen 映射 / Reveal·Morph·ContentTexture / 派生失败）
+>   写进 `DrawQueue::surface_errors()`，不静默。
+> - **Texture 路径（Step 4）与作品迁移（Step 5）尚未执行**：需要每帧编排
+>   （`SceneCompositorCallback`）+ 纹理分辨率/过滤进契约（E-08 放大）。
+
+
 ### 已知未接线项（Known unwired，记账非缺陷）
 
 以下各项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。

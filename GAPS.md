@@ -155,13 +155,13 @@
 | E-01 | `PipelineKey` 含 wgpu 类型（`Option<wgpu::Face>` / `BlendState`）→ 改为 IR `CullMode` / `LayerBlend`，并补第五维 `VertexLayout`（D15） | 渲染后端 | **已关闭（B2-2）** | `grep -n "struct PipelineKey" -A 8` 零 wgpu 类型；`test_b2_2_pipeline_state_dimensions`（1→2→3 条） |
 | E-02 | `cull_mode` 由拓扑推导、`blend` 硬编码 `REPLACE`（#2/#3）→ 意图层 `Material3D.double_sided` / `transparent` 驱动 | 渲染 / 场景组件 | **已关闭（B2-2）** | `test_b2_2_double_sided_visible_from_back`（背面可见） |
 | E-03 | 2D / 3D 两个队列、3D 无层序（#11/D2）→ **一个 `DrawQueue`**（2D 形状 + 3D 网格/线段共存）+ 统一 `ZOrder`（IR 唯一声明，`ze_scene_core::ZOrder` re-export） | 渲染管线 | **已关闭（B2-1）** | `test_queue_stable_within_equal_zorder`（R-F 显式锁定）、`test_unified_queue_mixes_2d_and_3d_by_zorder` |
-| E-04 | 2D 图元无法参与 3D（融合缺口）→ `derive_mesh`（Rect/Circle/Ellipse/Polygon/Line → 平面网格，Flat + double_sided 材质默认化） | 渲染管线 | **新增能力（B2-3）** | `test_b2_3_derived_2d_rect_renders_in_3d`；`Path`/`Group`/`Custom` 显式报错（不静默） |
+| E-04 | 2D 图元无法参与 3D（融合缺口）→ `derive_mesh`（Rect/Circle/Ellipse/Polygon/Line/**Path**/**Group** → 平面网格，Flat + double_sided 材质默认化） | 渲染管线 | **新增能力（B2-3；B3 Step 1 扩到 7 种）** | `test_b2_3_derived_2d_rect_renders_in_3d`；B3 Step 1 起统一走 `tessellate_with`（lyon），手写三角化已删；`Polyline`/`Custom` 仍显式报错（不静默） |
 | E-05 | 透明物体无排序（无透明桶）→ 不透明先画、透明按 `ZOrder` 升序后画；透明 pipeline **不写深度**（R-A） | 渲染后端 | **已关闭（B2-3）** | `test_b2_3_transparent_bucket_orders_by_zorder`（对调 ZOrder 后主导色对调） |
 | E-06 | 共面 z-fighting → `ZOrder × Z_ORDER_EPSILON` 的 **normal offset**（不用常量 depth bias，D4） | 渲染后端 | **已关闭（B2-4）** | `test_b2_4_epsilon_from_zorder_resolves_coplanar`；`DepthBiasState::default()` 未改 |
 | E-07 | 3D 无 AA（1x）vs 2D 4x（#6/#8）→ 3D MSAA 4x（`DEFAULT_MSAA_SAMPLES`），采样数经 `new_with_samples` 由能力侧给定 | 渲染后端 | **已关闭（B2-5）** | `test_b2_5_msaa_4x_produces_partial_coverage`（4x 部分覆盖像素更多） |
-| E-08 | **纹理走样**：MSAA 治不了纹理采样走样（`Material3D.texture` / `ContentTexture` 进 3D 后会有） | 渲染后端 | **仍成立（已知缺口）** | 需要 **mipmap + 各向异性过滤**；本轮不做（计划 B2-5 记账要求） |
+| E-08 | **纹理走样**：MSAA 治不了纹理采样走样（`Material3D.texture` / `ContentTexture` 进 3D 后会有） | 渲染后端 | **仍成立（已知缺口）** | 需要 **mipmap + 各向异性过滤**；本轮不做（计划 B2-5 记账要求）。B3 Step 4 的 Surface 纹理路径**未执行**，一旦落地会放大本条（2D 内容进 3D 同样走采样） |
 | E-09 | 硬件 MSAA **resolve 的跨端确定性**是否为 `[browser]` 段"1 帧 1 像素"差异的贡献者 | 对拍 | **待验证（不是断言）** | 本轮无浏览器环境（D5：跨端重录推迟）；`[browser]` 段仍仅存档 |
-| E-10 | 2D 派生网格仅覆盖可直接三角化的图元（`Path` 需要 lyon；`Group` 需要递归） | 渲染管线 | **仍成立（范围限制）** | `ShapeMeshError::Unsupported` 显式报错；后续批次扩展 |
+| E-10 | 2D 派生网格仅覆盖可直接三角化的图元（`Path` 需要 lyon；`Group` 需要递归） | 渲染管线 | **已关闭（B3 Step 1）** | 复用 `tessellate_with`：7 种图元可派生；剩余 `Polyline` / `Custom` 仍 `ShapeMeshError::Unsupported` 显式报错 |
 | E-11 | 双槽基线**没有差分视图**（两个孤立值，无法看出"当前值落在哪一槽"） | 对拍工具 | **已关闭（B2-6）** | xtask `render_diff_report`（诊断旁路，不参与门禁）；`diff_report_tests` 3 条 |
 | E-12 | 帧级归因缺**分层标签**（无法定位首帧分歧） | 对拍 / 可观测性 | **已关闭（B2-6）** | `ZELA_FRAME_DIGEST_SAMPLE=N` 逐帧 digest 采样；**不进序列哈希链**（D7） |
 | E-13 | 脚本看不到 B2 的意图层（`double_sided` / `transparent`） | 脚本 API | **已关闭（B2-7）** | pod `Material3D` 增两字段（D19：不暴露 GPU 机制）；`zela.scene` version 5 → **6** |
@@ -170,7 +170,7 @@
 | E-16 | 能力 API 改了可能**忘记递增 version** | 脚本 API | **已关闭（B2-9）** | `capability_fingerprint`（FNV-1a，跨 Rust 稳定）+ 钉住常量；`cargo verify --step structure` 内跑护栏（变而未递增 ⇒ **fail**） |
 | E-17 | 逐帧 digest 旁路**仅 native**（`zela-render` 二进制）；浏览器路径未接 | 可观测性 | **仍成立（范围限制）** | wasm 无环境变量；浏览器归因留待跨端重录（D5） |
 
-**E 段小计（B2-0 ~ B2-9）**：已关闭 **12** · 新增能力 1 · 仍成立/待验证 **4**（E-08 mipmap、E-09 跨端 resolve、E-10 派生桥范围、E-17 旁路仅 native）。
+**E 段小计（B2-0 ~ B2-9）**：已关闭 **13**（含 E-10，B3 Step 1）· 新增能力 1 · 仍成立/待验证 **3**（E-08 mipmap、E-09 跨端 resolve、E-17 旁路仅 native）。
 
 ---
 
@@ -291,6 +291,32 @@
 
 **I 段小计（B3-2）**：已闭合 1（R-01）· 可行 1（R-06）· 成立 1（R-08）· 平台相关 1（R-07）· 仍成立 4（R-02 / R-03 / R-04 / R-05）。
 签名**未改** ⇒ `PINNED_FINGERPRINTS` 不变。
+
+---
+
+## J. B3 批次记账（Surface 双路径，2026-10-21）
+
+> 计划《B3执行计划_Surface双路径》。本段记录**实际落地**部分；Step 4 / Step 5 未执行，单列说明。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| S0-01 | `zela-render` 断 ECS 依赖后缺 CI 门禁 | CI | **已关闭（B3 Step 0）** | 新增 `JQ_RENDER_LAYER`；临时加违规依赖验证能捕获后撤销 |
+| S0-02 | 四条基线 `@ f2c8778` 是**回填值**，易被误读为"产生时提交" | 对拍 | **已关闭（B3 Step 0）** | `FRAME_HASH_BASELINES.md` 增加回填值警告（跨批次不得采信） |
+| S0-03 | `B3-R` / `B4` / `B3-2d` 三名并存 | 文档 | **已关闭（B3 Step 0）** | GAPS 段标题 / 结论标题 / 代码注释统一为 B3-2 / B3-2d；`grep B3-R` = 0 |
+| S0-04 | 可选的 hecs 隔离判据（"hecs 只在 `ze-scene-hecs` / `zela-scene-ecs`"） | CI | **不成立（未采纳）** | 实测 `zela-schedule` / `zela-egui` / `zela-app` / `zela-playback` 的生产边仍直接依赖 hecs；判据前提与代码不符 |
+| S1-01 | 派生桥手写 ellipse / polygon / line_ribbon（第二份三角化真源） | 渲染管线 | **已关闭（B3 Step 1）** | 统一走 `tessellate_with`（lyon）；7 种图元（含 Path / Group）；三个手写函数已删 |
+| S1-02 | 2D 的边法线（attrib0）/ advance（attrib2）在 3D 布局里无对应槽 | 渲染管线 | **仍成立（显式限制）** | 转换时丢弃边法线，着色法线恒 +Z；Direct 对 `Reveal` 显式报错 |
+| S1-03 | `Polyline` / `Custom` 仍不可派生 | 渲染管线 | **仍成立（显式报错）** | `ShapeMeshError::Unsupported`；Direct 路径未声明支持，不静默 |
+| S1-04 | Direct 单材质：`fill` + `stroke` 同时存在时只派生填充 | 渲染管线 | **仍成立（文档化限制）** | `derive_mesh` 返回单一 `Material3D`；描边仅在 `fill=None` 时走 `TessKind::Stroke`（与 B2-3 行为一致）。多材质需 `Vec<DerivedMesh>`，留待 Step 4/5 |
+| S2-01 | Direct 路径的触发条件不能靠内容类型推断 | 渲染管线 | **已关闭（B3 Step 2）** | 只由 `SurfaceRenderer::Renderer3D` 决定（`surface_route.rs`）；无 Surface ⇒ 默认 2D |
+| S2-02 | Direct 失败无处表达（`System::run` 无返回值） | 渲染管线 | **已关闭（B3 Step 2）** | `DrawQueue::surface_errors()` 收集显式错误；不影响其它对象录制 |
+| S2-03 | Direct + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | `ScreenMappingUnsupported`；不猜映射 |
+| S3-01 | 无 Surface 组件 / 归属判定 | 场景核心 | **已关闭（B3 Step 3）** | `Surface`（无 position）+ `SurfaceRenderer`；沿 `Parent` 链解析、visited 环检测；缺 renderer 显式错误 |
+| S3-02 | 默认 renderer 策略 | 场景核心 | **未拍（按计划延后）** | 计划要求用 Step 1 实测覆盖度反推；当前 7/9 图元可 Direct，但 Step 4/5 未做，暂不设默认 |
+| S4-01 | Texture 路径（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行** | 需改 `SceneCompositorCallback` 的每帧编排；并须先把纹理分辨率/过滤写进契约（E-08 放大） |
+| S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
+
+**J 段小计（B3，已执行部分）**：已关闭 7（S0-01/02/03、S1-01、S2-01/02、S3-01）· 仍成立/显式拒绝 4（S1-02/03/04、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
 
 ---
 

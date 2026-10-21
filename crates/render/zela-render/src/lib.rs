@@ -30,6 +30,8 @@ pub mod painter_2d;
 pub mod painter_3d;
 pub mod record_systems;
 pub mod shape_to_mesh;
+/// B3 Step 2：Surface 路由（Direct / 默认 2D 的显式判定）。
+pub mod surface_route;
 pub mod tessellate;
 pub mod vertex_record;
 pub mod view_rect;
@@ -67,6 +69,8 @@ pub use ze_render_ir::{
 };
 // B2-3：2D 图元 → 3D 平面网格（派生桥）。
 pub use shape_to_mesh::{DerivedMesh, ShapeMeshError, derive_mesh};
+// B3 Step 2：Surface 路由结论与显式错误（宿主可读 `DrawQueue::surface_errors`）。
+pub use surface_route::{SurfaceRecordError, SurfaceRoute, surface_route};
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
 // 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度

@@ -127,6 +127,8 @@ position/attrib0/attrib1/attrib2）：
 | `filters` | **C 线（纯数据）**：`PostFilterChain`（Resource；顺序即应用顺序、最多 `MAX_FILTER_SLOTS = 4` 个）+ `FilterSlot` + `FilterKind`（`code()` 与 WGSL 常量表一一对应）+ 160 B uniform 编码；**空链 ⇒ 渲染层走直通、画面逐位不变** |
 | `tessellate` | S3-0 lyon 三角化适配层：`Vertex2D` / `Tessellation2D` / `tessellate` / `tessellate_with` / `TessellateError` / **`tessellate_reveal`（R0 书写动画）** / `REVEAL_STEP_PX` / `tolerance_for_scale`（纯 CPU，无 feature 门控） |
 | `draw_queue_3d` | 3D 双列表队列（`DrawQueue3D` / `MeshDraw` / `LineDraw`）|
+| `shape_to_mesh` | 2D → 3D 平面网格派生桥（`derive_mesh`）：统一走 `tessellate_with`，覆盖 7 种图元；`Polyline` / `Custom` 显式报错 |
+| `surface_route` | **B3 Step 2** Surface 路由：仅 `SurfaceRenderer::Renderer3D` 走 Direct；失败写入 `DrawQueue::surface_errors()`（缺 renderer / 环 / Screen 映射 / Reveal·Morph·ContentTexture / 派生失败） |
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
 | `shape` | `Shape2D` + `Style2D` + `CustomShapeData`/`SpecId`/`CustomSpec`/`CustomSpecs`（自定义图元按**具名规格**解析） |
 | `viewport` | `Viewport`（纯数据） |
