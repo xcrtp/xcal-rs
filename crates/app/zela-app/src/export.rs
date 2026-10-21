@@ -227,7 +227,7 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
 mod tests {
     use super::*;
     use ze_notion::{Rect2D, Vec2};
-    use ze_object::Camera2D;
+    use ze_scene_core::Camera2D;
     use zela_render::{
         DrawQueue, DrawQueue3D, PostFilterChain, StrokeSolid, ZIndex, components::Line,
     };

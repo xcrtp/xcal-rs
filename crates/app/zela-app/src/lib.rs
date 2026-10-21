@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use ze_notion::Rect2D;
-use ze_object::{
+use ze_scene_core::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
 };
 use zela_render::scene::Scene;
@@ -43,7 +43,7 @@ use zela_schedule::resource::Resources;
 use zela_schedule::scheduler::Scheduler;
 
 // 内容纹理（S3-3）的 id 与尺寸已归位到对象层默认配置：
-// `ze_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT}`。
+// `ze_scene_core::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT}`。
 
 mod assembly;
 pub mod export;
@@ -506,7 +506,7 @@ fn run_script_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::{Camera2DHandle, Camera3D, Camera3DHandle, Framing2D, Projection};
+    use ze_scene_core::{Camera2DHandle, Camera3D, Camera3DHandle, Framing2D, Projection};
     use zela_scene::ClockForest;
     use zela_scene::animation::{BindingTable, Camera2DFraming, CameraEye, SeekKind};
     use zela_scene::contract::object_id_of;
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn deferred_spawn_pixels_appear_next_frame() {
         use ze_notion::Transform2D;
-        use ze_object::{Circle, Framing2D, spawn_camera2d};
+        use ze_scene_core::{Circle, Framing2D, spawn_camera2d};
         use zela_render::{DrawQueue, MeasureSpace, SceneRecordSystem};
         use zela_render_backends::{RenderContext, WgpuBackend2D};
         use zela_scene::contract::WorldScene;
@@ -847,7 +847,7 @@ mod tests {
 
     /// 逐组件指纹（类型 + 值；浮点量化）。
     fn object_fingerprint(scene: &Scene, id: zela_scene::contract::ObjectId) -> String {
-        use ze_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
+        use ze_scene_core::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
         use zela_render::{FillSolid, StrokeSolid};
         use zela_scene::contract::SceneRead;
         use zela_scene::scene::components::Reveal;
@@ -925,7 +925,7 @@ mod tests {
 
     /// 故事板对象（创建顺序 = `ObjectId.index` 升序；无 despawn）。
     fn storyboard_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
-        use ze_object::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
+        use ze_scene_core::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
         use zela_scene::contract::{ObjectId, SceneRead};
         use zela_scene::scene::components::Reveal;
 
@@ -942,7 +942,7 @@ mod tests {
 
     /// Fourier 作品的对象全集（含纯层级节点 / 圆点 / Name / Parent）。
     fn fourier_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
-        use ze_object::{Arrow, Axes2D, Circle, Framing2D, Path as ObjectPath, Transform};
+        use ze_scene_core::{Arrow, Axes2D, Circle, Framing2D, Path as ObjectPath, Transform};
         use zela_scene::contract::{Name, ObjectId, SceneRead};
         use zela_scene::scene::components::Reveal;
 
@@ -965,7 +965,7 @@ mod tests {
         scene: &Scene,
         id: zela_scene::contract::ObjectId,
     ) -> String {
-        use ze_object::Circle;
+        use ze_scene_core::Circle;
         use zela_scene::contract::{Name, Parent, SceneRead};
         use zela_render::Opacity;
 
@@ -996,7 +996,7 @@ mod tests {
 
     /// demo3d 作品的对象全集（B1-D）：3D 装配组件 + Transform。
     fn demo3d_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
-        use ze_object::{Camera3D, Transform};
+        use ze_scene_core::{Camera3D, Transform};
         use zela_scene::contract::{ObjectId, SceneRead};
         use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
 
@@ -1020,20 +1020,20 @@ mod tests {
         scene: &Scene,
         id: zela_scene::contract::ObjectId,
     ) -> String {
-        use ze_object::{Camera3D, Transform};
+        use ze_scene_core::{Camera3D, Transform};
         use zela_scene::contract::SceneRead;
         use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
 
         let mut parts = vec![object_fingerprint(scene, id)];
         if let Some(text) = scene.with::<Camera3D, _>(id, |c| {
             let (fov, aspect, near, far) = match c.projection {
-                ze_object::Projection::Perspective {
+                ze_scene_core::Projection::Perspective {
                     fov_y,
                     aspect,
                     near,
                     far,
                 } => (Some(fov_y), aspect, near, far),
-                ze_object::Projection::Orthographic {
+                ze_scene_core::Projection::Orthographic {
                     extent: _,
                     aspect,
                     near,
@@ -1539,7 +1539,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
     /// **S4 验收**：同一 target 的多段绑定「推近 → 停留 → 拉回」有段语义。
     #[test]
     fn fourier_camera_push_pull_uses_segment_semantics() {
-        use ze_object::Framing2D;
+        use ze_scene_core::Framing2D;
         use ze_prerender::placeholder_engine;
         use zela_scene::animation::BindingApplySystem;
         use zela_schedule::resource::Resources;
@@ -1716,7 +1716,7 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
     #[test]
     fn python_lua_symmetry() {
         use std::sync::Arc;
-        use ze_object::Circle as NativeCircle;
+        use ze_scene_core::Circle as NativeCircle;
         use ze_prerender::placeholder_engine;
         use zela_scene::contract::SceneRead;
         use zela_scene::scene::components::Reveal;
@@ -1799,7 +1799,7 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
 #[cfg(test)]
 mod t_capabilities_gpu {
     use ze_notion::{Rect2D, Transform2D, Vec2};
-    use ze_object::{Camera2D, Transform};
+    use ze_scene_core::{Camera2D, Transform};
     use zela_render::components::{Arrow, Circle, Rect};
     use zela_render::{DrawQueue, FillSolid, Opacity, StrokeSolid, record_scene_tagged};
     use zela_render_backends::{Frame2DGeometry, RenderContext, WgpuBackend2D};
@@ -2102,7 +2102,7 @@ mod t_capabilities_gpu {
         let mut world = hecs::World::new();
         for (path, color, width, space) in paths {
             world.spawn((
-                ze_object::Path::new(path),
+                ze_scene_core::Path::new(path),
                 StrokeSolid::new_in(width, color, space),
             ));
         }

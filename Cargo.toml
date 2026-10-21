@@ -13,7 +13,6 @@ members = [
     "crates/ze/pod/ze-pod-binding",
     "crates/ze/pod/ze-pod-macro",
     "crates/ze/pod/ze-pod",
-    "crates/object/ze-object",
     "crates/scene/ze-scene-core",
     "crates/scene/ze-scene-api",
     "crates/ze/graph/ze-node-core",

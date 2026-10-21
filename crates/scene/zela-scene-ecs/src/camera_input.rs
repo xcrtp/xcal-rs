@@ -4,7 +4,7 @@
 // 本层只留 `CameraInputSystem`（需要 `ExecutorContext` / `Resources`）。
 // 路径兼容：`zela_scene::camera_input::apply_*` 转发自核心层。
 
-use ze_object::{Camera2DHandle, Camera3D, Camera3DHandle, FpsView, Framing2D};
+use ze_scene_core::{Camera2DHandle, Camera3D, Camera3DHandle, FpsView, Framing2D};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -93,10 +93,10 @@ impl System for CameraInputSystem {
 mod tests {
     use super::*;
     use ze_notion::Vec3;
-    use ze_object::FPS_PITCH_LIMIT;
+    use ze_scene_core::FPS_PITCH_LIMIT;
     use crate::TimeState;
     use crate::domain::LayerId;
-    use ze_object::Projection;
+    use ze_scene_core::Projection;
     use ze_scene_contract::ObjectId;
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};

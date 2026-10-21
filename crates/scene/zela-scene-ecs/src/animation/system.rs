@@ -76,7 +76,7 @@ mod tests {
     use crate::animation::target::CircleRadius;
     use hecs::World;
     use ze_notion::Vec3;
-    use ze_object::Circle;
+    use ze_scene_core::Circle;
     use ze_time::{ClockForest as XcClockForest, ClockNode, Curve};
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
@@ -217,7 +217,7 @@ mod tests {
     fn later_segment_is_not_written_before_start() {
         use crate::animation::target::Camera2DFraming;
         use crate::animation::timeline::Timeline;
-        use ze_object::Framing2D;
+        use ze_scene_core::Framing2D;
         use ze_time::AnimValue;
 
         let mut world = World::new();
@@ -273,7 +273,7 @@ mod tests {
     fn same_start_same_field_last_declaration_wins() {
         use crate::animation::target::Camera2DFraming;
         use crate::animation::timeline::Timeline;
-        use ze_object::Framing2D;
+        use ze_scene_core::Framing2D;
         use ze_time::AnimValue;
 
         let mut world = World::new();
@@ -313,7 +313,7 @@ mod tests {
     fn timeline_drives_transform_value_with_hold() {
         use crate::animation::target::TransformValue;
         use crate::animation::timeline::Timeline;
-        use ze_object::Transform;
+        use ze_scene_core::Transform;
         use ze_time::{AnimValue, Curve, Interp};
 
         let mut world = World::new();
@@ -373,7 +373,7 @@ mod tests {
         };
         use crate::scene::components::{MorphShape, PhaseAnim, Reveal};
         use std::sync::Arc;
-        use ze_object::{Camera3D, Framing2D, Projection, Transform};
+        use ze_scene_core::{Camera3D, Framing2D, Projection, Transform};
         use ze_render_ir::Opacity;
         use ze_time::{AnimValue, Interp};
 

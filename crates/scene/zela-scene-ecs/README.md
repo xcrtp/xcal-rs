@@ -1,13 +1,16 @@
-# zela-scene
+# zela-scene-ecs
 
-> **zela 的场景层**。装三类东西：
-> ① **场景数据**（`Scene` / 组件 / 图元生成器）；
-> ② **场景 System**（`BindingApply` / `MorphApply` / `DirectorAdvance`）；
-> ③ **UI ↔ 场景契约**（`domain`：`CameraCommand` / `SceneView` / `ContentHandle`）。
+> **场景层的 ECS 实现**（B3-1d 起；原 `zela-scene`）。只装"实现"：
+> ① `Scene`（hecs 适配）/ 资源 / 延迟命令 / 生命周期；
+> ② 全部 System（`BindingApply` / `MorphApply` / `CameraDrive` / `DirectorAdvance` / …）；
+> ③ 调度接线（`register`）。
+>
+> 概念（对象 / 组件 / 纯逻辑）在 `ze-scene-core`；语言无关能力在 `ze-scene-api`；
+> 作品（分镜 / demo）在 `zela-authored`。下游仍可经壳层 `zela-scene` 使用旧路径。
 >
 > 调度框架本身**不在这里**——它在独立的 `zela-schedule` crate 中，本 crate 依赖它。
 
-本 crate 是**纯数据 + 纯逻辑**：不得出现任何 `egui::` 类型，也不含任何 GPU / 调度实现。
+本 crate 是**纯数据 + 纯逻辑**：不得出现任何 `egui::` 类型，也不含任何 GPU 实现。
 
 ---
 
@@ -17,7 +20,9 @@
         kernel:  ze-notion / ze-time / ze-macro   (纯数据 + proc-macro)
                             │
                             ▼
-   zela-schedule  ◄───  zela-scene   ← 本 crate
+                   ze-scene-core  ← 对象 / 组件 / 纯逻辑（零 hecs）
+                            ▲
+   zela-schedule  ◄───  zela-scene-ecs   ← 本 crate（ECS 实现）
    (ECS 调度框架)            │
                     ┌────────┴─────────┐
                     ▼                  ▼

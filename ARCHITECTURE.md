@@ -49,9 +49,7 @@ graph TD
         ze_pod_tests["ze-pod-tests（测试组，publish=false）"]
     end
 
-    subgraph object[crates/object]
-        ze_object["ze-object"]
-    end
+    %% B3-1：`crates/object/ze-object` 已并入 ze-scene-core::object（crate 删除）
 
     subgraph graph[crates/ze/graph]
         ze_node_core["ze-node-core"]
@@ -66,7 +64,10 @@ graph TD
     end
 
     subgraph scene[crates/scene]
-        zela_scene["zela-scene"]
+        ze_scene_core["ze-scene-core"]
+        ze_scene_api["ze-scene-api"]
+        zela_scene_ecs["zela-scene-ecs"]
+        zela_scene["zela-scene<br/>(壳层)"]
     end
 
     subgraph render[crates/render]
@@ -111,11 +112,7 @@ graph TD
     ze_pod_tests --> ze_pod_lua
     ze_pod_tests --> ze_pod_py
 
-    %% object → kernel（场景对象层只依赖 kernel）
-    ze_object --> ze_notion
-    ze_object --> ze_render_ir
-    ze_object --> ze_scene_contract
-    ze_object --> ze_macro
+    %% 原 ze-object 的依赖边已归入 ze_scene_core（见上）
 
     %% graph → kernel
     ze_graph_algo --> ze_node_core
@@ -126,21 +123,29 @@ graph TD
     %% schedule（无内部依赖，仅依赖 hecs）
 
     %% render → kernel + object + schedule
-    zela_scene --> ze_notion
-    zela_scene --> ze_time
-    zela_scene --> ze_macro
-    zela_scene --> ze_content
-    zela_scene --> ze_prerender
-    zela_scene --> ze_pod_core
-    zela_scene --> ze_pod_macro
-    zela_scene --> ze_object
-    zela_scene --> ze_render_ir
-    zela_scene --> ze_scene_contract
-    zela_scene --> zela_schedule
+    %% 场景分层（B3-1）：壳层 → ECS 实现 → 核心 / 能力层
+    zela_scene --> zela_scene_ecs
+    zela_scene_ecs --> ze_scene_core
+    zela_scene_ecs --> ze_scene_api
+    zela_scene_ecs --> zela_schedule
+    zela_scene_ecs --> ze_pod_core
+    zela_scene_ecs --> ze_pod_macro
+    ze_scene_api --> ze_scene_core
+    ze_scene_api --> ze_pod_core
+    ze_scene_api --> ze_pod_macro
+    ze_scene_core --> ze_notion
+    ze_scene_core --> ze_time
+    ze_scene_core --> ze_macro
+    ze_scene_core --> ze_content
+    ze_scene_core --> ze_prerender
+    ze_scene_core --> ze_pod_core
+    ze_scene_core --> ze_pod_macro
+    ze_scene_core --> ze_render_ir
+    ze_scene_core --> ze_scene_contract
     zela_render --> ze_content
     zela_render --> ze_notion
     zela_render --> ze_render_ir
-    zela_render --> ze_object
+    zela_render --> ze_scene_core
     zela_render --> ze_vertex
     zela_render --> ze_resource
     zela_render --> zela_scene
@@ -149,7 +154,7 @@ graph TD
     zela_render_backends --> ze_notion
     zela_render_backends --> ze_render_ir
     zela_render_backends --> zela_render
-    zela_render_backends --> ze_object
+    zela_render_backends --> ze_scene_core
 
     %% ZSB 装配产物 → scene（不含任何语言适配器）
     zela_scene_bundle --> zela_scene
@@ -157,7 +162,7 @@ graph TD
     %% ui → kernel + graph + render + schedule
     zela_egui --> ze_notion
     zela_egui --> ze_macro
-    zela_egui --> ze_object
+    zela_egui --> ze_scene_core
     zela_egui --> ze_pod_core
     zela_egui --> zela_scene
     zela_egui --> zela_schedule
@@ -189,7 +194,7 @@ graph TD
     zela_app --> ze_content
     zela_app --> ze_prerender
     zela_app --> ze_notion
-    zela_app --> ze_object
+    zela_app --> ze_scene_core
     zela_app --> ze_pod_core
     zela_app --> ze_pod_binding
     zela_app --> ze_pod_lua
@@ -587,6 +592,20 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （`cargo tree` 中 wgpu：12 → 0），成为真正的渲染无关层。
 > - **像素口径纠正**：基线是**同后端 + 同机器**的测试夹具，不是跨端产品承诺
 >   （`FRAME_HASH_BASELINES.md` / `baselines.txt` 同步）。
+
+> **B3-1 批次（2026-10-21）已落地**（详见 `GAPS.md` H 段：场景层分层重构）：
+> 原 `zela-scene` 12k 行按"概念 / 实现 / 能力"三分：
+> - **`ze-scene-core`**（新）：场景对象（原 `ze-object`）+ 组件 + 纯逻辑
+>   （animation 数据 / scene_script / persist / registry / domain / camera_input 纯函数 /
+>   composer 数据）。**零 hecs、零 zela-***（CI 判据）。
+> - **`ze-scene-api`**（新）：`SceneApi` / `ContentApi` + 两个 Service Pod（原 `pod/`）。
+>   **零 hecs、零 zela-***；能力 namespace / version 不变（`zela.scene@6` / `zela.content@1`）。
+> - **`zela-scene-ecs`**：只留 ECS 实现（world / resources / System 接线 / 生命周期）。
+>   `zela-scene` 变成 re-export 壳层，259 处下游路径不变。
+> - **`zela-authored`**（新）：分镜 / demo 等**作品**移出场景层，app 按需依赖。
+> - **`SceneWrite` 擦除写入口**：动画目标（`Target`）不再接受 `WorldScene`，
+>   核心层因此完全不知道 hecs；ECS 用组件登记表实现具体分发。
+> - **单一真源不变**：`ZOrder` 仍只在 `ze-render-ir` 声明；`ze-object` crate 已删除。
 
 ### 已知未接线项（Known unwired，记账非缺陷）
 

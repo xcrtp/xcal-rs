@@ -30,7 +30,7 @@
 //    `with_component` 在组件缺席时静默跳过（不 panic、不报错），表现为"淡出没反应"。
 
 use ze_notion::{MeasureSpace, Path2D};
-use ze_object::{Camera2DHandle, Framing2D, Path};
+use ze_scene_core::{Camera2DHandle, Framing2D, Path};
 use ze_render_ir::{Opacity, StrokeSolid};
 
 use zela_scene_ecs::animation::OpacityValue;

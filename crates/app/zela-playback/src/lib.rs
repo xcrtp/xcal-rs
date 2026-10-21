@@ -43,7 +43,7 @@ use zela_scene_bundle::{
 };
 use zela_schedule::resource::Resources;
 use zela_schedule::scheduler::Scheduler;
-use ze_object::{Camera2DHandle, Camera3DHandle};
+use ze_scene_core::{Camera2DHandle, Camera3DHandle};
 
 /// 回放装配失败（全部显式，不静默降级）。
 #[derive(Debug, thiserror::Error)]
@@ -229,7 +229,7 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
 /// 2D 相机的语义判据：场景里唯一带 `Framing2D` 的对象。
 pub fn find_camera2d(scene: &Scene) -> Result<Camera2DHandle> {
     let mut cameras = Vec::new();
-    scene.for_each::<ze_object::Framing2D>(|id, _| cameras.push(id));
+    scene.for_each::<ze_scene_core::Framing2D>(|id, _| cameras.push(id));
     cameras
         .first()
         .copied()

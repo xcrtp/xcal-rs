@@ -5997,13 +5997,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ze-object"
-version = "0.1.1"
-dependencies = [
- "ze-scene-core",
-]
-
-[[package]]
 name = "ze-pod"
 version = "0.1.1"
 dependencies = [
@@ -6187,12 +6180,12 @@ dependencies = [
  "ze-content",
  "ze-macro",
  "ze-notion",
- "ze-object",
  "ze-pod-binding",
  "ze-pod-core",
  "ze-pod-lua",
  "ze-pod-py",
  "ze-prerender",
+ "ze-scene-core",
  "zela-authored",
  "zela-playback",
  "zela-render",
@@ -6208,9 +6201,9 @@ version = "0.1.1"
 dependencies = [
  "ze-content",
  "ze-notion",
- "ze-object",
  "ze-prerender",
  "ze-render-ir",
+ "ze-scene-core",
  "ze-time",
  "zela-scene-ecs",
 ]
@@ -6236,8 +6229,8 @@ dependencies = [
  "tracing",
  "ze-macro",
  "ze-notion",
- "ze-object",
  "ze-pod-core",
+ "ze-scene-core",
  "zela-render",
  "zela-render-backends",
  "zela-scene",
@@ -6306,8 +6299,8 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu",
  "ze-notion",
- "ze-object",
  "ze-pod-core",
+ "ze-scene-core",
  "zela-render",
  "zela-render-backends",
  "zela-scene",
@@ -6330,10 +6323,10 @@ dependencies = [
  "thiserror 2.0.20",
  "ze-content",
  "ze-notion",
- "ze-object",
  "ze-render-ir",
  "ze-resource",
  "ze-scene-contract",
+ "ze-scene-core",
  "ze-vertex",
  "zela-scene",
  "zela-schedule",
@@ -6353,9 +6346,9 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu",
  "ze-notion",
- "ze-object",
  "ze-render-ir",
  "ze-resource",
+ "ze-scene-core",
  "ze-vertex",
  "zela-render",
  "zela-scene",
@@ -6374,7 +6367,7 @@ version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
- "ze-object",
+ "ze-scene-core",
  "zela-scene",
 ]
 
@@ -6393,7 +6386,6 @@ dependencies = [
  "ze-content",
  "ze-macro",
  "ze-notion",
- "ze-object",
  "ze-pod-core",
  "ze-pod-macro",
  "ze-prerender",

@@ -2,7 +2,7 @@
 //! 持久化往返与"克隆后重新 commit"。
 
 use ze_notion::{FunctionX2Y, Path2D, Rect2D, Sampler1D, Vec2, Vec3};
-use ze_object::{
+use ze_scene_core::{
     Arrow, Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line,
     Path, Projection, Rect, Transform, ZOrder,
 };

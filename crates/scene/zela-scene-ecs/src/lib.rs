@@ -76,7 +76,7 @@ pub use transform_hierarchy::{
 pub use ze_scene_core::transform;
 pub use ze_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
 // 相机（M3-2）与摆放组件（M3-4）归场景对象层 `ze-object`：本层**不转发**，
-// 消费方直接 `use ze_object::{Camera2D, Camera3D, Projection, Transform}`。
+// 消费方直接 `use ze_scene_core::{Camera2D, Camera3D, Projection, Transform}`。
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），
 // 下游通过 `#[macro_use]` 或 `zela_scene::auto_into!` 访问。
 

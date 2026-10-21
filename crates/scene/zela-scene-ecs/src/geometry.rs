@@ -7,7 +7,7 @@
 // 它们不属于 UI：`Axes2D` / `FunctionGraph` 是场景对象，刷新结果也是场景组件。
 // 归位前住在 `zela-egui`，导致 headless 也必须依赖 UI 层。
 
-use ze_object::{Axes2D, Camera2DHandle, FunctionGraph};
+use ze_scene_core::{Axes2D, Camera2DHandle, FunctionGraph};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -21,7 +21,7 @@ use crate::scene::components::PhaseAnim;
 ///
 /// **M4-4：原网格构建 System（本层旧 `Grid` 构建器）已退役。** 原先 279 行的四段几何逻辑
 /// （相机裁剪、步长自适应、刻度线、坐标轴）全部归场景对象层的
-/// [`ze_object::Axes2D`]；本 System 只剩**接线**：取本帧相机 → 逐个刷新场景里的
+/// [`ze_scene_core::Axes2D`]；本 System 只剩**接线**：取本帧相机 → 逐个刷新场景里的
 /// 坐标轴对象。本文件因此**不再有任何几何计算**，也不再把相机缩放带进任何
 /// 宽度换算（换算只发生在 `zela-render` 的唯一换算点）。
 ///
@@ -71,7 +71,7 @@ impl System for AxesRefreshSystem {
 /// 函数图像刷新（Prepare 阶段）：按对象自己的采样规格重采样折线。
 ///
 /// **M4-1**：采样循环原先在本文件 `SceneRecordSystem` 内（逐点 `f(x + phase)`）；
-/// 现归场景对象层 [`ze_object::FunctionGraph`]，本 System 只负责把当前相位
+/// 现归场景对象层 [`ze_scene_core::FunctionGraph`]，本 System 只负责把当前相位
 /// （由 `BindingApplySystem` 写入实体的 `PhaseAnim`）交给它。
 ///
 /// 写路径是契约层 [`crate::contract::Scene::set`]（M4-3b 的消费方）：
@@ -96,7 +96,7 @@ impl System for FunctionGraphRefreshSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::{AxesLine, Framing2D, ZOrder};
+    use ze_scene_core::{AxesLine, Framing2D, ZOrder};
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -116,7 +116,7 @@ mod tests {
             .expect("Axes2D 已登记");
         let handle = {
             let mut ws = WorldScene::new(&mut world);
-            ze_object::spawn_camera2d(&mut ws, Framing2D::new((0.0, 0.0).into(), 40.0)).unwrap()
+            ze_scene_core::spawn_camera2d(&mut ws, Framing2D::new((0.0, 0.0).into(), 40.0)).unwrap()
         };
 
         let mut resources = Resources::new();
@@ -155,7 +155,7 @@ mod tests {
         axes.build(&mut WorldScene::new(&mut world)).unwrap();
         let handle = {
             let mut ws = WorldScene::new(&mut world);
-            ze_object::spawn_camera2d(&mut ws, Framing2D::default()).unwrap()
+            ze_scene_core::spawn_camera2d(&mut ws, Framing2D::default()).unwrap()
         };
 
         let mut resources = Resources::new();
@@ -234,7 +234,7 @@ mod tests {
 
         let path = sched
             .world()
-            .get::<&ze_object::Path>(crate::contract::entity_of(handle).unwrap())
+            .get::<&ze_scene_core::Path>(crate::contract::entity_of(handle).unwrap())
             .unwrap();
         let mut pts = Vec::new();
         for cmd in &path.0.commands {

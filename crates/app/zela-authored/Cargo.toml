@@ -12,8 +12,8 @@ license.workspace = true
 [dependencies]
 # 作品用真实的 ECS `Scene` 构建（`spawn_dyn` / `SceneScript`）。
 zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
-# 场景对象（图元 / 相机 / 装配对象）：兼容壳层，内容在 ze-scene-core::object。
-ze-object = { path = "../../object/ze-object" }
+# 场景对象（图元 / 相机 / 装配对象）：定义在 `ze-scene-core::object`。
+ze-scene-core = { path = "../../scene/ze-scene-core" }
 ze-notion = { path = "../../kernel/ze-notion" }
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
 ze-time = { path = "../../kernel/ze-time" }

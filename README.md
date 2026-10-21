@@ -96,14 +96,14 @@ crates/
 │       ├── ze-node-schema-macros  #[derive(NodeSpec)] 过程宏
 │       └── ze-node             门面：core + schema + algo + eval（不含 UI）
 │
-├── object/          # 场景对象层（只依赖 kernel）
-│   └── ze-object           图元 newtype / 相机 / 变换 / 装配对象（Axes2D · FunctionGraph）
-│
 ├── schedule/        # 通用 ECS 调度框架（不含任何场景/渲染概念）
 │   └── zela-schedule       Resource / System trait / 六阶段 Scheduler + Telemetry（依赖仅 hecs）
 │
-├── scene/           # 场景层
-│   ├── zela-scene          ECS 场景数据 + 场景 System + domain 契约 + Pod domain（SceneApi / ContentApi）
+├── scene/           # 场景层（B3-1：概念 / 实现 / 能力三分）
+│   ├── ze-scene-core       对象 + 组件 + 纯逻辑（动画数据 / 脚本数据 / 持久化；零 hecs、零 zela-*）
+│   ├── ze-scene-api        Pod 能力声明（SceneApi / ContentApi + 两个 Service；零 hecs、零 zela-*）
+│   ├── zela-scene-ecs      ECS 实现（Scene / 资源 / 生命周期 / 全部 System）
+│   ├── zela-scene          兼容壳层：re-export zela-scene-ecs
 │   └── zela-scene-bundle   ZSB 装配产物（格式 / payload 哈希 / 可还原性检查；无脚本依赖）
 │
 ├── render/          # 渲染抽象与具体后端
@@ -155,14 +155,17 @@ crates/
 | `ze-pod-core` | pod | Pod 机制：capability 协商（typed 句柄）/ 不透明句柄 / Injector / Broker（需求校验、拓扑、环检测、注入） |
 | `ze-pod-binding` | pod | 语言无关绑定驱动：`BindingPlan` / `ValueCodec` + `invoke` / JSON 文档真源；只依赖 `ze-pod-core` |
 | `ze-pod-macro` | pod | `#[capability]` 与 `#[derive(PodType)]` 过程宏（`ze-pod-core` 保持零依赖） |
-| `ze-object` | object | 场景对象层：图元 newtype / 相机 / 摆放 / 装配对象（`Axes2D` / `FunctionGraph`）；只依赖 kernel |
+| `ze-scene-core` | scene | 场景核心：对象（原 `ze-object`）/ 组件 / 纯逻辑（动画数据 · 脚本数据 · 持久化 · 登记表）；**零 hecs、零 `zela-*`** |
+| `ze-scene-api` | scene | 语言无关能力：`SceneApi` / `ContentApi` + `SceneServicePod` / `ContentServicePod`；**零 hecs、零 `zela-*`** |
 | `ze-node-core` | graph | 节点图内核（Node / Graph / Socket trait + NodeInteraction 交互策略） |
 | `ze-graph-algo` | graph | 图算法（TopoSort / SCC / 脏标记传播） |
 | `ze-graph-eval` | graph | 惰性拉取求值（LazyPullEval） |
 | `ze-node-schema` | graph | 属性模型（Property / NodeSpec / DynamicObject / NodeRegistry），不依赖 egui |
 | `ze-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
 | `zela-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs |
-| `zela-scene` | scene | 场景层：场景组件 + 场景 System（BindingApply / DirectorAdvance / MorphApply / Axes / FunctionGraph / 输入事件 / 父子变换）+ domain 契约 + Pod domain（`SceneApi` / `ContentApi`）；依赖 `zela-schedule` |
+| `zela-scene-ecs` | scene | ECS 实现：`Scene`（hecs 适配）/ 资源 / 生命周期 / 全部 System + `register`；依赖 `ze-scene-core` / `ze-scene-api` / `zela-schedule` |
+| `zela-scene` | scene | 兼容壳层：`pub use zela_scene_ecs::*`（B3-1d；259 处下游路径不变，后续删除） |
+| `zela-authored` | app | 场景作品：分镜 / 能力 demo / 3D demo（不再是框架代码） |
 | `zela-scene-bundle` | scene | ZSB 装配产物：容器 / payload SHA-256 / Meta（cap+pod 版本）/ 可还原性检查；**无脚本依赖** |
 | `ze-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `zela-*` |
 | `ze-pod-py` | pod（语言适配器组） | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |

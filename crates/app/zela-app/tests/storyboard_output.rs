@@ -108,7 +108,7 @@ fn storyboard_produces_draw_output_over_time() {
 
     let view = sched
         .world()
-        .get::<&ze_object::Framing2D>(camera_entity)
+        .get::<&ze_scene_core::Framing2D>(camera_entity)
         .unwrap();
     assert!(
         (view.scale - CAMERA_SCALE_PUSHED).abs() < 1e-3,

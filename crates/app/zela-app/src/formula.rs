@@ -474,7 +474,7 @@ mod tests {
     /// T3 验收 4：文字路径经 `record_scene` 受 **`Transform` 摆放** + **`Opacity` 淡入**。
     #[test]
     fn text_paths_honor_transform_and_opacity() {
-        use ze_object::{Camera2D, Transform};
+        use ze_scene_core::{Camera2D, Transform};
         use zela_render::components::Path;
         use zela_render::{DrawQueue, Opacity, StrokeSolid, record_scene};
         use zela_scene::contract::WorldView;
@@ -542,9 +542,9 @@ mod tests {
             .expect("至少一条文本路径");
 
         let mut scene = zela_scene::scene::Scene::new();
-        let cam = ze_object::spawn_camera2d(
+        let cam = ze_scene_core::spawn_camera2d(
             &mut scene,
-            ze_object::Framing2D::new(ze_notion::Vec2::ZERO, 40.0),
+            ze_scene_core::Framing2D::new(ze_notion::Vec2::ZERO, 40.0),
         )
         .expect("Framing2D 已登记");
         scene.spawn((

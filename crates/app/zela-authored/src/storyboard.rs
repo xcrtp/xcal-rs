@@ -22,7 +22,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use ze_notion::{MeasureSpace, Path2D};
-use ze_object::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
+use ze_scene_core::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
 use ze_prerender::InMemoryEngine;
 use ze_render_ir::{FillSolid, StrokeSolid};
 

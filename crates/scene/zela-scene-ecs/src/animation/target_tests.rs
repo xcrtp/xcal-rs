@@ -15,7 +15,7 @@ use crate::contract::WorldScene;
 mod tests {
     use super::*;
     use ze_notion::{Vec2, Vec3};
-    use ze_object::Projection;
+    use ze_scene_core::Projection;
     // 测试也走契约层（`spawn_dyn` / `with`）—— **本文件不出现 hecs**。
     // （`Scene` trait 已由父模块的 `use ... as _` 经 `use super::*` 带入。）
     use ze_scene_contract::SceneRead;

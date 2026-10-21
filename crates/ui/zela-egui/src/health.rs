@@ -22,7 +22,7 @@ use zela_scene::scene::components::{Material3D, MeshGeometry};
 use zela_schedule::resource::Resources;
 use zela_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 
-use ze_object::{Camera2DHandle, Camera3D, Framing2D};
+use ze_scene_core::{Camera2DHandle, Camera3D, Framing2D};
 
 use crate::resources::UiConfig;
 

@@ -210,6 +210,30 @@
 
 **G 段小计（B3-0.5）**：已关闭 6 · 仍成立 2（G-06 / G-07）· 明确不做 1（G-08）。
 
+---
+
+## H. B3-1 批次记账（场景层分层重构，2026-10-21）
+
+> 计划《B3-1执行计划_场景层分层重构.md》：把 12k 行的 `zela-scene` 分成
+> **概念（core）/ 实现（ecs）/ 能力（api）**，作品移出。**纯结构搬迁，像素必须不变**。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| H-01 | `pod/types.rs` / `scene_service.rs` 反向依赖 ECS 内部（`crate::animation` / `crate::scene::components` / `crate::scene_script`） | 场景层 | **已关闭（B3-1a/b）** | `grep "^use crate::" ze-scene-api/src` = 0（仅剩 crate 内 `crate::types` / `crate::content_service`） |
+| H-02 | `ze-object` 与 `zela-scene` 组件/纯逻辑混居 | 分层 | **已关闭（B3-1b/f）** | `ze-scene-core::object` 承接全部对象；`ze-object` crate 删除；`grep ze_object:: crates/` = 0 |
+| H-03 | 动画目标 `Target::apply(&mut WorldScene)` 把 hecs 适配器钉进"数据层" | 核心层 | **已关闭（B3-1b）** | 新增 `ze_scene_core::scene_write::{SceneWrite, with_component}`（object-safe 擦除写）；ECS 用组件登记表实现分发 |
+| H-04 | 组件登记表 / persist / math_pod 写在 ECS 实现里，脚本数据（core）却要依赖它 | 核心层 | **已关闭（B3-1b）** | `registry` / `persist` / `math_pod` 下沉 core；ECS 的 `add_known` 与 `SceneWrite` 共用导出的 `known_component_table!` |
+| H-05 | `pod/` 与实现同 crate，语言边界不独立 | 场景层 | **已关闭（B3-1c）** | 新 crate `ze-scene-api`；`cargo tree` 中 `zela-` / `hecs` = **0**；能力指纹未变 |
+| H-06 | `zela-scene` 自称"契约实现"却有 11k 行 | 场景层 | **已关闭（B3-1d）** | 实现改名 `zela-scene-ecs`；`zela-scene` 变壳层（re-export） |
+| H-07 | `authored/`（分镜 / demo）住在场景层 | 场景层 | **已关闭（B3-1e）** | 独立 `zela-authored`；`zela-scene-ecs` 内无 `authored` |
+| H-08 | `ze-scene-core` / `ze-scene-api` 的"不能依赖实现"只是约定 | CI | **已关闭（B3-1f）** | `structure` 步新增 jq 判据（`JQ_SCENE_LAYERS`） |
+| H-09 | `Target` 的 `apply` 签名变化（`&mut dyn SceneWrite`）会波及下游实现者 | 公开 API | **仍成立（有意）** | 仓内只有 `authored` 测试实现；这是分层必要的破坏性变更，未留兼容 shim |
+| H-10 | `scene_script.rs` 的 `commit` 用例需要真实 hecs 场景 | 测试布局 | **已关闭（B3-1b）** | 用例迁至 `zela-scene-ecs/src/scene_script_tests.rs`（实现与用例分离，语义不变） |
+| H-11 | `zela-scene` 壳层与 `ze-object` 壳层的删除时机 | 兼容层 | **部分关闭** | `ze-object` 已删除；`zela-scene` 壳层保留（259 处 `zela_scene::` import 未批量改），后续批次收敛 |
+
+**H 段小计（B3-1）**：已关闭 9 · 仍成立 1（H-09）· 部分关闭 1（H-11）。
+
+
 
 ---
 

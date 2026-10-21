@@ -52,7 +52,7 @@ use zela_scene::transform_hierarchy::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
-use ze_object::{Camera2DHandle, Path, Transform, ZOrder};
+use ze_scene_core::{Camera2DHandle, Path, Transform, ZOrder};
 
 use crate::draw::{
     ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
@@ -69,7 +69,7 @@ use ze_scene_contract::GroupVisibility;
 fn resolve_camera(
     ctx: &mut ExecutorContext<'_>,
     rect: ze_notion::Rect2D,
-) -> Option<ze_object::Camera2D> {
+) -> Option<ze_scene_core::Camera2D> {
     let handle = *ctx.get::<Camera2DHandle>()?;
     let world = ctx.borrow_world();
     handle.resolve(&WorldView::new(world), rect)
@@ -215,7 +215,7 @@ impl System for RevealRecordSystem {
                     return;
                 }
                 // S2（G4）+ S5：Reveal 消费**世界**变换（S1：2D 读投影视图；世界累乘优先，缺席回退 local）。
-                let local = scene.with::<ze_object::Transform, _>(id, |tr| tr.to_affine2d());
+                let local = scene.with::<ze_scene_core::Transform, _>(id, |tr| tr.to_affine2d());
                 let transform = worlds
                     .as_ref()
                     .and_then(|w| w.get2d(id))
@@ -396,7 +396,7 @@ mod tests {
     // 库本体（M3-7 纪律：本 crate 不认识 hecs）不受影响。
     use hecs::World;
     use ze_notion::{Path2D, PathCommand, Rect2D};
-    use ze_object::{Circle, Framing2D};
+    use ze_scene_core::{Circle, Framing2D};
     use ze_render_ir::Opacity;
     use zela_scene::contract::{GroupId, Visibility, WorldScene};
     use zela_scene::scene::components::TextureHandle;
@@ -413,7 +413,7 @@ mod tests {
 
     fn spawn_camera(world: &mut World, framing: Framing2D) -> Camera2DHandle {
         let mut scene = WorldScene::new(world);
-        ze_object::spawn_camera2d(&mut scene, framing).expect("Framing2D 已登记")
+        ze_scene_core::spawn_camera2d(&mut scene, framing).expect("Framing2D 已登记")
     }
 
     fn resources_with(rect: Rect2D, handle: Camera2DHandle) -> Resources {
@@ -461,9 +461,9 @@ mod tests {
         world.spawn((
             Reveal::new(path),
             StrokeSolid::new(2.0, (255, 0, 0, 255)),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 position: Vec3::new(1.0, 0.0, 0.0),
-                ..ze_object::Transform::default()
+                ..ze_scene_core::Transform::default()
             },
         ));
 
@@ -558,7 +558,7 @@ mod tests {
         let tex_rect = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
         let mut res = Resources::new();
         res.insert(ContentTextureSpec {
-            camera: ze_object::Camera2D::new(Vec2::ZERO, 25.0, tex_rect),
+            camera: ze_scene_core::Camera2D::new(Vec2::ZERO, 25.0, tex_rect),
             size_px: [512, 512],
             texture: TextureHandle::new(1),
             composite: false,
@@ -735,9 +735,9 @@ mod tests {
         let mut world = World::new();
         let parent = world.spawn((
             Arc::clone(&parent_geom),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 position: ze_notion::Vec3::new(10.0, 0.0, 0.0),
-                ..ze_object::Transform::default()
+                ..ze_scene_core::Transform::default()
             },
         ));
         let parent_id = object_id_of(parent);
@@ -745,9 +745,9 @@ mod tests {
         // 若系统不吃 WorldTransforms（旧行为），子 model 会停在 local (0,5,0)。
         let child = world.spawn((
             Arc::clone(&child_geom),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 position: ze_notion::Vec3::new(0.0, 5.0, 0.0),
-                ..ze_object::Transform::default()
+                ..ze_scene_core::Transform::default()
             },
             ze_scene_contract::Parent(parent_id),
         ));
@@ -792,7 +792,7 @@ mod tests {
         use zela_scene::scene::primitives::wireframe_cube;
         use zela_scene::transform_hierarchy::TransformHierarchySystem;
 
-        let tr = ze_object::Transform {
+        let tr = ze_scene_core::Transform {
             position: ze_notion::Vec3::new(1.0, -2.0, 3.0),
             rotation: ze_notion::Quat::from_rotation_z(0.7),
             scale: ze_notion::Vec3::new(2.0, 0.5, 1.0),
@@ -875,17 +875,17 @@ mod tests {
         // 父平移 (10, 0, 0)；点光挂在父下，local 平移 (0, 5, 0)
         // ⇒ 世界位置 = (10, 5, 0)。
         let parent = world.spawn((
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 position: ze_notion::Vec3::new(10.0, 0.0, 0.0),
-                ..ze_object::Transform::default()
+                ..ze_scene_core::Transform::default()
             },
         ));
         let parent_id = object_id_of(parent);
         world.spawn((
             Light::point_with(3.0, Color32::new(255, 128, 0, 255), 2.0),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 position: ze_notion::Vec3::new(0.0, 5.0, 0.0),
-                ..ze_object::Transform::default()
+                ..ze_scene_core::Transform::default()
             },
             ze_scene_contract::Parent(parent_id),
         ));

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use ze_notion::{Rect2D, SurfaceFn};
-use ze_object::{
+use ze_scene_core::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
     Camera3DHandle, Path, Projection, Transform,
 };

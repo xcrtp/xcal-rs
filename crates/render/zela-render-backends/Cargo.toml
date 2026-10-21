@@ -9,7 +9,7 @@ license.workspace = true
 zela-render = { path = "../zela-render", default-features = false }
 ze-notion = { path = "../../kernel/ze-notion" }
 # 场景对象层：相机与图元（Camera2D / Camera3D / Projection / Rect / …）的定义在此。
-ze-object = { path = "../../object/ze-object" }
+ze-scene-core = { path = "../../scene/ze-scene-core" }
 # S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖 zela-scene。
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # B2-0a：3D 顶点布局契约在 kernel 层声明（VertexLayout::standard_3d），

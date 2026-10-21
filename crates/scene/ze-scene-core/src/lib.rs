@@ -13,7 +13,7 @@
 //
 // # 与 `ze-object` 的关系
 // 原 `ze-object` 的全部内容已并入 [`object`]；`ze-object` 现在是本 crate 的
-// re-export 壳层（D6），下游 `ze_object::*` 路径保持不变。
+// re-export 壳层（D6），下游 `ze_scene_core::*` 路径保持不变。
 //
 // # 为什么 `object` 里的模块在根也被 re-export
 // `object/*.rs` 内部的 `crate::camera` / `crate::primitives` 等路径是搬迁前
@@ -46,10 +46,11 @@ pub mod types;
 pub use object::{affine, axes, camera, content_texture, graph, layer, placement, primitives, zorder};
 
 pub use object::{
-    AXIS_Z, Axes2D, AxesLine, CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
-    CONTENT_Z, Camera2D, Camera2DHandle, Camera3D, Camera3DHandle, FPS_PITCH_LIMIT, FpsView,
-    Framing2D, FunctionGraph, GRID_Z, LayerBlend, LayerId, LayerKind, Projection, TextureHandle,
-    TickSpec, Transform, ZOrder, map_path_affine, spawn_camera2d, spawn_camera3d, uniform_scale,
+    AXIS_Z, Arrow, Axes2D, AxesLine, CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID,
+    CONTENT_TEXTURE_WIDTH, CONTENT_Z, Camera2D, Camera2DHandle, Camera3D, Camera3DHandle, Circle,
+    FPS_PITCH_LIMIT, FpsView, Framing2D, FunctionGraph, GRID_Z, LayerBlend, LayerId, LayerKind,
+    Line, Path, Projection, Rect, TextureHandle, TickSpec, Transform, ZOrder, map_path_affine,
+    spawn_camera2d, spawn_camera3d, uniform_scale,
 };
 
 pub use time_state::TimeState;

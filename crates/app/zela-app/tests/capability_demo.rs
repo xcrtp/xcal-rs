@@ -17,7 +17,7 @@ use zela_scene::types::Rect2D;
 use zela_schedule::resource::Resources;
 use zela_schedule::scheduler::{Phase, Scheduler};
 
-use ze_object::{Camera2D, Path};
+use ze_scene_core::{Camera2D, Path};
 
 /// 录制测试用视口（`800×600`，与 `ViewRect::default` 无关，显式给出以免依赖缺省值）。
 fn view_rect() -> Rect2D {

@@ -18,7 +18,7 @@ ze-notion = { path = "../../kernel/ze-notion" }
 # 渲染 IR 层（Shape2D / Style2D / 样式组件 / 降级 trait）已下沉 kernel/ze-render-ir。
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # 场景对象层（图元 newtype）：Circle / Path / Line / Rect 的定义在此。
-ze-object = { path = "../../object/ze-object" }
+ze-scene-core = { path = "../../scene/ze-scene-core" }
 # 契约层：`record_scene<S: Scene>` 的唯一入参抽象（M3-7 —— 本 crate 无 hecs）。
 ze-scene-contract = { path = "../../kernel/ze-scene-contract" }
 ze-content = { path = "../../kernel/ze-content" }

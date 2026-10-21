@@ -8,7 +8,7 @@
 //
 // # 组合顺序
 //
-// 沿用 `ze_object::Transform::to_affine3d` 的约定：`scale → rotation → translation`。
+// 沿用 `ze_scene_core::Transform::to_affine3d` 的约定：`scale → rotation → translation`。
 // 父子：`world = parent ∘ local`（点先被 local 作用，再被 parent 作用）。
 // `Transform3D::compose(self, other)` 的语义是"先 self 后 other"，故写
 // `local.compose(parent)`。
@@ -29,7 +29,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ze_notion::{Transform2D, Transform3D};
-use ze_object::Transform;
+use ze_scene_core::Transform;
 use ze_scene_contract::{ObjectId, Parent, SceneRead};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn glyph_styles_are_independent_under_a_shared_parent() {
         use ze_notion::{Color32, Path2D};
-        use ze_object::Path;
+        use ze_scene_core::Path;
         use ze_render_ir::StrokeSolid;
 
         let mut world = hecs::World::new();

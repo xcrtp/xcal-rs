@@ -90,7 +90,7 @@ mod tests {
     use crate::deferred::{DeferredApplySystem, DeferredCommands};
     use crate::lifetime::{LifetimeFlushSystem, LifetimeTracker};
     use crate::scene::Scene as SceneStruct;
-    use ze_object::Circle;
+    use ze_scene_core::Circle;
     use ze_scene_contract::LifetimeTracked;
     use ze_scene_contract::Scene as _;
     use ze_scene_contract::SceneRead as _;

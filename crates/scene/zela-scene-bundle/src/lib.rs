@@ -442,7 +442,7 @@ impl Bundle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::Circle;
+    use ze_scene_core::Circle;
     use zela_scene::scene_script::SceneEncoder;
     use zela_scene::scene::Scene;
 

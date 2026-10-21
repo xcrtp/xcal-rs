@@ -680,7 +680,7 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::{Camera2DHandle, Camera3D, Framing2D, Projection};
+    use ze_scene_core::{Camera2DHandle, Camera3D, Framing2D, Projection};
     use zela_scene::contract::WorldScene;
     use zela_scene::domain::{ContentHandle, LayerBlend};
     use zela_schedule::resource::Resources;
@@ -698,7 +698,7 @@ mod tests {
     /// 建含 2D 相机对象的场景 + 其句柄 Resource（P1：相机是场景对象）。
     fn spawn_2d_camera(world: &mut hecs::World) -> Camera2DHandle {
         let mut scene = WorldScene::new(world);
-        ze_object::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
+        ze_scene_core::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
     }
 
     /// headless：无任何 egui 上下文即可构建 SceneView。
@@ -783,7 +783,7 @@ mod tests {
         let mut world = hecs::World::new();
         let mut scene = WorldScene::new(&mut world);
         let handle =
-            ze_object::spawn_camera2d(&mut scene, Framing2D::new((2.0, -3.0).into(), 55.0))
+            ze_scene_core::spawn_camera2d(&mut scene, Framing2D::new((2.0, -3.0).into(), 55.0))
                 .expect("Framing2D 已登记");
 
         let mut res = Resources::new();

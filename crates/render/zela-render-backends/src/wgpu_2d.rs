@@ -2462,7 +2462,7 @@ mod tests {
     // hecs 只作为 **dev-dependency** 出现在此（库本体仍不认识 hecs）。
 
     use hecs::World;
-    use ze_object::{Camera2D, Circle};
+    use ze_scene_core::{Camera2D, Circle};
     use zela_render::{FillSolid, Opacity, record_scene_tagged};
     use zela_scene::contract::{GroupId, GroupVisibility, ObjectId, Visibility, WorldView};
 

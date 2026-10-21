@@ -30,7 +30,7 @@
 //
 // A4：本 System 是**场景 system**，从 `zela-app` 归位到此；app 只负责注册。
 
-use ze_object::{Camera2DHandle, Camera3DHandle};
+use ze_scene_core::{Camera2DHandle, Camera3DHandle};
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -144,7 +144,7 @@ fn write_mode(ctx: &mut ExecutorContext<'_>, id: ObjectId, mode: CameraMode) {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use ze_object::{Camera3D, Framing2D, Projection};
+    use ze_scene_core::{Camera3D, Framing2D, Projection};
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 

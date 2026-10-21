@@ -17,7 +17,7 @@ zela-render-backends = { path = "../../render/zela-render-backends", default-fea
 # 场景能力版本（Meta 的 capability 口径唯一真源）。
 ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # 对象层：相机句柄与内容纹理默认配置。
-ze-object = { path = "../../object/ze-object" }
+ze-scene-core = { path = "../../scene/ze-scene-core" }
 ze-notion = { path = "../../kernel/ze-notion" }
 
 wgpu.workspace = true

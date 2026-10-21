@@ -215,7 +215,7 @@ mod tests {
     use crate::TimeState;
     use crate::animation::BindingApplySystem;
     use crate::scene::Scene as SceneStruct;
-    use ze_object::Circle;
+    use ze_scene_core::Circle;
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 

@@ -12,7 +12,7 @@
 // 依赖方向：`zela-scene` → `zela-render`；本模块只读场景契约与渲染队列。
 
 use ze_notion::Rect2D;
-use ze_object::{Camera2DHandle, Camera3D, LayerKind};
+use ze_scene_core::{Camera2DHandle, Camera3D, LayerKind};
 use zela_scene::contract::SceneRead;
 use zela_scene::domain::{
     ContentHandle, ContentTextureSpec, LayerBlend, LayerDescriptor, LayerId, SceneView,
@@ -225,7 +225,7 @@ pub fn draw_call_count(res: &Resources) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::{Camera3D, Framing2D, Projection};
+    use ze_scene_core::{Camera3D, Framing2D, Projection};
     use zela_scene::contract::WorldScene;
 
     fn spawn_3d_camera(world: &mut hecs::World) {
@@ -239,7 +239,7 @@ mod tests {
 
     fn spawn_2d_camera(world: &mut hecs::World) -> Camera2DHandle {
         let mut scene = WorldScene::new(world);
-        ze_object::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
+        ze_scene_core::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
     }
 
     /// headless：无 egui 上下文即可构建 SceneView；2D/3D 各一层、LayerId 唯一。

@@ -160,7 +160,7 @@ impl Default for Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::Circle;
+    use ze_scene_core::Circle;
 
     #[test]
     fn test_scene_new_is_empty() {

@@ -39,7 +39,7 @@ use hecs::{Entity, EntityBuilder, World};
 
 use crate::scene::components::{Light, Material3D, MeshGeometry};
 use std::sync::Arc;
-use ze_object::{
+use ze_scene_core::{
     Arrow, Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line,
     Path, Projection, Rect, Transform, ZOrder,
 };

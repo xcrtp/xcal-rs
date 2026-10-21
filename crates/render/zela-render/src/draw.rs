@@ -27,11 +27,11 @@
 use crate::components::{Arrow, Circle, FillSolid, Line, Path, Rect, StrokeSolid};
 use crate::shape::{Shape2D, Style2D};
 use ze_notion::Transform2D as Affine2D;
-use ze_object::Camera2D;
+use ze_scene_core::Camera2D;
 // 对象层的绘制层级（M4）：可缺席 —— 缺席即用录制默认层。
 // T1：逐对象摆放（`Transform`，可缺席 ⇒ 恒等）。
 // `ZOrder` 由对象层 re-export（唯一声明在 IR，B2-1 单一真源）。
-use ze_object::{Transform, ZOrder};
+use ze_scene_core::{Transform, ZOrder};
 // `Path::to_screen(camera)`（世界 → 屏幕）由 zela-scene 的场景层 trait 提供。
 use zela_scene::transform::Transform2D as _;
 // 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
@@ -191,7 +191,7 @@ impl DrawQueue {
     /// 矩形填充：`rect` 已在屏幕空间。
     ///
     /// 接受 `impl Into<Rect>`：场景层的视口矩形（`zela_scene::types::Rect`）与
-    /// 绘制用矩形对象（`ze_object::Rect`）同名不同物，转换由 `ze-object` 的
+    /// 绘制用矩形对象（`ze_scene_core::Rect`）同名不同物，转换由 `ze-object` 的
     /// `From` 实现承担（在 `zela-scene` 侧提供，避免对象层反向依赖）。
     pub fn rect_fill(&mut self, z: ZIndex, rect: impl Into<Rect>, fill: FillSolid) {
         let rect: Rect = rect.into();
@@ -539,7 +539,7 @@ pub fn apply_opacity(style: &mut Style2D, opacity: Opacity) {
 ///
 /// 摆放（T1）：对象上**可选**的 [`Transform`] 提供逐对象本地变换；
 /// 世界 → 屏幕 = `相机 ∘ 对象` ⇒ 逐对象仿射**先**作用于几何，相机仿射**后**作用
-/// （`Transform2D::compose` 的"先 self 后 other"语义，见 `ze_object::Transform::to_affine2d`）。
+/// （`Transform2D::compose` 的"先 self 后 other"语义，见 `ze_scene_core::Transform::to_affine2d`）。
 /// **缺席 `Transform` ⇒ 直接用相机仿射（逐位不变）** —— 不引入"乘恒等"的浮点噪声。
 fn record_group<S, A, B>(
     scene: &S,
@@ -611,7 +611,7 @@ pub fn record_scene<S: SceneRead>(scene: &S, camera: &Camera2D, queue: &mut Draw
 /// 本 crate 的依赖里没有 hecs。
 ///
 /// **M4：层级来自对象。** 带 [`ZOrder`] 的对象用它自己的层级（网格 z = -100、
-/// 坐标轴 z = -90，见 `ze_object::axes`），其余对象落在 `Z`（内容层）。
+/// 坐标轴 z = -90，见 `ze_scene_core::axes`），其余对象落在 `Z`（内容层）。
 ///
 /// **N5：可见性来自对象。** 带 [`Visibility`] 的对象按"对谁可见"过滤
 /// （缺席 = 全局可见）；不透明度见 [`apply_opacity`]。
@@ -1308,8 +1308,8 @@ mod tests {
 
     // ─── T1：逐对象 `Transform`（2D 摆放通道）────────────────────────────
 
-    fn transform_at(x: f32, y: f32) -> ze_object::Transform {
-        ze_object::Transform {
+    fn transform_at(x: f32, y: f32) -> ze_scene_core::Transform {
+        ze_scene_core::Transform {
             position: ze_notion::Vec3::new(x, y, 0.0),
             ..Default::default()
         }
@@ -1328,7 +1328,7 @@ mod tests {
     fn absent_or_identity_transform_is_bit_identical() {
         let mut world = TestScene::new();
         world.spawn((mk_circle(3.0), mk_stroke()));
-        world.spawn((mk_circle(3.0), mk_stroke(), ze_object::Transform::default()));
+        world.spawn((mk_circle(3.0), mk_stroke(), ze_scene_core::Transform::default()));
         // spawn 顺序 = 查询顺序 ⇒ 两条命令一一对应。
         let mut q = DrawQueue::new();
         record_scene(&world, &cam_with_scale(10.0), &mut q);
@@ -1366,7 +1366,7 @@ mod tests {
         world.spawn((
             mk_circle(0.0),
             mk_stroke(),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 scale: ze_notion::Vec3::splat(2.0),
                 ..Default::default()
             },
@@ -1390,7 +1390,7 @@ mod tests {
         world.spawn((
             Line::new((0.0, 0.0), (1.0, 0.0)),
             mk_stroke(),
-            ze_object::Transform {
+            ze_scene_core::Transform {
                 rotation: ze_notion::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
                 ..Default::default()
             },

@@ -74,8 +74,8 @@ pub(crate) mod transform2d {
                     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
                     return quote! {
                         impl #impl_g zela_scene::transform::Transform2DInto for #name #ty_g #where_g {
-                            fn to_logical_into(self, _: &ze_object::Camera2D) -> Self { Self }
-                            fn to_screen_into(self, _: &ze_object::Camera2D) -> Self { Self }
+                            fn to_logical_into(self, _: &ze_scene_core::Camera2D) -> Self { Self }
+                            fn to_screen_into(self, _: &ze_scene_core::Camera2D) -> Self { Self }
                         }
                     };
                 }
@@ -160,10 +160,10 @@ pub(crate) mod transform2d {
 
         quote! {
             impl #impl_generics zela_scene::transform::Transform2DInto for #name #ty_generics #where_clauses {
-                fn to_logical_into(self, camera: &ze_object::Camera2D) -> Self {
+                fn to_logical_into(self, camera: &ze_scene_core::Camera2D) -> Self {
                     #constructor_logical
                 }
-                fn to_screen_into(self, camera: &ze_object::Camera2D) -> Self {
+                fn to_screen_into(self, camera: &ze_scene_core::Camera2D) -> Self {
                     #constructor_screen
                 }
             }

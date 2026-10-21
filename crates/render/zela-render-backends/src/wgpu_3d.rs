@@ -1689,7 +1689,7 @@ mod tests {
     use super::*;
     use crate::render_context::RenderContext;
     use ze_notion::{SurfaceFn, Vec3};
-    use ze_object::{Camera3D, Projection};
+    use ze_scene_core::{Camera3D, Projection};
     use zela_render::{DrawQueue3D, Viewport};
     use zela_scene::scene::components::{Material3D, MeshGeometry, TextureHandle};
     use zela_scene::scene::primitives::{parametric_surface, wireframe_cube};
@@ -3307,7 +3307,7 @@ mod tests {
     /// 4. K2 轨迹：`Curve::Keyframes(Vec3)` 上的三个采样位姿 ⇒ 三帧互不相同。
     #[test]
     fn test_k_line_camera_controllers_change_pixels() {
-        use ze_object::FpsView;
+        use ze_scene_core::FpsView;
         use zela_scene::camera_input::{apply_fps, apply_orbit};
         use zela_scene::domain::CameraCommand;
         use zela_scene::{AnimValue, Curve, Interp};

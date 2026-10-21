@@ -25,7 +25,7 @@
 // （`HashMap<LayerId, ..>`），本帧**同类图层不再有数量上限**——这是 S3-3
 // （2D/3D 互为纹理）的前提，也是同一类多个图层各自成像的基础。
 
-use ze_object::LayerKind;
+use ze_scene_core::LayerKind;
 use ze_render_ir::LayerId;
 use zela_render::{
     DirectionalLightRecord, DrawQueue, DrawQueue3D, LightQueue, MorphItem, PointLightRecord,
@@ -175,11 +175,11 @@ impl SceneCompositorCallback {
             }
             hash
         }
-        fn layer_kind(kind: &ze_object::LayerKind) -> &'static str {
+        fn layer_kind(kind: &ze_scene_core::LayerKind) -> &'static str {
             match kind {
-                ze_object::LayerKind::Viewport2D { .. } => "v2d",
-                ze_object::LayerKind::Viewport3D { .. } => "v3d",
-                ze_object::LayerKind::ContentTexture { .. } => "ct",
+                ze_scene_core::LayerKind::Viewport2D { .. } => "v2d",
+                ze_scene_core::LayerKind::Viewport3D { .. } => "v3d",
+                ze_scene_core::LayerKind::ContentTexture { .. } => "ct",
             }
         }
 
@@ -563,7 +563,7 @@ mod tests {
         Material3D, MeshGeometry, PrimitiveTopology, TextureHandle,
     };
     use ze_notion::Rect2D;
-    use ze_object::{Camera2D, Camera3D, Projection};
+    use ze_scene_core::{Camera2D, Camera3D, Projection};
     use ze_notion::Color32;
 
     /// 内容纹理尺寸（与 3D 视口同尺寸，便于逐像素对应）。
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn headless_path_matches_egui_path_bit_for_bit() {
         use zela_render::{FilterSlot, StrokeSolid};
-        use ze_object::Line;
+        use ze_scene_core::Line;
 
         let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
             return;

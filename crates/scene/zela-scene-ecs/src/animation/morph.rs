@@ -11,7 +11,7 @@
 // App 的形变实体**不带 `Path`**，故本 System 在 App 里自然不命中。
 
 use ze_notion::Path2D;
-use ze_object::Path;
+use ze_scene_core::Path;
 use zela_scene::scene::components::MorphShape;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;

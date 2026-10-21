@@ -14,4 +14,4 @@ serde_json.workspace = true
 
 [dev-dependencies]
 # 测试构造一个最小装配产物（Circle 组件）。
-ze-object = { path = "../../object/ze-object" }
+ze-scene-core = { path = "../../scene/ze-scene-core" }

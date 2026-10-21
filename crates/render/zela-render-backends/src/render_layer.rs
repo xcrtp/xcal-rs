@@ -2,7 +2,7 @@
 //
 // 3D 渲染层：相机 + 视口 + 绘制队列 + 渲染目标 的完整提交单元。
 
-use ze_object::Camera3D;
+use ze_scene_core::Camera3D;
 
 use crate::render_target::RenderTarget;
 use zela_render::{DrawQueue3D, Viewport};

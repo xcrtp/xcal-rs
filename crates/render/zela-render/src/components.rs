@@ -9,7 +9,7 @@
 // 目的：保持 `zela_render::components::*` 这一路径稳定 —— M1 / M2 / M3 三轮下沉
 // （notion ← scene ← object ← render_ir）都靠它做到**下游零改动**。
 //
-// ⚠️ **不是** 死代码，**请勿删除**：下游改用各层原生路径（如 `ze_object::Circle`）后
+// ⚠️ **不是** 死代码，**请勿删除**：下游改用各层原生路径（如 `ze_scene_core::Circle`）后
 // 本模块即可整体移除，但那是一次独立的下游 churn（不属于任何单点重构的范围）。
 //
 // M1 T4：连续数学对象（FunctionX2Y / ParameterCurve* / Sampler* / Interpolator /
@@ -26,7 +26,7 @@ pub use zela_scene::scene::components::{
     CPUDevice, PathMesh, PhaseAnim, QuadMesh, TriangleMesh, WGPUDevice, marker, mesh,
 };
 // 图元对象与摆放组件（M3-4/M3-5：定义在场景对象层 `ze-object`，此处转发）。
-pub use ze_object::{Arrow, Circle, Line, Path, Rect, Transform};
+pub use ze_scene_core::{Arrow, Circle, Line, Path, Rect, Transform};
 pub use ze_render_ir::{FillSolid, FillStyle, StrokeSolid, StrokeStyle};
 
 #[cfg(test)]

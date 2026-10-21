@@ -11,7 +11,7 @@ use zela_scene_ecs::contract::Components;
 use zela_scene_ecs::math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 use zela_scene_ecs::{deserialize_components, serialize_components};
 use ze_notion::{FunctionX2Y, Sampler1D};
-use ze_object::FunctionGraph;
+use ze_scene_core::FunctionGraph;
 use ze_pod_core::RegistryPod;
 
 const NAMES: [&str; 7] = [

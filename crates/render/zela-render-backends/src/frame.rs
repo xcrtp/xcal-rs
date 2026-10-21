@@ -6,7 +6,7 @@
 //
 // 本模块**不依赖 `zela-scene`**（S2 CI 规则）：`SceneLayer` 定义在 `zela-render`。
 
-use ze_object::LayerKind;
+use ze_scene_core::LayerKind;
 use zela_render::{FrameInputs, LightQueue, SceneLayer};
 
 use crate::scene_callback::SceneCompositorCallback;
