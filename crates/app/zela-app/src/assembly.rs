@@ -31,8 +31,8 @@ pub const STORYBOARD_PY: &str = include_str!("../scripts/storyboard.py");
 
 /// 描述层：本 App 的静态插件清单（**纯数据**，可脱离 Pod 单测）。
 ///
-/// `with_python` 只描述"是否挂 Python 节点"；能力需求的形状与运行时一致。
-pub fn plan(with_python: bool) -> AssemblyPlan {
+/// `with_python` / `with_js` 只描述"是否挂对应语言节点"；能力需求的形状与运行时一致。
+pub fn plan(with_python: bool, with_js: bool) -> AssemblyPlan {
     let mut nodes = vec![
         NodeSpec::new("scene", &["scene"], Vec::new()),
         NodeSpec::new("content", &["content"], Vec::new()),
@@ -57,7 +57,21 @@ pub fn plan(with_python: bool) -> AssemblyPlan {
     #[cfg(not(feature = "python"))]
     let _ = with_python;
 
+    // Lua 节点：默认入口（`zela.script::run` 的消费者）。
+    // Broker 的拓扑序是"按插入序 DFS" ⇒ 无依赖边的节点保持声明序；
+    // `run_broker` 用拓扑序与它逐项对拍。
     nodes.push(NodeSpec::new("lua", &["script"], lua_requires));
+
+    // JS 节点（B3-Pc）：与 python 同形状 —— 只依赖 scene / content。
+    #[cfg(feature = "js")]
+    if with_js {
+        let mut js_requires = requirements("scene", SceneApi::signatures(), true);
+        js_requires.extend(requirements("content", ContentApi::signatures(), true));
+        nodes.push(NodeSpec::new("js", &["js"], js_requires));
+    }
+    #[cfg(not(feature = "js"))]
+    let _ = with_js;
+
     AssemblyPlan::new(nodes)
 }
 
@@ -105,6 +119,10 @@ pub struct PodAssembly {
     pub lua: Arc<LuaPod>,
     /// 内容 Service 句柄：`compile_script` 用它读"内容能力是否被实际使用"。
     pub(crate) content: Arc<pod::ContentServicePod>,
+    /// JS Pod 句柄（`js` feature）：只用于测试 / 排查。
+    #[cfg(feature = "js")]
+    #[allow(dead_code)]
+    pub js: Arc<ze_pod_js::JsPod>,
 }
 
 impl PodAssembly {
@@ -127,12 +145,23 @@ impl PodAssembly {
         let arg: &dyn std::any::Any = &owned;
         self.broker.run_with("python", ze_pod_py::RUN_ENTRY, &[arg])
     }
+
+    /// 宿主 → JS：执行分镜脚本，取回 `SceneScript`。
+    #[cfg(feature = "js")]
+    pub fn run_js_script(&self, source: &str) -> Result<SceneScript, BrokerError> {
+        let owned = source.to_string();
+        let arg: &dyn std::any::Any = &owned;
+        self.broker.run_with("js", ze_pod_js::RUN_ENTRY, &[arg])
+    }
 }
 
-/// 静态装配：scene / content / lua（+ feature 开启时的 python）。
+/// 静态装配：scene / content / lua（+ feature 开启时的 python / js）。
 pub fn assemble(engine: Arc<InMemoryEngine>) -> Result<PodAssembly, AssemblyError> {
-    // `nodes` 只在开启 python feature 时需要追加节点。
-    #[cfg_attr(not(feature = "python"), allow(unused_mut))]
+    // `nodes` 在开启 python / js feature 时需要追加节点。
+    #[cfg_attr(
+        not(any(feature = "python", feature = "js")),
+        allow(unused_mut)
+    )]
     let (lua, content, mut nodes) = base_nodes(engine);
 
     #[cfg(feature = "python")]
@@ -144,7 +173,25 @@ pub fn assemble(engine: Arc<InMemoryEngine>) -> Result<PodAssembly, AssemblyErro
         nodes.push(PodNode::new_sync("python", python, &["python"]));
     }
 
-    run_broker(lua, content, nodes)
+    #[cfg(feature = "js")]
+    let js = {
+        let js = Arc::new(ze_pod_js::JsPod::new());
+        js.register_capability::<SceneApi>("scene", true);
+        js.register_capability::<ContentApi>("content", true);
+        // boa 的 `Context` 是 `!Send + !Sync`（`examples/send_probe.rs` 实测）
+        // ⇒ 与 LuaPod 一样不登记 SyncPod 徽章。
+        nodes.push(PodNode::new("js", Arc::clone(&js) as Arc<dyn Pod>, &["js"]));
+        js
+    };
+
+    let broker = run_broker(&nodes)?;
+    Ok(PodAssembly {
+        broker,
+        lua,
+        content,
+        #[cfg(feature = "js")]
+        js,
+    })
 }
 
 /// 三个内置节点 + Lua 的能力注册。
@@ -175,16 +222,15 @@ fn base_nodes(
     (lua, content, nodes)
 }
 
-fn run_broker(
-    lua: Arc<LuaPod>,
-    content: Arc<pod::ContentServicePod>,
-    nodes: Vec<PodNode>,
-) -> Result<PodAssembly, AssemblyError> {
+fn run_broker(nodes: &[PodNode]) -> Result<Broker, AssemblyError> {
     // 描述层先校验（不建 Pod 也能跑）；再与 Broker 从真实 Pod 推导的图对齐。
-    let declared = plan(nodes.iter().any(|node| node.name == "python"));
+    let declared = plan(
+        nodes.iter().any(|node| node.name == "python"),
+        nodes.iter().any(|node| node.name == "js"),
+    );
     let declared_report = declared.validate()?;
 
-    let broker = Broker::new(nodes);
+    let broker = Broker::new(nodes.to_vec());
     let report = broker.assemble()?;
     debug_assert_eq!(
         declared_report.order, report.order,
@@ -200,11 +246,7 @@ fn run_broker(
     );
 
     eprintln!("[zela-app] Pod 装配：\n{report}");
-    Ok(PodAssembly {
-        broker,
-        lua,
-        content,
-    })
+    Ok(broker)
 }
 
 #[cfg(test)]
@@ -215,7 +257,7 @@ mod tests {
     /// 描述层：拓扑 / 边 / optional 缺失全部可在**不建 Pod** 时断言。
     #[test]
     fn plan_is_pure_and_ordered() {
-        let report = plan(false).validate().expect("静态清单合法");
+        let report = plan(false, false).validate().expect("静态清单合法");
         let position = |name: &str| {
             report
                 .order
@@ -238,11 +280,11 @@ mod tests {
         assert!(report.injected.is_empty(), "描述层不做注入");
     }
 
-    /// 描述层：Python 节点（启用时）依赖 scene，且排在 lua 之前。
+    /// 描述层：Python 节点（启用时）依赖 scene，且因 lua 消费 python 而排在 lua 之前。
     #[cfg(feature = "python")]
     #[test]
     fn plan_with_python_is_ordered() {
-        let report = plan(true).validate().expect("静态清单合法");
+        let report = plan(true, false).validate().expect("静态清单合法");
         let position = |name: &str| {
             report
                 .order
@@ -253,6 +295,34 @@ mod tests {
         assert!(position("scene") < position("python"));
         assert!(position("python") < position("lua"));
         assert!(report.optional_missing.is_empty());
+    }
+
+    /// 描述层：JS 节点（启用时）依赖 scene / content，且与 lua 无先后约束
+    /// （插入序在 lua 之后 ⇒ 拓扑序保持该序）。
+    #[cfg(feature = "js")]
+    #[test]
+    fn plan_with_js_is_ordered() {
+        let report = plan(false, true).validate().expect("静态清单合法");
+        let position = |name: &str| {
+            report
+                .order
+                .iter()
+                .position(|item| item == name)
+                .unwrap_or_else(|| panic!("缺节点 {name}"))
+        };
+        assert!(position("scene") < position("js"));
+        assert!(position("content") < position("js"));
+        assert!(position("lua") < position("js"));
+        assert!(
+            report
+                .edges
+                .contains(&("scene".to_string(), "js".to_string()))
+        );
+        assert!(
+            report
+                .edges
+                .contains(&("content".to_string(), "js".to_string()))
+        );
     }
 
     /// 描述层：环检测不需要真实 Pod。

@@ -22,6 +22,8 @@ ze-pod-binding = { path = "../../ze/pod/ze-pod-binding" }
 ze-pod-lua = { path = "../../ze/pod/ze-pod-lua" }
 # Python 适配器：只在 feature = "python" 时引入，默认构建不受 pyo3 影响。
 ze-pod-py = { path = "../../ze/pod/ze-pod-py", optional = true }
+# JS 适配器（boa）：只在 feature = "js" 时引入（B3-P）。
+ze-pod-js = { path = "../../ze/pod/ze-pod-js", optional = true }
 # ECS 调度内核 + Telemetry（Scheduler / Resources / System / ExecutorContext / 日志 / 快照）。
 zela-schedule = { path = "../../schedule/zela-schedule" }
 # 回放运行时（ZSB → Scene → 调度器 → 帧回调）：浏览器与 `--bundle` 共用装配尾。
@@ -61,3 +63,5 @@ default = ["typst", "python"]
 typst = ["ze-prerender/typst"]
 # Python 双向对称性用例 + Python 分镜（需要系统 Python）。
 python = ["dep:ze-pod-py", "ze-pod-py/python"]
+# JS 适配器（boa）：默认**不开**（R-2 体积 / 编译成本）；开启后多一个 `js` 节点。
+js = ["dep:ze-pod-js"]

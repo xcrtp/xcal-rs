@@ -85,6 +85,12 @@ fn run() -> Result<(), String> {
                 .to_string(),
         );
     }
+    if language == ScriptLanguage::JavaScript && !cfg!(feature = "js") {
+        return Err(
+            "脚本是 .js，但本二进制编译时未启用 `js` feature（请重新构建或改用 .lua）"
+                .to_string(),
+        );
+    }
 
     let compiled = compile_script(&source, language).map_err(|e| e.to_string())?;
     let bundle = Bundle::encode(

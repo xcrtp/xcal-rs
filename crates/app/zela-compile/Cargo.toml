@@ -19,3 +19,5 @@ zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
 default = ["typst", "python"]
 typst = ["zela-app/typst"]
 python = ["zela-app/python"]
+# JS 适配器（boa）：默认不开（与 zela-app 的 `js` feature 对齐）。
+js = ["zela-app/js"]

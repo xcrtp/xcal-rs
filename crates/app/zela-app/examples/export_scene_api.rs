@@ -1,4 +1,4 @@
-//! 导出 domain 能力的机器可读文档（JSON 真源 + LuaLS + Python `.pyi`）。
+//! 导出 domain 能力的机器可读文档（JSON 真源 + LuaLS + TypeScript + Python `.pyi`）。
 //!
 //! ```text
 //! cargo run -p zela-app --example export_scene_api
@@ -6,6 +6,7 @@
 //!
 //! 产物写到 `target/scene_api/`：
 //! - `scene_api.json` / `scene_api.lua`（`ze-pod-lua`）；
+//! - `scene_api.d.ts`（`ze-pod-js`，`js` feature）；
 //! - `zela/__init__.pyi` / `zela/scene.pyi` / `zela/content.pyi` / `zela/python.pyi`
 //!   （`ze-pod-py`，路径与 capability 命名空间一致）。
 
@@ -49,6 +50,13 @@ fn main() {
     println!("JSON  : {}", json.display());
     println!("LuaLS : {}", lua.display());
 
+    #[cfg(feature = "js")]
+    {
+        let paths = ze_pod_js::export_docs(&dir, &capabilities).expect("写 TypeScript 声明");
+        for path in paths {
+            println!("DTS   : {}", path.display());
+        }
+    }
     #[cfg(feature = "python")]
     {
         let paths = ze_pod_py::export_docs(&dir, &capabilities).expect("写 Python 类型存根");

@@ -82,15 +82,18 @@ pub enum ScriptLanguage {
     Lua,
     /// `.py`（`ze-pod-py`，需要 `python` feature）。
     Python,
+    /// `.js`（`ze-pod-js`，需要 `js` feature）。
+    JavaScript,
 }
 
-/// 按文件扩展名推断脚本语言（`.lua` / `.py`；其他 ⇒ 明确错误）。
+/// 按文件扩展名推断脚本语言（`.lua` / `.py` / `.js`；其他 ⇒ 明确错误）。
 pub fn language_from_path(path: &std::path::Path) -> Result<ScriptLanguage> {
     match path.extension().and_then(|ext| ext.to_str()) {
         Some("lua") => Ok(ScriptLanguage::Lua),
         Some("py") => Ok(ScriptLanguage::Python),
+        Some("js") => Ok(ScriptLanguage::JavaScript),
         other => Err(Error::InitializationError(format!(
-            "不支持的脚本扩展名：{other:?}（只支持 .lua / .py）"
+            "不支持的脚本扩展名：{other:?}（只支持 .lua / .py / .js）"
         ))),
     }
 }
@@ -498,6 +501,21 @@ fn run_script_source(
                 assembly
                     .run_python_script(source)
                     .map_err(|e| Error::InitializationError(format!("Python 分镜执行失败：{e}")))
+            }
+        }
+        ScriptLanguage::JavaScript => {
+            #[cfg(not(feature = "js"))]
+            {
+                let _ = (assembly, source);
+                Err(Error::InitializationError(
+                    "JS 适配器未启用（编译时关闭了 js feature）".to_string(),
+                ))
+            }
+            #[cfg(feature = "js")]
+            {
+                assembly
+                    .run_js_script(source)
+                    .map_err(|e| Error::InitializationError(format!("JS 分镜执行失败：{e}")))
             }
         }
     }
@@ -1767,6 +1785,57 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
         assert!((circles[0].0.radius - 0.5).abs() < 1e-4);
     }
 
+    /// **B3-Pd 验收（真实 domain）**：同一小段场景由 Lua 与 JS 编排，
+    /// 装配产物（`SceneScript` 规范 JSON）**逐字节相同**。
+    ///
+    /// 覆盖：相机 / 圆 + 填充 / 折线书写 / 半径动画（含枚举变体与数组）。
+    #[cfg(feature = "js")]
+    #[test]
+    fn js_and_lua_produce_the_same_scene_script() {
+        use ze_prerender::placeholder_engine;
+
+        let lua_source = r#"
+scene.spawn({ Camera2D { center = Vec2 { x = 0.0, y = 0.0 }, scale = 40.0 } })
+local dot = scene.spawn({
+    Circle { x = -0.8, y = 0.0, r = 0.8 },
+    Fill { color = Color { r = 80, g = 200, b = 255, a = 255 } },
+})
+local points = {}
+for i = 0, 8 do
+    local x = -2.0 + 4.0 * i / 8
+    points[#points + 1] = Vec2 { x = x, y = 0.7 }
+end
+scene.spawn({ Reveal { points = points, closed = false } })
+scene.animate(dot, scene.clip(Target.CircleRadius, Curve.Ramp { from = 0.8, to = 1.6, dur = 0.5 }), 0.5)
+"#;
+        let js_source = r#"
+scene.spawn([Camera2D({ center: Vec2({ x: 0.0, y: 0.0 }), scale: 40.0 })]);
+const dot = scene.spawn([
+  Circle({ x: -0.8, y: 0.0, r: 0.8 }),
+  Fill({ color: Color({ r: 80, g: 200, b: 255, a: 255 }) }),
+]);
+const points = [];
+for (let i = 0; i <= 8; i += 1) {
+  const x = -2.0 + 4.0 * i / 8;
+  points.push(Vec2({ x: x, y: 0.7 }));
+}
+scene.spawn([Reveal({ points: points, closed: false })]);
+scene.animate(dot, scene.clip(Target.CircleRadius, Curve.Ramp({ from: 0.8, to: 1.6, dur: 0.5 })), 0.5);
+"#;
+
+        let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
+            .expect("装配成功（含 js）");
+        let lua = assembly.run_script(lua_source).expect("Lua 脚本执行成功");
+        let js = assembly.run_js_script(js_source).expect("JS 脚本执行成功");
+
+        assert_eq!(lua.duration(), js.duration(), "两侧时长必须一致");
+        assert_eq!(
+            lua.to_json().expect("serialize lua"),
+            js.to_json().expect("serialize js"),
+            "Lua 与 JS 的装配产物必须逐字节相同"
+        );
+    }
+
     #[cfg(feature = "python")]
     #[test]
     fn python_is_optional() {
@@ -1774,7 +1843,7 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
         use ze_prerender::placeholder_engine;
 
         // 描述层：未挂 python 节点时 optional 缺失只记账、不阻断。
-        let report = crate::assembly::plan(false)
+        let report = crate::assembly::plan(false, false)
             .validate()
             .expect("optional 缺失可装配");
         assert!(
