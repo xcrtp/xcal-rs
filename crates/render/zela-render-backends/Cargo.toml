@@ -43,10 +43,20 @@ pollster.workspace = true
 # N6：GPU 像素级验收要构造真实 ECS 场景（`record_scene_tagged` 的入参是
 # `SceneRead`，hecs 侧适配器 `WorldView` 需要 `&hecs::World`）——**仅测试用**。
 hecs.workspace = true
+# B3-R：渲染契约探针（`render_pod_probe`）要**真的实现 Pod trait** 并走慢路径。
+# 仅 dev 边：生产依赖图仍与 B3-0.5 一致（structure 判据只查生产边）。
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
+serde.workspace = true
+serde_json.workspace = true
 
 [[example]]
 name = "cube_3d"
 required-features = ["egui-wgpu"]
+
+# B3-R 负向编译探针（`examples/send_probe.rs`）：只在显式启用时参与构建。
+[[example]]
+name = "send_probe"
+required-features = ["send-probe"]
 
 [features]
 # 默认启用 wgpu：让 `cargo test -p zela-render-backends`（顶点契约 V6 验收命令）
@@ -70,3 +80,5 @@ egui-wgpu = [
 ]
 # 文本引擎（Typst/LaTeX）预留。
 text = []
+# 只用于负向编译探针（`examples/send_probe.rs`）；正常构建 / 测试不启用。
+send-probe = []
