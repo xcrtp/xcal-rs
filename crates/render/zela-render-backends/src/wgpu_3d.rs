@@ -62,7 +62,7 @@ use zela_render::{
     RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
-use ze_render_ir::{Capabilities, CapabilityError, ColorFormat, DepthFormat};
+use ze_render_ir::{Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, LayerBlend};
 use ze_vertex::AttribType;
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
@@ -189,23 +189,64 @@ fn max_sample_count_from_flags(flags: wgpu::TextureFormatFeatureFlags) -> u32 {
     max
 }
 
-/// B1-E：pipeline **按需构建**的查表键。四个维度一次定齐：
-/// `(topology, variant, cull_mode, blending)` —— B2（S5+S6 语义）只增取值，
-/// 不再改这套机制。`cull_mode` / `blend` 当前由拓扑与默认材质语义推导
-/// （见 [`topology_cull_mode`]），后续可改为从材质 / 图元属性取值。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// B1-E/B2-2：pipeline **按需构建**的查表键。五个维度：
+/// `(topology, variant, cull, blend, layout)`。
+///
+/// - `cull` / `blend` 用 **IR 类型**（`CullMode` / `LayerBlend`）—— `PipelineKey`
+///   不得含任何 wgpu 类型（#1 的直接修正、D19）；
+/// - `layout` 是第五维（D15）：队列统一后 2D / 3D 两套布局共存，布局不同的 draw
+///   必须落到不同 pipeline（wgpu 的 `vertex.buffers` 在创建时固定）。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct PipelineKey {
     topology: PrimitiveTopology,
     variant: ShaderVariant,
-    cull_mode: Option<wgpu::Face>,
-    blend: wgpu::BlendState,
+    cull: CullMode,
+    blend: LayerBlend,
+    layout: ze_vertex::VertexLayout,
 }
 
-/// 拓扑 → 背面剔除（当前：三角形剔除背面，线段/点不剔除）。
-fn topology_cull_mode(topology: PrimitiveTopology) -> Option<wgpu::Face> {
+/// 意图层 `double_sided` → 后端剔除模式（B2-2）。
+///
+/// 三角形：封闭实体（`false`）剔除背面，双面（`true`）不剔除；
+/// 线段/点没有面朝向，恒不剔除。
+fn cull_mode_for(topology: PrimitiveTopology, double_sided: bool) -> CullMode {
     match topology {
-        PrimitiveTopology::Triangles => Some(wgpu::Face::Back),
-        PrimitiveTopology::Lines | PrimitiveTopology::Points => None,
+        PrimitiveTopology::Triangles if !double_sided => CullMode::Back,
+        PrimitiveTopology::Triangles => CullMode::None,
+        PrimitiveTopology::Lines | PrimitiveTopology::Points => CullMode::None,
+    }
+}
+
+/// IR `CullMode` → wgpu `Face`（后端翻译，B2-2）。
+fn to_wgpu_cull_mode(cull: CullMode) -> Option<wgpu::Face> {
+    match cull {
+        CullMode::None => None,
+        CullMode::Front => Some(wgpu::Face::Front),
+        CullMode::Back => Some(wgpu::Face::Back),
+    }
+}
+
+/// IR `LayerBlend` → wgpu `BlendState`（后端翻译，B2-2）。
+///
+/// - `Opaque` → `REPLACE`（与 B2-2 之前逐位一致）；
+/// - `Alpha` → **预乘** alpha over（`cube.wgsl` 输出预乘色，见 RC.1 注释）；
+/// - `Additive` → `src: One, dst: One`。
+fn to_wgpu_blend(blend: LayerBlend) -> wgpu::BlendState {
+    match blend {
+        LayerBlend::Opaque => wgpu::BlendState::REPLACE,
+        LayerBlend::Alpha => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        LayerBlend::Additive => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
     }
 }
 
@@ -261,9 +302,10 @@ pub struct PreparedDraw3D {
     pub topology: PrimitiveTopology,
     /// 着色变体：与 `topology` 一起构成 pipeline 表的查表键。
     pub variant: ShaderVariant,
-    /// B1-E：混合状态 —— pipeline 查表键的第四维。当前恒为 `REPLACE`
-    /// （不透明），B2 起可改从材质语义取值。
-    pub blend: wgpu::BlendState,
+    /// B2-2：背面剔除（IR 类型，不再存 wgpu 类型）。
+    pub cull: CullMode,
+    /// B2-2：混合语义（IR `LayerBlend`，不再存 wgpu `BlendState`）。
+    pub blend: LayerBlend,
     pub uniform_offset: u32,
     pub bind_group: wgpu::BindGroup,
 }
@@ -853,8 +895,10 @@ impl WgpuBackend3D {
             topology: PrimitiveTopology,
             /// 着色变体（pipeline 查表键之一）。
             variant: ShaderVariant,
-            /// B1-E：混合状态（pipeline 查表键第四维）。当前恒 `REPLACE`。
-            blend: wgpu::BlendState,
+            /// B2-2：剔除模式（pipeline 查表键）。
+            cull: CullMode,
+            /// B2-2：混合语义（pipeline 查表键）。
+            blend: LayerBlend,
             uniform_offset: u32,
             /// 材质纹理 id（bind group 的缓存键）。
             texture_id: u64,
@@ -956,7 +1000,13 @@ impl WgpuBackend3D {
                 index_count: cached_copy.index_count,
                 topology: cached_copy.topology,
                 variant: md.material.variant,
-                blend: wgpu::BlendState::REPLACE,
+                // B2-2：意图层 → 状态（材质未声明双面 ⇒ 剔除背面，与旧行为一致）。
+                cull: cull_mode_for(cached_copy.topology, md.material.double_sided),
+                blend: if md.material.transparent {
+                    LayerBlend::Alpha
+                } else {
+                    LayerBlend::Opaque
+                },
                 uniform_offset: offset_bytes,
                 texture_id: md
                     .material
@@ -1041,7 +1091,9 @@ impl WgpuBackend3D {
                 topology: cached_copy.topology,
                 // line 默认走 Lambert（法线填 (0,0,1) → lit = 1，外观不受光照影响）。
                 variant: ShaderVariant::Lambert,
-                blend: wgpu::BlendState::REPLACE,
+                // B2-2：线段没有面朝向 ⇒ 恒不剔除；不透明混合（与旧行为一致）。
+                cull: CullMode::None,
+                blend: LayerBlend::Opaque,
                 uniform_offset: offset_bytes,
                 // line 无材质纹理 → 绑定 1×1 **透明黑**兜底纹理（`DEFAULT_TEXTURE_ID = 0`
                 // 未注册，`resolve_texture_view` 回退），着色式退化为 `color * lit`。
@@ -1091,6 +1143,7 @@ impl WgpuBackend3D {
                     index_count: s.index_count,
                     topology: s.topology,
                     variant: s.variant,
+                    cull: s.cull,
                     blend: s.blend,
                     uniform_offset: s.uniform_offset,
                     bind_group,
@@ -1116,13 +1169,15 @@ impl WgpuBackend3D {
                     "不静默：3D 后端不支持点列表拓扑（PrimitiveTopology::Points），拒绝绘制而非静默丢弃"
                 );
             }
-            // B1-E：按需构建 + 缓存（key 四维：topology / variant / cull_mode / blending）。
+            // B1-E/B2-2：按需构建 + 缓存（key 五维：topology / variant / cull / blend / layout）。
             // 每个 draw 必然命中（未命中即创建）—— 原「回退 Lambert」路径已结构性消失。
             let key = PipelineKey {
                 topology: d.topology,
                 variant: d.variant,
-                cull_mode: topology_cull_mode(d.topology),
+                cull: d.cull,
                 blend: d.blend,
+                // D15：3D 顶点布局是第五维（当前全部 3D draw 共用 standard_3d）。
+                layout: ze_vertex::VertexLayout::standard_3d(),
             };
             let pipeline = self.get_or_create_pipeline(key);
             rpass.set_pipeline(&pipeline);
@@ -1138,7 +1193,7 @@ impl WgpuBackend3D {
         }
     }
 
-    /// B1-E：按需构建 + 缓存 pipeline（key 四维：topology / variant / cull_mode / blending）。
+    /// B1-E/B2-2：按需构建 + 缓存 pipeline（key 五维：topology / variant / cull / blend / layout）。
     ///
     /// 命中直接返回缓存克隆；未命中则创建并缓存。**无回退路径** —— 与预建时代
     /// 「查表落空回退 Lambert」不同，这里不存在"漏建"状态（不静默，铁律 2）。
@@ -1150,10 +1205,9 @@ impl WgpuBackend3D {
             return p.clone();
         }
         let label = format!("zela-3d-pipeline-{key:?}");
-        // B2-0a：顶点布局来自 kernel 契约（standard_3d），翻译成本地具名数据，
-        // 在 create_render_pipeline 期间保持存活（wgpu 创建时拷贝）。
-        let layout_desc = ze_vertex::VertexLayout::standard_3d();
-        let attributes = to_wgpu_vertex_attributes(&layout_desc);
+        // B2-0a：顶点布局来自 kernel 契约；B2-2：取自 key 的第五维（D15）。
+        let layout_desc = &key.layout;
+        let attributes = to_wgpu_vertex_attributes(layout_desc);
         let vertex_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: u64::from(layout_desc.stride),
             step_mode: to_wgpu_step_mode(layout_desc.step_mode),
@@ -1176,13 +1230,15 @@ impl WgpuBackend3D {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: self.format,
-                        blend: Some(key.blend),
+                        // B2-2：IR `LayerBlend` → wgpu `BlendState`（唯一的翻译点）。
+                        blend: Some(to_wgpu_blend(key.blend)),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: to_wgpu_topology(key.topology),
-                    cull_mode: key.cull_mode,
+                    // B2-2：IR `CullMode` → wgpu `Face`（唯一的翻译点）。
+                    cull_mode: to_wgpu_cull_mode(key.cull),
                     ..Default::default()
                 },
                 // RC.3：深度测试（Less：近处像素深度更小者胜出），写入深度。
@@ -2420,6 +2476,112 @@ mod tests {
         );
     }
 
+    /// **B2-2 结构判据**：`double_sided` / `transparent` 是 pipeline key 的新维度，
+    /// 与顶层 `ZOrder`（B2-1）一起工作；pipeline 数只随实际用到的状态组合增长。
+    #[test]
+    fn test_b2_2_pipeline_state_dimensions() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        let geometry = std::sync::Arc::new(parametric_surface(
+            SurfaceFn::new((-0.5, 0.5), (-0.5, 0.5), |_, _| 0.0),
+            1,
+            1,
+        ));
+
+        // ① 默认材质（不双面、不透明）→ 1 条
+        let base = Material3D::color(Color32::WHITE);
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(34),
+            size,
+            &[MeshDraw::new(std::sync::Arc::clone(&geometry), Mat4::IDENTITY, base)],
+        );
+        assert_eq!(backend.pipeline_count(), 1);
+
+        // ② 双面（double_sided）→ 新 key（cull: Back → None）→ 2 条
+        let mut double_sided = base;
+        double_sided.double_sided = true;
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(35),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                double_sided,
+            )],
+        );
+        assert_eq!(
+            backend.pipeline_count(),
+            2,
+            "double_sided 必须参与 key（否则双面状态会被旧 pipeline 吃掉）"
+        );
+
+        // ③ 透明（transparent）→ 新 key（blend: Opaque → Alpha）→ 3 条
+        let mut transparent = base;
+        transparent.transparent = true;
+        render_planes(
+            &backend,
+            &ctx,
+            LayerId(36),
+            size,
+            &[MeshDraw::new(
+                std::sync::Arc::clone(&geometry),
+                Mat4::IDENTITY,
+                transparent,
+            )],
+        );
+        assert_eq!(backend.pipeline_count(), 3, "transparent 必须参与 key");
+
+        // ④ D15：layout 是第五维 —— 两个只有布局不同的 key 必须不相等。
+        let k = |layout: ze_vertex::VertexLayout| PipelineKey {
+            topology: PrimitiveTopology::Triangles,
+            variant: ShaderVariant::Lambert,
+            cull: CullMode::Back,
+            blend: LayerBlend::Opaque,
+            layout,
+        };
+        let mut other_layout = ze_vertex::VertexLayout::standard_3d();
+        other_layout.cache = ze_vertex::CacheStrategy::PerFrame;
+        assert_ne!(k(ze_vertex::VertexLayout::standard_3d()), k(other_layout));
+    }
+
+    /// **B2-2 验收**：双面 —— 2D 派生片（平面）从**背面**可见。
+    ///
+    /// 用镜像投影翻转绕序来制造「从背面看」：单面材质被剔除（中心全透明），
+    /// 双面材质保留像素（中心不透明）。
+    #[test]
+    fn test_b2_2_double_sided_visible_from_back() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        // 镜像 X ⇒ 三角形绕序翻转 ⇒ 等价于从背面观察。
+        let mirrored = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+
+        // ① 单面：背面被剔除 ⇒ 中心 alpha = 0（清屏透明）
+        let single = flat_plane(0.5, 0.5, 0.0, Color32::WHITE);
+        let px = render_planes_with_view_proj(&backend, &ctx, LayerId(37), size, mirrored, &[single]);
+        assert_eq!(
+            pixel_at(&px, size, 16, 16)[3],
+            0,
+            "单面材质从背面必须不可见（cull Back）"
+        );
+
+        // ② 双面：同一视角可见
+        let mut both = flat_plane(0.5, 0.5, 0.0, Color32::WHITE);
+        both.material.double_sided = true;
+        let px = render_planes_with_view_proj(&backend, &ctx, LayerId(38), size, mirrored, &[both]);
+        assert!(
+            pixel_at(&px, size, 16, 16)[3] > 0,
+            "双面材质从背面必须可见（cull None）"
+        );
+    }
+
     /// **B1-F 验收（真实设备）**：点列表拓扑 ⇒ **必须显式报错**，不得静默跳过
     /// （铁律 2「不静默」：丢弃一个 draw 而不报错，会让"画面少东西"无从查起）。
     ///
@@ -2483,6 +2645,18 @@ mod tests {
         size: u32,
         draws: &[MeshDraw],
     ) -> Vec<u8> {
+        render_planes_with_view_proj(backend, ctx, layer_id, size, Mat4::IDENTITY, draws)
+    }
+
+    /// 以给定 `view_proj` 渲染一组网格并回读像素（B2-2 双面测试用）。
+    fn render_planes_with_view_proj(
+        backend: &WgpuBackend3D,
+        ctx: &RenderContext,
+        layer_id: LayerId,
+        size: u32,
+        view_proj: Mat4,
+        draws: &[MeshDraw],
+    ) -> Vec<u8> {
         let mut encoder = ctx
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2491,7 +2665,7 @@ mod tests {
         let _frame = backend.render_layer_offscreen(
             &mut encoder,
             layer_id,
-            Mat4::IDENTITY,
+            view_proj,
             ze_notion::Vec3::ZERO,
             Viewport::full(size, size),
             draws,

@@ -163,6 +163,16 @@ pub struct Material3D {
     /// 法线贴图句柄（B1-C，仅 `variant == Pbr` 消费）。缺省 = 平坦法线
     /// （后端绑定 1×1 平坦法线兜底纹理，`nts = (0,0,1)`，TBN 变换后 ≈ 几何法线）。
     pub normal_map: Option<TextureHandle>,
+    /// **意图层**（B2-2 / D19）：是否双面可见。
+    ///
+    /// 脚本与作者只声明这个意图；后端把它翻译成 `cull_mode`（`true ⇒ None`）。
+    /// 缺省 `false` = 封闭实体（三角形剔除背面），与 B2-2 之前的拓扑推导行为一致。
+    pub double_sided: bool,
+    /// **意图层**（B2-2 / D19）：是否按透明处理（预乘 alpha 混合）。
+    ///
+    /// 后端翻译成 `BlendState`；缺省 `false` = 不透明（`REPLACE`），
+    /// 与 B2-2 之前的硬编码行为一致。透明排序由统一 `ZOrder` 承担（B2-3）。
+    pub transparent: bool,
 }
 
 impl Default for Material3D {
@@ -177,6 +187,9 @@ impl Default for Material3D {
             // 默认 0.5：PBR 默认**中等粗糙**（避免 0.0 的镜面高光对纯色材质过曝）。
             roughness: 0.5,
             normal_map: None,
+            // B2-2 默认值与旧行为逐位一致：不双面、不透明。
+            double_sided: false,
+            transparent: false,
         }
     }
 }
