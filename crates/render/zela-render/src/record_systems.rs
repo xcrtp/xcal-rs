@@ -356,18 +356,37 @@ impl System for SceneRecord3DSystem {
     }
 }
 
+/// **唯一注册的录制系统**（B2-1：统一队列后的写者）。
+///
+/// # 为什么必须合并
+/// 2D / 3D 共处同一个 [`DrawQueue`]（D2）⇒ 两个独立 System 同相位写同一资源会被
+/// 调度器判定为借用冲突（`Scheduler conflict in phase RenderCommit`）。合并为一个
+/// 写者、内部顺序执行两次录制，是"一个队列"的直接要求。
+///
+/// `SceneRecordSystem` / `SceneRecord3DSystem` 仍保留为**可单独驱动**的单元
+/// （测试与自定义调度可用），但调度注册只放这一个。
+pub struct SceneRecordAllSystem;
+impl System for SceneRecordAllSystem {
+    type Reads = (ViewRect, Camera2DHandle, GroupVisibility, WorldTransforms);
+    type Writes = (DrawQueue, LightQueue);
+
+    fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
+        SceneRecordSystem.run(ctx);
+        SceneRecord3DSystem.run(ctx);
+    }
+}
+
 /// **唯一的渲染录制注册点**（A6：注册序列不再住在 app）。
 ///
-/// 五个 System 的写集（`DrawQueue` / `ContentTextureQueue` / `MorphQueue` /
-/// `RevealQueue` / `DrawQueue3D`）互不相交，可同相位注册。
+/// B2-1：2D / 3D 录制合并为 [`SceneRecordAllSystem`]（同写一个 `DrawQueue`），
+/// 其余队列（`ContentTextureQueue` / `MorphQueue` / `RevealQueue`）互不相交。
 pub fn register_record_systems(scheduler: &mut zela_schedule::scheduler::Scheduler) {
     use zela_schedule::scheduler::Phase;
 
-    scheduler.add_system(Phase::RenderCommit, SceneRecordSystem);
+    scheduler.add_system(Phase::RenderCommit, SceneRecordAllSystem);
     scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
     scheduler.add_system(Phase::RenderCommit, MorphRecordSystem);
     scheduler.add_system(Phase::RenderCommit, RevealRecordSystem);
-    scheduler.add_system(Phase::RenderCommit, SceneRecord3DSystem);
 }
 
 #[cfg(test)]
