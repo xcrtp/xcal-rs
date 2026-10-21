@@ -310,18 +310,19 @@
 | S1-04 | Direct 单材质：`fill` + `stroke` 同时存在时只派生填充 | 渲染管线 | **已关闭（B3 Step 4a-A）** | `derive_mesh → Vec<DerivedMesh>`：fill / stroke 各一份，各自材质颜色；不再丢描边 |
 | S2-01 | Direct 路径的触发条件不能靠内容类型推断 | 渲染管线 | **已关闭（B3 Step 2）** | 只由 `SurfaceRenderer::Renderer3D` 决定（`surface_route.rs`）；无 Surface ⇒ 默认 2D |
 | S2-02 | Direct 失败无处表达（`System::run` 无返回值） | 渲染管线 | **已关闭（B3 Step 2）** | `DrawQueue::surface_errors()` 收集显式错误；不影响其它对象录制 |
-| S2-03 | Direct + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | `ScreenMappingUnsupported`；不猜映射 |
+| S2-03 | Direct / Texture + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | Direct：`ScreenMappingUnsupported`；Texture：`ScreenTextureUnsupported`（`content_texture_specs` 只接受 `World`）。触发条件：先定义 HUD 近平面 / 代理平面世界位置语义（见 B3 Step 4d，明确"不做"） |
 | S3-01 | 无 Surface 组件 / 归属判定 | 场景核心 | **已关闭（B3 Step 3）** | `Surface`（无 position）+ `SurfaceRenderer`；沿 `Parent` 链解析、visited 环检测；缺 renderer 显式错误 |
 | S3-02 | 默认 renderer 策略 | 场景核心 | **未拍（按计划延后）** | 计划要求用 Step 1 实测覆盖度反推；当前 7/9 图元可 Direct，但 Step 4/5 未做，暂不设默认 |
-| S4-01 | Texture 路径多实例（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行（4c-5）** | 容器 / id 链 / `fit_margin` / demo3d 迁移均已落地；剩余：第二 Surface 的互不串扰验证 |
+| S4-01 | Texture 路径多实例（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **已关闭（B3 Step 4c-1..4c-5）** | 容器 / id 链 / `fit_margin` / demo3d 迁移 / 双 Surface 互不串扰验证全部落地 |
 | S4-02 | `Renderer2D` 没有可表达的固定纹理契约 | 场景核心 | **已关闭（B3 Step 4b）** | `SurfaceTexture { texel_size, filter, mipmap }` + `camera_for`；缺声明 / 尺寸非法 / 宽高比不一致 ⇒ 显式错误 |
 | S4-03 | `surface_errors` 只收集、无生产消费方（验收 O-2） | 宿主 / 帧管理 | **已关闭（B3 Step 4c-1）** | `zela_render::frame::end_frame` 非空 ⇒ `panic!`；egui / playback / web 三个宿主共用该帧末路径 |
 | S4-04 | `ContentTextureSpec` / `ContentTextureQueue` 单份；`LayerId` 用图层位置分配 | 渲染 IR / 帧管理 | **已关闭（B3 Step 4c-2）** | 容器按 `LayerId` 索引；`ObjectId → LayerId → TextureHandle` 单一映射（`content_layer_id` / `content_texture_handle`）；视口图层用固定 id；`grep "LayerId(view.layers.len()" = 0` |
 | S4-05 | Surface 纹理相机只能 1:1，无法表达 demo3d 的 0.8 留边 | 场景核心 | **已关闭（B3 Step 4c-3）** | `SurfaceTexture.fit_margin`；`Some(m)` 直接调用 `Camera2D::fit_bounds`（逐位相同）；非法 margin ⇒ 显式错误 |
 | S4-06 | demo3d 走硬编码 `CONTENT_TEXTURE_ID` / 手算内容相机（与 Surface 路径**两套真源**） | 作品 / 装配 | **已关闭（B3 Step 4c-4）** | demo3d 改为 `Surface(Renderer2D) + SurfaceTexture(fit_margin=0.8)`，内容实体挂 `Parent(surface)`；材质纹理由 `content_texture_handle` 派生；**四基线逐位不变（零差异）** |
+| S4-07 | 多 Surface 只是"签名存在"，无验证 | 测试 | **已关闭（B3 Step 4c-5）** | `two_surfaces_record_into_independent_layers`：两个 Surface 各自一层、纹理句柄不同、内容跨度互不串扰 |
 | S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
 
-**J 段小计（B3，已执行部分）**：已关闭 13（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-02/03/04/05/06）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 14（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
 
 ---
 

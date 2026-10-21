@@ -166,6 +166,11 @@ pub enum SurfaceError {
     #[error("SurfaceTexture.fit_margin 非法：{margin}（必须有限且 > 0）")]
     InvalidFitMargin { margin: f32 },
     #[error(
+        "Surface 对象 {surface:?} 使用 Screen 映射 + Renderer2D：代理平面 / 纹理语义未定义，\
+         显式拒绝（见 GAPS S2-03）"
+    )]
+    ScreenTextureUnsupported { surface: ObjectId },
+    #[error(
         "SurfaceTexture 与 bounds 宽高比不一致（bounds={bounds:?}, texel={texel_size:?}, \
          scale_x={scale_x}, scale_y={scale_y}）：会静默拉伸，故拒绝"
     )]

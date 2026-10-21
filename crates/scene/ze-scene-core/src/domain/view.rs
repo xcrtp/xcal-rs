@@ -138,6 +138,10 @@ pub fn content_texture_specs(
         let surface = scene
             .with::<Surface, _>(id, |surface| *surface)
             .ok_or(SurfaceError::MissingRenderer(id))?;
+        // B3 Step 4d：Screen 映射的代理平面 / 纹理语义未定义 ⇒ 显式拒绝，不猜。
+        if surface.mapping != crate::surface::SurfaceMapping::World {
+            return Err(SurfaceError::ScreenTextureUnsupported { surface: id });
+        }
         let texture = scene
             .with::<SurfaceTexture, _>(id, |texture| *texture)
             .ok_or(SurfaceError::MissingTexture(id))?;

@@ -619,6 +619,128 @@ mod tests {
         }
     }
 
+    /// **Step 4c-5**：两个 Surface 各自产出独立内容层，互不串扰。
+    #[test]
+    fn two_surfaces_record_into_independent_layers() {
+        let mut world = World::new();
+
+        let surface_a = object_id_of(world.spawn((
+            ze_scene_core::Surface::new(
+                Rect2D::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)),
+                ze_scene_core::SurfaceMapping::World,
+                Vec2::new(0.5, 0.5),
+            ),
+            ze_scene_core::SurfaceRenderer::Renderer2D,
+            ze_scene_core::SurfaceTexture::new(
+                [256, 256],
+                ze_scene_core::TextureFilter::Linear,
+                false,
+            ),
+        )));
+        let surface_b = object_id_of(world.spawn((
+            ze_scene_core::Surface::new(
+                Rect2D::new(Vec2::new(2.0, -1.0), Vec2::new(4.0, 1.0)),
+                ze_scene_core::SurfaceMapping::World,
+                Vec2::new(0.5, 0.5),
+            ),
+            ze_scene_core::SurfaceRenderer::Renderer2D,
+            ze_scene_core::SurfaceTexture::new(
+                [256, 256],
+                ze_scene_core::TextureFilter::Linear,
+                false,
+            ),
+        )));
+
+        // A：1 世界单位长的线（屏幕跨度 ≈ 128px）；B：0.2 单位（≈ 25.6px）。
+        world.spawn((
+            Path::new(Path2D::from_polyline(
+                &[Vec2::new(-0.5, 0.0), Vec2::new(0.5, 0.0)],
+                false,
+            )),
+            StrokeSolid::new(0.02, (255, 255, 255, 255)),
+            ContentTextureItem,
+            ze_scene_contract::Parent(surface_a),
+        ));
+        world.spawn((
+            Path::new(Path2D::from_polyline(
+                &[Vec2::new(2.9, 0.0), Vec2::new(3.1, 0.0)],
+                false,
+            )),
+            StrokeSolid::new(0.02, (255, 255, 255, 255)),
+            ContentTextureItem,
+            ze_scene_contract::Parent(surface_b),
+        ));
+
+        let specs =
+            ze_scene_core::domain::content_texture_specs(&WorldView::new(&world)).unwrap();
+        assert_eq!(specs.0.len(), 2, "两个 Surface ⇒ 两个内容层");
+        assert_ne!(
+            specs.0[0].texture_handle(),
+            specs.0[1].texture_handle(),
+            "每个 Surface 必须有独立纹理句柄"
+        );
+
+        let mut res = Resources::new();
+        res.insert(specs.clone());
+        res.insert(ContentTextureQueue::default());
+        let mut sched = Scheduler::new(world, res);
+        sched.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+        sched.init_resources();
+        sched.run_frame(0.016);
+
+        let queues = sched.resources().get::<ContentTextureQueue>().unwrap();
+        let span = |layer| {
+            let q = queues.get(layer).expect("该 Surface 的内容层存在");
+            assert_eq!(q.len(), 1, "每层只含自己的内容");
+            let commands = q.commands();
+            let cmd = commands[0];
+            let crate::shape::Shape2D::Path(path) = &cmd.shape else {
+                panic!("内容层应录到 Path");
+            };
+            let xs: Vec<f32> = path
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    PathCommand::MoveTo(p) | PathCommand::LineTo(p) => Some(p.x),
+                    _ => None,
+                })
+                .collect();
+            xs.iter().cloned().fold(f32::MIN, f32::max)
+                - xs.iter().cloned().fold(f32::MAX, f32::min)
+        };
+        let span_a = span(specs.0[0].layer_id());
+        let span_b = span(specs.0[1].layer_id());
+        assert!(
+            span_a > 100.0 && span_b < 50.0,
+            "两层内容互不串扰：A 跨度 {span_a}，B 跨度 {span_b}"
+        );
+    }
+
+    /// Step 4d：Texture + Screen 映射 ⇒ 显式拒绝（语义未定义，不猜）。
+    #[test]
+    fn texture_screen_mapping_is_rejected() {
+        let mut world = World::new();
+        world.spawn((
+            ze_scene_core::Surface::new(
+                Rect2D::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+                ze_scene_core::SurfaceMapping::Screen,
+                Vec2::new(0.5, 0.5),
+            ),
+            ze_scene_core::SurfaceRenderer::Renderer2D,
+            ze_scene_core::SurfaceTexture::new(
+                [256, 256],
+                ze_scene_core::TextureFilter::Linear,
+                false,
+            ),
+        ));
+        let error = ze_scene_core::domain::content_texture_specs(&WorldView::new(&world))
+            .expect_err("Screen + Renderer2D 必须显式失败");
+        assert!(matches!(
+            error,
+            ze_scene_core::SurfaceError::ScreenTextureUnsupported { .. }
+        ));
+    }
+
     // ─── N5：对象级可见性 / 不透明度过滤 ──────────────────────────────────
 
     fn rect_800x600() -> Rect2D {
