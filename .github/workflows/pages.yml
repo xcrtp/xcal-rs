@@ -2,8 +2,11 @@ name: Pages
 
 # Demo 集构建 + GitHub Pages 部署（独立 workflow）。
 #
-# 一次性手动前提：仓库 Settings → Pages → Source 选 **GitHub Actions**
-# （否则 deploy job 必然失败）。
+# 一次性手动前提（已完成）：仓库 Settings → Pages → Source 选 **GitHub Actions**。
+#
+# 注意：`github-pages` 环境的 deployment branch policy 必须显式放行部署分支
+# （当前放行 main、pages）。若缺少，GitHub 会在**启动任何 job 之前**整单取消该
+# run（表现为 run cancelled、0 个 job、无 deployment），而不是把 deploy job 标为 skipped。
 #
 # 铁律：本地与 CI 跑**同一个** `crates/web/zela-web/build.ps1`
 # （ubuntu runner 预装 pwsh，不另写 bash 版，避免两套命令定义漂移）。
@@ -76,7 +79,7 @@ jobs:
         with:
           path: crates/web/zela-web/www
 
-  # 仅 push main 部署；PR 只做构建验证（避免每个 PR 发一版）。
+  # 仅 push pages 部署；PR 只做构建验证（避免每个 PR 发一版）。
   deploy:
     name: Deploy GitHub Pages
     needs: demo
