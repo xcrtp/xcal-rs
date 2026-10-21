@@ -8,7 +8,7 @@ license.workspace = true
 # 回放运行时：浏览器与 native `--bundle` 共用**同一份**装配尾。
 # 不依赖任何语言适配器，也不直接依赖 ze-prerender（Typst 只在装配期需要）。
 [dependencies]
-zela-scene = { path = "../../scene/zela-scene" }
+zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
 zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
 zela-schedule = { path = "../../schedule/zela-schedule" }
 zela-render = { path = "../../render/zela-render" }

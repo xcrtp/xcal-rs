@@ -1,4 +1,4 @@
-// layer.rs — 图层合成概念（S2：从 `zela_scene::domain` 下沉）。
+// layer.rs — 图层合成概念（S2：从 `zela_scene_ecs::domain` 下沉）。
 //
 // 为什么在渲染 IR 层：`LayerId` / `LayerBlend` 是**合成语义**，不是场景状态；
 // `zela-render-backends` 生产代码需要它们，但不该为此依赖 `zela-scene`。

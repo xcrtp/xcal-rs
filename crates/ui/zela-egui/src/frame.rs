@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use zela_scene::{DriverCommand, DriverPod};
+use zela_scene_ecs::{DriverCommand, DriverPod};
 
 use crate::health::HealthOverlay;
 use crate::host::EguiSceneHost;

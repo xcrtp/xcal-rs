@@ -30,8 +30,8 @@ use zela_app::{
 };
 use zela_render::ViewRect;
 use zela_render_backends::{RenderContext, ScreenParams, StandardBackends, render_frame_headless};
-use zela_scene::DriverCommand;
-use zela_scene::contract::WorldView;
+use zela_scene_ecs::DriverCommand;
+use zela_scene_ecs::contract::WorldView;
 use zela_scene_bundle::Bundle;
 use zela_scene_bundle::frame_hash::FrameSequenceHash;
 

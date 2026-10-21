@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 pub mod frame_hash;
 pub mod sha256;
 
-use zela_scene::scene_script::SceneScript;
+use zela_scene_ecs::scene_script::SceneScript;
 
 /// 文件魔数（4 字节）。
 pub const MAGIC: &[u8; 4] = b"ZSB1";
@@ -443,8 +443,8 @@ impl Bundle {
 mod tests {
     use super::*;
     use ze_scene_core::Circle;
-    use zela_scene::scene_script::SceneEncoder;
-    use zela_scene::scene::Scene;
+    use zela_scene_ecs::scene_script::SceneEncoder;
+    use zela_scene_ecs::scene::Scene;
 
     fn tiny_script() -> SceneScript {
         let mut enc = SceneEncoder::new();
@@ -452,12 +452,12 @@ mod tests {
         enc.animate_named(
             circle,
             "CircleRadius",
-            zela_scene::Curve::Keyframes {
+            zela_scene_ecs::Curve::Keyframes {
                 keys: vec![
-                    (0.0, zela_scene::AnimValue::Scalar(1.0)),
-                    (2.0, zela_scene::AnimValue::Scalar(3.0)),
+                    (0.0, zela_scene_ecs::AnimValue::Scalar(1.0)),
+                    (2.0, zela_scene_ecs::AnimValue::Scalar(3.0)),
                 ],
-                interpolation: zela_scene::Interp::Linear,
+                interpolation: zela_scene_ecs::Interp::Linear,
             },
             2.0,
         );

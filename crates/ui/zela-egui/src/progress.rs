@@ -8,7 +8,7 @@ use std::cell::Cell;
 
 use ze_pod_core::{Capability, EventSink, FunctionId, Pod, PodError, PodId, QualifiedName};
 
-use zela_scene::DriverEvent;
+use zela_scene_ecs::DriverEvent;
 
 /// 事件订阅方：提供 `EventSink<DriverEvent>`，只记录 `FrameFinished`。
 pub struct FrameProgress {

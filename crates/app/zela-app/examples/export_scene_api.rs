@@ -11,7 +11,7 @@
 
 use ze_pod_core::Capability;
 use ze_pod_binding::CapabilityDocs;
-use zela_scene::pod::{ContentApi, SceneApi};
+use zela_scene_ecs::pod::{ContentApi, SceneApi};
 
 fn main() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -1292,7 +1292,7 @@ mod tests {
     // B3-0c：生产函数移到 `zela_render`；测试仍直接调用三角化做几何断言。
     use zela_render::tessellate;
     use zela_render::{DrawCommand, ZIndex};
-    use zela_scene::domain::LayerBlend;
+    use zela_scene_ecs::domain::LayerBlend;
 
     use crate::compositor::{CompositeOp, Compositor};
 
@@ -2464,7 +2464,7 @@ mod tests {
     use hecs::World;
     use ze_scene_core::{Camera2D, Circle};
     use zela_render::{FillSolid, Opacity, record_scene_tagged};
-    use zela_scene::contract::{GroupId, GroupVisibility, ObjectId, Visibility, WorldView};
+    use zela_scene_ecs::contract::{GroupId, GroupVisibility, ObjectId, Visibility, WorldView};
 
     /// N6 视口矩形：与 `geometry(200, 100, 1.0, [400, 200])` 的 viewport 一致。
     fn n6_viewport() -> Rect2D {

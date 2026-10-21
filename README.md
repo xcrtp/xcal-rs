@@ -103,7 +103,6 @@ crates/
 │   ├── ze-scene-core       对象 + 组件 + 纯逻辑（动画数据 / 脚本数据 / 持久化；零 hecs、零 zela-*）
 │   ├── ze-scene-api        Pod 能力声明（SceneApi / ContentApi + 两个 Service；零 hecs、零 zela-*）
 │   ├── zela-scene-ecs      ECS 实现（Scene / 资源 / 生命周期 / 全部 System）
-│   ├── zela-scene          兼容壳层：re-export zela-scene-ecs
 │   └── zela-scene-bundle   ZSB 装配产物（格式 / payload 哈希 / 可还原性检查；无脚本依赖）
 │
 ├── render/          # 渲染抽象与具体后端
@@ -145,7 +144,7 @@ crates/
 |-------|----|------|
 | `ze-notion` | kernel | 理念层（数学元语）：Vec/Mat 再导出 / Color32 / Rect2D / Path2D·Path3D / 2D 图元 / Transform2D·3D / Lerp / 函数·曲线·采样器 / 投影辅助（全仓唯一 glam 出口） |
 | `ze-render-ir` | kernel | 渲染 IR：`Shape2D` / `Style2D` / 样式组件 / `ToShape2D` + `ResolveStyle`（唯一换算点） |
-| `ze-scene-contract` | kernel | 场景契约：`Scene` / `ObjectId` / `Parent` / `Describable`；具体 ECS 只出现在 `zela-scene` |
+| `ze-scene-contract` | kernel | 场景契约：`Scene` / `ObjectId` / `Parent` / `Describable`；具体 ECS 只出现在 `zela-scene-ecs` |
 | `ze-time` | kernel | 纯逻辑时间内核：ClockForest（时钟树+环检测+eval_local）/ Curve（纯函数 sample）/ Director（唯一时间源） |
 | `ze-content` | kernel | 内容中间表示：ContentIR / StyledPath / Span 锚点 + 源码归一化 + 确定性 SVG 量具 + 零依赖占位排版 |
 | `ze-prerender` | kernel | 内容预渲染：ContentEngine 异步形状 API + InMemoryEngine + 哈希缓存 + Typst 接入（feature 全 optional） |
@@ -164,7 +163,6 @@ crates/
 | `ze-node-schema-macros` | graph | `#[derive(NodeSpec)]` 过程宏：`#[node(...)]`（含 `resizable/draggable/selectable`）+ `#[property(...)]` |
 | `zela-schedule` | schedule | 通用 ECS 调度框架（Resource / System trait / 六阶段 Scheduler + Telemetry）；仅依赖 hecs |
 | `zela-scene-ecs` | scene | ECS 实现：`Scene`（hecs 适配）/ 资源 / 生命周期 / 全部 System + `register`；依赖 `ze-scene-core` / `ze-scene-api` / `zela-schedule` |
-| `zela-scene` | scene | 兼容壳层：`pub use zela_scene_ecs::*`（B3-1d；259 处下游路径不变，后续删除） |
 | `zela-authored` | app | 场景作品：分镜 / 能力 demo / 3D demo（不再是框架代码） |
 | `zela-scene-bundle` | scene | ZSB 装配产物：容器 / payload SHA-256 / Meta（cap+pod 版本）/ 可还原性检查；**无脚本依赖** |
 | `ze-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `zela-*` |
@@ -279,7 +277,7 @@ cargo run -p zela-app --example export_frames
 
 # 全量测试 / 文档
 cargo test --workspace
-cargo doc --no-deps -p zela-scene -p zela-render
+cargo doc --no-deps -p zela-scene-ecs -p zela-render
 ```
 
 ## 许可

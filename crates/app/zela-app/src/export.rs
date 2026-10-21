@@ -232,7 +232,7 @@ mod tests {
         DrawQueue, DrawQueue3D, PostFilterChain, StrokeSolid, ZIndex, components::Line,
     };
     use zela_render_backends::Compositor;
-    use zela_scene::domain::{LayerBlend, LayerId, LayerKind};
+    use zela_scene_ecs::domain::{LayerBlend, LayerId, LayerKind};
 
     const W: u32 = 32;
     const H: u32 = 24;

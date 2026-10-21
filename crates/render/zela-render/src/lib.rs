@@ -125,5 +125,5 @@ pub use ze_resource::render_backend::{AccessError, GpuHandle, GpuResourceId};
 pub mod scene {
     pub use crate::components;
     pub use crate::components as comp;
-    pub use zela_scene::scene::Scene;
+    pub use zela_scene_ecs::scene::Scene;
 }

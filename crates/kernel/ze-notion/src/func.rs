@@ -165,7 +165,7 @@ where
 /// 从 `zela-scene` 的 `SurfaceSpec` 劈出：`SurfaceSpec` 原把
 /// `u_steps` / `v_steps`（"这次采样多少格"）混进了数学定义。
 /// `z = f(x, y)` 这个概念只需要**函数 + 域**；步数是离散化决策，留在场景层
-/// （见 `zela_scene::scene::primitives::parametric_surface` 的 `u_steps` / `v_steps` 参数）。
+/// （见 `zela_scene_ecs::scene::primitives::parametric_surface` 的 `u_steps` / `v_steps` 参数）。
 ///
 /// # 本轮变化：不再是裸 fn 指针（也不再 `Copy`）
 ///

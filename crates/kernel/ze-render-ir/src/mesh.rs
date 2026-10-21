@@ -1,4 +1,4 @@
-// mesh.rs — 3D 渲染描述符（S2：从 `zela_scene::scene::components` 下沉）。
+// mesh.rs — 3D 渲染描述符（S2：从 `zela_scene_ecs::scene::components` 下沉）。
 //
 // 这些是**纯数据声明**（拓扑 / 着色变体 / UV 兜底 / 纹理句柄），渲染后端按它们
 // 查表选 pipeline；不属于场景逻辑，也不含任何 GPU 类型。

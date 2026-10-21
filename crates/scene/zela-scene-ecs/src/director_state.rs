@@ -1,7 +1,7 @@
 // director_state.rs — Director + 推进 System（zela-scene）
 
 use ze_time::Director;
-use zela_scene::TimeState;
+use zela_scene_ecs::TimeState;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 

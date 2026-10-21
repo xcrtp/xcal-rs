@@ -6,8 +6,7 @@
 > ③ 调度接线（`register`）。
 >
 > 概念（对象 / 组件 / 纯逻辑）在 `ze-scene-core`；语言无关能力在 `ze-scene-api`；
-> 作品（分镜 / demo）在 `zela-authored`。下游仍可经壳层 `zela-scene` 使用旧路径。
->
+> 作品（分镜 / demo）在 `zela-authored`。>
 > 调度框架本身**不在这里**——它在独立的 `zela-schedule` crate 中，本 crate 依赖它。
 
 本 crate 是**纯数据 + 纯逻辑**：不得出现任何 `egui::` 类型，也不含任何 GPU 实现。
@@ -35,11 +34,11 @@
 
 依赖方向是**单向**的：
 
-- `zela-scene` → `zela-schedule`：本 crate 的 System 实现的是
+- `zela-scene-ecs` → `zela-schedule`：本 crate 的 System 实现的是
   `zela_schedule::system::System`，上下文是 `zela_schedule::context::ExecutorContext`；
   Phase 归属由本 crate 的 `register` 声明，`zela-app` 只负责调用它；UI 层**不再注册**
   任何场景 System。
-- `zela-render` / `zela-egui` → `zela-scene`：渲染与 UI 消费场景数据与契约。
+- `zela-render` / `zela-egui` → `zela-scene-ecs`：渲染与 UI 消费场景数据与契约。
 - 反向依赖不存在：`zela-schedule` 不认识任何场景/渲染概念。
 
 ---
@@ -61,7 +60,7 @@
 
 ### 契约层适配：`contract`
 
-`zela-scene` 是**契约层 `Scene` trait 的 hecs 实现**（唯一接触面）：
+`zela-scene-ecs` 是**契约层 `Scene` trait 的 hecs 实现**（唯一接触面）：
 
 | 类型 | 能力 | 用途 |
 |------|------|------|
@@ -79,7 +78,7 @@
 - `find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`：按 `for_each::<Name>` 遍历，
   返回**第一个**命中（**不新增契约层 trait 方法** —— 加方法要动 4 个实现，不划算）。
 - `Name` / `Group` / `GroupId` / `Visibility` / `VisibilityTag` / `GroupVisibility`
-  经 `zela_scene::contract` **对外转发**（消费方不必直连 `ze-scene-contract`）。
+  经 `zela_scene_ecs::contract` **对外转发**（消费方不必直连 `ze-scene-contract`）。
 - `Opacity`（对象级不透明度，落点在 `ze-render-ir`）同样进登记表。
 
 组件分两处：
@@ -144,7 +143,7 @@ egui 原生输入的读取与翻译只发生在 `zela-egui` 的 host。
 - 对实现 `Transform2DInto + Clone` 的类型，`Transform2D` 由 blanket impl 自动提供。
 - 结构体派生：`#[derive(ze_macro::Transform2DInto)]`，字段可用
   `#[transform(skip)]` / `#[transform(iter)]` 调整转换模式。
-- 派生宏生成的代码使用绝对路径 `zela_scene::…`，本 crate 通过
+- 派生宏生成的代码使用绝对路径 `zela_scene_ecs::…`，本 crate 通过
   `extern crate self as zela_scene;` 让该路径在 crate 内也可解析。
 
 ---
@@ -176,13 +175,13 @@ egui 原生输入的读取与翻译只发生在 `zela-egui` 的 host。
 本 crate 只提供被注册的 System：
 
 ```rust
-use zela_scene::animation::{BindingApplySystem, MorphApplySystem};
-use zela_scene::{DirectorAdvanceSystem, DirectorState, Scene, TimeState};
+use zela_scene_ecs::animation::{BindingApplySystem, MorphApplySystem};
+use zela_scene_ecs::{DirectorAdvanceSystem, DirectorState, Scene, TimeState};
 use zela_schedule::{Phase, Resources, Scheduler};
 
 // 1) 场景数据
 let mut scene = Scene::new();
-scene.spawn((zela_scene::components::Circle::new((0.0, 0.0), 1.0),));
+scene.spawn((zela_scene_ecs::components::Circle::new((0.0, 0.0), 1.0),));
 
 // 2) 资源：时间 / 导演状态 /（时钟树、绑定表由上层填充）
 let mut resources = Resources::new();
@@ -216,8 +215,8 @@ for _ in 0..60 {
 ## 测试
 
 ```bash
-cargo test  -p zela-scene            # 场景层单元测试（含 headless 形变接缝测例）
-cargo doc   -p zela-scene --no-deps  # API 文档
+cargo test  -p zela-scene-ecs            # 场景层单元测试（含 headless 形变接缝测例）
+cargo doc   -p zela-scene-ecs --no-deps  # API 文档
 ```
 
 ---

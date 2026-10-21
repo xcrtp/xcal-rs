@@ -21,7 +21,7 @@ use ze_prerender::{ContentConfig, ContentEngine};
 #[cfg(test)]
 use zela_render::{MeasureSpace, ir_to_draw_cmds};
 #[cfg(test)]
-use zela_scene::types::Color32;
+use zela_scene_ecs::types::Color32;
 
 /// 公式源描述（静态配置；将来接交互时改为可编辑字段）。
 ///
@@ -477,7 +477,7 @@ mod tests {
         use ze_scene_core::{Camera2D, Transform};
         use zela_render::components::Path;
         use zela_render::{DrawQueue, Opacity, StrokeSolid, record_scene};
-        use zela_scene::contract::WorldView;
+        use zela_scene_ecs::contract::WorldView;
 
         let engine = ze_prerender::placeholder_engine();
         let text = TextSpec::new("hi", 1.0, ze_notion::Vec2::ZERO);
@@ -491,7 +491,7 @@ mod tests {
             ze_notion::Rect2D::new(ze_notion::Vec2::ZERO, ze_notion::Vec2::new(800.0, 600.0));
         let camera = Camera2D::new(ze_notion::Vec2::ZERO, 40.0, rect);
 
-        let mut scene = zela_scene::scene::Scene::new();
+        let mut scene = zela_scene_ecs::scene::Scene::new();
         // 基准：仅淡入（不摆放）。
         scene.spawn((
             Path::new(path.clone()),
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn text_paths_can_be_revealed() {
         use zela_render::{RevealQueue, RevealRecordSystem, StrokeSolid, ViewRect};
-        use zela_scene::scene::components::Reveal;
+        use zela_scene_ecs::scene::components::Reveal;
 
         let engine = ze_prerender::placeholder_engine();
         let text = TextSpec::new("ab", 1.0, ze_notion::Vec2::ZERO);
@@ -541,7 +541,7 @@ mod tests {
             .next()
             .expect("至少一条文本路径");
 
-        let mut scene = zela_scene::scene::Scene::new();
+        let mut scene = zela_scene_ecs::scene::Scene::new();
         let cam = ze_scene_core::spawn_camera2d(
             &mut scene,
             ze_scene_core::Framing2D::new(ze_notion::Vec2::ZERO, 40.0),

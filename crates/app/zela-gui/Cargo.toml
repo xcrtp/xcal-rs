@@ -15,7 +15,7 @@ zela-app = { path = "../zela-app" }
 # UI 层：EguiSceneHost / SceneFrame / FrameProgress / 主题与字体。
 zela-egui = { path = "../../ui/zela-egui" }
 # 场景类型（Result / DriverPod）与后端安装。
-zela-scene = { path = "../../scene/zela-scene" }
+zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
 zela-render-backends = { path = "../../render/zela-render-backends", features = ["egui-wgpu", "eframe"] }
 zela-schedule = { path = "../../schedule/zela-schedule" }
 ze-pod-core = { path = "../../ze/pod/ze-pod-core" }

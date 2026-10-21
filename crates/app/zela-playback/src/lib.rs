@@ -29,12 +29,12 @@ use zela_render_backends::{
 };
 #[cfg(feature = "blocking")]
 use zela_render_backends::render_frame_headless;
-use zela_scene::animation::{Binding, BindingTable, CameraEye};
-use zela_scene::contract::{GroupVisibility, ObjectId, SceneRead, WorldView};
-use zela_scene::director_state::DirectorState;
-use zela_scene::domain::{ContentTextureSpec, InputEvents, UiConfig};
-use zela_scene::scene::Scene;
-use zela_scene::{
+use zela_scene_ecs::animation::{Binding, BindingTable, CameraEye};
+use zela_scene_ecs::contract::{GroupVisibility, ObjectId, SceneRead, WorldView};
+use zela_scene_ecs::director_state::DirectorState;
+use zela_scene_ecs::domain::{ContentTextureSpec, InputEvents, UiConfig};
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::{
     ClockForest, ClockNode, ComposerQueue, Curve, DeferredCommands, DriverCommand, DriverPod,
     DynamicObjects, LifetimeEvents, LifetimeTracker, SeekKind, TimeState,
 };
@@ -97,14 +97,14 @@ pub fn available_playback_caps() -> Available {
 
 fn scene_pod() -> Pod {
     Pod::new(
-        zela_scene::pod::SERVICE_NAME,
-        zela_scene::pod::SERVICE_VERSION,
+        zela_scene_ecs::pod::SERVICE_NAME,
+        zela_scene_ecs::pod::SERVICE_VERSION,
     )
 }
 
 fn scene_capability() -> Capability {
-    let meta = <zela_scene::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::meta();
-    let name = <zela_scene::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::signatures()
+    let meta = <zela_scene_ecs::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::meta();
+    let name = <zela_scene_ecs::pod::SceneApi<'static> as ze_pod_core::Capability<'static>>::signatures()
         .first()
         .map(|signature| signature.namespace)
         .unwrap_or("");
@@ -193,8 +193,8 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
     }
     resources.insert(TimeState::default());
     resources.insert(UiConfig::default());
-    resources.insert(zela_scene::WorldTransforms::default());
-    resources.insert(zela_scene::TransformHierarchyError::default());
+    resources.insert(zela_scene_ecs::WorldTransforms::default());
+    resources.insert(zela_scene_ecs::TransformHierarchyError::default());
     resources.insert(ViewRect::default());
     resources.insert(InputEvents::default());
     resources.insert(DrawQueue::new());
@@ -216,7 +216,7 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
     resources.insert(ComposerQueue::new());
 
     let mut scheduler = Scheduler::new(world, resources);
-    zela_scene::register::register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
+    zela_scene_ecs::register::register_systems(&mut scheduler, cam2d_bindings, orbit_binding);
     zela_render::register_record_systems(&mut scheduler);
 
     Runtime {

@@ -7,7 +7,7 @@
 // 4. 写场景经 [`crate::scene_write::SceneWrite`]（类型擦除）⇒ 本模块不认识 hecs。
 //
 // ECS 侧（`zela-scene`）保留三个 System：`BindingApplySystem` / `CameraDriveSystem` /
-// `MorphApplySystem`，并通过 re-export 保持 `zela_scene::animation::*` 路径不变。
+// `MorphApplySystem`，并通过 re-export 保持 `zela_scene_ecs::animation::*` 路径不变。
 
 pub mod binding;
 pub mod target;

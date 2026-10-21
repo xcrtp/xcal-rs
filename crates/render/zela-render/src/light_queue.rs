@@ -1,6 +1,6 @@
 // light_queue.rs — 本帧场景光源快照（渲染层，后端 uniform 友好）。
 //
-// 与 `zela_scene::scene::components::Light` 组件一一对应，但已解析成后端消费
+// 与 `zela_scene_ecs::scene::components::Light` 组件一一对应，但已解析成后端消费
 // 的形状（颜色归一化到 [0,1]、含强度）：
 // - 方向光：`direction`（世界空间）+ 颜色 + 强度；
 // - 点光（B1-B）：`position` 已由录制侧从 `Transform` → `WorldTransforms` 解析

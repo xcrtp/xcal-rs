@@ -13,7 +13,7 @@ use crate::types::Color32;
 // S2：合成概念已下沉。
 // - `LayerId` / `LayerBlend` / `TextureHandle` → `ze-render-ir`
 // - `LayerKind`（含相机）→ `object` 模块（B3-1b 起在 ze-scene-core 内）
-// 此处 re-export 保持 `ze_scene_core::domain::*` / `zela_scene::domain::*` 路径不变。
+// 此处 re-export 保持 `ze_scene_core::domain::*` / `zela_scene_ecs::domain::*` 路径不变。
 pub use crate::object::LayerKind;
 pub use ze_render_ir::{LayerBlend, LayerId, TextureHandle};
 

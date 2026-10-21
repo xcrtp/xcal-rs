@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-zela-scene = { path = "../../scene/zela-scene" }
+zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
 # 事件订阅方（FrameProgress）实现 Pod 的 EventSink。
 ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # ECS 调度内核：System / ExecutorContext / Resources / Scheduler / Phase。

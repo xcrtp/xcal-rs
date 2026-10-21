@@ -17,26 +17,26 @@ use ze_scene_core::{
 };
 use zela_render::scene::Scene;
 use zela_render_backends::RenderContext;
-pub use zela_scene::Result;
-use zela_scene::animation::BindingTable;
-use zela_scene::contract::GroupVisibility;
-use zela_scene::domain::ContentTextureSpec;
-use zela_scene::errors::Error;
-use zela_scene::scene::components::TextureHandle;
-use zela_scene::ClockForest;
+pub use zela_scene_ecs::Result;
+use zela_scene_ecs::animation::BindingTable;
+use zela_scene_ecs::contract::GroupVisibility;
+use zela_scene_ecs::domain::ContentTextureSpec;
+use zela_scene_ecs::errors::Error;
+use zela_scene_ecs::scene::components::TextureHandle;
+use zela_scene_ecs::ClockForest;
 
 // 装配尾已下沉到 `zela-playback`；以下导入只服务于本 crate 的回归测试与
 // `register_systems`（test-only）。
 #[cfg(test)]
 use zela_render::{DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect};
 #[cfg(test)]
-use zela_scene::animation::Binding;
+use zela_scene_ecs::animation::Binding;
 #[cfg(test)]
-use zela_scene::director_state::DirectorState;
+use zela_scene_ecs::director_state::DirectorState;
 #[cfg(test)]
-use zela_scene::domain::{InputEvents, UiConfig};
+use zela_scene_ecs::domain::{InputEvents, UiConfig};
 #[cfg(test)]
-use zela_scene::{ClockNode, Curve, TimeState};
+use zela_scene_ecs::{ClockNode, Curve, TimeState};
 #[cfg(test)]
 use zela_schedule::resource::Resources;
 #[cfg(test)]
@@ -126,7 +126,7 @@ pub fn build_script_runtime(
 /// 脚本编译结果（`zela-compile` 的中间产物，全部是纯数据）。
 pub struct CompiledScript {
     /// 装配产物（会写进 `.zsb` 的 payload）。
-    pub script: zela_scene::scene_script::SceneScript,
+    pub script: zela_scene_ecs::scene_script::SceneScript,
     /// 参与装配的能力版本（写入 Meta 的诊断字段 `capabilities`）。
     pub capabilities: Vec<zela_scene_bundle::Capability>,
     /// **回放期所需**能力（写入 Meta 的 `required_capabilities`，参与可还原性检查）。
@@ -178,11 +178,11 @@ fn capability_of<C: ze_pod_core::Capability<'static>>() -> zela_scene_bundle::Ca
 }
 
 fn scene_capability() -> zela_scene_bundle::Capability {
-    capability_of::<zela_scene::pod::SceneApi<'static>>()
+    capability_of::<zela_scene_ecs::pod::SceneApi<'static>>()
 }
 
 fn content_capability() -> zela_scene_bundle::Capability {
-    capability_of::<zela_scene::pod::ContentApi<'static>>()
+    capability_of::<zela_scene_ecs::pod::ContentApi<'static>>()
 }
 
 /// 脚本**实际用到的最小 capability 集**（ZSB Meta 口径）。
@@ -210,14 +210,14 @@ fn runtime_pods(scene_used: bool, content_used: bool) -> Vec<zela_scene_bundle::
     let mut out = Vec::new();
     if scene_used {
         out.push(zela_scene_bundle::Pod::new(
-            zela_scene::pod::SERVICE_NAME,
-            zela_scene::pod::SERVICE_VERSION,
+            zela_scene_ecs::pod::SERVICE_NAME,
+            zela_scene_ecs::pod::SERVICE_VERSION,
         ));
     }
     if content_used {
         out.push(zela_scene_bundle::Pod::new(
-            zela_scene::pod::CONTENT_SERVICE_NAME,
-            zela_scene::pod::CONTENT_SERVICE_VERSION,
+            zela_scene_ecs::pod::CONTENT_SERVICE_NAME,
+            zela_scene_ecs::pod::CONTENT_SERVICE_VERSION,
         ));
     }
     out
@@ -236,8 +236,8 @@ fn required_playback_capabilities() -> Vec<zela_scene_bundle::Capability> {
 /// `check_restorable` 误拒）。
 fn required_playback_pods() -> Vec<zela_scene_bundle::Pod> {
     vec![zela_scene_bundle::Pod::new(
-        zela_scene::pod::SERVICE_NAME,
-        zela_scene::pod::SERVICE_VERSION,
+        zela_scene_ecs::pod::SERVICE_NAME,
+        zela_scene_ecs::pod::SERVICE_VERSION,
     )]
 }
 
@@ -245,12 +245,12 @@ fn required_playback_pods() -> Vec<zela_scene_bundle::Pod> {
 fn all_runtime_pods() -> Vec<zela_scene_bundle::Pod> {
     vec![
         zela_scene_bundle::Pod::new(
-            zela_scene::pod::SERVICE_NAME,
-            zela_scene::pod::SERVICE_VERSION,
+            zela_scene_ecs::pod::SERVICE_NAME,
+            zela_scene_ecs::pod::SERVICE_VERSION,
         ),
         zela_scene_bundle::Pod::new(
-            zela_scene::pod::CONTENT_SERVICE_NAME,
-            zela_scene::pod::CONTENT_SERVICE_VERSION,
+            zela_scene_ecs::pod::CONTENT_SERVICE_NAME,
+            zela_scene_ecs::pod::CONTENT_SERVICE_VERSION,
         ),
     ]
 }
@@ -313,7 +313,7 @@ fn register_systems(
     cam2d_bindings: Vec<Binding>,
     orbit_binding: Binding,
 ) {
-    zela_scene::register::register_systems(scheduler, cam2d_bindings, orbit_binding);
+    zela_scene_ecs::register::register_systems(scheduler, cam2d_bindings, orbit_binding);
     zela_render::register_record_systems(scheduler);
 }
 
@@ -480,7 +480,7 @@ fn run_script_source(
     assembly: &assembly::PodAssembly,
     source: &str,
     language: ScriptLanguage,
-) -> Result<zela_scene::scene_script::SceneScript> {
+) -> Result<zela_scene_ecs::scene_script::SceneScript> {
     match language {
         ScriptLanguage::Lua => assembly
             .run_script(source)
@@ -507,11 +507,11 @@ fn run_script_source(
 mod tests {
     use super::*;
     use ze_scene_core::{Camera2DHandle, Camera3D, Camera3DHandle, Framing2D, Projection};
-    use zela_scene::ClockForest;
-    use zela_scene::animation::{BindingTable, Camera2DFraming, CameraEye, SeekKind};
-    use zela_scene::contract::object_id_of;
-    use zela_scene::domain::CameraMode;
-    use zela_scene::{AnimValue, Interp};
+    use zela_scene_ecs::ClockForest;
+    use zela_scene_ecs::animation::{BindingTable, Camera2DFraming, CameraEye, SeekKind};
+    use zela_scene_ecs::contract::object_id_of;
+    use zela_scene_ecs::domain::CameraMode;
+    use zela_scene_ecs::{AnimValue, Interp};
     use zela_schedule::scheduler::Phase;
 
     /// **A3 验收**：默认启动与 `--script` 走**同一条消费路径**（都加载
@@ -635,14 +635,14 @@ mod tests {
 
     /// **B0 验收**：装配层能经 `zela_scene` 写"用契约层 `spawn_dyn` 动态创建对象"的代码。
     ///
-    /// 可证伪：`zela_scene::contract` 若不转发写 trait `Scene`，本测试**编译失败**。
+    /// 可证伪：`zela_scene_ecs::contract` 若不转发写 trait `Scene`，本测试**编译失败**。
     /// 这里也顺带钉住登记表（`add_known`）齐备性：`Name` 未登记 ⇒ `spawn_dyn` 返回 `None`。
     #[test]
     fn app_layer_can_spawn_dyn_via_contract() {
-        use zela_scene::contract::{
+        use zela_scene_ecs::contract::{
             Components, Name, Scene as SceneTrait, SceneRead, find_by_name,
         };
-        use zela_scene::scene::Scene;
+        use zela_scene_ecs::scene::Scene;
 
         let mut scene = Scene::new();
         let components: Components = vec![Box::new(Name::new("hero"))];
@@ -689,9 +689,9 @@ mod tests {
         use ze_scene_core::{Circle, Framing2D, spawn_camera2d};
         use zela_render::{DrawQueue, MeasureSpace, SceneRecordSystem};
         use zela_render_backends::{RenderContext, WgpuBackend2D};
-        use zela_scene::contract::WorldScene;
-        use zela_scene::types::Rect2D;
-        use zela_scene::{DeferredApplySystem, DeferredCommands, DynamicObjects};
+        use zela_scene_ecs::contract::WorldScene;
+        use zela_scene_ecs::types::Rect2D;
+        use zela_scene_ecs::{DeferredApplySystem, DeferredCommands, DynamicObjects};
 
         let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
             .expect("headless GPU 上下文");
@@ -726,7 +726,7 @@ mod tests {
                       ctx: &RenderContext,
                       g: &zela_render_backends::Frame2DGeometry|
          -> Vec<u8> {
-            use zela_scene::domain::LayerId;
+            use zela_scene_ecs::domain::LayerId;
             let queue = sched.resources().get::<DrawQueue>().expect("DrawQueue");
             backend.begin_frame_at(*g);
             for cmd in queue.commands() {
@@ -828,7 +828,7 @@ mod tests {
         (value as f64 * 1e4).round() as i64
     }
 
-    fn rgba(color: zela_scene::types::Color32) -> String {
+    fn rgba(color: zela_scene_ecs::types::Color32) -> String {
         format!("{},{},{},{}", color.r(), color.g(), color.b(), color.a())
     }
 
@@ -846,11 +846,11 @@ mod tests {
     }
 
     /// 逐组件指纹（类型 + 值；浮点量化）。
-    fn object_fingerprint(scene: &Scene, id: zela_scene::contract::ObjectId) -> String {
+    fn object_fingerprint(scene: &Scene, id: zela_scene_ecs::contract::ObjectId) -> String {
         use ze_scene_core::{Arrow, Axes2D, Framing2D, Path as ObjectPath, Transform};
         use zela_render::{FillSolid, StrokeSolid};
-        use zela_scene::contract::SceneRead;
-        use zela_scene::scene::components::Reveal;
+        use zela_scene_ecs::contract::SceneRead;
+        use zela_scene_ecs::scene::components::Reveal;
 
         let mut parts: Vec<String> = Vec::new();
         if let Some(text) = scene.with::<Axes2D, _>(id, |a| {
@@ -924,10 +924,10 @@ mod tests {
     }
 
     /// 故事板对象（创建顺序 = `ObjectId.index` 升序；无 despawn）。
-    fn storyboard_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
+    fn storyboard_ids(scene: &Scene) -> Vec<zela_scene_ecs::contract::ObjectId> {
         use ze_scene_core::{Arrow, Axes2D, Framing2D, Path as ObjectPath};
-        use zela_scene::contract::{ObjectId, SceneRead};
-        use zela_scene::scene::components::Reveal;
+        use zela_scene_ecs::contract::{ObjectId, SceneRead};
+        use zela_scene_ecs::scene::components::Reveal;
 
         let mut ids: Vec<ObjectId> = Vec::new();
         scene.for_each::<Axes2D>(|id, _| ids.push(id));
@@ -941,10 +941,10 @@ mod tests {
     }
 
     /// Fourier 作品的对象全集（含纯层级节点 / 圆点 / Name / Parent）。
-    fn fourier_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
+    fn fourier_ids(scene: &Scene) -> Vec<zela_scene_ecs::contract::ObjectId> {
         use ze_scene_core::{Arrow, Axes2D, Circle, Framing2D, Path as ObjectPath, Transform};
-        use zela_scene::contract::{Name, ObjectId, SceneRead};
-        use zela_scene::scene::components::Reveal;
+        use zela_scene_ecs::contract::{Name, ObjectId, SceneRead};
+        use zela_scene_ecs::scene::components::Reveal;
 
         let mut ids: Vec<ObjectId> = Vec::new();
         scene.for_each::<Axes2D>(|id, _| ids.push(id));
@@ -963,10 +963,10 @@ mod tests {
     /// Fourier 作品的逐组件指纹（在通用指纹上补 Circle / Name / Parent / Opacity）。
     fn fourier_fingerprint(
         scene: &Scene,
-        id: zela_scene::contract::ObjectId,
+        id: zela_scene_ecs::contract::ObjectId,
     ) -> String {
         use ze_scene_core::Circle;
-        use zela_scene::contract::{Name, Parent, SceneRead};
+        use zela_scene_ecs::contract::{Name, Parent, SceneRead};
         use zela_render::Opacity;
 
         let mut parts = vec![object_fingerprint(scene, id)];
@@ -995,10 +995,10 @@ mod tests {
     }
 
     /// demo3d 作品的对象全集（B1-D）：3D 装配组件 + Transform。
-    fn demo3d_ids(scene: &Scene) -> Vec<zela_scene::contract::ObjectId> {
+    fn demo3d_ids(scene: &Scene) -> Vec<zela_scene_ecs::contract::ObjectId> {
         use ze_scene_core::{Camera3D, Transform};
-        use zela_scene::contract::{ObjectId, SceneRead};
-        use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
+        use zela_scene_ecs::contract::{ObjectId, SceneRead};
+        use zela_scene_ecs::scene::components::{Light, Material3D, MeshGeometry};
 
         let mut ids: Vec<ObjectId> = Vec::new();
         scene.for_each::<Camera3D>(|id, _| ids.push(id));
@@ -1018,11 +1018,11 @@ mod tests {
     /// 才是"还原后的几何必须与脚本产物一致"的强口径。
     fn demo3d_fingerprint(
         scene: &Scene,
-        id: zela_scene::contract::ObjectId,
+        id: zela_scene_ecs::contract::ObjectId,
     ) -> String {
         use ze_scene_core::{Camera3D, Transform};
-        use zela_scene::contract::SceneRead;
-        use zela_scene::scene::components::{Light, Material3D, MeshGeometry};
+        use zela_scene_ecs::contract::SceneRead;
+        use zela_scene_ecs::scene::components::{Light, Material3D, MeshGeometry};
 
         let mut parts = vec![object_fingerprint(scene, id)];
         if let Some(text) = scene.with::<Camera3D, _>(id, |c| {
@@ -1112,13 +1112,13 @@ mod tests {
         }
         if let Some(text) = scene.with::<Light, _>(id, |l| {
             let kind = match l.kind {
-                zela_scene::scene::components::LightKind::Directional { direction } => format!(
+                zela_scene_ecs::scene::components::LightKind::Directional { direction } => format!(
                     "dir({},{},{})",
                     qf(direction.x),
                     qf(direction.y),
                     qf(direction.z)
                 ),
-                zela_scene::scene::components::LightKind::Point { range } => {
+                zela_scene_ecs::scene::components::LightKind::Point { range } => {
                     format!("point({})", qf(range))
                 }
             };
@@ -1149,7 +1149,7 @@ mod tests {
     fn binding_rows(
         forest: &ClockForest,
         bindings: &BindingTable,
-        ids: &[zela_scene::contract::ObjectId],
+        ids: &[zela_scene_ecs::contract::ObjectId],
     ) -> Vec<BindRow> {
         bindings
             .bindings
@@ -1376,7 +1376,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
             .collect();
         assert_eq!(
             names,
-            vec![zela_scene::pod::SERVICE_NAME],
+            vec![zela_scene_ecs::pod::SERVICE_NAME],
             "只用到 scene，Meta 的 pods 不得含 content"
         );
 
@@ -1394,8 +1394,8 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
         assert_eq!(
             names,
             vec![
-                zela_scene::pod::SERVICE_NAME,
-                zela_scene::pod::CONTENT_SERVICE_NAME
+                zela_scene_ecs::pod::SERVICE_NAME,
+                zela_scene_ecs::pod::CONTENT_SERVICE_NAME
             ],
             "用到 content 时两个 Pod 都必须在 Meta 中"
         );
@@ -1541,7 +1541,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
     fn fourier_camera_push_pull_uses_segment_semantics() {
         use ze_scene_core::Framing2D;
         use ze_prerender::placeholder_engine;
-        use zela_scene::animation::BindingApplySystem;
+        use zela_scene_ecs::animation::BindingApplySystem;
         use zela_schedule::resource::Resources;
         use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -1688,7 +1688,7 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
     #[test]
     fn script_camera_is_found_by_framing_component() {
         use ze_prerender::placeholder_engine;
-        use zela_scene::contract::SceneRead;
+        use zela_scene_ecs::contract::SceneRead;
 
         let assembly =
             crate::assembly::assemble(std::sync::Arc::new(placeholder_engine())).expect("装配成功");
@@ -1718,8 +1718,8 @@ scene2.spawn([Circle(x=1.0, y=0.0, r=1.0)])
         use std::sync::Arc;
         use ze_scene_core::Circle as NativeCircle;
         use ze_prerender::placeholder_engine;
-        use zela_scene::contract::SceneRead;
-        use zela_scene::scene::components::Reveal;
+        use zela_scene_ecs::contract::SceneRead;
+        use zela_scene_ecs::scene::components::Reveal;
 
         let assembly = crate::assembly::assemble(Arc::new(placeholder_engine()))
             .expect("Python + Lua 装配成功");
@@ -1803,8 +1803,8 @@ mod t_capabilities_gpu {
     use zela_render::components::{Arrow, Circle, Rect};
     use zela_render::{DrawQueue, FillSolid, Opacity, StrokeSolid, record_scene_tagged};
     use zela_render_backends::{Frame2DGeometry, RenderContext, WgpuBackend2D};
-    use zela_scene::contract::{GroupId, GroupVisibility, Visibility, WorldView};
-    use zela_scene::domain::LayerId;
+    use zela_scene_ecs::contract::{GroupId, GroupVisibility, Visibility, WorldView};
+    use zela_scene_ecs::domain::LayerId;
 
     /// 离屏尺寸（紧凑像素，行距 = `W * 4`；目标格式字节序，默认 BGRA）。
     const W: u32 = 160;

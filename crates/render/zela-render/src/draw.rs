@@ -2,7 +2,7 @@
 //
 // 2D 绘制抽象：Painter2D trait + Shape2D/Style2D + ZIndex + DrawQueue +
 // SceneRender + record_drawables / record_scene。
-// 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 zela_scene::transform。
+// 数学部分（Transform2D/Transform2DInto/Circle 手动 impl）在 zela_scene_ecs::transform。
 //
 // M0（图元体系迁移）：载荷已统一为 [`Shape2D`](crate::shape::Shape2D) /
 // [`Style2D`](crate::shape::Style2D)，旧 `Shape` / `Style` 枚举已删除。
@@ -33,7 +33,7 @@ use ze_scene_core::Camera2D;
 // `ZOrder` 由对象层 re-export（唯一声明在 IR，B2-1 单一真源）。
 use ze_scene_core::{Transform, ZOrder};
 // `Path::to_screen(camera)`（世界 → 屏幕）由 zela-scene 的场景层 trait 提供。
-use zela_scene::transform::Transform2D as _;
+use zela_scene_ecs::transform::Transform2D as _;
 // 契约层 `SceneRead`：`record_scene` 的唯一入参抽象（M3-7 —— 本 crate 不认识 hecs，
 // 且**只需要读能力**）。
 use ze_scene_contract::{GroupVisibility, ObjectId, SceneRead, Visibility};
@@ -190,7 +190,7 @@ impl DrawQueue {
 
     /// 矩形填充：`rect` 已在屏幕空间。
     ///
-    /// 接受 `impl Into<Rect>`：场景层的视口矩形（`zela_scene::types::Rect`）与
+    /// 接受 `impl Into<Rect>`：场景层的视口矩形（`zela_scene_ecs::types::Rect`）与
     /// 绘制用矩形对象（`ze_scene_core::Rect`）同名不同物，转换由 `ze-object` 的
     /// `From` 实现承担（在 `zela-scene` 侧提供，避免对象层反向依赖）。
     pub fn rect_fill(&mut self, z: ZIndex, rect: impl Into<Rect>, fill: FillSolid) {
@@ -547,7 +547,7 @@ fn record_group<S, A, B>(
     scale: f32,
     camera_tag: Option<ObjectId>,
     groups: &GroupVisibility,
-    worlds: Option<&zela_scene::transform_hierarchy::WorldTransforms>,
+    worlds: Option<&zela_scene_ecs::transform_hierarchy::WorldTransforms>,
     queue: &mut DrawQueue,
     z_default: f32,
 ) where
@@ -638,7 +638,7 @@ pub fn record_scene_tagged_with<S: SceneRead>(
     camera: &Camera2D,
     camera_tag: Option<ObjectId>,
     groups: &GroupVisibility,
-    worlds: Option<&zela_scene::transform_hierarchy::WorldTransforms>,
+    worlds: Option<&zela_scene_ecs::transform_hierarchy::WorldTransforms>,
     queue: &mut DrawQueue,
 ) {
     // 内容对象的默认绘制层级：同层（保持查询顺序）。
@@ -740,7 +740,7 @@ mod tests {
     use std::any::Any;
     use ze_notion::{MeasureSpace, Path2D};
     use ze_scene_contract::{Component, Components, ObjectId, Parent, Scene, SceneRead};
-    use zela_scene::scene::components::*;
+    use zela_scene_ecs::scene::components::*;
 
     // ─── 非 ECS 的测试 Scene（M3-7 判据：`record_scene` 不依赖 hecs）──────────
     //
@@ -1609,8 +1609,8 @@ mod tests {
     fn test_unified_queue_mixes_2d_and_3d_by_zorder() {
         use std::sync::Arc;
 
-        use zela_scene::scene::components::Material3D;
-        use zela_scene::scene::primitives::wireframe_cube;
+        use zela_scene_ecs::scene::components::Material3D;
+        use zela_scene_ecs::scene::primitives::wireframe_cube;
 
         let mut q = DrawQueue::new();
         q.draw_line(
@@ -1645,8 +1645,8 @@ mod tests {
     fn test_clear_meshes_and_lines_keeps_shapes() {
         use std::sync::Arc;
 
-        use zela_scene::scene::components::Material3D;
-        use zela_scene::scene::primitives::wireframe_cube;
+        use zela_scene_ecs::scene::components::Material3D;
+        use zela_scene_ecs::scene::primitives::wireframe_cube;
 
         let mut q = DrawQueue::new();
         q.circle_fill(ZIndex::new(0), mk_circle(1.0), mk_fill());

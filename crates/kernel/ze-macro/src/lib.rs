@@ -53,7 +53,7 @@ pub(crate) mod transform2d {
         })
     }
 
-    /// 为结构体自动派生 [`zela_scene::transform::Transform2DInto`]（消耗 `self` 版本）。
+    /// 为结构体自动派生 [`ze_scene_core::transform::Transform2DInto`]（消耗 `self` 版本）。
     ///
     /// 对每个字段，按 `#[transform(...)]` 属性生成对应的初始化表达式：
     /// - 默认（无属性）：`field.to_logical_into(camera)` / `field.to_screen_into(camera)`
@@ -73,7 +73,7 @@ pub(crate) mod transform2d {
                 Fields::Unit => {
                     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
                     return quote! {
-                        impl #impl_g zela_scene::transform::Transform2DInto for #name #ty_g #where_g {
+                        impl #impl_g ze_scene_core::transform::Transform2DInto for #name #ty_g #where_g {
                             fn to_logical_into(self, _: &ze_scene_core::Camera2D) -> Self { Self }
                             fn to_screen_into(self, _: &ze_scene_core::Camera2D) -> Self { Self }
                         }
@@ -105,7 +105,7 @@ pub(crate) mod transform2d {
                 let ty = &f.ty;
                 where_clause
                     .predicates
-                    .push(parse_quote!(#ty: zela_scene::transform::Transform2DInto));
+                    .push(parse_quote!(#ty: ze_scene_core::transform::Transform2DInto));
             }
         }
         let (impl_generics, ty_generics, where_clauses) = generics.split_for_impl();
@@ -118,23 +118,23 @@ pub(crate) mod transform2d {
                     match &f.ident {
                         Some(ident) => match kind {
                             FieldKind::Default => quote! {
-                                #ident: zela_scene::transform::Transform2DInto::$method(self.#ident, camera)
+                                #ident: ze_scene_core::transform::Transform2DInto::$method(self.#ident, camera)
                             },
                             FieldKind::Skip => quote! { #ident: self.#ident },
                             FieldKind::Iter => quote! {
                                 #ident: ::core::iter::IntoIterator::into_iter(self.#ident)
-                                    .map(|v| zela_scene::transform::Transform2DInto::$method(v, camera))
+                                    .map(|v| ze_scene_core::transform::Transform2DInto::$method(v, camera))
                                     .collect()
                             },
                         },
                         None => match kind {
                             FieldKind::Default => quote! {
-                                zela_scene::transform::Transform2DInto::$method(self.#idx, camera)
+                                ze_scene_core::transform::Transform2DInto::$method(self.#idx, camera)
                             },
                             FieldKind::Skip => quote! { self.#idx },
                             FieldKind::Iter => quote! {
                                 ::core::iter::IntoIterator::into_iter(self.#idx)
-                                    .map(|v| zela_scene::transform::Transform2DInto::$method(v, camera))
+                                    .map(|v| ze_scene_core::transform::Transform2DInto::$method(v, camera))
                                     .collect()
                             },
                         },
@@ -159,7 +159,7 @@ pub(crate) mod transform2d {
         };
 
         quote! {
-            impl #impl_generics zela_scene::transform::Transform2DInto for #name #ty_generics #where_clauses {
+            impl #impl_generics ze_scene_core::transform::Transform2DInto for #name #ty_generics #where_clauses {
                 fn to_logical_into(self, camera: &ze_scene_core::Camera2D) -> Self {
                     #constructor_logical
                 }

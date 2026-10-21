@@ -5,15 +5,15 @@
 
 use zela_render::{DrawQueue, SceneRecordSystem, ViewRect, record_scene_tagged};
 use zela_render_backends::{RenderContext, WgpuBackend2D};
-use zela_scene::TimeState;
-use zela_scene::animation::BindingApplySystem;
+use zela_scene_ecs::TimeState;
+use zela_scene_ecs::animation::BindingApplySystem;
 use zela_authored::capability_demo::{
     COLOR_CONTROL, COLOR_COS, COLOR_SIN, COS_OFFSET, CapabilityDemo, FADE_SECONDS, GROUP_COS,
     NAME_CONTROL, NAME_COS, NAME_SIN, build,
 };
-use zela_scene::contract::{SceneRead, WorldView, entity_of, find_by_name};
-use zela_scene::scene::Scene;
-use zela_scene::types::Rect2D;
+use zela_scene_ecs::contract::{SceneRead, WorldView, entity_of, find_by_name};
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::types::Rect2D;
 use zela_schedule::resource::Resources;
 use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -22,8 +22,8 @@ use ze_scene_core::{Camera2D, Path};
 /// 录制测试用视口（`800×600`，与 `ViewRect::default` 无关，显式给出以免依赖缺省值）。
 fn view_rect() -> Rect2D {
     Rect2D::new(
-        zela_scene::types::Vec2::ZERO,
-        zela_scene::types::Vec2::new(800.0, 600.0),
+        zela_scene_ecs::types::Vec2::ZERO,
+        zela_scene_ecs::types::Vec2::new(800.0, 600.0),
     )
 }
 
@@ -73,7 +73,7 @@ fn find_by_name_returns_the_named_objects() {
     assert_ne!(cos, ctl);
 
     // 取回的对象确实**就是这个名字、且真有几何**（不是只对上名字的空壳）。
-    let name_of = |id| scene.with::<zela_scene::contract::Name, _>(id, |n| n.as_str().to_string());
+    let name_of = |id| scene.with::<zela_scene_ecs::contract::Name, _>(id, |n| n.as_str().to_string());
     assert_eq!(name_of(sin).as_deref(), Some(NAME_SIN));
     assert_eq!(name_of(cos).as_deref(), Some(NAME_COS));
     assert_eq!(name_of(ctl).as_deref(), Some(NAME_CONTROL));
@@ -119,7 +119,7 @@ fn camera_tag_is_matched_exactly() {
 #[test]
 fn hiding_a_group_removes_only_that_group() {
     let groups = {
-        let mut g = zela_scene::contract::GroupVisibility::new();
+        let mut g = zela_scene_ecs::contract::GroupVisibility::new();
         g.hide(GROUP_COS);
         g
     };
@@ -190,8 +190,8 @@ const GPU_H: u32 = 200;
 fn gpu_geometry() -> zela_render_backends::Frame2DGeometry {
     zela_render_backends::Frame2DGeometry {
         viewport_points: Rect2D::new(
-            zela_scene::types::Vec2::new(100.0, 50.0),
-            zela_scene::types::Vec2::new(340.0, 250.0),
+            zela_scene_ecs::types::Vec2::new(100.0, 50.0),
+            zela_scene_ecs::types::Vec2::new(340.0, 250.0),
         ),
         pixels_per_point: 1.0,
         screen_size_px: [400, 300],
@@ -200,11 +200,11 @@ fn gpu_geometry() -> zela_render_backends::Frame2DGeometry {
 
 fn gpu_camera() -> Camera2D {
     Camera2D::new(
-        zela_scene::types::Vec2::ZERO,
+        zela_scene_ecs::types::Vec2::ZERO,
         25.0,
         Rect2D::new(
-            zela_scene::types::Vec2::new(100.0, 50.0),
-            zela_scene::types::Vec2::new(340.0, 250.0),
+            zela_scene_ecs::types::Vec2::new(100.0, 50.0),
+            zela_scene_ecs::types::Vec2::new(340.0, 250.0),
         ),
     )
 }
@@ -212,11 +212,11 @@ fn gpu_camera() -> Camera2D {
 /// 走**完整录制路径**渲染一帧并回读像素（`240×200` 紧凑像素；
 /// 目标格式字节序，默认 BGRA）。
 fn render_demo_tweaked(
-    groups: &zela_scene::contract::GroupVisibility,
+    groups: &zela_scene_ecs::contract::GroupVisibility,
     tweak: impl FnOnce(&mut hecs::World),
 ) -> Vec<u8> {
     use ze_notion::Transform2D;
-    use zela_scene::domain::LayerId;
+    use zela_scene_ecs::domain::LayerId;
 
     let ctx = RenderContext::headless_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
         .expect("headless GPU 上下文");
@@ -255,7 +255,7 @@ fn render_demo_tweaked(
 }
 
 /// 默认形态：不额外改动场景。
-fn render_demo(groups: &zela_scene::contract::GroupVisibility) -> Vec<u8> {
+fn render_demo(groups: &zela_scene_ecs::contract::GroupVisibility) -> Vec<u8> {
     render_demo_tweaked(groups, |_| {})
 }
 
@@ -299,7 +299,7 @@ fn count_magenta(px: &[u8]) -> usize {
 /// - 品红（对照组）**恒为 0** ⇒ 相机 tag 的反向判据在像素层也成立。
 #[test]
 fn hidden_group_removes_that_curves_pixels() {
-    use zela_scene::contract::GroupVisibility;
+    use zela_scene_ecs::contract::GroupVisibility;
 
     let visible = render_demo(&GroupVisibility::new());
     let hidden = {
@@ -340,7 +340,7 @@ fn hidden_group_removes_that_curves_pixels() {
 #[test]
 fn zero_opacity_curve_has_no_pixels() {
     use zela_render::Opacity;
-    use zela_scene::contract::GroupVisibility;
+    use zela_scene_ecs::contract::GroupVisibility;
 
     let opaque = render_demo(&GroupVisibility::new());
     let transparent = render_demo_tweaked(&GroupVisibility::new(), |world| {

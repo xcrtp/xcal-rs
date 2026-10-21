@@ -13,8 +13,8 @@
 
 use ze_notion::Rect2D;
 use ze_scene_core::{Camera2DHandle, Camera3D, LayerKind};
-use zela_scene::contract::SceneRead;
-use zela_scene::domain::{
+use zela_scene_ecs::contract::SceneRead;
+use zela_scene_ecs::domain::{
     ContentHandle, ContentTextureSpec, LayerBlend, LayerDescriptor, LayerId, SceneView,
 };
 use zela_schedule::resource::Resources;
@@ -63,7 +63,7 @@ impl Default for FrameOptions {
 
 impl FrameOptions {
     /// 从场景 `UiConfig` 提取渲染相关字段（UI 层负责调用；本 crate 不反向依赖 UI）。
-    pub fn from_ui_config(config: &zela_scene::domain::UiConfig) -> Self {
+    pub fn from_ui_config(config: &zela_scene_ecs::domain::UiConfig) -> Self {
         Self {
             show_2d: config.show_2d,
             show_3d: config.show_3d,
@@ -226,7 +226,7 @@ pub fn draw_call_count(res: &Resources) -> usize {
 mod tests {
     use super::*;
     use ze_scene_core::{Camera3D, Framing2D, Projection};
-    use zela_scene::contract::WorldScene;
+    use zela_scene_ecs::contract::WorldScene;
 
     fn spawn_3d_camera(world: &mut hecs::World) {
         world.spawn((Camera3D::new(
@@ -254,7 +254,7 @@ mod tests {
         res.insert(ViewRect::default());
 
         let view = build_scene_view(
-            &zela_scene::contract::WorldView::new(&world),
+            &zela_scene_ecs::contract::WorldView::new(&world),
             &res,
             FrameOptions::default(),
         );
@@ -280,7 +280,7 @@ mod tests {
         res.insert(ViewRect::default());
 
         let view = build_scene_view(
-            &zela_scene::contract::WorldView::new(&world),
+            &zela_scene_ecs::contract::WorldView::new(&world),
             &res,
             FrameOptions {
                 show_2d: true,

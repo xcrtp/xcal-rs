@@ -23,10 +23,10 @@ pub mod scene;
 pub mod transform_hierarchy;
 pub mod utils;
 
-// B3-1c：语言无关的 Pod 边界已独立为 `ze-scene-api`；`zela_scene::pod` 路径保持不变。
+// B3-1c：语言无关的 Pod 边界已独立为 `ze-scene-api`；`zela_scene_ecs::pod` 路径保持不变。
 pub use ze_scene_api as pod;
 
-// B3-1b：内容编译宿主适配已下沉核心层；`zela_scene::content` 路径保持不变。
+// B3-1b：内容编译宿主适配已下沉核心层；`zela_scene_ecs::content` 路径保持不变。
 pub use ze_scene_core::content;
 
 // B3-1b：纯数据 / 对象 / 组件已下沉 `ze-scene-core`；这里保留原公开路径。
@@ -72,17 +72,17 @@ mod scene_script_tests;
 pub use transform_hierarchy::{
     TransformHierarchyError, TransformHierarchySystem, WorldTransforms,
 };
-// `Transform2D` 的模块路径（ze-macro 生成的 `zela_scene::transform::Transform2DInto`）。
+// `Transform2D` 的模块路径（`ze_scene_core::transform`；本层转发以便下游少一个依赖）。
 pub use ze_scene_core::transform;
 pub use ze_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
-// 相机（M3-2）与摆放组件（M3-4）归场景对象层 `ze-object`：本层**不转发**，
+// 相机与摆放组件归核心层对象模块：本层**不转发**具体类型，
 // 消费方直接 `use ze_scene_core::{Camera2D, Camera3D, Projection, Transform}`。
 // `#[macro_export]` 已经把 auto_into 宏导出到 crate 根（与模块无关），
-// 下游通过 `#[macro_use]` 或 `zela_scene::auto_into!` 访问。
+// 下游通过 `#[macro_use]` 或 `zela_scene_ecs::auto_into!` 访问。
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-// 为 ze-macro 派生宏生成的 `zela_scene::` 路径提供别名。
-// ze-macro 现在生成 `zela_scene::transform::Transform2DInto` 等。
+// 本 crate 内部模块里的 `zela_scene_ecs::…` 绝对路径需要自别名（Rust 2018 起
+// 路径不以自身 crate 名开头解析）。ze-macro 生成的是 `ze_scene_core::…`，不依赖它。
 #[allow(unused_extern_crates)]
-extern crate self as zela_scene;
+extern crate self as zela_scene_ecs;

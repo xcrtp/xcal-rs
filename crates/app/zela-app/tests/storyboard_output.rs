@@ -7,11 +7,11 @@
 use std::f32::consts::FRAC_PI_2;
 
 use zela_render::{DrawQueue, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect};
-use zela_scene::TimeState;
-use zela_scene::animation::BindingApplySystem;
+use zela_scene_ecs::TimeState;
+use zela_scene_ecs::animation::BindingApplySystem;
 use zela_authored::storyboard::build;
-use zela_scene::contract::entity_of;
-use zela_scene::scene::Scene;
+use zela_scene_ecs::contract::entity_of;
+use zela_scene_ecs::scene::Scene;
 use zela_schedule::resource::Resources;
 use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -20,8 +20,8 @@ const CAMERA_PEAK: ze_notion::Vec2 = ze_notion::Vec2::new(FRAC_PI_2, 1.0);
 
 #[test]
 fn storyboard_produces_draw_output_over_time() {
-    use zela_scene::AxesRefreshSystem;
-    use zela_scene::domain::UiConfig;
+    use zela_scene_ecs::AxesRefreshSystem;
+    use zela_scene_ecs::domain::UiConfig;
 
     let mut scene = Scene::new();
     let engine = ze_prerender::placeholder_engine();

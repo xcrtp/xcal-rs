@@ -1691,8 +1691,8 @@ mod tests {
     use ze_notion::{SurfaceFn, Vec3};
     use ze_scene_core::{Camera3D, Projection};
     use zela_render::{DrawQueue3D, Viewport};
-    use zela_scene::scene::components::{Material3D, MeshGeometry, TextureHandle};
-    use zela_scene::scene::primitives::{parametric_surface, wireframe_cube};
+    use zela_scene_ecs::scene::components::{Material3D, MeshGeometry, TextureHandle};
+    use zela_scene_ecs::scene::primitives::{parametric_surface, wireframe_cube};
 
     /// 3D 后端的 headless 夹具：**守卫必须活到测试结束**（调用点绑定 `_gpu`）。
     #[track_caller]
@@ -3308,9 +3308,9 @@ mod tests {
     #[test]
     fn test_k_line_camera_controllers_change_pixels() {
         use ze_scene_core::FpsView;
-        use zela_scene::camera_input::{apply_fps, apply_orbit};
-        use zela_scene::domain::CameraCommand;
-        use zela_scene::{AnimValue, Curve, Interp};
+        use zela_scene_ecs::camera_input::{apply_fps, apply_orbit};
+        use zela_scene_ecs::domain::CameraCommand;
+        use zela_scene_ecs::{AnimValue, Curve, Interp};
 
         let Some((_gpu, backend, ctx)) = headless_backend() else {
             return;

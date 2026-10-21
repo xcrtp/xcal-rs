@@ -6,7 +6,7 @@
 // 且两个相机同居一层才不割裂。
 //
 // 顺带（计划 §1.5）：`Camera2D.rect` 直接用理念层 [`Rect2D`]，
-// `zela_scene::types::Rect`（视口版的私有字段 + 访问器包装）**已删除** ——
+// `zela_scene_ecs::types::Rect`（视口版的私有字段 + 访问器包装）**已删除** ——
 // 它与 `Rect2D` 字段完全相同，是可删的重复定义。
 
 use ze_notion::proj::{directx, look_at_mat4};

@@ -43,12 +43,12 @@
 
 use std::sync::Arc;
 
-use zela_scene::contract::{SceneRead, WorldView};
-use zela_scene::domain::ContentTextureSpec;
-use zela_scene::scene::components::{
+use zela_scene_ecs::contract::{SceneRead, WorldView};
+use zela_scene_ecs::domain::ContentTextureSpec;
+use zela_scene_ecs::scene::components::{
     ContentTextureItem, Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal,
 };
-use zela_scene::transform_hierarchy::WorldTransforms;
+use zela_scene_ecs::transform_hierarchy::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -398,9 +398,9 @@ mod tests {
     use ze_notion::{Path2D, PathCommand, Rect2D};
     use ze_scene_core::{Circle, Framing2D};
     use ze_render_ir::Opacity;
-    use zela_scene::contract::{GroupId, Visibility, WorldScene};
-    use zela_scene::scene::components::TextureHandle;
-    use zela_scene::types::Vec2;
+    use zela_scene_ecs::contract::{GroupId, Visibility, WorldScene};
+    use zela_scene_ecs::scene::components::TextureHandle;
+    use zela_scene_ecs::types::Vec2;
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -726,9 +726,9 @@ mod tests {
     /// **S1-5 #2**：父子两级 3D，`DrawQueue3D` 的 model 矩阵 = **累乘结果**（不是 local）。
     #[test]
     fn record_3d_consumes_world_transforms() {
-        use zela_scene::contract::object_id_of;
-        use zela_scene::scene::primitives::wireframe_cube;
-        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+        use zela_scene_ecs::contract::object_id_of;
+        use zela_scene_ecs::scene::primitives::wireframe_cube;
+        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
 
         let parent_geom = Arc::new(wireframe_cube(1.0));
         let child_geom = Arc::new(wireframe_cube(0.5));
@@ -788,9 +788,9 @@ mod tests {
     /// **S1-5 #3**：无 `Parent` 时 3D model 与旧 `transform.matrix()` **逐位相同**（回退不变性）。
     #[test]
     fn no_parent_3d_model_is_bitwise_local() {
-        use zela_scene::contract::object_id_of;
-        use zela_scene::scene::primitives::wireframe_cube;
-        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+        use zela_scene_ecs::contract::object_id_of;
+        use zela_scene_ecs::scene::primitives::wireframe_cube;
+        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
 
         let tr = ze_scene_core::Transform {
             position: ze_notion::Vec3::new(1.0, -2.0, 3.0),
@@ -867,9 +867,9 @@ mod tests {
     #[test]
     fn record_point_lights_resolve_world_position() {
         use ze_notion::Color32;
-        use zela_scene::contract::object_id_of;
-        use zela_scene::scene::components::Light;
-        use zela_scene::transform_hierarchy::TransformHierarchySystem;
+        use zela_scene_ecs::contract::object_id_of;
+        use zela_scene_ecs::scene::components::Light;
+        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
 
         let mut world = World::new();
         // 父平移 (10, 0, 0)；点光挂在父下，local 平移 (0, 5, 0)

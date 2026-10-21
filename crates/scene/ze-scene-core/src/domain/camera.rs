@@ -24,7 +24,7 @@ use ze_notion::{Vec2, Vec3};
 /// - [`Fps`](CameraMode::Fps)（3D 第一人称，K1）：`Look` 改朝向、`Move` 沿自身朝向位移；
 ///   其余忽略。
 /// - [`Path`](CameraMode::Path)（路径动画，K2）：eye/target 各自由动画曲线驱动
-///   （见 `zela_scene::animation::CameraEye` / `Camera2DFraming`），**不接受交互命令**。
+///   （见 `zela_scene_ecs::animation::CameraEye` / `Camera2DFraming`），**不接受交互命令**。
 ///
 /// **模式是相机对象的组件**（K0）：支持多相机各自不同模式；未挂该组件时取
 /// [`Default`] = `PanZoom`（不 panic）。

@@ -14,10 +14,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ze_notion::Mat4;
-use zela_scene::domain::{LayerBlend, LayerId, LayerKind};
-use zela_scene::scene::components::{Material3D, MeshGeometry};
+use zela_scene_ecs::domain::{LayerBlend, LayerId, LayerKind};
+use zela_scene_ecs::scene::components::{Material3D, MeshGeometry};
 use ze_scene_core::{Camera3D, Projection};
-use zela_scene::scene::primitives::wireframe_cube;
+use zela_scene_ecs::scene::primitives::wireframe_cube;
 use zela_render::{DrawQueue, DrawQueue3D, LightQueue};
 use zela_render_backends::{
     Compositor, SceneCompositorCallback, SceneLayer, WgpuBackend3D,

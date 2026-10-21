@@ -2,7 +2,7 @@
 //
 // 纯函数控制器（`apply_*` / `MIN_SCALE` / `MAX_SCALE`）已下沉 `ze-scene-core`；
 // 本层只留 `CameraInputSystem`（需要 `ExecutorContext` / `Resources`）。
-// 路径兼容：`zela_scene::camera_input::apply_*` 转发自核心层。
+// 路径兼容：`zela_scene_ecs::camera_input::apply_*` 转发自核心层。
 
 use ze_scene_core::{Camera2DHandle, Camera3D, Camera3DHandle, FpsView, Framing2D};
 use zela_schedule::context::ExecutorContext;

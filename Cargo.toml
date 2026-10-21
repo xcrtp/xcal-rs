@@ -21,7 +21,6 @@ members = [
     "crates/ze/graph/ze-node-schema",
     "crates/ze/graph/ze-node-schema-macros",
     "crates/ze/graph/ze-node",
-    "crates/scene/zela-scene",
     "crates/scene/zela-scene-ecs",
     "crates/scene/zela-scene-bundle",
     "crates/ze/pod/ze-pod-lua",

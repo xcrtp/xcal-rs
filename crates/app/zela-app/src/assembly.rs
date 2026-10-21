@@ -20,8 +20,8 @@ use ze_pod_core::{
 };
 use ze_pod_lua::LuaPod;
 use ze_prerender::InMemoryEngine;
-use zela_scene::pod::{self, ContentApi, PathStore, SceneApi};
-use zela_scene::scene_script::SceneScript;
+use zela_scene_ecs::pod::{self, ContentApi, PathStore, SceneApi};
+use zela_scene_ecs::scene_script::SceneScript;
 
 /// 本 App 的分镜脚本（**App 自己的资产**，不属于语言适配器）。
 pub const STORYBOARD_LUA: &str = include_str!("../scripts/storyboard.lua");

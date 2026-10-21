@@ -1,4 +1,4 @@
-// layer.rs — 图层类型（S2：从 `zela_scene::domain` 下沉）。
+// layer.rs — 图层类型（S2：从 `zela_scene_ecs::domain` 下沉）。
 //
 // `LayerKind` 携带相机与纹理句柄 ⇒ 需要场景对象层的类型；放在本层使
 // `zela-render-backends` 可以只依赖 `ze-object`（它本来就需要相机类型），

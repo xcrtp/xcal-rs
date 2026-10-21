@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ze_notion::Mat4;
 use ze_notion::{Color32, Vec3};
-use zela_scene::scene::components::{Material3D, MeshGeometry};
+use zela_scene_ecs::scene::components::{Material3D, MeshGeometry};
 
 /// 3D 绘制器 trait。
 ///
@@ -28,7 +28,7 @@ use zela_scene::scene::components::{Material3D, MeshGeometry};
 /// ```
 /// use std::sync::Arc;
 /// use ze_notion::Mat4;
-/// use zela_scene::scene::components::{Material3D, MeshGeometry};
+/// use zela_scene_ecs::scene::components::{Material3D, MeshGeometry};
 /// use ze_notion::{Color32, Vec3};
 /// use zela_render::Painter3D;
 ///

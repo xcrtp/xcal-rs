@@ -46,7 +46,7 @@ use ze_scene_core::{
 use ze_render_ir::{FillSolid, Opacity, StrokeSolid};
 
 /// 契约层的**只读 / 读写**能力在此处对外转发：
-/// 消费方（UI 层 / 装配层 / App）只需 `zela_scene::contract::*` 一个入口，
+/// 消费方（UI 层 / 装配层 / App）只需 `zela_scene_ecs::contract::*` 一个入口，
 /// 不必额外依赖 `ze-scene-contract`（本 crate 已依赖它）。
 ///
 /// 同时转发身份与**组织**类型（句柄 / 目标 / 可见性判定都要用到它们）：
@@ -232,7 +232,7 @@ impl SceneRead for WorldScene<'_> {
 //
 // 唯一来源是 `ze_scene_core::known_component_table!`（导出宏）；
 // 本层只保留 hecs 特有的 `add_known`（需要 `EntityBuilder`），
-// 并把反向能力（类型名 / 克隆 / serde）转出，保持 `zela_scene::contract::*` 路径不变。
+// 并把反向能力（类型名 / 克隆 / serde）转出，保持 `zela_scene_ecs::contract::*` 路径不变。
 pub use ze_scene_core::registry::{
     clone_known, deserialize_component, known_type_name, serialize_component,
 };
@@ -644,7 +644,7 @@ mod tests {
         assert!(clone_known(&NotRegistered).is_none());
     }
 
-    /// 本地类型 `zela_scene::Scene` 也实现了契约（孤儿规则合法落点之一）。
+    /// 本地类型 `zela_scene_ecs::Scene` 也实现了契约（孤儿规则合法落点之一）。
     #[test]
     fn scene_struct_implements_contract() {
         let mut scene = crate::scene::Scene::new();

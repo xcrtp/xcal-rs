@@ -12,7 +12,7 @@
 
 use ze_notion::Path2D;
 use ze_scene_core::Path;
-use zela_scene::scene::components::MorphShape;
+use zela_scene_ecs::scene::components::MorphShape;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 

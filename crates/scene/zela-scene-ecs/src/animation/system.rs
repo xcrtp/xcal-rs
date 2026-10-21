@@ -8,7 +8,7 @@
 // "遍历 + 求值 + 派发"，**不认识任何具体目标**（新增目标零 System 改动）。
 
 use ze_time::{AnimValue, ClockForest};
-use zela_scene::TimeState;
+use zela_scene_ecs::TimeState;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -81,7 +81,7 @@ mod tests {
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 
-    /// 场景向量（M2.5 后 `zela_scene::types::Vec2` 就是 `ze_notion::Vec2`（= glam）的转发，
+    /// 场景向量（M2.5 后 `zela_scene_ecs::types::Vec2` 就是 `ze_notion::Vec2`（= glam）的转发，
     /// 图元对象用的也是同一类型 —— 原来的 `vec2` / `obj_vec2` 两个包装已被消灭）。
     fn vec2(x: f32, y: f32) -> ze_notion::Vec2 {
         ze_notion::Vec2::new(x, y)

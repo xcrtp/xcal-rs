@@ -12,9 +12,9 @@ use ze_pod_core::Pod;
 use zela_app::{SceneChoice, build_scene_runtime};
 use zela_egui::{EguiSceneHost, FrameProgress, SceneFrame, install_visuals};
 use zela_render_backends::{RenderContext, install_standard_backends};
-use zela_scene::DriverPod;
-use zela_scene::Result;
-use zela_scene::errors::Error;
+use zela_scene_ecs::DriverPod;
+use zela_scene_ecs::Result;
+use zela_scene_ecs::errors::Error;
 
 /// GUI 应用壳：持有 Runtime 与每帧帧体。
 pub struct App {

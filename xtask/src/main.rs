@@ -55,14 +55,14 @@ const JQ_POD_LAYER: &str = r#"
 | "\($n) -> \(.name)"
 "#;
 
-/// 结构性判据 2：`zela-render-backends` 的生产依赖边不得出现 `zela-scene`（S2）。
+/// 结构性判据 2：`zela-render-backends` 的生产依赖边不得出现场景实现（S2）。
 const JQ_BACKENDS: &str = r#"
 .packages[]
 | select(.name == "zela-render-backends")
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
-| select(.name == "zela-scene")
+| select(.name == "zela-scene-ecs")
 | "\($n) -> \(.name)"
 "#;
 

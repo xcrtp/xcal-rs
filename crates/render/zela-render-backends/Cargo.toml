@@ -10,7 +10,7 @@ zela-render = { path = "../zela-render", default-features = false }
 ze-notion = { path = "../../kernel/ze-notion" }
 # 场景对象层：相机与图元（Camera2D / Camera3D / Projection / Rect / …）的定义在此。
 ze-scene-core = { path = "../../scene/ze-scene-core" }
-# S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖 zela-scene。
+# S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖场景实现。
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # B2-0a：3D 顶点布局契约在 kernel 层声明（VertexLayout::standard_3d），
 # 后端只做「契约 → wgpu 类型」的翻译（铁律 4：不改顶点格式）。
@@ -33,8 +33,8 @@ egui = { workspace = true, optional = true }
 egui-wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
-# 仅测试：像素级用例要构造真实 ECS 场景（生产边不得依赖 zela-scene，见 S2 CI 规则）。
-zela-scene = { path = "../../scene/zela-scene", default-features = false }
+# 仅测试：像素级用例要构造真实 ECS 场景（生产边不得依赖场景实现，见 S2 CI 规则）。
+zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
 egui.workspace = true
 eframe.workspace = true
 egui-wgpu.workspace = true

@@ -559,7 +559,7 @@ mod tests {
     use crate::wgpu_3d::WgpuBackend3D;
     use zela_render::ZIndex;
     use zela_render::components::FillSolid;
-    use zela_scene::scene::components::{
+    use zela_scene_ecs::scene::components::{
         Material3D, MeshGeometry, PrimitiveTopology, TextureHandle,
     };
     use ze_notion::Rect2D;

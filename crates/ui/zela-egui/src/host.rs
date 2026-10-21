@@ -27,13 +27,13 @@ use egui::Panel;
 use ze_notion::Rect2D;
 use zela_render::ViewRect;
 use zela_render_backends::SceneCompositorCallback;
-use zela_scene::animation::BindingTable;
-use zela_scene::contract::WorldView;
-use zela_scene::director_state::DirectorState;
-use zela_scene::domain::{
+use zela_scene_ecs::animation::BindingTable;
+use zela_scene_ecs::contract::WorldView;
+use zela_scene_ecs::director_state::DirectorState;
+use zela_scene_ecs::domain::{
     CameraCommand, InputEvents, LayerDescriptor, LayerKind, SceneEvent, SceneView, ids,
 };
-use zela_scene::{Curve, TimeState};
+use zela_scene_ecs::{Curve, TimeState};
 use zela_schedule::resource::Resources;
 
 use crate::resources::{UiConfig, ViewportCamera};
@@ -681,8 +681,8 @@ fn cjk_font_candidates() -> Vec<std::path::PathBuf> {
 mod tests {
     use super::*;
     use ze_scene_core::{Camera2DHandle, Camera3D, Framing2D, Projection};
-    use zela_scene::contract::WorldScene;
-    use zela_scene::domain::{ContentHandle, LayerBlend};
+    use zela_scene_ecs::contract::WorldScene;
+    use zela_scene_ecs::domain::{ContentHandle, LayerBlend};
     use zela_schedule::resource::Resources;
 
     /// 建含 3D 相机的世界（3D 图层来源）。
@@ -724,7 +724,7 @@ mod tests {
             assert_eq!(l.opacity, 1.0);
             assert_eq!(l.clamped_opacity(), 1.0);
         }
-        assert_eq!(view.background, zela_scene::domain::DEFAULT_BACKGROUND);
+        assert_eq!(view.background, zela_scene_ecs::domain::DEFAULT_BACKGROUND);
     }
 
     /// S3-2 修复：`view.layers` 内 `LayerId` 必须**两两唯一**

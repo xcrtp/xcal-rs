@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use ze_notion::{Color32, Vec2, Vec3};
 use ze_render_ir::{Shape2D, ShaderVariant, Style2D};
-use zela_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
+use zela_scene_ecs::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
 /// 2D → 3D 派生失败的原因（显式错误，铁律 2）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

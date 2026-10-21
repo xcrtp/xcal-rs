@@ -67,7 +67,6 @@ graph TD
         ze_scene_core["ze-scene-core"]
         ze_scene_api["ze-scene-api"]
         zela_scene_ecs["zela-scene-ecs"]
-        zela_scene["zela-scene<br/>(壳层)"]
     end
 
     subgraph render[crates/render]
@@ -123,8 +122,7 @@ graph TD
     %% schedule（无内部依赖，仅依赖 hecs）
 
     %% render → kernel + object + schedule
-    %% 场景分层（B3-1）：壳层 → ECS 实现 → 核心 / 能力层
-    zela_scene --> zela_scene_ecs
+    %% 场景分层（B3-1）：ECS 实现 → 核心 / 能力层（壳层已删除）
     zela_scene_ecs --> ze_scene_core
     zela_scene_ecs --> ze_scene_api
     zela_scene_ecs --> zela_schedule
@@ -148,7 +146,7 @@ graph TD
     zela_render --> ze_scene_core
     zela_render --> ze_vertex
     zela_render --> ze_resource
-    zela_render --> zela_scene
+    zela_render --> zela_scene_ecs
     zela_render --> zela_schedule
     zela_render --> ze_scene_contract
     zela_render_backends --> ze_notion
@@ -157,14 +155,14 @@ graph TD
     zela_render_backends --> ze_scene_core
 
     %% ZSB 装配产物 → scene（不含任何语言适配器）
-    zela_scene_bundle --> zela_scene
+    zela_scene_bundle --> zela_scene_ecs
 
     %% ui → kernel + graph + render + schedule
     zela_egui --> ze_notion
     zela_egui --> ze_macro
     zela_egui --> ze_scene_core
     zela_egui --> ze_pod_core
-    zela_egui --> zela_scene
+    zela_egui --> zela_scene_ecs
     zela_egui --> zela_schedule
     zela_egui --> zela_render
     zela_egui --> zela_render_backends
@@ -181,11 +179,11 @@ graph TD
     zela_gui --> zela_app
     zela_gui --> zela_egui
     zela_gui --> zela_render_backends
-    zela_gui --> zela_scene
+    zela_gui --> zela_scene_ecs
     zela_gui --> zela_schedule
 
     %% app → everything（**不依赖 zela-egui**）
-    zela_app --> zela_scene
+    zela_app --> zela_scene_ecs
     zela_app --> zela_scene_bundle
     zela_app --> zela_schedule
     zela_app --> ze_macro
@@ -601,7 +599,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **`ze-scene-api`**（新）：`SceneApi` / `ContentApi` + 两个 Service Pod（原 `pod/`）。
 >   **零 hecs、零 zela-***；能力 namespace / version 不变（`zela.scene@6` / `zela.content@1`）。
 > - **`zela-scene-ecs`**：只留 ECS 实现（world / resources / System 接线 / 生命周期）。
->   `zela-scene` 变成 re-export 壳层，259 处下游路径不变。
+>   兼容壳层 `zela-scene` **已在同批删除**：237 处 `zela_scene::` 全部改为
+>   `zela_scene_ecs::`，ze-macro 派生代码改指向 `ze_scene_core::transform`。
 > - **`zela-authored`**（新）：分镜 / demo 等**作品**移出场景层，app 按需依赖。
 > - **`SceneWrite` 擦除写入口**：动画目标（`Target`）不再接受 `WorldScene`，
 >   核心层因此完全不知道 hecs；ECS 用组件登记表实现具体分发。
@@ -615,7 +614,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 
 > **S5 已把 `Parent` 移出本表**：`TransformHierarchySystem` 每帧产出 `WorldTransforms`，
 > `SceneRecordSystem` / `RevealRecordSystem` 已消费（详见
-> [`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs)）。
+> [`transform_hierarchy.rs`](crates/scene/zela-scene-ecs/src/transform_hierarchy.rs)）。
 > **S1 换型为 3D**：`WorldTransforms` 只存 `Transform3D`（Mat4 单一真源），2D 消费方经
 > `get2d` 读投影视图（丢 `z`，见 `GAPS.md` R-21）；`SceneRecord3DSystem` 同消费
 > （`Reads = (WorldTransforms,)`），3D 父子层级已接线。

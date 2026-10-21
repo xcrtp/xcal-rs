@@ -17,8 +17,8 @@ use zela_render::ViewRect;
 use zela_render::components::{Circle, PhaseAnim, StrokeSolid};
 use zela_render::{DrawQueue, DrawQueue3D};
 use zela_render_backends::RenderContext;
-use zela_scene::TimeState;
-use zela_scene::scene::components::{Material3D, MeshGeometry};
+use zela_scene_ecs::TimeState;
+use zela_scene_ecs::scene::components::{Material3D, MeshGeometry};
 use zela_schedule::resource::Resources;
 use zela_schedule::telemetry::{FrameReport, SnapshotRegistry, write_snapshot_json};
 

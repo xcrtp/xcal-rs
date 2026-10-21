@@ -2,7 +2,7 @@
 //
 // `Composer` / `ComposerQueue` / `full_recompute` 已下沉 `ze-scene-core`；
 // 本层只留事件消费 System（它需要 `ExecutorContext` 与 hecs 世界）。
-// 路径兼容：`zela_scene::composer::{Composer, ComposerQueue, full_recompute}` 转发自核心层。
+// 路径兼容：`zela_scene_ecs::composer::{Composer, ComposerQueue, full_recompute}` 转发自核心层。
 
 use ze_scene_contract::ObjectId;
 use zela_schedule::context::ExecutorContext;

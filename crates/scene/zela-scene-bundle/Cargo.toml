@@ -8,7 +8,7 @@ description = "ZSB 场景装配产物：格式 + 读写 + 内容 hash + 可还�
 [dependencies]
 # 装配产物 = `SceneScript`（声明式创建 + 时间线）。本 crate **不依赖任何语言适配器**：
 # 浏览器侧只引这一个轻 crate 即可回放。
-zela-scene = { path = "../zela-scene" }
+zela-scene-ecs = { path = "../zela-scene-ecs" }
 serde.workspace = true
 serde_json.workspace = true
 

@@ -2,12 +2,12 @@
 //
 // B 阶段（UI 解耦）后本文件不得出现任何 egui 类型。
 //
-// A4 后：`UiConfig` / `ViewportCamera` 的**定义**已归位 `zela_scene::domain`
+// A4 后：`UiConfig` / `ViewportCamera` 的**定义**已归位 `zela_scene_ecs::domain`
 // （`CameraDriveSystem` 是场景 system，必须能读到这两个开关；场景不得反向依赖 UI）。
 // 本层只保留 re-export 与"依赖渲染层的派生函数"（`post_filters`）。
 //
 // P1-1（相机归位）：`AppCamera` **已删除** —— 相机状态是**场景对象**（持 `Framing2D`，
-// 见 `ze-object`），UI 只发 `CameraCommand`（控制器纯函数在 `zela_scene::camera_input`），
+// 见 `ze-object`），UI 只发 `CameraCommand`（控制器纯函数在 `zela_scene_ecs::camera_input`），
 // 场景里的目标相机由 `Camera2DHandle`（引用型句柄）指认。
 // 本层不再持有任何相机状态。
 //
@@ -16,11 +16,11 @@
 
 // ─── TimeState ─────────────────────────────────────────────────────────────
 
-pub use zela_scene::TimeState;
+pub use zela_scene_ecs::TimeState;
 
 // ─── UiConfig / ViewportCamera（定义在场景 domain）──────────────────────────
 
-pub use zela_scene::domain::{UiConfig, ViewportCamera};
+pub use zela_scene_ecs::domain::{UiConfig, ViewportCamera};
 
 use zela_render::{FilterSlot, PostFilterChain};
 

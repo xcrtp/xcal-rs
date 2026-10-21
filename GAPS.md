@@ -229,10 +229,10 @@
 | H-08 | `ze-scene-core` / `ze-scene-api` 的"不能依赖实现"只是约定 | CI | **已关闭（B3-1f）** | `structure` 步新增 jq 判据（`JQ_SCENE_LAYERS`） |
 | H-09 | `Target` 的 `apply` 签名变化（`&mut dyn SceneWrite`）会波及下游实现者 | 公开 API | **仍成立（有意）** | 仓内只有 `authored` 测试实现；这是分层必要的破坏性变更，未留兼容 shim |
 | H-10 | `scene_script.rs` 的 `commit` 用例需要真实 hecs 场景 | 测试布局 | **已关闭（B3-1b）** | 用例迁至 `zela-scene-ecs/src/scene_script_tests.rs`（实现与用例分离，语义不变） |
-| H-11 | `zela-scene` 壳层与 `ze-object` 壳层的删除时机 | 兼容层 | **部分关闭** | `ze-object` 已删除；`zela-scene` 壳层保留（259 处 `zela_scene::` import 未批量改），后续批次收敛 |
+| H-11 | `zela-scene` 壳层与 `ze-object` 壳层的删除时机 | 兼容层 | **已关闭（B3-1 收尾）** | `ze-object` 与 `zela-scene` 壳层均已删除；237 处 `zela_scene::` 改为 `zela_scene_ecs::`；ze-macro 派生代码指向 `ze_scene_core::transform`（不再需要任何 `zela_scene` 路径） |
 | H-12 | `WGPUDevice` / `CPUDevice` 仍在组件层（D7） | 场景核心 | **仍成立（按计划不占本批预算）** | 计划 §三 D7 与 §十：建议作为 B3-0.5 收尾先做；本批只做搬迁，未动语义。现位于 `ze-scene-core::components::marker`，`zela-render::components` 仍转发 |
 
-**H 段小计（B3-1）**：已关闭 9 · 仍成立 2（H-09 / H-12）· 部分关闭 1（H-11）。
+**H 段小计（B3-1）**：已关闭 10 · 仍成立 2（H-09 / H-12）。
 
 
 
