@@ -4,7 +4,7 @@
 
 use ze_notion::Vec3;
 
-use crate::scene::components::{MeshGeometry, PrimitiveTopology};
+use crate::components::{MeshGeometry, PrimitiveTopology};
 
 /// 立方体 8 个角点（h = half_extent）：
 /// 0..=3 为后面（z=-h），4..=7 为前面（z=+h）。

@@ -6000,14 +6000,7 @@ dependencies = [
 name = "ze-object"
 version = "0.1.1"
 dependencies = [
- "derive-new",
- "derive_builder",
- "serde",
- "serde_json",
- "ze-macro",
- "ze-notion",
- "ze-render-ir",
- "ze-scene-contract",
+ "ze-scene-core",
 ]
 
 [[package]]
@@ -6116,6 +6109,21 @@ dependencies = [
  "serde",
  "ze-notion",
  "ze-render-ir",
+]
+
+[[package]]
+name = "ze-scene-core"
+version = "0.1.1"
+dependencies = [
+ "derive-new",
+ "derive_builder",
+ "derive_more",
+ "serde",
+ "serde_json",
+ "ze-macro",
+ "ze-notion",
+ "ze-render-ir",
+ "ze-scene-contract",
 ]
 
 [[package]]
@@ -6340,6 +6348,7 @@ dependencies = [
  "ze-prerender",
  "ze-render-ir",
  "ze-scene-contract",
+ "ze-scene-core",
  "ze-time",
  "zela-schedule",
 ]

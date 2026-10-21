@@ -1,0 +1,35 @@
+[package]
+name = "ze-scene-core"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 场景核心层（B3-1）：场景对象 + 组件 + 纯逻辑（动画词汇 / 相机控制器 / 脚本数据）。
+#
+# 硬约束（structure step 判据）：
+#   - **不得依赖 hecs**（ECS 实现细节不进核心）
+#   - **不得依赖任何 zela-***（反向依赖禁令）
+#
+# 原 `ze-object` 的内容并入本 crate 的 `object` 模块；`ze-object` 保留为
+# re-export 壳层（D6），避免一次性改动 123 处下游 import。
+[dependencies]
+ze-notion = { path = "../../kernel/ze-notion" }
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
+# 契约层：`Describable` trait 与 `*Desc`（由 `#[derive(Describable)]` 展开引用）。
+ze-scene-contract = { path = "../../kernel/ze-scene-contract" }
+# `#[derive(Describable)]` 派生宏（生成 Deref + impl Describable）。
+ze-macro = { path = "../../kernel/ze-macro" }
+
+# Transform 摆放组件的 Builder 派生（与归位前一致）。
+derive_builder.workspace = true
+# 组件 newtype 的 Deref / From / Into 派生（components.rs 的 `define_comp!`）。
+derive_more.workspace = true
+# Camera2D / Camera3D 的 `new` 派生。
+derive-new.workspace = true
+# 组件持久化：全部登记组件的 serde。
+serde.workspace = true
+
+[dev-dependencies]
+# Axes2D 无界定义域的 serde 往返用例（ZSB）。
+serde_json.workspace = true

@@ -15,7 +15,6 @@ pub mod content;
 pub mod contract;
 pub mod deferred;
 pub mod director_state;
-pub mod domain;
 pub mod driver;
 pub mod errors;
 pub mod geometry;
@@ -27,11 +26,13 @@ pub mod pod;
 pub mod register;
 pub mod scene;
 pub mod scene_script;
-pub mod time_state;
-pub mod transform;
 pub mod transform_hierarchy;
-pub mod types;
 pub mod utils;
+
+// B3-1b：纯数据 / 对象 / 组件已下沉 `ze-scene-core`；这里保留原公开路径。
+pub use ze_scene_core::{domain, types};
+pub use ze_scene_core::{Color32, Rect2D, Vec2, Vec3, Vec4};
+pub use ze_scene_core::{TimeState, Transform2D, Transform2DInto};
 
 pub use animation::{
     Binding, BindingTable, SeekKind, Target, TargetKind, Timeline, TransformValue,
@@ -53,16 +54,17 @@ pub use lifetime::{
 };
 pub use math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
 pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};
-pub use scene::{Scene, comp, components, primitives};
+pub use scene::{
+    components, comp, primitives, Scene,
+};
 pub use scene_script::{
     Handle, HandleRange, SceneEncoder, SceneRecipe, SceneScript, ScriptError, handle_ref,
 };
-pub use time_state::TimeState;
-pub use transform::{Transform2D, Transform2DInto};
 pub use transform_hierarchy::{
     TransformHierarchyError, TransformHierarchySystem, WorldTransforms,
 };
-pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
+// `Transform2D` 的模块路径（ze-macro 生成的 `zela_scene::transform::Transform2DInto`）。
+pub use ze_scene_core::transform;
 pub use ze_time::{AnimValue, ClockForest, ClockId, ClockNode, Curve, Director, Interp, PlayMode};
 // 相机（M3-2）与摆放组件（M3-4）归场景对象层 `ze-object`：本层**不转发**，
 // 消费方直接 `use ze_object::{Camera2D, Camera3D, Projection, Transform}`。

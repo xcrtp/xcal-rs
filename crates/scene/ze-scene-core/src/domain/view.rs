@@ -6,15 +6,15 @@
 // `ContentHandle` 刻意保持不透明——内容的具体形态是 S3 统一管线的职责，
 // B 不阻塞 S3，S3 也不用等 B。
 
-use ze_object::Camera2D;
+use crate::object::Camera2D;
 
 use crate::types::Color32;
 
 // S2：合成概念已下沉。
 // - `LayerId` / `LayerBlend` / `TextureHandle` → `ze-render-ir`
-// - `LayerKind`（含相机）→ `ze-object`
-// 此处 re-export 是过渡期 shim，保持 `zela_scene::domain::*` 路径不变。
-pub use ze_object::LayerKind;
+// - `LayerKind`（含相机）→ `object` 模块（B3-1b 起在 ze-scene-core 内）
+// 此处 re-export 保持 `ze_scene_core::domain::*` / `zela_scene::domain::*` 路径不变。
+pub use crate::object::LayerKind;
 pub use ze_render_ir::{LayerBlend, LayerId, TextureHandle};
 
 /// 内容来源句柄（不透明；S3 统一管线后指向 RenderQueue 的分片）。

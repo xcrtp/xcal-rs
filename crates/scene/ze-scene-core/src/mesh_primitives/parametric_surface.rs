@@ -15,7 +15,7 @@
 
 use ze_notion::{SurfaceFn, Vec2, Vec3};
 
-use crate::scene::components::{MeshGeometry, PrimitiveTopology};
+use crate::components::{MeshGeometry, PrimitiveTopology};
 
 /// 生成参数曲面网格：规则网格顶点 + 逐顶点 UV / 法线 + 三角索引。
 ///

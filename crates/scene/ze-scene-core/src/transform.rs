@@ -10,11 +10,11 @@
 //
 // M3-5：图元本体已迁往场景对象层 `ze-object`（newtype），故它们的
 // `Transform2DInto` 实现移到这里（trait 是本 crate 的本地 trait，合法）。
-// 逐命令映射的实现已统一到 `ze_object::map_path_affine`（单份），
+// 逐命令映射的实现已统一到 `crate::object::map_path_affine`（单份），
 // 本文件的正反向都复用它 —— 不再各写一份。
 
 use ze_notion::{Path2D, Transform2D as Affine2D, Vec2, Vec3};
-use ze_object::{Camera2D, Circle, Line, Path};
+use crate::object::{Camera2D, Circle, Line, Path};
 
 /// 2D 坐标系转换 Trait（非消耗版本）。
 ///
@@ -147,17 +147,17 @@ impl Transform2DInto for Path {
 //
 // 相机变换是仿射 `A = diag(s, -s)`（s = scale 用于 to_screen，1/scale 用于
 // to_logical）加平移；逐命令映射与椭圆弧解析改写的**唯一实现**在
-// `ze_object::map_path_affine`（理念层仿射 + 解析弧），此处只负责把
+// `crate::object::map_path_affine`（理念层仿射 + 解析弧），此处只负责把
 // 「相机」降级成该仿射（正向用 `to_transform2d()`，反向取其逆矩阵）。
 //
 // 重建 `Path2D` 时 `bounds` 自然重置为 `None`（懒计算缓存随变换失效）。
 impl Transform2DInto for Path2D {
     fn to_logical_into(self, camera: &Camera2D) -> Self {
-        ze_object::map_path_affine(&self, &camera_inverse_affine(camera))
+        crate::object::map_path_affine(&self, &camera_inverse_affine(camera))
     }
 
     fn to_screen_into(self, camera: &Camera2D) -> Self {
-        ze_object::map_path_affine(&self, &camera.to_transform2d())
+        crate::object::map_path_affine(&self, &camera.to_transform2d())
     }
 }
 

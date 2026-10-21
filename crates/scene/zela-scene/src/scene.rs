@@ -24,11 +24,15 @@ use std::{any::TypeId, collections::HashMap};
 
 type ResourceMap = HashMap<TypeId, Box<dyn std::any::Any>>;
 
-/// ECS 组件集合（marker / mesh / 2D 图元 / 3D 类型）。
-pub mod components;
+// B3-1b：组件与网格生成器已下沉 `ze-scene-core`；这里保留原模块路径
+// （`zela_scene::scene::components` / `zela_scene::scene::primitives`）。
+pub mod components {
+    pub use ze_scene_core::components::*;
+}
 
-/// 内置图元生成器（立方体等）。
-pub mod primitives;
+pub mod primitives {
+    pub use ze_scene_core::mesh_primitives::*;
+}
 
 pub mod resource {}
 
