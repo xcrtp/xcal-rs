@@ -11,9 +11,9 @@ name: Pages
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, pages]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, pages]
   workflow_dispatch:
 
 env:
@@ -80,7 +80,7 @@ jobs:
   deploy:
     name: Deploy GitHub Pages
     needs: demo
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/pages'
     runs-on: ubuntu-latest
     permissions:
       pages: write
