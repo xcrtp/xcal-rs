@@ -123,6 +123,20 @@ pub struct RenderProbePod {
     state: RefCell<ProbeState>,
 }
 
+/// 探针内部状态。
+///
+/// # 句柄映射规则（契约 R-05 / R-06 的落地形态）
+///
+/// - **目标**：`Handle.slot` 直接当离屏 `LayerId` 用
+///   （`backend.offscreen_texture(LayerId(handle.slot()))`），`generation` 由
+///   `HandleTable` 校验；`RenderTargetDesc` 与 `Frame2DGeometry` 存在 `targets`。
+/// - **批次**：`Handle` ↔ `batches` 的槽位，世代 / ABA 由 `HandleTable` 负责。
+/// - **`GpuHandle` 不出 Pod**：离屏纹理只在本结构内被提交 / 回读，跨边界只有
+///   `Handle`（两个整数 + PodId）。
+/// - 生产化时的通用对齐（GAPS R-06）：`Handle.slot` ↔ `GpuResourceId.index`、
+///   `Handle.generation` ↔ `GpuResourceId.generation`。探针目前用 `LayerId` 代替
+///   资源 id（离屏纹理由后端按 layer 持有），所以这条对齐**尚未真正启用** ——
+///   写在这里是为了让后续接线不必重新推导。
 struct ProbeState {
     ctx: RenderContext,
     backend: WgpuBackend2D,
