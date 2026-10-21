@@ -8,3 +8,5 @@
 /out
 .trae/hooks.json
 .trae/rules/当执行 corgo verify --full这类长命令时，可以让它在后台运行，然后去写新的动画脚本，把它加到 demo 里，记得把它加到demo的manifest.md
+tasks.md
+spec.md
