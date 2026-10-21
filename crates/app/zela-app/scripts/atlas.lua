@@ -27,13 +27,13 @@ local surf = scene.spawn({
 })
 
 -- 公式内容（世界空间描边路径），挂在 Surface 之下。
--- 注意：纹理贴到平面上时 V 轴与内容层的 y 方向相反 ⇒ `y` 取负值才会落在平面**上半部**。
+-- 正 y = 平面**上半部**（Planar 兜底 UV 已按"图像行首在 +y"取反）。
 -- 用一阶表达式（不带上下标）：形如 `x^2` 的上标在当前轮廓管线下位置会偏低。
 local paths = content.formula(Formula {
     source = "2x + 1",
     font_size = 2.2,
     x = -2.8,
-    y = -1.0,
+    y = 1.0,
 })
 -- 深色描边：平面是浅色底，默认白色描边会看不见。
 local ink = Stroke { width = 9.0, color = Color { r = 16, g = 28, b = 56, a = 255 } }

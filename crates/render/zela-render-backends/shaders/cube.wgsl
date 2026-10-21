@@ -167,13 +167,19 @@ fn fs_pbr(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv1 = dpdx(in.uv);
     let uv2 = dpdy(in.uv);
     let det = uv1.x * uv2.y - uv2.x * uv1.y;
-    let inv_det = 1.0 / max(abs(det), 1e-6);
-    // 注意：局部切线变量不得叫 `t` —— 会遮蔽 binding 1 的纹理 `t`（WGSL 不允许
-    // 函数内遮蔽全局后仍被 textureSample 正确解析）。
-    let tangent = normalize((p1 * uv2.y - p2 * uv1.y) * inv_det);
-    let bitangent = normalize((p2 * uv1.x - p1 * uv2.x) * inv_det);
     let nts = textureSample(nt, s, in.uv).rgb * 2.0 - 1.0;
-    let n = normalize(mat3x3(tangent, bitangent, n_g) * nts);
+    // 退化 UV（面平行于投影轴、或几何无 UV 走兜底）：`det ≈ 0` ⇒ 切线基不可求，
+    // `normalize(0)` 会得 NaN 并污染整片像素（旧基线里的随机噪点）。
+    // 判据显式：退化就**跳过法线贴图**，直接用几何法线。
+    var n = n_g;
+    if (abs(det) > 1e-6) {
+        let inv_det = 1.0 / abs(det);
+        // 注意：局部切线变量不得叫 `t` —— 会遮蔽 binding 1 的纹理 `t`（WGSL 不允许
+        // 函数内遮蔽全局后仍被 textureSample 正确解析）。
+        let tangent = normalize((p1 * uv2.y - p2 * uv1.y) * inv_det);
+        let bitangent = normalize((p2 * uv1.x - p1 * uv2.x) * inv_det);
+        n = normalize(mat3x3(tangent, bitangent, n_g) * nts);
+    }
 
     // ── 材质参数（线性域 albedo）──
     let albedo = srgb_to_linear(in.color.rgb);

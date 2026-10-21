@@ -197,7 +197,9 @@ pub fn interleaved_pos_uv_normal(
 
 /// 几何未携带 UV 时的兜底 UV（包围盒归一化到 [0, 1]）。
 ///
-/// - [`UvProjection::Planar`]：XY 平面投影；
+/// - [`UvProjection::Planar`]：XY 平面投影，**V 轴取反**（`v = 1 - y`）——
+///   纹理 `v = 0` 是图像行首（顶），模型 `+y` 应显示图像上沿；否则贴图上下倒转
+///   （与 `parametric_surface` 手写的 `1.0 - v` 同一口径）。
 /// - [`UvProjection::Spherical`]：围绕包围盒中心的方向向量球面映射；
 /// - [`UvProjection::Triplanar`]：按相对中心偏移最大的分量选主轴投影。
 ///
@@ -220,7 +222,7 @@ pub fn fallback_uvs(positions: &[Vec3], projection: UvProjection) -> Vec<Vec2> {
         .map(|p| {
             let local = *p - min;
             match projection {
-                UvProjection::Planar => Vec2::new(local.x / size.x, local.y / size.y),
+                UvProjection::Planar => Vec2::new(local.x / size.x, 1.0 - local.y / size.y),
                 UvProjection::Spherical => {
                     let d = (*p - center).normalize_or_zero();
                     Vec2::new(d.x * 0.5 + 0.5, d.y * 0.5 + 0.5)
@@ -276,6 +278,22 @@ mod tests {
     use super::*;
     use ze_notion::Color32;
     use ze_scene_core::mesh_primitives::wireframe_cube;
+
+    /// Planar 兜底 UV：图像行首（`v = 0`）对应模型 **+y**（矩形上沿），不得上下倒转。
+    #[test]
+    fn planar_fallback_uv_puts_image_top_at_positive_y() {
+        let positions = vec![
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        ];
+        let uvs = fallback_uvs(&positions, UvProjection::Planar);
+        assert_eq!(uvs[0], Vec2::new(0.0, 1.0), "左下角 → 图像左下");
+        assert_eq!(uvs[1], Vec2::new(1.0, 1.0), "右下角 → 图像右下");
+        assert_eq!(uvs[2], Vec2::new(0.0, 0.0), "左上角 → 图像左上");
+        assert_eq!(uvs[3], Vec2::new(1.0, 0.0), "右上角 → 图像右上");
+    }
 
     /// 3D 顶点缓冲：stride 32、顶点数正确、字节序与布局一致。
     #[test]

@@ -109,12 +109,22 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 > 只写 `# slotB:` 与生效行、**没有 `# slotA:`**（`--record` 允许"新增 key 直接登记"）。
 > 作品 A 之后重录过三次：① 补 `Path × Fill` 组合；② 修「Surface 归属内容被屏幕视口重复绘制」；
 > ③ 对齐纹理/承载平面的宽高比（bounds = texel = 4:3，消除横向拉伸）。当前值见 `baselines.txt`。
-> 作品 B 在 ③ 同步重录：平面改为 8×6（与 bounds / texel 同比例）、相机拉远、公式改一阶表达式 + 深色描边。
+> 作品 B 另在 ③ 之后重录一次：`Planar` 兜底 UV 的 V 轴取反（贴图不再上下倒转），
+> 平面 8×6（与 bounds / texel 同比例）、相机拉远、公式改一阶表达式 + 深色描边。
 > 因此 `# slotA:` 只保留**上一次**值，更早的值看 git 历史。
 >
 > `surface_matrix` 只渲 1 帧（静态能力矩阵）：像素覆盖的是"全部组合同屏一次"，
 > 组合覆盖度的主判据是**非像素断言**（`ContentTextureQueue` 里每种组合都录到，
 > 见 `zela-app` 测试 `surface_matrix_records_all_script_expressible_combos`）。
+
+> **demo3d 基线变更（2026-10-22，B3 Step 5 修正）**：`dc8b1388…` → `ddd69b3e…`。
+> 不是"画面漂移"，是渲染管线三处显式修正的结果，每个变化都能解释：
+> 1. `Planar` 兜底 UV 的 V 轴取反（纹理行首在 `+y`，贴图不再上下倒转）；
+> 2. `solid_cube` 改为 24 顶点：每面显式 UV + **面法线**（旧实现 8 顶点共享、无 UV / 无
+>    法线 ⇒ Planar 兜底在侧面退化成 0 面积）；
+> 3. `cube.wgsl` 的 PBR TBN 在 `det ≈ 0` 时**跳过法线贴图**（旧实现 `normalize(0)` → NaN）。
+> ⇒ 立方体右脸的随机噪点消失，三个可见面的明暗变成正确的面法线着色。
+> `atlas` 同步重录（它用 Cube 当承载平面）。
 
 > `[browser]` 段**绝不参与自动比对**：本机跑不出浏览器产物，
 > 纳入比对只会让本机永远红，并诱导人去"修"一个不该修的东西。
