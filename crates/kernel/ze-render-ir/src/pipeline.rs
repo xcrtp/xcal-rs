@@ -69,12 +69,18 @@ pub struct PassDesc {
 // ─── B2-0c：能力查询（D22） ────────────────────────────────────────────────
 
 /// 颜色目标格式（后端中立的有限集合；由 target 决定）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum ColorFormat {
     /// sRGB 8bit（默认窗口/离屏目标）。
     Rgba8UnormSrgb,
     /// 线性 8bit（回读/测试目标）。
     Rgba8Unorm,
+    /// sRGB 8bit（原生窗口常见目标格式，B3-0.5b 补齐）。
+    Bgra8UnormSrgb,
+    /// 线性 8bit（部分平台窗口目标）。
+    Bgra8Unorm,
 }
 
 /// 深度格式。

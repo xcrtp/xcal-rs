@@ -1408,6 +1408,8 @@ impl WgpuBackend3D {
         let color_format = match self.format {
             wgpu::TextureFormat::Rgba8UnormSrgb => ColorFormat::Rgba8UnormSrgb,
             wgpu::TextureFormat::Rgba8Unorm => ColorFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Bgra8UnormSrgb => ColorFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm => ColorFormat::Bgra8Unorm,
             _ => return Err(CapabilityError::UnsupportedColorFormat),
         };
         let flags = adapter.get_texture_format_features(self.format).flags;

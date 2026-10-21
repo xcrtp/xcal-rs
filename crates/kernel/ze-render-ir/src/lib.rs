@@ -30,6 +30,7 @@ pub mod mesh;
 pub mod pipeline;
 pub mod shape;
 pub mod style;
+pub mod target;
 pub mod uniform;
 
 pub use degrade::ToShape2D;
@@ -49,6 +50,7 @@ pub use uniform::{
     UniformField, UniformLayout, UniformLayoutError, UniformType, cube_lights_layout,
     cube_uniforms_layout,
 };
+pub use target::{RenderTargetDesc, TargetDescError};
 
 /// 呈现层度量空间：宽度属**世界**（随缩放）还是**屏幕**（不随缩放）。
 ///
