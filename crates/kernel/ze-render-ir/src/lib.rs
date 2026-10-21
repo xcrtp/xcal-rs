@@ -23,6 +23,7 @@
 // 为什么 `ToShape2D` 吃的是仿射矩阵而不是相机：见 `degrade.rs` 顶部注释
 // （相机在场景对象层，IR 层认识它会成环）。
 
+pub mod caps;
 pub mod degrade;
 pub mod draw;
 pub mod layer;
@@ -34,6 +35,10 @@ pub mod target;
 pub mod uniform;
 
 pub use degrade::ToShape2D;
+pub use caps::{
+    CapabilityNegotiationError, NAMESPACES, PINNED_FINGERPRINTS, RenderCapabilitySet,
+    fingerprints, negotiate, signatures_of,
+};
 pub use draw::{DrawCommand, ZIndex, ZOrder};
 pub use layer::{LayerBlend, LayerId};
 pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};

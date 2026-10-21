@@ -24,6 +24,9 @@ ze-vertex = { path = "../ze-vertex" }
 serde.workspace = true
 # B2-0c：能力不满足时的显式错误类型（CapabilityError）。
 thiserror.workspace = true
+# B3-0.5c：四个渲染 capability 的签名集（FnSig）与能力指纹。
+# ze-pod-core 是 kernel 层的契约 crate（无 GPU / 无 ECS），不违反分层。
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 
 [dev-dependencies]
 # `Shape2D` 可序列化的往返用例（ZSB D1）。
