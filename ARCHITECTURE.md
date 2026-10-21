@@ -645,8 +645,17 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **Texture 路径落地（B3 Step 4c-4）**：demo3d 改走
 >   `Surface(Renderer2D) + SurfaceTexture(fit_margin=0.8)`，内容实体挂 `Parent(surface)`；
 >   材质纹理句柄由 `content_texture_handle` 派生。**四基线逐位不变（零差异）**。
-> - **作品迁移（Step 5）尚未执行**：fourier / storyboard 仍走默认 2D 路径；
->   Step 5 会引入一次纹理采样（需重录）。
+> - **录制器泛化（B3 Step 5-1）**：`record_scene_for_surface` 复用 9 组
+>   (图元 × 样式) 全组合 + `Parent` 归属过滤；`ContentTextureItem` 标记不再是
+>   归属条件（组件保留登记以兼容旧数据），不再出现"只录 `(Path, StrokeSolid)`
+>   静默丢内容"。
+> - **`composite` 可声明（B3 Step 5-2）**：`SurfaceTexture.composite`（默认 `false`），
+>   `content_texture_specs` 不再硬编码。
+> - **两个脚本作品（B3 Step 5-3/5-4）**：`surface_matrix.lua`（能力矩阵，
+>   `composite=true` 直视纹理 + 内容层命令数断言）与 `atlas.lua`（2D 公式内容
+>   → 3D 平面 consumer，带动画）；两者均已进 `cargo verify` 对拍 fixture。
+> - **fourier / storyboard 迁移到纹理路径仍未执行（S5-01）**：两者仍走默认 2D
+>   直画路径；迁移会引入一次纹理采样 ⇒ 需重录。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

@@ -295,6 +295,9 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     let storyboard_hash = compare_script_vs_bundle(root, "storyboard", "640x480", None)?;
     // B2-8（Q4 决议）：`demo3d` 升级为对拍 fixture —— 3D 进 frame hash 对拍网。
     let demo3d_hash = compare_script_vs_bundle(root, "demo3d", "640x480", None)?;
+    // B3 Step 5：Surface 作品（能力矩阵 + 复杂 Demo）。
+    let surface_matrix_hash = compare_script_vs_bundle(root, "surface_matrix", "640x480", None)?;
+    let atlas_hash = compare_script_vs_bundle(root, "atlas", "640x480", None)?;
 
     // 2) 回填 commit：当前 HEAD（重录发生在提交前，commit 待回填）。
     let head = git_short_head(root)?;
@@ -312,6 +315,12 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
             storyboard_hash,
         ),
         ("native".to_string(), "demo3d".to_string(), demo3d_hash),
+        (
+            "native".to_string(),
+            "surface_matrix".to_string(),
+            surface_matrix_hash,
+        ),
+        ("native".to_string(), "atlas".to_string(), atlas_hash),
     ];
     let next = apply_record(&text, &device, reason, &head, &records)?;
     fs::write(&baseline_path, next)
@@ -739,7 +748,7 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let mut current: Vec<(&str, &str, &str)> = Vec::new();
     let mut hashes: Vec<(String, String)> = Vec::new();
 
-    for work in ["fourier", "storyboard", "demo3d"] {
+    for work in ["fourier", "storyboard", "demo3d", "surface_matrix", "atlas"] {
         let expected = if skip_baseline {
             None
         } else {

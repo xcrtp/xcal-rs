@@ -265,7 +265,7 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
 /// - 新值 → `# slotB:` 注释 + 新生效行 `key = <hash> @ <产生时 HEAD>`（口径 B）；
 /// - 写入 `# device = …` 与 `# reason: … @ <产生时 HEAD>`；
 /// - 非托管注释（如“Vulkan headless…”）原样保留；`[browser]` 整段不动；
-/// - key 缺失 / section 缺失 ⇒ 显式报错，不静默。
+/// - 新增 key（无旧值行）⇒ 直接登记为生效行，不产生 `# slotA:`；section 缺失 ⇒ 显式报错。
 pub fn apply_record(
     text: &str,
     device: &str,
@@ -396,11 +396,7 @@ fn flush_section(
     flushed: &mut BTreeSet<String>,
 ) -> Result<(), String> {
     if let Some(new_values) = grouped.get(section) {
-        for (key, _hash) in new_values {
-            if !old_pairs.iter().any(|(k, _, _)| k == key) {
-                return Err(format!("[{}] 段缺少旧值行 `{key}`，无法重录", section));
-            }
-        }
+        // 新增 fixture 没有旧值行 ⇒ 直接登记（无 `# slotA:`）；旧 key 仍走轮换。
         out.extend(emit_record_block(
             preserved, old_pairs, new_values, device, reason, head,
         ));

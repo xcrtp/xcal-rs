@@ -99,8 +99,19 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 |---|---|---|---|---|---|
 | `[native]` | native（Vulkan headless） | fourier | 216 / 640×480 | `zela-render --script/--bundle` | ✅ 不符即 fail |
 | `[native]` | native（Vulkan headless） | storyboard | 135 / 640×480 | 同上 | ✅ 不符即 fail |
+| `[native]` | native（Vulkan headless） | demo3d | 120 / 640×480 | 同上（3D 首入对拍网，B2-8） | ✅ 不符即 fail |
+| `[native]` | native（Vulkan headless） | surface_matrix | 1 / 640×480 | 同上（B3 Step 5-3 能力矩阵，`composite=true`，静态） | ✅ 不符即 fail |
+| `[native]` | native（Vulkan headless） | atlas | 120 / 640×480 | 同上（B3 Step 5-4：2D 公式内容 → 3D 平面） | ✅ 不符即 fail |
 | `[smoke]` | native（Vulkan headless） | smoke | 15 / 320×240 | 同上（PR / `--fast` 快速反馈） | ✅ 不符即 fail，但**不等价于完整基线** |
 | `[browser]` | 浏览器（Chrome WebGPU） | fourier | 216 / 640×480 | `zela-web` + `?compare=1` | ❌ **仅留档** |
+
+> `surface_matrix` / `atlas` 于 2026-10-22（B3 Step 5）首次登记：两项**没有旧值行**，
+> 因此 `baselines.txt` 里只有 `# slotB:` 与生效行，**没有 `# slotA:`** ——
+> 这不是漏写，而是"首次登记"的正常形态。
+>
+> `surface_matrix` 只渲 1 帧（静态能力矩阵）：像素覆盖的是"全部组合同屏一次"，
+> 组合覆盖度的主判据是**非像素断言**（`ContentTextureQueue` 里每种组合都录到，
+> 见 `zela-app` 测试 `surface_matrix_records_all_script_expressible_combos`）。
 
 > `[browser]` 段**绝不参与自动比对**：本机跑不出浏览器产物，
 > 纳入比对只会让本机永远红，并诱导人去"修"一个不该修的东西。

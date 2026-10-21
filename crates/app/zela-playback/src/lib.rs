@@ -124,6 +124,10 @@ pub fn build_bundle_runtime(render_ctx: RenderContext, bundle: &Bundle) -> Resul
         .commit(&mut scene)
         .map_err(|e| PlaybackError::Assembly(format!("ZSB commit 失败：{e}")))?;
     let camera2d = find_camera2d(&scene)?;
+    // B3 Step 5：Surface 内容纹理同样从场景推导（与 app 脚本路径同一条入口）。
+    let content_textures = zela_scene_ecs::domain::content_texture_specs(&scene)
+        .map_err(|error| PlaybackError::Assembly(format!("Surface 纹理装配失败：{error}")))?;
+    let content_textures = (!content_textures.is_empty()).then_some(content_textures);
     let world = scene.into_world();
 
     Ok(assemble_runtime(
@@ -136,7 +140,7 @@ pub fn build_bundle_runtime(render_ctx: RenderContext, bundle: &Bundle) -> Resul
             group_visibility: GroupVisibility::default(),
             duration,
             camera3d: None,
-            content_textures: None,
+            content_textures,
         },
     ))
 }
