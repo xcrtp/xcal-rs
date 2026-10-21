@@ -1,0 +1,29 @@
+[package]
+name = "zela-render-vector"
+version.workspace = true
+edition.workspace = true
+# 多许可：MIT（多数文件）+ Apache-2.0（来自 AOSP / Filament 的着色栈）。
+# 逐文件归属见 UPSTREAM.md 与每个文件头部的 SPDX 行。
+license = "MIT OR Apache-2.0"
+description = "矢量后端（移植自 manimgx）：解析抗锯齿的路径光栅化 + 3D 着色栈。上游 SHA 见 UPSTREAM.md"
+publish = false
+
+# 许可证基线（B4 Step 3）：
+# - LICENSES/MIT.txt / LICENSES/Apache-2.0.txt 逐字来自上游 `manimgx/LICENSES/`；
+# - 每个移植文件**必须**带 SPDX 头（上游无头的文件由我们补齐），修改处追加
+#   `// Modified by Zela: …`；
+# - `UPSTREAM.md` 记录 upstream commit SHA 与逐文件许可清单。
+
+[dependencies]
+# 移植范围只开 `render`：python / typeset / export / window / web 一律不开，
+# 因此 pyo3 / typst / x264(GPL) / ffmpeg(LGPL) / winit / cpal 都不会进入依赖树。
+wgpu.workspace = true
+bytemuck = { version = "1.25", features = ["derive", "extern_crate_alloc", "min_const_generics"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+thiserror.workspace = true
+serde.workspace = true
+
+[features]
+default = []
+# 移植落地后由 `zela-render-backends` 打开；当前为空壳（B4 Step 3 只立规范）。
+render = []

@@ -32,6 +32,8 @@ members = [
     "crates/schedule/zela-schedule",
     "crates/render/zela-render",
     "crates/render/zela-render-backends",
+    # B4 Step 3：矢量后端（移植自 manimgx，许可证基线 + 移植落点）。
+    "crates/render/zela-render-vector",
     "crates/ui/zela-egui",
     "crates/ui/zela-node-editor",
     "crates/ui/zela-node-egui",
