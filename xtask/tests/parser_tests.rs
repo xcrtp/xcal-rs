@@ -189,18 +189,18 @@ fn apply_record_rotates_slots_and_backfills() {
     let next = apply_record(SAMPLE, "windows / RTX 4060 Laptop", "测试重录", "abc1234", &records)
         .unwrap();
 
-    // 生效行 = 新值 @ pending
-    assert!(next.contains(&format!("fourier = {H2} @ pending")));
-    assert!(next.contains(&format!("storyboard = {H1} @ pending")));
-    assert!(next.contains(&format!("smoke = {H1} @ pending")));
+    // 生效行 = 新值 @ 产生时 HEAD（口径 B；head = abc1234）
+    assert!(next.contains(&format!("fourier = {H2} @ abc1234")));
+    assert!(next.contains(&format!("storyboard = {H1} @ abc1234")));
+    assert!(next.contains(&format!("smoke = {H1} @ abc1234")));
     // slotA = 旧值 @ 旧 commit（已定型，不回填）
     assert!(next.contains(&format!("# slotA: fourier = {H1} @ 55a1eda")));
     assert!(next.contains(&format!("# slotA: storyboard = {H2} @ 55a1eda")));
-    // slotB = 新值 @ pending
-    assert!(next.contains(&format!("# slotB: fourier = {H2} @ pending")));
+    // slotB = 新值 @ 产生时 HEAD
+    assert!(next.contains(&format!("# slotB: fourier = {H2} @ abc1234")));
     // device + reason 行
     assert!(next.contains("# device = windows / RTX 4060 Laptop"));
-    assert!(next.contains("# reason: 测试重录 @ pending"));
+    assert!(next.contains("# reason: 测试重录 @ abc1234"));
     // 旧值不再作为生效行出现
     assert!(!next.lines().any(|l| l.starts_with("fourier = ") && l.contains(H1)));
     // 非托管注释与 [browser] 段原样保留

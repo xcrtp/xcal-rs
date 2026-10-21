@@ -12,6 +12,20 @@
 > 用途：渲染回归对拍。**不覆盖 mp4 / PNG 容器**，只覆盖帧缓冲像素 ⇒ 浏览器侧
 > 无需导出、无需 ffmpeg。
 
+## `@ <commit>` 口径（B3-1 收尾定案：B）
+
+值行 `key = <hash> @ <commit>` 里的 commit 表示**产生该哈希值时的 HEAD**。
+
+- `--record` 现在直接把**当次重录的 HEAD** 写进 `# reason` / `# slotB` / 生效行；
+  下一次轮换时 `# slotA` 拿到的就是真实产生提交，而不是"下次重录的 HEAD"
+  （旧行为会把跨批次的改动误归因到当时未提交的 HEAD）。
+- **旧文件里的 `@ pending`** 没有记录产生时 HEAD，按**最后已知有效提交**理解
+  （即同段 `# slotA` 的 commit）。`@ pending` 不再作为新录写的默认值。
+- 当前 `[native]` / `[smoke]` 的四条值统一标注 `@ f2c8778` ——
+  这是它们**最后一次被验证有效**的提交（与 `# slotA` 一致），不是"下一次重录"的 head。
+- `[browser]` 段仍只有裸值：它不参与自动比对，不适用本口径。
+
+
 ## 算法（V1）
 
 实现：[`zela_scene_bundle::frame_hash::FrameSequenceHash`](../../../scene/zela-scene-bundle/src/frame_hash.rs)

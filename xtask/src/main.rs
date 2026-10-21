@@ -43,6 +43,13 @@ const KERNEL_CRATES: &[&str] = &[
 /// 门面 crate：必须与核心组一样保持 wasm32 可编译（不含 lua / py / UI）。
 const FACADE_CRATES: &[&str] = &["ze-pod", "ze-node", "zela"];
 
+/// **可选 wasm 能力**组：语言适配器里**能**编到 wasm32 的那些。
+///
+/// lua / py 不需要 wasm（mlua 的解释器不适合 wasm 内核路径；pyo3 根本编不到），
+/// 而 `ze-pod-js` 的存在理由正是"native 与 wasm 跑同一个 JS 引擎"（B3-P §一）——
+/// 不给它门禁，那条理由就没有回归保护（A1）。
+const OPTIONAL_WASM_CRATES: &[&str] = &["ze-pod-js"];
+
 /// 结构性判据 1：`crates/ze/pod/` 的生产依赖边不得出现任何 `zela-*`。
 const JQ_POD_LAYER: &str = r#"
 .packages[]
@@ -247,8 +254,8 @@ fn repo_root() -> Result<PathBuf, String> {
 /// 流程：
 /// 1. 设备门禁：`ZELA_RECORD_DEVICE` 未设置 ⇒ 显式报错，不静默；
 /// 2. 硬门禁：smoke + hashes 全量对拍，`--script == --bundle` 必须绿；
-/// 3. 回填旧 `pending` 槽的 commit（当前 HEAD）并轮换 slotA/slotB（纯逻辑在
-///    `xtask::apply_record`，有 tests 覆盖）；
+/// 3. 新值的 commit 写**产生时 HEAD**（口径 B），轮换 slotA/slotB（纯逻辑在
+///    `xtask::apply_record`，有 tests 覆盖）；旧版 `pending` 行按最后已知有效提交兜底；
 /// 4. 写入后重新解析自校验。
 fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     let device = env::var("ZELA_RECORD_DEVICE").unwrap_or_default();
@@ -449,6 +456,15 @@ fn step_wasm(root: &Path) -> Result<(), String> {
     // 门面必须保持 wasm32 能力：不能吞 lua / py / UI。
     for name in FACADE_CRATES {
         println!("[xtask] == {name} facade (wasm32-unknown-unknown) ==");
+        cargo(
+            root,
+            &strings(&["check", "-p", name, "--target", "wasm32-unknown-unknown"]),
+        )?;
+    }
+
+    // 可选 wasm 能力：只有"同引擎覆盖 native+wasm"的适配器才在这里。
+    for name in OPTIONAL_WASM_CRATES {
+        println!("[xtask] == {name} optional-wasm (wasm32-unknown-unknown) ==");
         cargo(
             root,
             &strings(&["check", "-p", name, "--target", "wasm32-unknown-unknown"]),

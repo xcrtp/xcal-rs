@@ -4,7 +4,8 @@
 //! 字符串 / 路径，不触碰进程与渲染，`tests/` 可直接测。
 //!
 //! 重录（`--record`）与两槽窗口的语义见 `基线策略_像素哈希与确定性分离.md` §九：
-//! - 值行：`key = <hash> [@ <commit>]`；`@ pending` = 新录未定型，`@ <hash>` = 已定型；
+//! - 值行：`key = <hash> [@ <commit>]`；`@ <commit>` = **产生该值时的 HEAD**，
+//!   `@ pending` 仅用于旧文件 / 非 git 环境（无产生时 HEAD 可写）；
 //! - 生效行永远是与当前状态相符的 `script == bundle` 值；`# slotA` / `# slotB`
 //!   注释记录上一代 / 新一代，`--record` 自动回填旧 `pending` 并轮换。
 
@@ -260,9 +261,9 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
 /// 相符的 `--script == --bundle` 实测值。
 ///
 /// 语义（基线策略 §9.2 / §9.5）：
-/// - 旧生效行 → `# slotA:` 注释；旧 commit 缺失或 `pending` 时回填 `head`；
-/// - 新值 → `# slotB:` 注释 + 新生效行 `key = <hash> @ pending`；
-/// - 写入 `# device = …` 与 `# reason: … @ pending`；
+/// - 旧生效行 → `# slotA:` 注释；旧 commit 缺失或 `pending` 时按"最后已知有效提交"回填 `head`；
+/// - 新值 → `# slotB:` 注释 + 新生效行 `key = <hash> @ <产生时 HEAD>`（口径 B）；
+/// - 写入 `# device = …` 与 `# reason: … @ <产生时 HEAD>`；
 /// - 非托管注释（如“Vulkan headless…”）原样保留；`[browser]` 整段不动；
 /// - key 缺失 / section 缺失 ⇒ 显式报错，不静默。
 pub fn apply_record(
@@ -426,19 +427,24 @@ fn emit_record_block(
         .cloned()
         .collect();
     block.push(format!("# device = {device}"));
-    block.push(format!("# reason: {reason} @ pending"));
+    // B3-1 收尾（口径 B）：`# reason` / `slotB` / 生效行都写**产生时 HEAD**，
+    // 这样下一次轮换时 slotA 拿到的就是真实产生提交，而不是"下次重录的 HEAD"。
+    // `head` 为空（非 git 环境）⇒ 退回 `pending`（仅此情况下才出现）。
+    let produced = if head.is_empty() { "pending" } else { head };
+    block.push(format!("# reason: {reason} @ {produced}"));
     for (key, hash, commit) in old_pairs {
         let slot_a_commit = match commit {
             Some(commit) if commit != "pending" => commit.clone(),
+            // 旧版 `pending` 行没有产生时 HEAD ⇒ 按"最后已知有效提交"回填（口径 C 的兜底）。
             _ => head.to_string(),
         };
         block.push(format!("# slotA: {key} = {hash} @ {slot_a_commit}"));
     }
     for (key, hash) in new_values {
-        block.push(format!("# slotB: {key} = {hash} @ pending"));
+        block.push(format!("# slotB: {key} = {hash} @ {produced}"));
     }
     for (key, hash) in new_values {
-        block.push(format!("{key} = {hash} @ pending"));
+        block.push(format!("{key} = {hash} @ {produced}"));
     }
     // 段尾空行，恢复 section 之间的分隔。
     block.push(String::new());
