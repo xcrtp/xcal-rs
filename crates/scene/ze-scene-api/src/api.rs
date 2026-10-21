@@ -9,8 +9,8 @@
 // `content.*` 表与 `Circle { ... }` / `Curve.Phase { ... }` 构造器由
 // `binding.rs` 按 `TypeSpec` **自动生成**。
 
-use crate::animation::TargetKind;
-use crate::pod::types::{
+use ze_scene_core::animation::TargetKind;
+use crate::types::{
     Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Formula, Light, Material3D, Name,
     Opacity, Parent, PathList, PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform,
     Transform3D, TransformChannel,

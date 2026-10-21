@@ -26,6 +26,9 @@ ze-time = { path = "../../kernel/ze-time" }
 ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # `TargetKind` 的 schema（`#[pod_type]` 派生）。
 ze-pod-macro = { path = "../../ze/pod/ze-pod-macro" }
+# 内容编译的宿主侧适配（content.rs）：排版引擎 → IR → 世界坐标轮廓。
+ze-content = { path = "../../kernel/ze-content" }
+ze-prerender = { path = "../../kernel/ze-prerender", default-features = false }
 
 # 组件持久化：组件 serde + tagged JSON 编码。
 serde_json.workspace = true

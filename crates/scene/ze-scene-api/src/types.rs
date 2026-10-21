@@ -5,8 +5,8 @@
 //   `TypeSpec` + 双向转换 + `IntoPodTypeName`；
 // - 宿主侧 Service 把它们的值转成场景原语（`ze_object` / `ze_time` …）。
 
-use crate::animation::target::TransformChannel as NativeTransformChannel;
-use crate::{AnimValue, Curve as NativeCurve, Interp as NativeInterp};
+use ze_scene_core::animation::target::TransformChannel as NativeTransformChannel;
+use ze_time::{AnimValue, Curve as NativeCurve, Interp as NativeInterp};
 use ze_pod_core::Handle;
 use ze_pod_macro::PodType;
 

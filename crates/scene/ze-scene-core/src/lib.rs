@@ -26,6 +26,8 @@ pub mod animation;
 pub mod camera_input;
 pub mod components;
 pub mod composer;
+/// 内容编译的宿主侧适配（排版引擎 → IR → 世界坐标轮廓）。
+pub mod content;
 pub mod domain;
 /// 内置数学函数（Pod 提供）与持久化时的名字壳回绑。
 pub mod math_pod;

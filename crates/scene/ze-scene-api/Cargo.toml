@@ -1,0 +1,25 @@
+[package]
+name = "ze-scene-api"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 场景**语言无关边界**（B3-1c）：能力声明（`SceneApi` / `ContentApi`）+ 两个 Service Pod。
+#
+# 硬约束（structure step 判据）：
+#   - **不得依赖 hecs**（不认识 ECS 实现）
+#   - **不得依赖任何 zela-***（只依赖 ze-* 与核心层）
+#
+# 语言适配器（ze-pod-lua / ze-pod-py）只依赖本 crate 的能力类型；
+# 本 crate 不认识任何语言运行时（无 mlua / pyo3）。
+[dependencies]
+ze-scene-core = { path = "../ze-scene-core" }
+ze-scene-contract = { path = "../../kernel/ze-scene-contract" }
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
+ze-notion = { path = "../../kernel/ze-notion" }
+ze-time = { path = "../../kernel/ze-time" }
+ze-content = { path = "../../kernel/ze-content" }
+ze-prerender = { path = "../../kernel/ze-prerender", default-features = false }
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
+ze-pod-macro = { path = "../../ze/pod/ze-pod-macro" }

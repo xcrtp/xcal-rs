@@ -11,7 +11,6 @@ pub mod animation;
 pub mod authored;
 pub mod camera_input;
 pub mod composer;
-pub mod content;
 pub mod contract;
 pub mod deferred;
 pub mod director_state;
@@ -20,11 +19,16 @@ pub mod errors;
 pub mod geometry;
 pub mod input;
 pub mod lifetime;
-pub mod pod;
 pub mod register;
 pub mod scene;
 pub mod transform_hierarchy;
 pub mod utils;
+
+// B3-1c：语言无关的 Pod 边界已独立为 `ze-scene-api`；`zela_scene::pod` 路径保持不变。
+pub use ze_scene_api as pod;
+
+// B3-1b：内容编译宿主适配已下沉核心层；`zela_scene::content` 路径保持不变。
+pub use ze_scene_core::content;
 
 // B3-1b：纯数据 / 对象 / 组件已下沉 `ze-scene-core`；这里保留原公开路径。
 pub use ze_scene_core::{domain, types};

@@ -11,14 +11,14 @@
 use std::any::Any;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::Curve as NativeCurve;
-use crate::animation::TargetKind;
-use crate::scene::components::Reveal as NativeReveal;
-use crate::scene_script::{
+use ze_time::Curve as NativeCurve;
+use ze_scene_core::animation::TargetKind;
+use ze_scene_core::components::Reveal as NativeReveal;
+use ze_scene_core::scene_script::{
     Handle as ScriptHandle, SceneEncoder, SceneScript, handle_ref,
 };
 use ze_notion::{Color32, Quat, Vec2 as NotionVec2, Vec3 as NotionVec3};
-use ze_object::{
+use ze_scene_core::object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Camera3D as NativeCamera3D, Circle as NativeCircle,
     Framing2D, Path as NativePath, Projection, TickSpec, Transform as NativeTransform,
 };
@@ -26,13 +26,13 @@ use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, Qualifi
 use ze_render_ir::{FillSolid, MeasureSpace, Opacity as NativeOpacity, StrokeSolid};
 use ze_scene_contract::{Components, Name as NativeName, Parent as NativeParent};
 
-use crate::pod::content_service::PathStore;
-use crate::pod::types::{
+use crate::content_service::PathStore;
+use crate::types::{
     Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Light, LightKind, LineStyle,
     Material3D, Name, Opacity, Parent, Path, PathShape, Polyline, Reveal, RevealPath, ShaderVariant,
     Stroke, Transform, Transform3D, TransformChannel,
 };
-use crate::scene::components::{Light as NativeLight, Material3D as NativeMaterial3D};
+use ze_scene_core::components::{Light as NativeLight, Material3D as NativeMaterial3D};
 use ze_render_ir::ShaderVariant as NativeShaderVariant;
 
 /// 注入时使用的 Service 名（与 `LuaPod::requirements()` 对应）。
@@ -62,8 +62,8 @@ enum ClipTarget {
 }
 
 impl ClipTarget {
-    fn make(self) -> fn(ze_scene_contract::ObjectId) -> std::sync::Arc<dyn crate::animation::Target> {
-        use crate::animation::target::{
+    fn make(self) -> fn(ze_scene_contract::ObjectId) -> std::sync::Arc<dyn ze_scene_core::animation::Target> {
+        use ze_scene_core::animation::target::{
             make_transform_auto, make_transform_position, make_transform_rotation,
             make_transform_scale,
         };
@@ -370,7 +370,7 @@ fn service(pod: &dyn Pod) -> &SceneServicePod {
         .expect("SceneApi 的调用者必须是 SceneServicePod")
 }
 
-fn color32(color: crate::pod::types::Color) -> Color32 {
+fn color32(color: crate::types::Color) -> Color32 {
     Color32::new(color.r, color.g, color.b, color.a)
 }
 
@@ -438,9 +438,9 @@ fn scene_camera3d(pod: &dyn Pod, camera: Camera3D) -> Handle {
 fn scene_cube(pod: &dyn Pod, cube: Cube) -> Handle {
     // **参数化构造器**：顶点由宿主生成（B1-D 硬约束），脚本不传顶点数组。
     let mesh = std::sync::Arc::new(if cube.solid {
-        crate::scene::primitives::solid_cube(cube.half_extent)
+        ze_scene_core::mesh_primitives::solid_cube(cube.half_extent)
     } else {
-        crate::scene::primitives::wireframe_cube(cube.half_extent)
+        ze_scene_core::mesh_primitives::wireframe_cube(cube.half_extent)
     });
     service(pod)
         .rec

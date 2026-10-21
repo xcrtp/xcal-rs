@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 # B3-1b：场景核心层（对象 / 组件 / 纯逻辑）。本 crate 只留 ECS 实现。
 ze-scene-core = { path = "../ze-scene-core" }
+# B3-1c：语言无关的 Pod 边界；本层只做 re-export（`zela_scene::pod`）。
+ze-scene-api = { path = "../ze-scene-api" }
 ze-macro = { path = "../../kernel/ze-macro" }
 ze-notion = { path = "../../kernel/ze-notion" }
 # 场景对象层（图元 newtype）：组件词汇由对象层定义，本层（ECS 实现）只消费。

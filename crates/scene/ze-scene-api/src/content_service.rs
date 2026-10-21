@@ -26,7 +26,7 @@ use ze_notion::{Color32 as NotionColor, Path2D, Vec2 as NotionVec2};
 use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use ze_prerender::InMemoryEngine;
 
-use crate::pod::types::{Color, Formula, Path, PathList, Text};
+use crate::types::{Color, Formula, Path, PathList, Text};
 
 /// 注入时使用的 Service 名。
 pub const CONTENT_SERVICE_NAME: &str = "content";
@@ -170,7 +170,7 @@ fn compile(
     let this = service(pod);
     // 记录"内容能力被实际使用"（供 ZSB Meta 取最小 capability 集）。
     this.used.store(true, Ordering::Relaxed);
-    let outlines = crate::content::compile(
+    let outlines = ze_scene_core::content::compile(
         &this.engine,
         source,
         font_size,

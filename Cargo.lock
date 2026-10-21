@@ -6103,6 +6103,21 @@ name = "ze-resource"
 version = "0.1.1"
 
 [[package]]
+name = "ze-scene-api"
+version = "0.1.1"
+dependencies = [
+ "ze-content",
+ "ze-notion",
+ "ze-pod-core",
+ "ze-pod-macro",
+ "ze-prerender",
+ "ze-render-ir",
+ "ze-scene-contract",
+ "ze-scene-core",
+ "ze-time",
+]
+
+[[package]]
 name = "ze-scene-contract"
 version = "0.1.1"
 dependencies = [
@@ -6120,10 +6135,12 @@ dependencies = [
  "derive_more",
  "serde",
  "serde_json",
+ "ze-content",
  "ze-macro",
  "ze-notion",
  "ze-pod-core",
  "ze-pod-macro",
+ "ze-prerender",
  "ze-render-ir",
  "ze-scene-contract",
  "ze-time",
@@ -6350,6 +6367,7 @@ dependencies = [
  "ze-pod-macro",
  "ze-prerender",
  "ze-render-ir",
+ "ze-scene-api",
  "ze-scene-contract",
  "ze-scene-core",
  "ze-time",
