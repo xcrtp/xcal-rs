@@ -20,6 +20,15 @@ ze-render-ir = { path = "../../kernel/ze-render-ir" }
 ze-scene-contract = { path = "../../kernel/ze-scene-contract" }
 # `#[derive(Describable)]` 派生宏（生成 Deref + impl Describable）。
 ze-macro = { path = "../../kernel/ze-macro" }
+# 动画曲线 / 时钟（Binding / Timeline 的纯数据来源）。
+ze-time = { path = "../../kernel/ze-time" }
+# 内置数学函数由 Pod 提供（math_pod）；核心层不依赖任何 zela-*。
+ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
+# `TargetKind` 的 schema（`#[pod_type]` 派生）。
+ze-pod-macro = { path = "../../ze/pod/ze-pod-macro" }
+
+# 组件持久化：组件 serde + tagged JSON 编码。
+serde_json.workspace = true
 
 # Transform 摆放组件的 Builder 派生（与归位前一致）。
 derive_builder.workspace = true

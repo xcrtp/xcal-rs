@@ -19,7 +19,7 @@
 use crate::types::{Color32, Vec2, Vec3};
 
 // S2：3D 渲染描述符已下沉 `ze-render-ir`（渲染 IR 层）；此处 re-export
-// 保持 `zela_scene::scene::components::*` 路径不变。
+// 保持 `ze_scene_core::components::*` 路径不变。
 pub use ze_render_ir::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
 
 /// 分配进程内唯一的几何 id。
@@ -38,8 +38,8 @@ fn next_geometry_id() -> u64 {
 ///
 /// # Example
 /// ```rust
-/// use zela_scene::scene::components::{MeshGeometry, PrimitiveTopology};
-/// use zela_scene::types::Vec3;
+/// use ze_scene_core::components::{MeshGeometry, PrimitiveTopology};
+/// use ze_scene_core::types::Vec3;
 ///
 /// // 一个无索引三角形。
 /// let mesh = MeshGeometry::new(
@@ -132,8 +132,8 @@ impl MeshGeometry {
 ///
 /// # Example
 /// ```rust
-/// use zela_scene::scene::components::{Material3D, ShaderVariant};
-/// use zela_scene::types::Color32;
+/// use ze_scene_core::components::{Material3D, ShaderVariant};
+/// use ze_scene_core::types::Color32;
 ///
 /// let m = Material3D::color(Color32::new(255, 0, 0, 255));
 /// assert_eq!(m.color.r, 255);

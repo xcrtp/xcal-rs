@@ -34,7 +34,7 @@ use crate::components::{MeshGeometry, PrimitiveTopology};
 ///
 /// # Example
 /// ```rust
-/// use zela_scene::scene::primitives::parametric_surface;
+/// use ze_scene_core::mesh_primitives::parametric_surface;
 /// use ze_notion::SurfaceFn;
 ///
 /// let surface = SurfaceFn::new((-1.0, 1.0), (-1.0, 1.0), |x, y| x * y);

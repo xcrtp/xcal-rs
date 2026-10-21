@@ -91,7 +91,7 @@ pub fn rebind_components(components: &mut ze_scene_contract::Components) {
         // 必须显式解引用到 `dyn Component`（`Box<dyn Component>` 也满足 blanket impl）。
         if let Some(graph) = (**c)
             .as_any_mut()
-            .downcast_mut::<ze_object::FunctionGraph>()
+            .downcast_mut::<crate::object::FunctionGraph>()
         {
             if graph.func.is_bound() {
                 continue;

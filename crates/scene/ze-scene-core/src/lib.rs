@@ -22,11 +22,20 @@
 pub mod object;
 
 // 组件 / 图元 / 纯数据（B3-1b 从 `zela-scene` 下沉）。
+pub mod animation;
+pub mod camera_input;
 pub mod components;
+pub mod composer;
 pub mod domain;
+/// 内置数学函数（Pod 提供）与持久化时的名字壳回绑。
+pub mod math_pod;
 /// 内置网格生成器（原 `zela-scene::scene::primitives`；`object::primitives` 是图元 newtype，
 /// 两者同名不同义，故此处改名 `mesh_primitives`）。
 pub mod mesh_primitives;
+pub mod persist;
+pub mod registry;
+pub mod scene_script;
+pub mod scene_write;
 pub mod time_state;
 pub mod transform;
 pub mod types;

@@ -92,7 +92,7 @@ pub fn serialize_components(components: &Components) -> Result<Vec<TaggedCompone
         .map(|c| {
             // 显式解引用到 `dyn Component`：`Box<dyn Component>` 本身也满足
             // blanket `Component` impl，直接 `c.as_any()` 会拿到 Box 的 Any 而不是组件的。
-            let (type_name, data) = crate::contract::serialize_component((**c).as_any())?;
+            let (type_name, data) = crate::registry::serialize_component((**c).as_any())?;
             Ok(TaggedComponent {
                 type_name: type_name.to_string(),
                 data,
@@ -108,7 +108,7 @@ pub fn serialize_components(components: &Components) -> Result<Vec<TaggedCompone
 pub fn deserialize_components(tagged: Vec<TaggedComponent>) -> Result<Components, PersistError> {
     let mut components: Components = tagged
         .into_iter()
-        .map(|t| crate::contract::deserialize_component(&t.type_name, t.data))
+        .map(|t| crate::registry::deserialize_component(&t.type_name, t.data))
         .collect::<Result<_, _>>()?;
     crate::math_pod::rebind_components(&mut components);
     Ok(components)
@@ -117,7 +117,7 @@ pub fn deserialize_components(tagged: Vec<TaggedComponent>) -> Result<Components
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_object::Axes2D;
+    use crate::object::Axes2D;
 
     /// **无界定义域（±∞）必须能存 / 读往返**。
     ///

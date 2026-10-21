@@ -228,94 +228,18 @@ impl SceneRead for WorldScene<'_> {
     }
 }
 
-/// **组件登记表（唯一来源）**：正向 downcast、类型名反查、克隆、serde 共用这一份。
-///
-/// # 为什么是"一张表 + 多个展开器"
-///
-/// 核心约束是"新增一个已登记类型只写一处"。故 [`add_known`] / [`known_type_name`] /
-/// [`clone_known`] / [`serialize_component`] / [`deserialize_component`]
-/// 全部由本表展开，各自只需一个极薄的 `macro_rules!` 臂。
-///
-/// # `clone:` 段
-///
-/// 所有登记类型都必须 `Clone`（`Components` 的元素要求）—— 这是
-/// `SceneScript: Clone` 的直接前提。`AxesLine` 本轮也补上了 `Clone`。
-macro_rules! known_component_table {
-    ($mac:ident) => {
-        $mac! {
-            clone: Circle, Line, Path, Rect, Arrow, Transform, ZOrder,
-                   Name, Group, Visibility, Opacity,
-                   Camera2D, Camera3D, Projection, Framing2D, CameraMode, FpsView,
-                   StrokeSolid, FillSolid,
-                   Axes2D, AxesLine, FunctionGraph,
-                   PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent,
-                   // B1-D：3D 装配组件（脚本层入口）。`Arc<MeshGeometry>` 是
-                   // 录制系统读取的类型（记录时以 Arc 组件遍历）；Arc 本身 Clone /
-                   // Serialize / Deserialize（MeshGeometry 派生 serde）。
-                   LifetimeTracked, Composer, Arc<MeshGeometry>, Material3D, Light;
-            manual:
-        }
-    };
-}
-
-/// 反向能力 ①：已登记类型的**稳定名字**（即 Rust 类型名）。
-///
-/// 供"脚本 / dylib / 序列化"侧把类型记录成可持久化的名字。未登记 ⇒ `None`
-/// （与 `spawn_dyn` 的"未登记即失败"同口径）。名字来自 `stringify!`
-/// ⇒ **不会与类型定义漂移**。
-pub fn known_type_name<T: 'static>() -> Option<&'static str> {
-    // 宏定义在函数体内：宏体里的 `T` 才能解析到本函数的泛型参数
-    // （与 `add_known` 的 `arm!` 同法 —— 本地变量 / 泛型参数是**定义点卫生**的）。
-    macro_rules! name_arms {
-        (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
-            $(
-                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$c>() {
-                    return Some(stringify!($c));
-                }
-            )+
-            $(
-                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<$m>() {
-                    return Some(stringify!($m));
-                }
-            )*
-        }};
-    }
-    known_component_table!(name_arms);
-    None
-}
-
-/// 反向能力 ②：克隆一个**类型擦除**的已登记组件。
-///
-/// 用途：外部来源（Pod / dylib / 反序列化）拿到一个组件后要把它**复制**进
-/// [`Components`] 交给 `spawn_dyn`，而 `Box<dyn Any>` 本身不可 `Clone`。
-///
-/// 未登记类型 ⇒ `None`（与 `spawn_dyn` 同口径，不 panic）。
-pub fn clone_known(
-    c: &(dyn std::any::Any + Send + Sync),
-) -> Option<Box<dyn std::any::Any + Send + Sync>> {
-    macro_rules! clone_arms {
-        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
-            $(
-                if let Some(v) = c.downcast_ref::<$t>() {
-                    return Some(Box::new(v.clone()));
-                }
-            )+
-            $(
-                if let Some(v) = c.downcast_ref::<$m>() {
-                    let make = $ctor;
-                    return Some(Box::new(make(v)));
-                }
-            )*
-        }};
-    }
-    known_component_table!(clone_arms);
-    None
-}
+// ─── 组件登记表（B3-1b：表与 serde 已下沉 `ze-scene-core::registry`） ──────
+//
+// 唯一来源是 `ze_scene_core::known_component_table!`（导出宏）；
+// 本层只保留 hecs 特有的 `add_known`（需要 `EntityBuilder`），
+// 并把反向能力（类型名 / 克隆 / serde）转出，保持 `zela_scene::contract::*` 路径不变。
+pub use ze_scene_core::registry::{
+    clone_known, deserialize_component, known_type_name, serialize_component,
+};
 
 /// 按登记表把一个类型擦除的组件加进 builder；未登记返回 `false`。
 fn add_known(builder: &mut EntityBuilder, c: Box<dyn Component>) -> bool {
     let mut c: Box<dyn std::any::Any + Send + Sync> = c.into_any();
-    // 与 `known_type_name` / `clone_known` / serde **同一张表**（`known_component_table!`）。
     macro_rules! add_arms {
         (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
             $(
@@ -338,87 +262,98 @@ fn add_known(builder: &mut EntityBuilder, c: Box<dyn Component>) -> bool {
             )*
         }};
     }
-    known_component_table!(add_arms);
+    ze_scene_core::known_component_table!(add_arms);
 
-    // 未命中时 `c` 是最后一次 `Err(b) => c = b` 的结果；显式消费以表明
-    // "丢弃的是未登记组件"（返回值已不需要它，见上方 `bool` 语义）。
     let _unregistered = c;
     false
 }
 
-/// **组件持久化（编码）**：按登记表把组件写成 `(稳定类型名, JSON 值)`。
-///
-/// 未登记类型 / 序列化失败（如匿名函数）⇒ **明确错误**，不静默丢组件。
-pub fn serialize_component(
-    c: &dyn std::any::Any,
-) -> Result<(&'static str, serde_json::Value), crate::persist::PersistError> {
-    macro_rules! ser_arms {
-        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
-            $(
-                if let Some(v) = c.downcast_ref::<$t>() {
-                    return serde_json::to_value(v)
-                        .map(|data| (stringify!($t), data))
-                        .map_err(|e| crate::persist::PersistError::SerializeComponent {
-                            type_name: stringify!($t),
-                            message: e.to_string(),
-                        });
-                }
-            )+
-            $(
-                if let Some(v) = c.downcast_ref::<$m>() {
-                    return serde_json::to_value(v)
-                        .map(|data| (stringify!($m), data))
-                        .map_err(|e| crate::persist::PersistError::SerializeComponent {
-                            type_name: stringify!($m),
-                            message: e.to_string(),
-                        });
-                }
-            )*
-        }};
+// ─── B3-1b：SceneWrite 实现（类型擦除写入口） ─────────────────────────────
+//
+// 核心层的动画目标（`ze_scene_core::animation::target`）按 `ObjectId` 写组件，
+// 但不得认识 hecs。本 impl 用与 `add_known` **同一张登记表**做 `TypeId` 分发，
+// 保证"新增已登记组件只写一处"的约定不被绕过。
+impl ze_scene_core::scene_write::SceneWrite for WorldScene<'_> {
+    fn with_component_mut(
+        &mut self,
+        id: ObjectId,
+        type_id: std::any::TypeId,
+        f: &mut dyn FnMut(&mut dyn std::any::Any),
+    ) -> bool {
+        let Some(e) = entity_of(id) else {
+            return false;
+        };
+        macro_rules! mut_arms {
+            (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
+                $(
+                    if type_id == std::any::TypeId::of::<$c>() {
+                        return match self.world.query_one_mut::<&mut $c>(e) {
+                            Ok(v) => {
+                                f(v);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                    }
+                )+
+                $(
+                    if type_id == std::any::TypeId::of::<$m>() {
+                        return match self.world.query_one_mut::<&mut $m>(e) {
+                            Ok(v) => {
+                                f(v);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                    }
+                )*
+            }};
+        }
+        ze_scene_core::known_component_table!(mut_arms);
+        false
     }
-    known_component_table!(ser_arms);
-
-    Err(crate::persist::PersistError::UnregisteredComponent(
-        std::any::type_name_of_val(c).to_string(),
-    ))
 }
 
-/// **组件持久化（解码）**：按稳定类型名重建组件。
-///
-/// 类型名未知 / 数据不合法 ⇒ **明确错误**（不降级成 `None` 组件）。
-pub fn deserialize_component(
-    type_name: &str,
-    data: serde_json::Value,
-) -> Result<Box<dyn Component>, crate::persist::PersistError> {
-    macro_rules! de_arms {
-        (clone: $($t:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
-            $(
-                if type_name == stringify!($t) {
-                    return serde_json::from_value::<$t>(data)
-                        .map(|v| Box::new(v) as Box<dyn Component>)
-                        .map_err(|e| crate::persist::PersistError::DeserializeComponent {
-                            type_name: type_name.to_string(),
-                            message: e.to_string(),
-                        });
-                }
-            )+
-            $(
-                if type_name == stringify!($m) {
-                    return serde_json::from_value::<$m>(data)
-                        .map(|v| Box::new(v) as Box<dyn Component>)
-                        .map_err(|e| crate::persist::PersistError::DeserializeComponent {
-                            type_name: type_name.to_string(),
-                            message: e.to_string(),
-                        });
-                }
-            )*
-        }};
+impl ze_scene_core::scene_write::SceneWrite for crate::scene::Scene {
+    fn with_component_mut(
+        &mut self,
+        id: ObjectId,
+        type_id: std::any::TypeId,
+        f: &mut dyn FnMut(&mut dyn std::any::Any),
+    ) -> bool {
+        let Some(e) = entity_of(id) else {
+            return false;
+        };
+        let world = self.world_mut();
+        macro_rules! mut_arms {
+            (clone: $($c:ty),+ $(,)?; manual: $($m:ty => $ctor:expr),* $(,)?) => {{
+                $(
+                    if type_id == std::any::TypeId::of::<$c>() {
+                        return match world.query_one_mut::<&mut $c>(e) {
+                            Ok(v) => {
+                                f(v);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                    }
+                )+
+                $(
+                    if type_id == std::any::TypeId::of::<$m>() {
+                        return match world.query_one_mut::<&mut $m>(e) {
+                            Ok(v) => {
+                                f(v);
+                                true
+                            }
+                            Err(_) => false,
+                        };
+                    }
+                )*
+            }};
+        }
+        ze_scene_core::known_component_table!(mut_arms);
+        false
     }
-    known_component_table!(de_arms);
-
-    Err(crate::persist::PersistError::UnknownComponentType(
-        type_name.to_string(),
-    ))
 }
 
 impl Scene for WorldScene<'_> {

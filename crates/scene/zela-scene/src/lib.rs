@@ -20,12 +20,9 @@ pub mod errors;
 pub mod geometry;
 pub mod input;
 pub mod lifetime;
-pub mod math_pod;
-pub mod persist;
 pub mod pod;
 pub mod register;
 pub mod scene;
-pub mod scene_script;
 pub mod transform_hierarchy;
 pub mod utils;
 
@@ -52,14 +49,23 @@ pub use input::{ParamPanelSystem, TimeControlSystem};
 pub use lifetime::{
     LifetimeEvent, LifetimeEventKind, LifetimeEvents, LifetimeFlushSystem, LifetimeTracker,
 };
-pub use math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
-pub use persist::{PersistError, TaggedComponent, deserialize_components, serialize_components};
+// B3-1b：数学函数 Pod 与持久化已下沉核心层；路径保持不变。
+pub use ze_scene_core::{math_pod, persist};
+pub use ze_scene_core::math_pod::{SharedPod, builtin_f32, function_from_pod, math_pod};
+pub use ze_scene_core::persist::{
+    PersistError, TaggedComponent, deserialize_components, serialize_components,
+};
 pub use scene::{
     components, comp, primitives, Scene,
 };
-pub use scene_script::{
+// B3-1b：脚本数据（SceneScript / SceneEncoder）已下沉核心层；路径保持不变。
+pub use ze_scene_core::scene_script;
+pub use ze_scene_core::scene_script::{
     Handle, HandleRange, SceneEncoder, SceneRecipe, SceneScript, ScriptError, handle_ref,
 };
+
+#[cfg(test)]
+mod scene_script_tests;
 pub use transform_hierarchy::{
     TransformHierarchyError, TransformHierarchySystem, WorldTransforms,
 };

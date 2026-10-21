@@ -6122,8 +6122,11 @@ dependencies = [
  "serde_json",
  "ze-macro",
  "ze-notion",
+ "ze-pod-core",
+ "ze-pod-macro",
  "ze-render-ir",
  "ze-scene-contract",
+ "ze-time",
 ]
 
 [[package]]
