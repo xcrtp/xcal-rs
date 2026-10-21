@@ -325,13 +325,14 @@
 | S4-08 | `SurfaceTexture.filter` / `mipmap` 已进契约，但后端采样仍用全局默认 | 渲染后端 | **仍成立（未接线）** | 为保持 demo3d 零差异，4c 未改后端 sampler；mipmap 生成本就未实现（E-08）。触发条件：出现对过滤敏感的 Surface 内容 / 引入 mipmap 生成 |
 | S4-09 | 内容层录制只支持 `(Path, StrokeSolid)`，其它组合走 Surface 会静默丢内容 | 渲染管线 | **已关闭（B3 Step 5-1）** | 新增 `record_scene_for_surface`：复用 9 组全组合 + Parent 归属过滤；`ContentTextureItem` 标记**不再必需**（组件保留登记以兼容旧数据）；demo3d 零差异 |
 | S4-10 | Surface 归属的 2D 内容被**屏幕视口重复绘制**（同一对象出现两次且带偏移） | 渲染管线 | **已关闭（B3 Step 5 修正）** | `record_group` 引入 `SurfaceScope::{Viewport, Content}`：视口层跳过归属任一 `Surface` 的对象（内容只进该 Surface 的纹理）；test `renderer2d_content_is_not_drawn_in_viewport`；`surface_matrix` 重录 `baafe1aa… → 7bed8a31…`，既有四基线不变 |
+| S4-11 | `composite = true` 把整张纹理**铺满视口**（无 letterbox / 无目标矩形）⇒ 纹素宽高比 ≠ 输出宽高比时画面被拉伸（圆变椭圆） | 渲染后端 | **仍成立（已知限制）** | 作品 A/B 已按「bounds = texel = 承载平面 = 4:3」对齐规避；触发条件：窗口比例与 texel 比例不一致（如 16:9 输出 4:3 纹理）。修法需给合成四边形加目标矩形或 UV 缩放 |
 | S5-01 | fourier / storyboard 迁移到纹理路径 + 重录 | 作品 | **未执行** | 本批 Step 5 只做**新作品的 fixture 注册 + 重录**，不含迁移；两者仍走默认 2D 直画路径。迁移会引入一次纹理采样 ⇒ 必须重录 |
 | S6-01 | 脚本无法声明 Surface / 无法把内容纹理挂到材质 | 脚本 API | **已关闭（B3 Step 5-0）** | `scene.surface(zela.Surface)` + `Material3D.texture = Texture.Surface{..}`；`SurfaceTextureRef` 在 commit 解析；`zela.scene@7`（指纹 `15_573_081_187_359_822_637`） |
 | S6-02 | `zela.Material3D` 加 `texture` 字段而指纹不变（字段结构不进指纹） | 脚本 API | **仍成立（已知）** | 加**方法**会变指纹、加**字段**不会 —— 看守力度不一致；本轮靠版本递增 + 手工记账 |
 | S6-03 | Rust 版 `authored/demo3d.rs` 不进任何对拍 / 测试（验证盲区） | 作品 / 测试 | **仍成立（记账）** | `build_script_runtime` 用 `with_demo3d = false`，`--script` / `--bundle` 都不构建它；`tests/` 只覆盖能力 demo 与分镜 ⇒ 该模块的改动无人验（4c-4 的"零差异"对它是平凡真）。触发条件：给它加对拍入口，或显式降级为"仅 GUI 示例" |
 | S6-04 | 脚本可表达的图元是 9 组录制表的**真子集** | 脚本 API | **仍成立（已知）** | `ze-scene-api` 只有 `Circle` / `Polyline` / `Arrow` / `PathShape`（无 Rect / Line / Ellipse / Polygon）；作品 A 因此只能覆盖 Circle / Arrow / Path × {Fill, Stroke}，Rect / Line 组合**无法用脚本表达** |
 
-**J 段小计（B3，已执行部分）**：已关闭 17（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10、S6-01）· 仍成立/显式拒绝 7（S1-02/03、S2-03、S4-08、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 17（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10、S6-01）· 仍成立/显式拒绝 8（S1-02/03、S2-03、S4-08、S4-11、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
 
 ---
 

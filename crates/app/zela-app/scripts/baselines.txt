@@ -17,32 +17,32 @@
 # （S1 零扰动补证：ff2751d 与 ba75687 两侧均复现本值，见 GAPS.md G-101 补证）
 # B2-8（Q4）：3D 首次进入 frame hash 对拍网（demo3d 升级为 fixture）。
 # device = windows / RTX 4060 Laptop
-# reason: B3 Step 5 修正：Surface 归属内容不再重复绘制在屏幕视口（两套相机导致同对象双重且偏移）；既有四基线不变 @ 2b4fab9
-# slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ a92b9ea
-# slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ a92b9ea
-# slotA: demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ a92b9ea
-# slotA: surface_matrix = baafe1aa567564aabfd74f24e2973e06b49106c987c2c0f746a53abf2085d859 @ a92b9ea
-# slotA: atlas = 4d718c22dfa7b413b731125147c8f47aff9a203e3f555a20262120137cdc6bd5 @ a92b9ea
-# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 2b4fab9
-# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 2b4fab9
-# slotB: demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ 2b4fab9
-# slotB: surface_matrix = 7bed8a312ae5f7268edd2743d8fd3f2c1c89ac87133606275bbd08c9b9d61467 @ 2b4fab9
-# slotB: atlas = 4d718c22dfa7b413b731125147c8f47aff9a203e3f555a20262120137cdc6bd5 @ 2b4fab9
-fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 2b4fab9
-storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 2b4fab9
-demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ 2b4fab9
-surface_matrix = 7bed8a312ae5f7268edd2743d8fd3f2c1c89ac87133606275bbd08c9b9d61467 @ 2b4fab9
-atlas = 4d718c22dfa7b413b731125147c8f47aff9a203e3f555a20262120137cdc6bd5 @ 2b4fab9
+# reason: B3 Step 5 修正：作品 A/B 纹理与承载平面宽高比对齐（4:3）消除横向拉伸；作品 B 公式改一阶表达式 @ 32141e7
+# slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 32141e7
+# slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 32141e7
+# slotA: demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ 32141e7
+# slotA: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 32141e7
+# slotA: atlas = d60aeb5c43d1f3f93aad021285a4c068cb85849b95d96eafdaac6e9f456e6316 @ 32141e7
+# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 32141e7
+# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 32141e7
+# slotB: demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ 32141e7
+# slotB: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 32141e7
+# slotB: atlas = efe5bf3926bdb17a183d4880bd6b989fd1f4bf07043dc1d71f4851fd5b050318 @ 32141e7
+fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 32141e7
+storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 32141e7
+demo3d = dc8b1388e10bc9d750629daf858e8c97d521ff4e4a69389edcaf0e055b292b3f @ 32141e7
+surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 32141e7
+atlas = efe5bf3926bdb17a183d4880bd6b989fd1f4bf07043dc1d71f4851fd5b050318 @ 32141e7
 
 [smoke]
 # 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
 # device = windows / RTX 4060 Laptop
-# reason: B3 Step 5 修正：Surface 归属内容不再重复绘制在屏幕视口（两套相机导致同对象双重且偏移）；既有四基线不变 @ 2b4fab9
-# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ a92b9ea
-# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 2b4fab9
-smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 2b4fab9
+# reason: B3 Step 5 修正：作品 A/B 纹理与承载平面宽高比对齐（4:3）消除横向拉伸；作品 B 公式改一阶表达式 @ 32141e7
+# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 32141e7
+# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 32141e7
+smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 32141e7
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档

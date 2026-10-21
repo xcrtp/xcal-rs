@@ -4,16 +4,20 @@
 -- `Renderer2D` 内容纹理路径；`composite = true` 让纹理直接合成到屏幕，
 -- 从而可被像素对拍（非像素断言另见 zela-app 测试）。
 --
--- 覆盖：Circle × Fill / Stroke、Arrow × Fill / Stroke、Path × Stroke（文本路径）。
+-- 覆盖：Circle × Fill / Stroke、Arrow × Fill / Stroke、Path × Fill / Stroke（文本）。
 -- 所有内容挂 `Parent { parent = surf }` —— 归属由 Parent 链解析（不再需要标记组件）。
+--
+-- 比例约定：bounds 16×12（4:3）= texel 1024×768（4:3）。
+-- `composite = true` 是**整张纹理铺满视口**（不做 letterbox）⇒ 纹理宽高比必须
+-- 与输出视口一致，否则画面会被横向拉伸（圆变椭圆）。
 
 local surf = scene.spawn({
     Surface {
-        min_x = -10.0, min_y = -6.0, max_x = 10.0, max_y = 6.0,
+        min_x = -8.0, min_y = -6.0, max_x = 8.0, max_y = 6.0,
         mapping = SurfaceMapping.World,
         anchor_x = 0.5, anchor_y = 0.5,
         renderer = SurfaceRenderer.Renderer2D,
-        texel_width = 512, texel_height = 512,
+        texel_width = 1024, texel_height = 768,
         filter = TextureFilter.Linear,
         mipmap = false,
         fit_margin = 0.9,
@@ -29,12 +33,12 @@ local stroke_green = Stroke { width = 4.0, color = Color { r = 120, g = 255, b =
 
 -- Circle × Fill / Stroke（空间错开，避免互相污染）。
 scene.spawn({
-    Circle { x = -6.0, y = 3.0, r = 1.5 },
+    Circle { x = -5.5, y = 3.0, r = 1.6 },
     fill_warm,
     belong,
 })
 scene.spawn({
-    Circle { x = -6.0, y = -3.0, r = 1.5 },
+    Circle { x = -5.5, y = -3.0, r = 1.6 },
     stroke_cool,
     belong,
 })
@@ -43,7 +47,7 @@ scene.spawn({
 scene.spawn({
     Arrow {
         from = Vec2 { x = -2.0, y = 3.0 },
-        to = Vec2 { x = 2.0, y = 3.0 },
+        to = Vec2 { x = 1.5, y = 3.0 },
         head_length = 0.9,
         head_width = 0.6,
     },
@@ -53,7 +57,7 @@ scene.spawn({
 scene.spawn({
     Arrow {
         from = Vec2 { x = -2.0, y = -3.0 },
-        to = Vec2 { x = 2.0, y = -3.0 },
+        to = Vec2 { x = 1.5, y = -3.0 },
         head_length = 0.9,
         head_width = 0.6,
     },
@@ -62,7 +66,7 @@ scene.spawn({
 })
 
 -- Path × Stroke：文本编译出的描边路径（每条形一条对象）。
-local paths = content.text(Text { source = "AB", font_size = 3.0, x = 5.0, y = 0.0 })
+local paths = content.text(Text { source = "AB", font_size = 3.0, x = 3.0, y = -0.5 })
 for i = 1, #paths do
     scene.spawn({
         PathShape { path = paths[i] },
@@ -71,7 +75,7 @@ for i = 1, #paths do
 end
 
 -- Path × Fill：同一份字形轮廓走填充（另一种样式组合，空间上不重叠）。
-local fills = content.text(Text { source = "CD", font_size = 2.5, x = 5.0, y = 4.0 })
+local fills = content.text(Text { source = "CD", font_size = 2.5, x = 3.0, y = 4.0 })
 for i = 1, #fills do
     scene.spawn({
         PathShape { path = fills[i] },
