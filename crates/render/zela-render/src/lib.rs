@@ -1,15 +1,14 @@
-// zela-render: 渲染 trait + 调度 + 资源管理层（三层架构的中间层）
+// zela-render: 渲染管线层（**渲染无关**；B3-0.5e 起不依赖 wgpu）
 // 依赖方向：ze-notion / zela-scene ← zela-render ← zela-render-backends
 //
-// 本 crate 禁止依赖 egui。wgpu 仅通过 feature = "wgpu" 引入
-// （RenderTarget / RenderLayer / RenderBackend / ResourceCache 等 GPU 抽象）。
+// 本 crate 禁止依赖 egui；GPU 侧契约（RenderTarget / RenderLayer / RenderBackend /
+// ResourceCache）已迁入 `zela-render-backends`（B3-0.5e）。
 //
 // 包含：
 //   - 2D 绘制管线（draw.rs：Painter2D / DrawQueue / Shape2D / Style2D /
 //     Drawable / record_drawables / record_scene）
 //   - 3D 队列与绘制器 trait（draw_queue_3d.rs / painter_3d.rs）
-//   - 视口/渲染目标/渲染层（viewport.rs / render_target.rs / render_layer.rs）
-//   - 后端 trait 与资源缓存的过渡 shim（render_backend.rs / resource_cache.rs，wgpu gate）
+//   - 视口（viewport.rs）与顶点生产（vertex_record.rs）
 //   - 路径稳定的转发模块（`shape` / `vertex`）与预留后端目标
 //     （`painter_2d.rs::Painter2DTarget`，已有生产实现 `WgpuBackend2D`）
 //
@@ -46,14 +45,9 @@ pub mod shape {
 }
 
 // render_backend 模块始终编译（GpuHandle 无 wgpu 依赖）；
-// RenderBackend / RenderBackend3D trait 在模块内 cfg(feature = "wgpu")。
-pub mod render_backend;
-#[cfg(feature = "wgpu")]
-pub mod render_layer;
-#[cfg(feature = "wgpu")]
-pub mod render_target;
-#[cfg(feature = "wgpu")]
-pub mod resource_cache;
+// B3-0.5e：GPU 侧模块（render_backend / render_layer / render_target / resource_cache）
+// 已迁入 `zela-render-backends` —— 本 crate **不再依赖 wgpu**（渲染无关层）。
+// 依赖方向：ze-notion / zela-scene ← zela-render ← zela-render-backends。
 
 // ─── 2D 管线 re-export ────────────────────────────────────────────────────
 // M0 起载荷统一为 Shape2D / Style2D（旧 Shape / Style 枚举已删除）。
@@ -122,18 +116,9 @@ pub use vertex::{
     hash_bytes_sampled,
 };
 
-// ─── wgpu 抽象（feature gate） ────────────────────────────────────────────
-#[cfg(feature = "wgpu")]
-pub use render_backend::{RenderBackend, RenderBackend3D};
-#[cfg(feature = "wgpu")]
-pub use render_layer::RenderLayer;
-#[cfg(feature = "wgpu")]
-pub use render_target::RenderTarget;
-#[cfg(feature = "wgpu")]
-pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};
-
-// GpuHandle / GpuResourceId / AccessError 是纯 Any 包装 + 类型，无 wgpu 依赖，始终可用。
-pub use render_backend::{AccessError, GpuHandle, GpuResourceId};
+// ─── 渲染契约的纯数据类型（无 wgpu 依赖） ─────────────────────────────────
+// GpuHandle / GpuResourceId / AccessError 来自 kernel/ze-resource（始终可用）。
+pub use ze_resource::render_backend::{AccessError, GpuHandle, GpuResourceId};
 
 // 为下游用户提供与原 zela::scene::comp::{StrokeSolid, FillSolid} 一致的访问
 // 通过在 scene 根重新导出 components + render 组件。

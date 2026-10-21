@@ -111,7 +111,8 @@ pub struct RenderCapabilitySet {
 }
 
 impl RenderCapabilitySet {
-    /// 全部实现（wgpu 当前形态）。
+    /// wgpu 当前形态：2D / 3D / mixed 已实现，`shapes` **尚未实现**。
+    /// （后端自述集合见 `zela-render-backends::render_backend::IMPLEMENTED_NAMESPACES`。）
     pub const ALL: Self = Self {
         render2d: true,
         render3d: true,

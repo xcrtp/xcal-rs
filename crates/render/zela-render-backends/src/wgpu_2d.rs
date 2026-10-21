@@ -34,7 +34,7 @@ use ze_notion::Mat4;
 use wgpu::util::DeviceExt as _;
 
 use ze_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
-use zela_render::resource_cache::{ResourceCache, ResourceKey};
+use crate::resource_cache::{ResourceCache, ResourceKey};
 use zela_render::{
     AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, REVEAL_STEP_PX,
     RevealItem, Shape2D, Style2D, TessKind, VertexInputDesc, VertexLayout, hash_bytes,

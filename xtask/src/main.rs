@@ -596,6 +596,29 @@ fn step_structure(root: &Path) -> Result<(), String> {
         );
     }
     println!("[xtask] OK: 能力指纹与 version 配对（zela.scene / zela.content）");
+
+    // B3-0.5c：四个 render capability 的指纹同样钉住——
+    // 签名集（ze-render-ir::caps）变了而未更新 PINNED_FINGERPRINTS ⇒ fail。
+    println!("[xtask] $ cargo test -p ze-render-ir --lib render_fingerprints_are_pinned");
+    let status = Command::new("cargo")
+        .args([
+            "test",
+            "-q",
+            "-p",
+            "ze-render-ir",
+            "--lib",
+            "render_fingerprints_are_pinned",
+        ])
+        .current_dir(root)
+        .status()
+        .map_err(|error| format!("启动渲染能力指纹校验失败：{error}"))?;
+    if !status.success() {
+        return Err(
+            "渲染能力指纹校验失败：caps 签名变了但 PINNED_FINGERPRINTS 未同步（B3-0.5c）"
+                .to_string(),
+        );
+    }
+    println!("[xtask] OK: 渲染能力指纹（zela.render2d / render3d / mixed / shapes）");
     Ok(())
 }
 

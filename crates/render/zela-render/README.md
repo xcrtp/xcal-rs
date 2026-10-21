@@ -7,9 +7,9 @@
 > ```
 >
 > 定义 2D 与 3D 的绘制器 trait、绘制队列、视口/渲染目标/渲染层抽象与新图元体系。
-> **无 egui 依赖**；`wgpu` 仅通过 `feature = "wgpu"` 引入（纯数据/队列/trait 定义不依赖 wgpu）。
-> 渲染契约层（顶点格式 `ze-vertex`、资源缓存纯数据 `ze-resource`）已下沉 kernel，
-> 本 crate 通过 `pub use` 与过渡 shim 保留原有公开路径。
+> **无 egui 依赖，B3-0.5e 起无 wgpu 依赖**（渲染无关层：纯数据 / 队列 / trait / 顶点生产）。
+> GPU 侧契约（`RenderTarget` / `RenderLayer` / `RenderBackend` / `ResourceCache`）已迁入
+> `zela-render-backends`；契约纯数据（顶点格式 `ze-vertex`、资源缓存 `ze-resource`）在 kernel。
 
 ---
 
@@ -96,27 +96,23 @@ position/attrib0/attrib1/attrib2）：
   `LineDraw { start, end, color }`，类型无交集便于并行写入
   （便捷方法 `draw_mesh` / `draw_line`）
 - `Painter3D` trait：`fn begin(&mut self)` / `draw_mesh` / `draw_line` / `end`
-- `RenderLayer` (`feature="wgpu"`)：渲染层 / framebuffer 组合描述
-- `RenderTarget` (`feature="wgpu"`)：对 wgpu `TextureView` 的 RAII 包装
-- `Viewport`：纯数据 `(origin, size)`，无 wgpu 依赖，任何 feature 组合均可用
-- `RenderBackend / RenderBackend3D` (`feature="wgpu"`)：设备/队列/格式抽象
+- `RenderLayer` / `RenderTarget` / `RenderBackend / RenderBackend3D`：**已迁入**
+  `zela-render-backends`（B3-0.5e；GPU 侧契约与 wgpu 类型同处一个 crate）
+- `Viewport`：纯数据 `(origin, size)`，无 wgpu 依赖
 - `ResourceCache<T>` / `GpuResourceCache`：generation-aware slot + key→id 索引的资源缓存
-  （已下沉 `ze-resource`，本 crate 经 `resource_cache` shim 重导出）
+  （定义在 `ze-resource`；后端侧 shim 在 `zela-render-backends::resource_cache`）
 - `GpuHandle`：纯 `Any` 包装，**无 wgpu 依赖**，任何上层都可持有（已下沉 `ze-resource`）
 
 ---
 
 ## Features
 
-| Feature | 默认 | 引入 |
-|---------|------|------|
-| `wgpu` | ✅ | `wgpu = 30`；编译 `render_layer.rs / render_target.rs / resource_cache.rs` 以及 `render_backend.rs` 中的 `RenderBackend / RenderBackend3D` trait。关闭时仍保留 `GpuHandle`、`Viewport`、`DrawQueue*D`、`Painter*D` 等纯数据与 trait。 |
+**无 feature 开关**（`default = []`，且没有可选 feature）：本 crate 恒为渲染无关层。
 
 **典型组合**：
-- `zela-render` (默认) — 用于 zela-app 装配
-- `zela-render, default-features = false` — 用于 zela-egui 2D 管线
-  （不关心 wgpu 层，仅用 `Painter2D` / `DrawQueue` / `Shape2D` / `Style2D`；
-  `tessellate` 是纯 CPU 模块，任何 feature 组合都可用）
+- `zela-render` — 用于 zela-app / zela-egui / zela-render-backends
+  （`Painter2D` / `DrawQueue` / `Shape2D` / `Style2D` / `DrawQueue3D` / `tessellate` /
+  `vertex_record` 等；不含任何 wgpu 类型）
 
 ---
 
@@ -134,10 +130,7 @@ position/attrib0/attrib1/attrib2）：
 | `painter_2d` / `painter_3d` | 绘制器 trait 定义（`Painter2DTarget` / `Painter3D`） |
 | `shape` | `Shape2D` + `Style2D` + `CustomShapeData`/`SpecId`/`CustomSpec`/`CustomSpecs`（自定义图元按**具名规格**解析） |
 | `viewport` | `Viewport`（纯数据） |
-| `render_backend` | 重导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源，始终可用）+ `RenderBackend / RenderBackend3D` (`wgpu`) |
-| `render_layer` (`wgpu`) | `RenderLayer`（framebuffer + 清屏描述 + 视口） |
-| `render_target` (`wgpu`) | `RenderTarget`（`TextureView` RAII + 描述符） |
-| `resource_cache` (`wgpu`) | 过渡 shim：glob 重导出 `ze-resource` 的 `ResourceCache / ResourceKey / DeferredDestroyer / GpuResourceCache`（M3-7 起**不再有 hecs 的 `CacheKey` 兼容层**）|
+| `render_backend`（导出项） | 根导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源）；`RenderBackend / RenderBackend3D` 已迁入 `zela-render-backends` |
 | `scene` (mod) | `use zela_render::scene::{comp, Scene}` 重新导出 components + zela_scene Scene |
 | `content_ir` | `ir_to_draw_cmds`：ze-content `ContentIR` → `Shape2D + Style2D + Transform2D`（scale = target / nominal_font_size，描边宽度同步换算为世界单位并标 `MeasureSpace::World`） |
 | `vertex` | 顶点格式契约（已下沉 kernel `ze-vertex`，经 `pub use ze_vertex as vertex;` 保持路径）：`VertexLayout` / `VertexAttrib` / `AaModel` / `CacheStrategy` / `StaticConsistencyChecker`；需 `serde` 可序列化 |
@@ -225,9 +218,8 @@ assert_eq!(q3.mesh_count() + q3.line_count(), 2);
 ## 测试
 
 ```bash
-cargo test -p zela-render                      # 75 个单元测试（顶点契约 / 资源缓存主体已随模块迁至 ze-vertex / ze-resource）
-cargo test -p zela-render --no-default-features # 验证纯数据/队列无 wgpu 依赖时通过
-cargo doc  -p zela-render --no-deps --all-features
+cargo test -p zela-render                      # 本 crate 无 feature 开关、不含 wgpu 代码，一次命令即全量
+cargo doc  -p zela-render --no-deps
 ```
 
 覆盖点：
@@ -247,9 +239,9 @@ cargo doc  -p zela-render --no-deps --all-features
   `shader_offset_reproduces_lyon_contour_points`（`position + normal * w/2`
   与旧管线 lyon `position()` 逐顶点 < 1e-6，即"与旧 CPU 管线同源"的数值证明）、
   `stroke_area_scales_linearly_with_width`（宽 2→8 面积比 = 4）
-- `resource_cache`（shim 层）：`ResourceKey` 版本隔离、`get_or_insert` 命中/未命中、
+- `resource_cache`（shim 层测试在 `zela-render-backends`）：`ResourceKey` 版本隔离、`get_or_insert` 命中/未命中、
   `mark_used` 保活、`evict_unused`、脏标记与 `upload_dirty`、stale id 返回 `AccessError`
-  （`ResourceCache`/`GpuHandle` 主体与 pending 有界性压测已随模块迁至 `ze-resource`）
+  （`ResourceCache`/`GpuHandle` 主体与 pending 有界性压测在 `ze-resource`）
 - `GpuHandle` 不再要求 `Send + Sync`（wasm 上 wgpu 资源含 `Rc`）；native 的
   egui TypeMap 边界由后端类型上的显式徽章局部承担
 
@@ -272,7 +264,7 @@ derive_more / derive-new / derive_builder
 thiserror         = "2.0"
 lyon_tessellation = "1.0"   # S3-0 三角化（不自研）
 lyon_path         = "1.0"
-wgpu              = "30"   (optional, feature = "wgpu")
+# 无 wgpu：B3-0.5e 起 GPU 侧契约在 zela-render-backends
 ```
 
 > **无 hecs（库本体）**（M3-7）：`record_scene<S: SceneRead>` 与 P4 归位的三个录制 System

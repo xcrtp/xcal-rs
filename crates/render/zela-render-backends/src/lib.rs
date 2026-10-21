@@ -32,6 +32,29 @@ pub mod wgpu_2d;
 pub mod compositor;
 // 渲染期软失败计数（三角化失败跳过数：每帧 / 累计）。
 pub mod diagnostics;
+// B3-0.5e：GPU 侧契约模块从 `zela-render` 迁入（`zela-render` 不再依赖 wgpu）。
+//   - render_backend：RenderBackend / RenderBackend3D trait（引用 wgpu 类型）
+//   - render_layer：RenderLayer（相机 + 视口 + 队列 + 目标）
+//   - render_target：RenderTarget（纹理视图 RAII）
+//   - resource_cache：`zela_render::resource_cache` 路径的兼容重导出（纯 ze-resource）
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod render_backend;
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod render_layer;
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod render_target;
+pub mod resource_cache;
+
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use render_backend::{
+    IMPLEMENTED_NAMESPACES, RenderBackend, RenderBackend3D, implemented_capabilities,
+    negotiate_capabilities,
+};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use render_layer::RenderLayer;
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use render_target::RenderTarget;
+pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};
 
 // S2：eframe/egui 宿主适配，默认关闭（feature = "eframe"）——
 // 浏览器产物不得带 egui 链；native 宿主（zela-gui）显式开启。

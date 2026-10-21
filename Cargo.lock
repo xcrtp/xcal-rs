@@ -6101,6 +6101,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "ze-notion",
+ "ze-pod-core",
  "ze-vertex",
 ]
 
@@ -6285,7 +6286,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "wgpu",
  "ze-content",
  "ze-notion",
  "ze-object",
@@ -6313,6 +6313,7 @@ dependencies = [
  "ze-notion",
  "ze-object",
  "ze-render-ir",
+ "ze-resource",
  "ze-vertex",
  "zela-render",
  "zela-scene",

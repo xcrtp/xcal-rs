@@ -26,7 +26,7 @@ zela-scene / zela-render / ze-notion
 | feature | 引入的依赖 | 可用模块 |
 |---------|-----------|----------|
 | `default` (= `wgpu`) | 同 `wgpu` | 同 `wgpu`（默认开启以便 `cargo test -p zela-render-backends` 直接跑顶点契约测试） |
-| `wgpu` | `wgpu 30`, `pollster 0.3`, `zela-render/wgpu` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `standard_backends`, `scene_callback` |
+| `wgpu` | `wgpu 30`, `pollster 0.3` | `render_context`, `wgpu_3d`, `wgpu_2d`, `vertex_layout`, `compositor`, `standard_backends`, `scene_callback`，以及 B3-0.5e 迁入的 `render_backend` / `render_layer` / `render_target` / `resource_cache` |
 | `egui-wgpu` | `egui` + `egui-wgpu` + `wgpu` + `pollster` + 同 `wgpu` | 同 `wgpu`（`scene_callback` 额外提供 `CallbackTrait` 实现） |
 | `eframe` | 同 `egui-wgpu` | 同 `egui-wgpu` + `eframe_backend`（`EframeWgpuBackend` / `install_standard_backends`）。**默认关闭**：浏览器产物不带 egui 链 |
 | `text` | — | 预留空 feature：Cargo.toml 保留声明，`src/` 无对应模块（旧 Typst/LaTeX 空壳已删除） |

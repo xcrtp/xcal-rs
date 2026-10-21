@@ -7,8 +7,8 @@ license.workspace = true
 
 # trait + 调度 + 资源管理层。
 # 依赖方向：ze-notion / zela-scene ← zela-render ← zela-render-backends
-# 本 crate 禁止依赖 egui；wgpu 仅通过 feature "wgpu" 引入（RenderTarget /
-# RenderLayer / RenderBackend 等 GPU 抽象需要），纯数据/队列/trait 定义不依赖 wgpu。
+# 本 crate 禁止依赖 egui；**也不再依赖 wgpu**（B3-0.5e：GPU 侧模块已迁入
+# zela-render-backends，本 crate 是纯渲染无关层）。
 [dependencies]
 zela-scene = { path = "../../scene/zela-scene", default-features = false }
 # 调度内核：三个录制 System（record_systems.rs，P4 从 zela-egui 归位到渲染层）
@@ -36,7 +36,6 @@ thiserror.workspace = true
 # 顶点格式契约（vertex 模块）：VertexLayout 需可序列化（V4，pipeline 变体缓存 key 前置）
 serde.workspace = true
 
-wgpu = { workspace = true, optional = true }
 lyon_tessellation = "1.0"
 lyon_path = "1.0"
 
@@ -47,5 +46,5 @@ serde_json.workspace = true
 hecs.workspace = true
 
 [features]
-default = ["wgpu"]
-wgpu = ["dep:wgpu"]
+# B3-0.5e：wgpu feature 已删除（GPU 侧模块迁入 zela-render-backends）。
+default = []

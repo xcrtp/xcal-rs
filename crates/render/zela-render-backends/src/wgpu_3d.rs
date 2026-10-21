@@ -57,10 +57,12 @@ use wgpu::util::DeviceExt as _;
 use crate::gpu_util::{UniformArena, bytes_of};
 use ze_notion::Color32;
 use zela_render::draw_queue_3d::{LineDraw, MeshDraw};
-use zela_render::{
-    DirectionalLightRecord, GpuHandle, PointLightRecord, RenderBackend3D, RenderLayer,
-    RenderTarget, ResourceCache, ResourceKey, Viewport,
-};
+use zela_render::{DirectionalLightRecord, PointLightRecord, Viewport};
+// B3-0.5e：GPU 侧契约模块已在本 crate（原 `zela_render::*`）。
+use crate::render_backend::{GpuHandle, RenderBackend3D};
+use crate::render_layer::RenderLayer;
+use crate::render_target::RenderTarget;
+use crate::resource_cache::{ResourceCache, ResourceKey};
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
 use ze_render_ir::{
     Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, LayerBlend, ZOrder,

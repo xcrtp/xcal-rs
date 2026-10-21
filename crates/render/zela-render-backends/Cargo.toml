@@ -15,6 +15,9 @@ ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # B2-0a：3D 顶点布局契约在 kernel 层声明（VertexLayout::standard_3d），
 # 后端只做「契约 → wgpu 类型」的翻译（铁律 4：不改顶点格式）。
 ze-vertex = { path = "../../kernel/ze-vertex" }
+# B3-0.5e：resource_cache / render_backend 的纯数据部分（GpuHandle / ResourceKey / ...）
+# 在 kernel 层；后端 crate 直接依赖它，不再经 zela-render 转口。
+ze-resource = { path = "../../kernel/ze-resource" }
 
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
@@ -49,7 +52,7 @@ required-features = ["egui-wgpu"]
 # 默认启用 wgpu：让 `cargo test -p zela-render-backends`（顶点契约 V6 验收命令）
 # 能编译并运行 vertex_layout 翻译层测试；纯翻译层测试不创建 GPU 实例，headless 可跑。
 default = ["wgpu", "blocking"]
-wgpu = ["dep:wgpu", "zela-render/wgpu"]
+wgpu = ["dep:wgpu"]
 # S2：native 同步构造/回读（`pollster::block_on` / `device.poll(wait)`）。
 # **wasm 构建必须关闭**（`--no-default-features --features wgpu`）⇒ 相关 API 编译期不存在，
 # 不会出现"运行时静默卡死"。
@@ -64,7 +67,6 @@ egui-wgpu = [
     "dep:egui",
     "dep:egui-wgpu",
     "dep:wgpu",
-    "zela-render/wgpu",
 ]
 # 文本引擎（Typst/LaTeX）预留。
 text = []

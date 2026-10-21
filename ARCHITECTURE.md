@@ -572,6 +572,22 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **不静默（B6）**：2D 三角化失败由 `eprintln + continue` 改为**显式错误**（有 `should_panic` 测试）。
 > - 2D stride 24 / 3D stride 32 未变（D1）；像素与 B2 结束时**逐位相同**。
 
+> **B3-0.5 批次（2026-10-21）已落地**（详见 `GAPS.md` G 段：Backend 抽象与 Pod 化）：
+> - **Pod bulk 字节（B3-0.5a）**：`PodBytes` newtype + `PodValue::Bytes`；`Vec<u8>` 仍走
+>   `Array(U8)`（语义不撞车）；脚本绑定层对 `Bytes` **显式报错**（bulk 数据不走脚本边界）。
+> - **渲染目标契约进 IR（B3-0.5b）**：`ze_render_ir::target::RenderTargetDesc`
+>   （尺寸 / `ColorFormat` / 采样数，serde + Hash + `validate()`）；GPU 句柄仍留后端。
+> - **四个 render capability（B3-0.5c）**：`ze_render_ir::caps` 定义
+>   `zela.render2d` / `zela.render3d` / `zela.render.mixed` / `zela.render.shapes` 的
+>   签名集、能力指纹与 `negotiate`（**全有或全无**）；`structure` 步校验钉住指纹。
+> - **后端自述（B3-0.5d）**：`zela-render-backends::render_backend::implemented_capabilities()`
+>   声明 wgpu 实现 2d / 3d / mixed；**`shapes` 未实现** ⇒ 请求即显式协商失败。
+> - **分层收口（B3-0.5e）**：`RenderTarget` / `RenderLayer` / `RenderBackend` /
+>   `ResourceCache` shim 迁入 backends；`zela-render` 删除 `feature = "wgpu"`
+>   （`cargo tree` 中 wgpu：12 → 0），成为真正的渲染无关层。
+> - **像素口径纠正**：基线是**同后端 + 同机器**的测试夹具，不是跨端产品承诺
+>   （`FRAME_HASH_BASELINES.md` / `baselines.txt` 同步）。
+
 ### 已知未接线项（Known unwired，记账非缺陷）
 
 以下各项是**有意保留的"已就绪未接线"**：用途明确、机制已就位，但当前不接线。

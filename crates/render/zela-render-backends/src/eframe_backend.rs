@@ -5,7 +5,7 @@
 //
 // RenderContext（device/queue/format 句柄）见 render_context.rs。
 
-use zela_render::render_backend::{GpuHandle, RenderBackend};
+use crate::render_backend::{GpuHandle, RenderBackend};
 
 use crate::render_context::RenderContext;
 use crate::standard_backends::StandardBackends;

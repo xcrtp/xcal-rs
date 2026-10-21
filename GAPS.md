@@ -191,6 +191,28 @@
 
 ---
 
+## G. B3-0.5 批次记账（Backend 抽象与 Pod 化，2026-10-21）
+
+> 计划《B3-0.5执行计划_Backend抽象与Pod化.md》：把"跨后端契约"从 wgpu 类型里剥出来，
+> 并纠正像素口径（**同后端 + 同机器 = 测试夹具**，不再承诺跨端逐像素一致）。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| G-01 | `PodValue` 无法承载 bulk 字节（只能 `Array(U8)`，与 `Vec<u8>` 语义撞车） | Pod 层 | **已关闭（B3-0.5a）** | `PodBytes` newtype + `PodValue::Bytes`；`describe()` / `mismatch()` 补分支；`vec_u8_still_uses_array` 防回归；脚本绑定层显式报错（不静默） |
+| G-02 | 渲染目标描述（尺寸 / 格式 / 采样数）留在后端，IR 侧无契约 | 渲染 IR | **已关闭（B3-0.5b）** | `ze_render_ir::target::RenderTargetDesc`（serde + Hash + `validate()`）；`ColorFormat` 补 Bgra 两型；旧 `RenderTarget` 仍在 backend 持 GPU 句柄 |
+| G-03 | 四个 render capability（2d / 3d / mixed / shapes）没有签名集与指纹 | 渲染 IR | **已关闭（B3-0.5c）** | `ze_render_ir::caps`：`SIGNATURES` / `signatures_of` / `fingerprints` / `PINNED_FINGERPRINTS` / `negotiate`；`structure` 步跑 `render_fingerprints_are_pinned` |
+| G-04 | 后端"实现了哪些 capability"没有显式声明，部分实现会静默失败 | 渲染后端 | **已关闭（B3-0.5d）** | `zela_render_backends::render_backend::{IMPLEMENTED_NAMESPACES, implemented_capabilities, negotiate_capabilities}`；`negotiation_fails_explicitly_for_shapes` |
+| G-05 | `zela-render` 带 `feature = "wgpu"`，GPU 侧模块与渲染无关层混居 | 分层 | **已关闭（B3-0.5e）** | 四个模块迁入 backends；`default = []` 且无 wgpu 依赖；`cargo tree -p zela-render \| grep -c wgpu`：**12 → 0** |
+| G-06 | `zela.render.shapes` **wgpu 未实现**（需要直接吃 `Path2D` 控制点的解析抗锯齿 / 矢量化渲染） | 渲染后端 | **仍成立（范围限制）** | `implemented_capabilities().shapes == false`；请求它 ⇒ 显式 `CapabilityNegotiationError`（不假装实现） |
+| G-07 | `Capability` trait 的 `from_negotiated` 与 **typed 快路径**（`Pod::resolve()`）未落地；当前契约是签名集 + 后端自述集合，跨边界调用仍走 typed trait | Pod / 后端 | **仍成立（D4.4 后续）** | 本轮只做契约与协商；`PodBytes` 是契约层表示，typed 快路径是可选优化（不改变语义） |
+| G-08 | `Compositor` 未 pod 化、`COMPOSITE_QUAD` 未外迁 | 渲染后端 | **明确不做（§九）** | 随 Compositor 单独批次处理 |
+| G-09 | `FRAME_HASH_BASELINES.md` 旧标题/首段把像素一致性写成了跨运行时承诺 | 文档 | **已纠正（B3-0.5e）** | 标题改「同后端 + 同机器」；写明像素 = 测试夹具、跨端不追求一致、`[browser]` 仅存档；`baselines.txt` 注释同步 |
+
+**G 段小计（B3-0.5）**：已关闭 6 · 仍成立 2（G-06 / G-07）· 明确不做 1（G-08）。
+
+
+---
+
 ## 统计与维护约定
 
 | 类别 | 数量 |
