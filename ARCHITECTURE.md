@@ -664,6 +664,29 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **fourier / storyboard 迁移到纹理路径仍未执行（S5-01）**：两者仍走默认 2D
 >   直画路径；迁移会引入一次纹理采样 ⇒ 需重录。
 
+> **B4 批次（2026-10-22，Step 1-4 已落地，Step 5-6 未执行）**：渲染参数契约 + 矢量后端移植。
+> - **`RenderParams` 进 IR（Step 1）**：`ze_render_ir::params` 收口
+>   size / supersample / msaa / filter / tone / bloom / ao / env。`Default` 逐字段
+>   等价当前行为；`validate()` 管有效性、`is_supported_by(&Capabilities)` 管一致性
+>   （**不支持 ⇒ 显式失败，不降级**）；`target_desc()` 是 `RenderTargetDesc` 的唯一上游投影。
+>   `TextureFilter` 移入 IR，`ze-scene-core` 转发（调用点不变）。
+> - **`PostCaps` 进 `Capabilities`（Step 1）**：tone / bloom / ao / env 四维能力。
+>   wgpu 三角化后端声明 `none()` —— 一旦要求后处理就显式失败。
+> - **Meta 承载 + 回放照参（Step 2）**：`Meta.render_params`（`#[serde(default)]`，
+>   不进内容 hash）；`zela-playback` 提供 `bundle_render_params`（有效性）与
+>   `check_render_params_supported`（一致性）；`zela-render` 开渲前两项都查。
+> - **许可证基线（Step 3）**：新 crate `zela-render-vector` 收录上游
+>   `LICENSES/{MIT,Apache-2.0}.txt`，`UPSTREAM.md` 记录 `manimgx @ dcfe01a` 与逐文件
+>   许可（light / occlusion / tone / bloom + dfg.bin 为 Apache-2.0，源自 Filament）。
+>   只开上游 `render` feature ⇒ x264(GPL) / ffmpeg(LGPL) / pyo3 / typst 不进依赖树。
+> - **去掉单后端假设（Step 4）**：删除 `RenderCapabilitySet::ALL`，系统能力 =
+>   已注册后端之并（`union`）；`BackendKind::{Wgpu, Vector}` 各自自述 namespace，
+>   `BackendRegistry` 提供注册 / 选择 / 协商（未实现或未注册 ⇒ 显式错误）。
+> - **三角化资产的性质（记账）**：`tessellate.rs` / `shape_to_mesh` 在双后端下是
+>   **wgpu 后端专用路径**，不是全局唯一真源（矢量后端不做三角化）。
+> - **矢量后端移植（Step 5）与双后端共存验证（Step 6）未执行**：落点与规范已就绪，
+>   移植量约 9.9k 行；`BackendKind::Vector` 在移植前 `is_available() == false`。
+
 
 ### 已知未接线项（Known unwired，记账非缺陷）
 
