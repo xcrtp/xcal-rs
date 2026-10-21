@@ -154,6 +154,13 @@ impl SurfaceTexture {
 /// `fit_bounds` 的退化盒兜底 scale（与原 `demo3d` 基底同值；正常路径不参与计算）。
 const FIT_FALLBACK_SCALE: f32 = 40.0;
 
+/// **3D 网格引用某 Surface 的内容纹理**（B3 Step 0）。
+///
+/// 声明期用 `handle_ref` 占位，`commit` 时由 `resolve_component_refs` 改写为真实
+/// `ObjectId`；录制时由 `SceneRecord3DSystem` 转成 `content_texture_handle`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceTextureRef(pub ObjectId);
+
 /// 归属结果：最近的 Surface 祖先 + 它的策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SurfaceOwner {

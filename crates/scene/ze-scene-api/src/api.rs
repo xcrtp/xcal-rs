@@ -12,8 +12,8 @@
 use ze_scene_core::animation::TargetKind;
 use crate::types::{
     Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Formula, Light, Material3D, Name,
-    Opacity, Parent, PathList, PathShape, Polyline, Reveal, RevealPath, Stroke, Text, Transform,
-    Transform3D, TransformChannel,
+    Opacity, Parent, PathList, PathShape, Polyline, Reveal, RevealPath, Stroke, Surface, Text,
+    Transform, Transform3D, TransformChannel,
 };
 use ze_pod_core::Handle;
 use ze_pod_macro::capability;
@@ -21,7 +21,7 @@ use ze_pod_macro::capability;
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(
     namespace = "zela.scene",
-    version = "6",
+    version = "7",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -106,6 +106,9 @@ pub struct SceneApi<'a> {
 
     /// 推进时序游标（不产生动画段）。
     pub wait: fn(&'a dyn Pod, seconds: f64) -> (),
+
+    /// 构造 Surface（B3 Step 0）：`Surface` + `SurfaceRenderer` + `SurfaceTexture` 组件组。
+    pub surface: fn(&'a dyn Pod, surface: Surface) -> Handle,
 }
 
 /// 宿主暴露给脚本的内容编译接口。
@@ -133,9 +136,9 @@ pub struct ContentApi<'a> {
 // 指纹算法是固定 FNV-1a（跨 Rust 版本稳定），见 `ze_pod_core::capability_fingerprint`。
 
 /// `zela.scene` 的当前自述版本（必须与 `#[capability(version = ...)]` 逐字一致）。
-pub const SCENE_API_VERSION: &str = "6";
+pub const SCENE_API_VERSION: &str = "7";
 /// `zela.scene` 的 `hash(signatures())` 基线。
-pub const SCENE_API_FINGERPRINT: u64 = 13_421_122_430_392_971_548;
+pub const SCENE_API_FINGERPRINT: u64 = 15_573_081_187_359_822_637;
 /// `zela.content` 的当前自述版本。
 pub const CONTENT_API_VERSION: &str = "1";
 /// `zela.content` 的 `hash(signatures())` 基线。

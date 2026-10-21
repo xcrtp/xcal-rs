@@ -20,6 +20,7 @@ local cube = scene.spawn({
         roughness = 0.6,
         double_sided = false,
         transparent = false,
+        texture = Texture.None,
     },
     Transform3D {
         position = Vec3 { x = 0.0, y = 0.0, z = 0.0 },
@@ -59,6 +60,7 @@ local wire = scene.spawn({
         roughness = 0.5,
         double_sided = false,
         transparent = false,
+        texture = Texture.None,
     },
     Transform3D {
         position = Vec3 { x = -2.8, y = 1.0, z = 0.0 },

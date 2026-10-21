@@ -637,6 +637,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   均为多实例容器；`ObjectId → LayerId → TextureHandle` 由
 >   `content_layer_id` / `content_texture_handle` **单一映射**派生，
 >   视口图层改用固定 id（不再 `layers.len()` 位置分配）。
+> - **脚本 Surface API（B3 Step 5-0）**：`scene.surface(zela.Surface)` 构造
+>   `Surface + SurfaceRenderer + SurfaceTexture` 组件组；`Material3D.texture` 接受
+>   `Texture.Surface(surface)`（脚本不接触 u64 句柄）⇒ `SurfaceTextureRef` 组件在
+>   `commit` 解析为真实 `ObjectId`，3D 录制时派生纹理句柄。
+>   **`zela.scene` version 6 → 7**（新增方法 ⇒ 指纹变更并同步 `PINNED`）。
 > - **Texture 路径落地（B3 Step 4c-4）**：demo3d 改走
 >   `Surface(Renderer2D) + SurfaceTexture(fit_margin=0.8)`，内容实体挂 `Parent(surface)`；
 >   材质纹理句柄由 `content_texture_handle` 派生。**四基线逐位不变（零差异）**。

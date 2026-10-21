@@ -17,7 +17,7 @@ use ze_scene_core::components::Reveal as NativeReveal;
 use ze_scene_core::scene_script::{
     Handle as ScriptHandle, SceneEncoder, SceneScript, handle_ref,
 };
-use ze_notion::{Color32, Quat, Vec2 as NotionVec2, Vec3 as NotionVec3};
+use ze_notion::{Color32, Quat, Rect2D, Vec2 as NotionVec2, Vec3 as NotionVec3};
 use ze_scene_core::object::{
     Arrow as NativeArrow, Axes2D as NativeAxes2D, Camera3D as NativeCamera3D, Circle as NativeCircle,
     Framing2D, Path as NativePath, Projection, TickSpec, Transform as NativeTransform,
@@ -30,9 +30,15 @@ use crate::content_service::PathStore;
 use crate::types::{
     Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Light, LightKind, LineStyle,
     Material3D, Name, Opacity, Parent, Path, PathShape, Polyline, Reveal, RevealPath, ShaderVariant,
-    Stroke, Transform, Transform3D, TransformChannel,
+    Stroke, Surface, SurfaceMapping, SurfaceRenderer, Texture, TextureFilter, Transform, Transform3D,
+    TransformChannel,
 };
 use ze_scene_core::components::{Light as NativeLight, Material3D as NativeMaterial3D};
+use ze_scene_core::surface::{
+    Surface as NativeSurface, SurfaceMapping as NativeSurfaceMapping,
+    SurfaceRenderer as NativeSurfaceRenderer, SurfaceTexture as NativeSurfaceTexture,
+    SurfaceTextureRef, TextureFilter as NativeTextureFilter,
+};
 use ze_render_ir::ShaderVariant as NativeShaderVariant;
 
 /// 注入时使用的 Service 名（与 `LuaPod::requirements()` 对应）。
@@ -196,6 +202,13 @@ impl SceneServicePod {
             "zela.Light",
             "ze_pod_core.Handle",
             scene_light,
+        );
+        // B3 Step 0：Surface 组件组（Surface + Renderer + Texture）。
+        registry.register_fn1_named::<Surface, Handle>(
+            "zela.scene::surface",
+            "zela.Surface",
+            "ze_pod_core.Handle",
+            scene_surface,
         );
         registry.register_fn1_named::<Transform3D, Handle>(
             "zela.scene::transform3d",
@@ -450,6 +463,8 @@ fn scene_cube(pod: &dyn Pod, cube: Cube) -> Handle {
 }
 
 fn scene_material3d(pod: &dyn Pod, material: Material3D) -> Handle {
+    let this = service(pod);
+    let mut rec = this.rec.borrow_mut();
     let mut native = NativeMaterial3D::color(color32(material.color));
     native.variant = match material.variant {
         ShaderVariant::Flat => NativeShaderVariant::Flat,
@@ -461,11 +476,59 @@ fn scene_material3d(pod: &dyn Pod, material: Material3D) -> Handle {
     // B2-7（D19）：意图层字段原样透传；后端负责翻译成 cull_mode / blend。
     native.double_sided = material.double_sided;
     native.transparent = material.transparent;
+    // B3 Step 0：纹理引用以**组件**承载（`SurfaceTextureRef` 的占位句柄在 commit 解析），
+    // 材质本身不接触 ObjectId / u64 句柄。
+    let mut components: Vec<Box<dyn ze_scene_contract::Component>> = vec![Box::new(native)];
+    match material.texture {
+        Texture::None => {}
+        Texture::Surface { surface } => match rec.objects.get(&surface) {
+            Ok(script) => components.push(Box::new(SurfaceTextureRef(handle_ref(*script)))),
+            Err(error) => rec.fail(format!("材质引用的 Surface 句柄无效：{error:?}")),
+        },
+    }
+    rec.components.insert(components)
+}
+
+/// `zela.Surface` → `Surface + SurfaceRenderer + SurfaceTexture` 组件组。
+fn scene_surface(pod: &dyn Pod, desc: Surface) -> Handle {
+    let mapping = match desc.mapping {
+        SurfaceMapping::World => NativeSurfaceMapping::World,
+        SurfaceMapping::Screen => NativeSurfaceMapping::Screen,
+    };
+    let renderer = match desc.renderer {
+        SurfaceRenderer::Renderer2D => NativeSurfaceRenderer::Renderer2D,
+        SurfaceRenderer::Renderer3D => NativeSurfaceRenderer::Renderer3D,
+    };
+    let filter = match desc.filter {
+        TextureFilter::Nearest => NativeTextureFilter::Nearest,
+        TextureFilter::Linear => NativeTextureFilter::Linear,
+    };
+    let surface = NativeSurface::new(
+        Rect2D::new(
+            NotionVec2::new(desc.min_x, desc.min_y),
+            NotionVec2::new(desc.max_x, desc.max_y),
+        ),
+        mapping,
+        NotionVec2::new(desc.anchor_x, desc.anchor_y),
+    );
+    let mut texture = NativeSurfaceTexture::new(
+        [desc.texel_width, desc.texel_height],
+        filter,
+        desc.mipmap,
+    )
+    .with_composite(desc.composite);
+    if desc.fit_margin > 0.0 {
+        texture = texture.with_fit_margin(desc.fit_margin);
+    }
     service(pod)
         .rec
         .borrow_mut()
         .components
-        .insert(vec![Box::new(native)])
+        .insert(vec![
+            Box::new(surface),
+            Box::new(renderer),
+            Box::new(texture),
+        ])
 }
 
 fn scene_light(pod: &dyn Pod, light: Light) -> Handle {

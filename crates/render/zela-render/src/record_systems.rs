@@ -45,7 +45,8 @@ use std::sync::Arc;
 
 use ze_scene_contract::SceneRead;
 use ze_scene_hecs::WorldView;
-use ze_scene_core::domain::ContentTextureSpecs;
+use ze_scene_core::domain::{content_texture_handle, ContentTextureSpecs};
+use ze_scene_core::SurfaceTextureRef;
 use ze_render_ir::StrokeSolid;
 use ze_scene_core::components::{Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal};
 use ze_scene_core::WorldTransforms;
@@ -331,9 +332,14 @@ impl System for SceneRecord3DSystem {
             // 先收集（读借用），再统一入队（写借用已由 `queue` 独占）。
             let mut items = Vec::new();
             scene.for_each::<Arc<MeshGeometry>>(|id, mesh| {
-                let material = scene
+                let mut material = scene
                     .with::<Material3D, _>(id, |material| *material)
                     .unwrap_or_default();
+                // B3 Step 0：脚本用 `SurfaceTextureRef` 引用内容纹理；
+                // 句柄由 Surface 的 ObjectId 派生（脚本不接触 u64）。
+                if let Some(surface) = scene.with::<SurfaceTextureRef, _>(id, |owner| owner.0) {
+                    material.texture = Some(content_texture_handle(surface));
+                }
                 // B2-1：统一层序（缺席 ⇒ 默认层 0），与 2D 共用同一个 ZOrder 概念。
                 let z = scene
                     .with::<ZOrder, _>(id, |z| *z)

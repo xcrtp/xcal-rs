@@ -59,7 +59,7 @@ pub use object::{
 
 pub use surface::{
     resolve_surface, resolve_surface_texture, Surface, SurfaceError, SurfaceMapping, SurfaceOwner,
-    SurfaceRenderer, SurfaceTexture, TextureFilter,
+    SurfaceRenderer, SurfaceTexture, SurfaceTextureRef, TextureFilter,
 };
 pub use time_state::TimeState;
 pub use transform::{Transform2D, Transform2DInto};

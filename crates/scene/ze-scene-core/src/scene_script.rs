@@ -50,6 +50,7 @@ use ze_time::{ClockForest, Curve};
 use crate::animation::binding::BindingTable;
 use crate::animation::target::{TargetCtor, target_ctor_by_name};
 use crate::animation::timeline::Timeline;
+use crate::surface::SurfaceTextureRef;
 
 /// **Encoder 内的局部句柄**：声明期索引，`commit` 时才映射到 [`ObjectId`]。
 ///
@@ -95,6 +96,10 @@ fn resolve_component_refs(components: &mut Components, resolve: impl Fn(ObjectId
             if is_handle_ref(p.0) {
                 p.0 = resolve(p.0);
             }
+        } else if let Some(r) = (**c).as_any_mut().downcast_mut::<SurfaceTextureRef>() {
+            if is_handle_ref(r.0) {
+                r.0 = resolve(r.0);
+            }
         }
     }
 }
@@ -113,6 +118,10 @@ fn shift_component_refs(components: &mut Components, base: usize) {
         } else if let Some(p) = (**c).as_any_mut().downcast_mut::<Parent>() {
             if is_handle_ref(p.0) {
                 p.0.index += base as u32;
+            }
+        } else if let Some(r) = (**c).as_any_mut().downcast_mut::<SurfaceTextureRef>() {
+            if is_handle_ref(r.0) {
+                r.0.index += base as u32;
             }
         }
     }

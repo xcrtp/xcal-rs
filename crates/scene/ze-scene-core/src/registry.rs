@@ -19,7 +19,7 @@ use ze_render_ir::{FillSolid, Opacity, StrokeSolid};
 use crate::components::{ContentTextureItem, Light, Material3D, MeshGeometry, MorphShape, PhaseAnim, Reveal};
 use crate::composer::Composer;
 use crate::domain::CameraMode;
-use crate::surface::{Surface, SurfaceRenderer, SurfaceTexture};
+use crate::surface::{Surface, SurfaceRenderer, SurfaceTexture, SurfaceTextureRef};
 use crate::object::{
     Arrow, Axes2D, AxesLine, Camera2D, Camera3D, Circle, FpsView, Framing2D, FunctionGraph, Line,
     Path, Projection, Rect, Transform, ZOrder,
@@ -40,7 +40,7 @@ macro_rules! known_component_table {
                    Axes2D, AxesLine, FunctionGraph,
                    PhaseAnim, MorphShape, ContentTextureItem, Reveal, Parent,
                    // B3 Step 3：2D/3D 融合边界（Surface 是数据组件，不含 position）。
-                   Surface, SurfaceRenderer, SurfaceTexture,
+                   Surface, SurfaceRenderer, SurfaceTexture, SurfaceTextureRef,
                    // B1-D：3D 装配组件（脚本层入口）。`Arc<MeshGeometry>` 是
                    // 录制系统读取的类型（记录时以 Arc 组件遍历）；Arc 本身 Clone /
                    // Serialize / Deserialize（MeshGeometry 派生 serde）。

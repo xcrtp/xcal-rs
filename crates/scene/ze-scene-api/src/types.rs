@@ -109,6 +109,63 @@ pub struct Material3D {
     pub double_sided: bool,
     /// 是否按透明处理（B2-7 / D19；`false` = 不透明）。
     pub transparent: bool,
+    /// 采样纹理（B3 Step 0）：`None` 或引用某 Surface 的内容纹理。
+    pub texture: Texture,
+}
+
+/// 材质可引用的纹理（脚本不接触裸 u64 句柄）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.Texture")]
+pub enum Texture {
+    None,
+    /// 引用某 Surface 的内容纹理（句柄由 `ObjectId → LayerId → TextureHandle` 派生）。
+    Surface { surface: Handle },
+}
+
+/// Surface 的坐标映射语义。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.SurfaceMapping")]
+pub enum SurfaceMapping {
+    World,
+    Screen,
+}
+
+/// Surface 的渲染策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.SurfaceRenderer")]
+pub enum SurfaceRenderer {
+    Renderer2D,
+    Renderer3D,
+}
+
+/// 纹理采样过滤。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.TextureFilter")]
+pub enum TextureFilter {
+    Nearest,
+    Linear,
+}
+
+/// Surface 声明（B3 Step 0）：一次构造 `Surface` + `SurfaceRenderer` + `SurfaceTexture`。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Surface")]
+pub struct Surface {
+    pub min_x: f32,
+    pub min_y: f32,
+    pub max_x: f32,
+    pub max_y: f32,
+    pub mapping: SurfaceMapping,
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+    pub renderer: SurfaceRenderer,
+    pub texel_width: u32,
+    pub texel_height: u32,
+    pub filter: TextureFilter,
+    pub mipmap: bool,
+    /// `0` = bounds 1:1 铺满；`> 0` = `fit_bounds` 边距语义。
+    pub fit_margin: f32,
+    /// 是否把内容层合成到屏幕（能力矩阵作品需要它才能被像素对拍）。
+    pub composite: bool,
 }
 
 /// 光源类型。

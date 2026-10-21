@@ -21,6 +21,7 @@ local red = scene.spawn({
         roughness = 0.5,
         double_sided = true,
         transparent = true,
+        texture = Texture.None,
     },
     Transform3D {
         position = Vec3 { x = -0.6, y = 0.0, z = 0.0 },
@@ -39,6 +40,7 @@ local blue = scene.spawn({
         roughness = 0.5,
         double_sided = true,
         transparent = true,
+        texture = Texture.None,
     },
     Transform3D {
         position = Vec3 { x = 0.6, y = 0.0, z = 0.0 },
@@ -57,6 +59,7 @@ scene.spawn({
         roughness = 0.5,
         double_sided = false,
         transparent = false,
+        texture = Texture.None,
     },
     Transform3D {
         position = Vec3 { x = 0.0, y = -1.8, z = 0.0 },
