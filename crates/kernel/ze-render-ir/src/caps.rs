@@ -111,14 +111,19 @@ pub struct RenderCapabilitySet {
 }
 
 impl RenderCapabilitySet {
-    /// wgpu 当前形态：2D / 3D / mixed 已实现，`shapes` **尚未实现**。
-    /// （后端自述集合见 `zela-render-backends::render_backend::IMPLEMENTED_NAMESPACES`。）
-    pub const ALL: Self = Self {
-        render2d: true,
-        render3d: true,
-        mixed: true,
-        shapes: false,
-    };
+    /// **系统能力 = 已注册后端能力之并**（B4 Step 4）。
+    ///
+    /// 不得再用"某个后端的能力常量"冒充系统能力（那会把"只有一个后端"写进类型）。
+    pub fn union(sets: &[Self]) -> Self {
+        let mut out = Self::default();
+        for set in sets {
+            out.render2d |= set.render2d;
+            out.render3d |= set.render3d;
+            out.mixed |= set.mixed;
+            out.shapes |= set.shapes;
+        }
+        out
+    }
 
     /// 从 namespace 名集合构造（未知名字 ⇒ 由调用方先校验）。
     pub fn from_names(names: &[&str]) -> Self {
@@ -234,6 +239,25 @@ mod tests {
         // 未知名字不能冒充实现。
         let err = negotiate(&["zela.render.unknown"], &[mixed::NAMESPACE]).unwrap_err();
         assert_eq!(err.missing, vec![mixed::NAMESPACE]);
+    }
+
+    /// 系统能力是**并集**，不是某个后端的常量（B4 Step 4）。
+    #[test]
+    fn system_capabilities_are_a_union_of_backends() {
+        let wgpu = RenderCapabilitySet::from_names(&[
+            render2d::NAMESPACE,
+            render3d::NAMESPACE,
+            mixed::NAMESPACE,
+        ]);
+        let vector = RenderCapabilitySet {
+            shapes: true,
+            mixed: true,
+            ..RenderCapabilitySet::default()
+        };
+        let system = RenderCapabilitySet::union(&[wgpu, vector]);
+        assert!(system.render2d && system.render3d && system.mixed && system.shapes);
+        // 单个后端仍如实自述（shapes 不因另一个后端支持就变 true）。
+        assert!(!wgpu.shapes);
     }
 
     /// 签名集合里**不出现** wgpu 机制名（契约只表达意图，D19）。

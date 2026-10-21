@@ -43,6 +43,9 @@ pub mod render_backend;
 pub mod render_layer;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod render_target;
+// B4 Step 4：后端注册与选择（补完 B3-0.5 未竟的装配点）。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod registry;
 pub mod resource_cache;
 
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
@@ -52,6 +55,8 @@ pub use render_backend::{
 };
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_layer::RenderLayer;
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use registry::{BackendKind, BackendRegistry, BackendRegistryError};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_target::RenderTarget;
 pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};
