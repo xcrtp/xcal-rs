@@ -313,11 +313,12 @@
 | S2-03 | Direct + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | `ScreenMappingUnsupported`；不猜映射 |
 | S3-01 | 无 Surface 组件 / 归属判定 | 场景核心 | **已关闭（B3 Step 3）** | `Surface`（无 position）+ `SurfaceRenderer`；沿 `Parent` 链解析、visited 环检测；缺 renderer 显式错误 |
 | S3-02 | 默认 renderer 策略 | 场景核心 | **未拍（按计划延后）** | 计划要求用 Step 1 实测覆盖度反推；当前 7/9 图元可 Direct，但 Step 4/5 未做，暂不设默认 |
-| S4-01 | Texture 路径多实例（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行（4c/4d）** | 需把 `ContentTextureQueue` 单份泛化为 `HashMap<LayerId, _>` 并改 `SceneCompositorCallback` 遍历 |
+| S4-01 | Texture 路径多实例（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行（4c-2..4c-5）** | 需把 `ContentTextureSpec` / `ContentTextureQueue` 泛化为按 id 索引的容器 + 稳定 LayerId 链 |
 | S4-02 | `Renderer2D` 没有可表达的固定纹理契约 | 场景核心 | **已关闭（B3 Step 4b）** | `SurfaceTexture { texel_size, filter, mipmap }` + `camera_for`；缺声明 / 尺寸非法 / 宽高比不一致 ⇒ 显式错误 |
+| S4-03 | `surface_errors` 只收集、无生产消费方（验收 O-2） | 宿主 / 帧管理 | **已关闭（B3 Step 4c-1）** | `zela_render::frame::end_frame` 非空 ⇒ `panic!`；egui / playback / web 三个宿主共用该帧末路径 |
 | S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
 
-**J 段小计（B3，已执行部分）**：已关闭 9（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-02）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 10（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-02、S4-03）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
 
 ---
 

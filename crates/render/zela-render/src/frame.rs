@@ -144,7 +144,21 @@ pub fn build_scene_view(
 }
 
 /// 帧末清理：2D 队列内容已被呈现消费，清空以便下帧重新录制。
+///
+/// **B3 Step 4c-1**：同时检查 Surface 路由 / Direct 派生错误 —— 非空 ⇒ 显式失败。
+/// 收集了错误却没人读等于静默吞掉（验收 O-2）。
 pub fn end_frame(res: &mut Resources) {
+    if let Some(queue) = res.get::<DrawQueue>() {
+        let errors = queue.surface_errors();
+        if !errors.is_empty() {
+            let details = errors
+                .iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            panic!("Surface 录制失败（{} 条）：{details}", errors.len());
+        }
+    }
     if let Some(queue) = res.get_mut::<DrawQueue>() {
         queue.clear();
     }
@@ -225,8 +239,44 @@ pub fn draw_call_count(res: &Resources) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ze_scene_core::{Camera3D, Framing2D, Projection};
+    use ze_notion::{Rect2D as GeoRect, Vec2};
+    use ze_render_ir::FillSolid;
+    use ze_scene_contract::Parent;
+    use ze_scene_core::{
+        Camera2D, Camera3D, Circle, Framing2D, Projection, Surface, SurfaceMapping,
+    };
     use ze_scene_hecs::object_id_of;
+
+    /// Step 4c-1：`surface_errors` 非空 ⇒ `end_frame` 显式失败（不静默吞）。
+    #[test]
+    #[should_panic(expected = "Surface 录制失败")]
+    fn end_frame_fails_on_surface_errors() {
+        let mut world = hecs::World::new();
+        let surface = object_id_of(world.spawn((Surface::new(
+            GeoRect::new(Vec2::ZERO, Vec2::new(100.0, 100.0)),
+            SurfaceMapping::World,
+            Vec2::ZERO,
+        ),)));
+        world.spawn((
+            Circle::new((0.0, 0.0), 1.0),
+            FillSolid::new((255, 255, 255, 255)),
+            Parent(surface),
+        ));
+
+        let mut res = Resources::new();
+        let mut queue = DrawQueue::new();
+        crate::draw::record_scene(
+            &ze_scene_hecs::WorldView::new(&world),
+            &Camera2D::new(
+                Vec2::ZERO,
+                1.0,
+                GeoRect::new(Vec2::ZERO, Vec2::new(800.0, 600.0)),
+            ),
+            &mut queue,
+        );
+        res.insert(queue);
+        end_frame(&mut res);
+    }
 
     fn spawn_3d_camera(world: &mut hecs::World) {
         world.spawn((Camera3D::new(
