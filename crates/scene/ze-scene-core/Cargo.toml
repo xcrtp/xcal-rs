@@ -42,6 +42,9 @@ derive-new.workspace = true
 # 组件持久化：全部登记组件的 serde。
 serde.workspace = true
 
+# Surface 归属判定的显式错误类型（`SurfaceError`）。
+thiserror.workspace = true
+
 [dev-dependencies]
 # Axes2D 无界定义域的 serde 往返用例（ZSB）。
 serde_json.workspace = true

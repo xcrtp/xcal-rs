@@ -38,6 +38,8 @@ pub mod persist;
 pub mod registry;
 pub mod scene_script;
 pub mod scene_write;
+/// 2D/3D 融合边界（Surface 组件 + renderer 策略 + Parent 链归属判定）。
+pub mod surface;
 pub mod time_state;
 pub mod transform;
 pub mod types;
@@ -55,6 +57,7 @@ pub use object::{
     spawn_camera2d, spawn_camera3d, uniform_scale,
 };
 
+pub use surface::{Surface, SurfaceError, SurfaceMapping, SurfaceOwner, SurfaceRenderer, resolve_surface};
 pub use time_state::TimeState;
 pub use transform::{Transform2D, Transform2DInto};
 pub use types::{Color32, Rect2D, Vec2, Vec3, Vec4};
