@@ -41,7 +41,9 @@ use ze_scene_contract::{GroupVisibility, ObjectId, SceneRead, Visibility};
 //   ⇒ IR 层不认识相机类型，不成环（见 ze_render_ir::degrade）。
 // - `Camera2D::to_transform2d()` 由场景对象层的 `Camera2D` 提供（M3 迁往 ze-object）。
 // - `ToShape2D` 的图元 impl 在场景对象层 `ze-object`（孤儿规则：实现里必须有本地类型）。
-use ze_render_ir::{Opacity, ResolveStyle, ToShape2D, fill_style, stroke_style_raw};
+use ze_render_ir::{
+    DrawCommand, Opacity, ResolveStyle, ToShape2D, ZIndex, fill_style, stroke_style_raw,
+};
 
 /// 2D 绘制器 Trait。
 ///
@@ -55,35 +57,6 @@ use ze_render_ir::{Opacity, ResolveStyle, ToShape2D, fill_style, stroke_style_ra
 /// （删掉后 `DrawQueue` 只剩 GPU 一条消费路径，将来加非 GPU 后端要重建）。
 pub trait Painter2D {
     fn paint(&self, shape: &Shape2D, style: &Style2D);
-}
-
-/// 绘制层级。值越小越先绘制（位于画面下层）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, derive_new::new)]
-pub struct ZIndex(pub i32);
-
-/// 单条 2D 绘制命令 = [`ZIndex`] + [`Shape2D`] + [`Style2D`]。
-#[derive(Debug, Clone, derive_new::new)]
-pub struct DrawCommand {
-    pub z: ZIndex,
-    pub shape: Shape2D,
-    pub style: Style2D,
-}
-
-impl PartialEq for DrawCommand {
-    fn eq(&self, other: &Self) -> bool {
-        self.z == other.z
-    }
-}
-impl Eq for DrawCommand {}
-impl PartialOrd for DrawCommand {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl Ord for DrawCommand {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.z.cmp(&other.z)
-    }
 }
 
 /// 2D 绘制命令队列，按 [`ZIndex`] 自动排序（延迟排序）。

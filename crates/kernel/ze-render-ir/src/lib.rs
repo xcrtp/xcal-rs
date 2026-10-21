@@ -14,7 +14,8 @@
 // ```
 //
 // 硬约束（与理念层同级，验收口径见 M2 计划 §6.2）：
-//   - 只依赖理念层 `ze-notion`
+//   - 只依赖理念层 `ze-notion` + kernel 层的 `ze-vertex`（B2-0b / D23：IR 携带顶点
+//     布局引用；两者同在 kernel 层，不构成反向依赖）
 //   - 不得出现 ECS / hecs / GPU / wgpu / egui / UI
 //   - 不得依赖 `zela-*` / `ze-object`
 //     （`cargo tree -p ze-render-ir | grep -E "zela-|ze-object"` = 0）
@@ -23,14 +24,21 @@
 // （相机在场景对象层，IR 层认识它会成环）。
 
 pub mod degrade;
+pub mod draw;
 pub mod layer;
 pub mod mesh;
+pub mod pipeline;
 pub mod shape;
 pub mod style;
 
 pub use degrade::ToShape2D;
+pub use draw::{DrawCommand, ZIndex};
 pub use layer::{LayerBlend, LayerId};
 pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
+pub use pipeline::{
+    Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, PassDepth, PassDesc,
+    PipelineDesc,
+};
 pub use shape::{CustomShapeData, CustomSpec, CustomSpecs, Shape2D, SpecId, Style2D};
 pub use style::{
     FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,

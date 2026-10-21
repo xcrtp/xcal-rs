@@ -17,8 +17,13 @@ license.workspace = true
 # 三角化（lyon）不在此层：它是「IR → 顶点」的后端侧动作，留在 zela-render。
 [dependencies]
 ze-notion = { path = "../ze-notion" }
+# B2-0b（D23）：IR 携带顶点布局引用（PipelineDesc.vertex_layout）⇒ 依赖 kernel 层的
+# ze-vertex（两者同在 kernel 层，不违反分层）。IR 仍不依赖任何 zela-* / ze-object。
+ze-vertex = { path = "../ze-vertex" }
 # 组件持久化：样式组件（StrokeSolid / FillSolid / Opacity）可 serde。
 serde.workspace = true
+# B2-0c：能力不满足时的显式错误类型（CapabilityError）。
+thiserror.workspace = true
 
 [dev-dependencies]
 # `Shape2D` 可序列化的往返用例（ZSB D1）。
