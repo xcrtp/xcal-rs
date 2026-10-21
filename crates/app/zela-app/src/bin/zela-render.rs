@@ -226,7 +226,7 @@ fn run() -> Result<(), String> {
     let mut frame_hash = FrameSequenceHash::new(width, height);
     // B2-6（D7）：**分层标签旁路** —— `ZELA_FRAME_DIGEST_SAMPLE=N` 时每 N 帧打印
     // 该帧的独立 digest。旁路不进入 `frame_hash`（判定与诊断分离）。
-    let digest_sample: u64 = std::env::var("ZELA_FRAME_DIGEST_SAMPLE")
+    let digest_sample: u32 = std::env::var("ZELA_FRAME_DIGEST_SAMPLE")
         .ok()
         .and_then(|raw| raw.trim().parse().ok())
         .filter(|n| *n > 0)

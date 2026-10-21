@@ -258,6 +258,8 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     let smoke_hash = compare_script_vs_bundle(root, "smoke", "320x240", None)?;
     let fourier_hash = compare_script_vs_bundle(root, "fourier", "640x480", None)?;
     let storyboard_hash = compare_script_vs_bundle(root, "storyboard", "640x480", None)?;
+    // B2-8（Q4 决议）：`demo3d` 升级为对拍 fixture —— 3D 进 frame hash 对拍网。
+    let demo3d_hash = compare_script_vs_bundle(root, "demo3d", "640x480", None)?;
 
     // 2) 回填 commit：当前 HEAD（重录发生在提交前，commit 待回填）。
     let head = git_short_head(root)?;
@@ -274,6 +276,7 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
             "storyboard".to_string(),
             storyboard_hash,
         ),
+        ("native".to_string(), "demo3d".to_string(), demo3d_hash),
     ];
     let next = apply_record(&text, &device, reason, &head, &records)?;
     fs::write(&baseline_path, next)
@@ -662,7 +665,7 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let mut current: Vec<(&str, &str, &str)> = Vec::new();
     let mut hashes: Vec<(String, String)> = Vec::new();
 
-    for work in ["fourier", "storyboard"] {
+    for work in ["fourier", "storyboard", "demo3d"] {
         let expected = if skip_baseline {
             None
         } else {

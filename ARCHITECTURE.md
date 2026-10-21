@@ -526,8 +526,8 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 - `present` 只注册**一个**回调，放在有效序中**首个 GPU 图层**的位置（CPU 2D 层就地回放）。
 - `LayerId` 改为**按层唯一**（`build_scene_view` 按索引派生），并有单测断言两两不相等。
 
-**已知限制**：3D 离屏无 MSAA（1x）；每层多一次全屏 blit（层数少时可接受，层多时优化）；
-`opacity` × `blend` 组合未穷举验证。
+**已知限制**：3D 离屏 MSAA 已与 2D 对齐（4x，B2-5；`DEFAULT_MSAA_SAMPLES`）；每层多一次全屏 blit（层数少时可接受，层多时优化）；
+`opacity` × `blend` 组合未穷举验证；纹理采样走样（mipmap / 各向异性）仍是缺口（GAPS E-08）。
 
 > 两条已退出限制：3D 两个 pass 均挂 `Depth32Float` 深度附件（`wgpu_3d::DEPTH_FORMAT`）；
 > 旧 CPU 2D 回放（`egui_2d`）已在 S4.1 删除，2D 统一走 `wgpu_2d` 离屏 + 合成。
@@ -542,6 +542,24 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **pipeline 按需构建（B1-E）**：废弃 `(topology, variant)` 笛卡尔积预建，改
 >   `get_or_create_pipeline` + 缓存，key 四维定齐 `(topology, variant, cull_mode, blending)`；
 >   **不静默（B1-F）**：静默回退 Lambert 已结构性删除，点列表改 `panic!` 显式报错。
+
+> **B2 批次（2026-10-21）已落地**（详见 `GAPS.md` E 段）：
+> - **队列与层序（B2-1）**：2D / 3D 合并为**一个 `DrawQueue`**（`DrawItem::{Shape,Mesh,Line}`），
+>   统一 `ZOrder`（IR 唯一声明；`ZOrder` 稳定排序，同层内保持插入序 —— 显式测试锁定 R-F）；
+>   `DrawQueue3D` 成为类型别名；录制合并为 `SceneRecordAllSystem` 单写者。
+> - **管线状态 IR 化（B2-2）**：`PipelineKey` 去 wgpu（`CullMode` / `LayerBlend`）+ 第五维
+>   `VertexLayout`；作者只声明 `double_sided` / `transparent`（`Material3D`，D19）。
+> - **2D 进 3D（B2-3）**：`derive_mesh` 把 2D 图元降级为平面网格（Flat + 双面 + 透明推导）；
+>   透明桶按 `ZOrder` 排序、透明 pipeline 不写深度；epsilon 由 `ZOrder` 派生为 normal offset
+>   （B2-4，不用常量 depth bias）。
+> - **AA 统一（B2-5）**：3D MSAA 4x，采样数由能力侧给出（`new_with_samples` + `capabilities`）。
+> - **可观测性（B2-6）**：xtask 双槽差分报告器（诊断旁路）；帧级 digest 采样旁路
+>   （`ZELA_FRAME_DIGEST_SAMPLE=N`，不进序列哈希链）。
+> - **脚本意图层 + demo（B2-7）**：`Material3D` 暴露 `double_sided` / `transparent`（version 6）；
+>   新增 `fusion.lua` 入册。
+> - **对拍与记账（B2-8）**：`demo3d` 升级为 frame hash fixture（3D 首入对拍网）；
+>   `cargo verify --step hashes` 现覆盖 fourier / storyboard / demo3d。
+> - **能力指纹（B2-9）**：`hash(signatures())` × `version` 配对校验，挂 xtask `structure`。
 
 ### 已知未接线项（Known unwired，记账非缺陷）
 

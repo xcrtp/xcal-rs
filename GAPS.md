@@ -162,8 +162,15 @@
 | E-08 | **纹理走样**：MSAA 治不了纹理采样走样（`Material3D.texture` / `ContentTexture` 进 3D 后会有） | 渲染后端 | **仍成立（已知缺口）** | 需要 **mipmap + 各向异性过滤**；本轮不做（计划 B2-5 记账要求） |
 | E-09 | 硬件 MSAA **resolve 的跨端确定性**是否为 `[browser]` 段"1 帧 1 像素"差异的贡献者 | 对拍 | **待验证（不是断言）** | 本轮无浏览器环境（D5：跨端重录推迟）；`[browser]` 段仍仅存档 |
 | E-10 | 2D 派生网格仅覆盖可直接三角化的图元（`Path` 需要 lyon；`Group` 需要递归） | 渲染管线 | **仍成立（范围限制）** | `ShapeMeshError::Unsupported` 显式报错；后续批次扩展 |
+| E-11 | 双槽基线**没有差分视图**（两个孤立值，无法看出"当前值落在哪一槽"） | 对拍工具 | **已关闭（B2-6）** | xtask `render_diff_report`（诊断旁路，不参与门禁）；`diff_report_tests` 3 条 |
+| E-12 | 帧级归因缺**分层标签**（无法定位首帧分歧） | 对拍 / 可观测性 | **已关闭（B2-6）** | `ZELA_FRAME_DIGEST_SAMPLE=N` 逐帧 digest 采样；**不进序列哈希链**（D7） |
+| E-13 | 脚本看不到 B2 的意图层（`double_sided` / `transparent`） | 脚本 API | **已关闭（B2-7）** | pod `Material3D` 增两字段（D19：不暴露 GPU 机制）；`zela.scene` version 5 → **6** |
+| E-14 | 新能力缺展示脚本 | Demo | **已关闭（B2-7）** | `fusion.lua`（双面 + 透明相交体）入册 `demo/manifest.txt`，payload-hash `-` |
+| E-15 | 3D **未进 frame hash 对拍网**（B1 遗留） | 对拍 | **已关闭（B2-8）** | `demo3d` 升级为 fixture（Q4 决议）；hashes 覆盖 fourier / storyboard / demo3d；`[browser]` 仍仅存档 |
+| E-16 | 能力 API 改了可能**忘记递增 version** | 脚本 API | **已关闭（B2-9）** | `capability_fingerprint`（FNV-1a，跨 Rust 稳定）+ 钉住常量；`cargo verify --step structure` 内跑护栏（变而未递增 ⇒ **fail**） |
+| E-17 | 逐帧 digest 旁路**仅 native**（`zela-render` 二进制）；浏览器路径未接 | 可观测性 | **仍成立（范围限制）** | wasm 无环境变量；浏览器归因留待跨端重录（D5） |
 
-**E 段小计（B2-0 ~ B2-5）**：已关闭 5 · 新增能力 1 · 仍成立/待验证 3。
+**E 段小计（B2-0 ~ B2-9）**：已关闭 **12** · 新增能力 1 · 仍成立/待验证 **4**（E-08 mipmap、E-09 跨端 resolve、E-10 派生桥范围、E-17 旁路仅 native）。
 
 ---
 
