@@ -47,18 +47,16 @@ use ze_scene_contract::SceneRead;
 use ze_scene_hecs::WorldView;
 use ze_scene_core::domain::ContentTextureSpecs;
 use ze_render_ir::StrokeSolid;
-use ze_scene_core::components::{
-    ContentTextureItem, Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal,
-};
-use ze_scene_core::{WorldTransforms, resolve_surface};
+use ze_scene_core::components::{Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal};
+use ze_scene_core::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
-use ze_scene_core::{Camera2DHandle, Path, Transform, ZOrder};
+use ze_scene_core::{Camera2DHandle, Transform, ZOrder};
 
 use crate::draw::{
     ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
-    push_reveal_item, record_path_stroke, record_scene_tagged_with, visible_for,
+    push_reveal_item, record_scene_for_surface, record_scene_tagged_with, visible_for,
 };
 use crate::draw_queue_3d::DrawQueue3D;
 use crate::light_queue::{DirectionalLightRecord, LightQueue, PointLightRecord};
@@ -250,7 +248,7 @@ impl System for RevealRecordSystem {
 /// （唯一换算点在 zela-render 内）。
 pub struct ContentTextureRecordSystem;
 impl System for ContentTextureRecordSystem {
-    type Reads = (ContentTextureSpecs,);
+    type Reads = (ContentTextureSpecs, WorldTransforms);
     type Writes = (ContentTextureQueue,);
 
     fn run(&mut self, ctx: &mut ExecutorContext<'_>) {
@@ -260,29 +258,15 @@ impl System for ContentTextureRecordSystem {
         if specs.is_empty() {
             return;
         }
+        let worlds = ctx.get::<WorldTransforms>().cloned();
 
         ctx.with_world_and_resource_mut::<ContentTextureQueue, _>(|world, queues| {
             queues.0.clear();
             let scene = WorldView::new(world);
-            // B3 Step 4c-2：多实例。每份 spec 一个内容层；只收该 Surface 名下的
-            // `ContentTextureItem`（归属沿 Parent 链解析，不存 surface_id）。
+            // B3 Step 1：复用全组合录制入口 + Surface 归属过滤（Parent 链唯一条件）。
             for spec in &specs.0 {
-                let layer = spec.layer_id();
-                let surface = spec.surface;
-                let queue = queues.queue_mut(layer);
-                scene.for_each_pair_opt::<Path, StrokeSolid, ContentTextureItem>(
-                    |id, path, stroke, mark| {
-                        if mark.is_none() {
-                            return;
-                        }
-                        match resolve_surface(&scene, id) {
-                            Ok(Some(owner)) if owner.surface == surface => {}
-                            // 不属于该 Surface（或归属无效）⇒ 不录进这一层。
-                            _ => return,
-                        }
-                        record_path_stroke(queue, path, stroke, &spec.camera);
-                    },
-                );
+                let queue = queues.queue_mut(spec.layer_id());
+                record_scene_for_surface(&scene, spec.surface, &spec.camera, worlds.as_ref(), queue);
             }
         });
     }
@@ -412,7 +396,7 @@ mod tests {
     // 库本体（M3-7 纪律：本 crate 不认识 hecs）不受影响。
     use hecs::World;
     use ze_notion::{Path2D, PathCommand, Rect2D};
-    use ze_scene_core::{Circle, Framing2D};
+    use ze_scene_core::{Circle, Framing2D, Path};
     use ze_render_ir::Opacity;
     use ze_scene_contract::{GroupId, Visibility};
     use ze_scene_hecs::object_id_of;
@@ -556,9 +540,9 @@ mod tests {
         assert!((q.0[0].t - 0.25).abs() < 1e-6);
     }
 
-    /// 内容纹理：只录带 `ContentTextureItem` 标记的对象（干扰圆不进队列）。
+    /// 内容纹理：只录归属该 Surface 的对象（无关对象不进队列）。
     #[test]
-    fn content_texture_record_filters_unmarked() {
+    fn content_texture_records_only_surface_owned() {
         let mut world = World::new();
         let surface = object_id_of(world.spawn((
             ze_scene_core::Surface::new(
@@ -575,7 +559,6 @@ mod tests {
                 false,
             )),
             StrokeSolid::new(0.02, (255, 255, 255, 255)),
-            ContentTextureItem,
             ze_scene_contract::Parent(surface),
         ));
         world.spawn((
@@ -658,7 +641,6 @@ mod tests {
                 false,
             )),
             StrokeSolid::new(0.02, (255, 255, 255, 255)),
-            ContentTextureItem,
             ze_scene_contract::Parent(surface_a),
         ));
         world.spawn((
@@ -667,7 +649,6 @@ mod tests {
                 false,
             )),
             StrokeSolid::new(0.02, (255, 255, 255, 255)),
-            ContentTextureItem,
             ze_scene_contract::Parent(surface_b),
         ));
 

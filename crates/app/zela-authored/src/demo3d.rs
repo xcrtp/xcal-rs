@@ -18,7 +18,7 @@ use zela_scene_ecs::content;
 use zela_scene_ecs::contract::{object_id_of, Parent};
 use zela_scene_ecs::domain::CameraMode;
 use zela_scene_ecs::scene::Scene;
-use zela_scene_ecs::scene::components::{ContentTextureItem, Material3D};
+use zela_scene_ecs::scene::components::Material3D;
 use zela_scene_ecs::scene::primitives::{parametric_surface, wireframe_cube};
 use zela_scene_ecs::types::Color32;
 
@@ -127,8 +127,6 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
             Path::new(outline.path),
             // 公式描边是世界空间：与字形一同随缩放成比例变化。
             StrokeSolid::new_in(outline.width, outline.color, ze_notion::MeasureSpace::World),
-            // S3-3：标记该实体进内容纹理（D5：只录带标记的实体）。
-            ContentTextureItem,
             Parent(surface_id),
         ));
     }

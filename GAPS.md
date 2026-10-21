@@ -321,9 +321,10 @@
 | S4-06 | demo3d 走硬编码 `CONTENT_TEXTURE_ID` / 手算内容相机（与 Surface 路径**两套真源**） | 作品 / 装配 | **已关闭（B3 Step 4c-4）** | demo3d 改为 `Surface(Renderer2D) + SurfaceTexture(fit_margin=0.8)`，内容实体挂 `Parent(surface)`；材质纹理由 `content_texture_handle` 派生；**四基线逐位不变（零差异）** |
 | S4-07 | 多 Surface 只是"签名存在"，无验证 | 测试 | **已关闭（B3 Step 4c-5）** | `two_surfaces_record_into_independent_layers`：两个 Surface 各自一层、纹理句柄不同、内容跨度互不串扰 |
 | S4-08 | `SurfaceTexture.filter` / `mipmap` 已进契约，但后端采样仍用全局默认 | 渲染后端 | **仍成立（未接线）** | 为保持 demo3d 零差异，4c 未改后端 sampler；mipmap 生成本就未实现（E-08）。触发条件：出现对过滤敏感的 Surface 内容 / 引入 mipmap 生成 |
+| S4-09 | 内容层录制只支持 `(Path, StrokeSolid)`，其它组合走 Surface 会静默丢内容 | 渲染管线 | **已关闭（B3 Step 5-1）** | 新增 `record_scene_for_surface`：复用 9 组全组合 + Parent 归属过滤；`ContentTextureItem` 标记**不再必需**（组件保留登记以兼容旧数据）；demo3d 零差异 |
 | S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
 
-**J 段小计（B3，已执行部分）**：已关闭 14（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07）· 仍成立/显式拒绝 4（S1-02/03、S2-03、S4-08）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 15（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09）· 仍成立/显式拒绝 4（S1-02/03、S2-03、S4-08）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
 
 ---
 
