@@ -103,6 +103,8 @@ fn run() -> Result<(), String> {
             // 当前脚本不使用 Shape2D::Custom ⇒ 无降级记录。
             downgrades: Vec::new(),
             source_sha256: Some(compiled.source_sha256.clone()),
+            // B4 Step 2：编译期不猜画质（档 1 默认值 = 当前行为）；回放端可覆盖。
+            render_params: Default::default(),
         },
     )
     .map_err(|e| format!("编码 ZSB 失败：{e}"))?;

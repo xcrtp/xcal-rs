@@ -25,6 +25,10 @@ pub struct RenderContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub target_format: wgpu::TextureFormat,
+    /// 可选 adapter：`Capabilities`（最大 MSAA 等）只能从 adapter 查询
+    /// （wgpu 30 的 `get_texture_format_features` 是 `Adapter` 方法）。
+    /// 宿主未提供 ⇒ `None`（B4 Step 2：无法确认支持性时不得假装支持）。
+    adapter: Option<wgpu::Adapter>,
 }
 
 impl RenderContext {
@@ -41,7 +45,19 @@ impl RenderContext {
             device,
             queue,
             target_format,
+            adapter: None,
         }
+    }
+
+    /// 附加 adapter（能力查询用；B4 Step 2）。链式，便于已有构造点不被打断。
+    pub fn with_adapter(mut self, adapter: wgpu::Adapter) -> Self {
+        self.adapter = Some(adapter);
+        self
+    }
+
+    /// 能力查询用 adapter（宿主未提供 ⇒ `None`）。
+    pub fn adapter(&self) -> Option<&wgpu::Adapter> {
+        self.adapter.as_ref()
     }
 
     /// 从 egui_wgpu::RenderState 提取上下文。
@@ -51,6 +67,7 @@ impl RenderContext {
             device: rs.device.clone(),
             queue: rs.queue.clone(),
             target_format: rs.target_format,
+            adapter: Some(rs.adapter.clone()),
         }
     }
 
@@ -112,6 +129,7 @@ impl RenderContext {
                 device,
                 queue,
                 target_format,
+                adapter: Some(adapter),
             })
         })
     }

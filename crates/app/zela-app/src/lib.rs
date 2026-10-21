@@ -1484,6 +1484,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
                 required_pods: required_playback_pods(),
                 downgrades: Vec::new(),
                 source_sha256: None,
+                render_params: Default::default(),
             },
         )
         .expect("编码 ZSB");
@@ -1552,6 +1553,7 @@ scene.spawn({ Circle { x = 0.0, y = 0.0, r = 1.0 } })
                 required_pods: required_playback_pods(),
                 downgrades: Vec::new(),
                 source_sha256: None,
+                render_params: Default::default(),
             },
         )
         .expect("编码 ZSB（3D 组件必须可序列化）");

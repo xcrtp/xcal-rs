@@ -37,6 +37,12 @@ pub mod sha256;
 
 use zela_scene_ecs::scene_script::SceneScript;
 
+/// B4 Step 2：渲染参数（Meta 的 `render_params` 字段）。
+///
+/// 转发 kernel 层的纯数据类型 —— 回放端可直接用
+/// `bundle.meta().render_params` 构造后端，不必再引一层依赖。
+pub use ze_render_ir::RenderParams;
+
 /// 文件魔数（4 字节）。
 pub const MAGIC: &[u8; 4] = b"ZSB1";
 /// 当前容器版本（决定"怎么读字节"，不属于内容 hash）。
@@ -116,6 +122,12 @@ pub struct Meta {
     pub downgrades: Vec<Downgrade>,
     /// 源脚本 SHA-256（诊断用，不进内容 hash）。
     pub source_sha256: Option<String>,
+    /// **渲染参数**（B4 Step 2）：回放端照着它构造后端（D1）。
+    ///
+    /// 纯记录 + 消费，**不进内容 hash**（不做 payload 校验）；`#[serde(default)]`
+    /// 让既有 ZSB 仍可读（缺字段 ⇒ `RenderParams::default()` = 当前行为）。
+    #[serde(default)]
+    pub render_params: crate::RenderParams,
     /// 场景时长（秒；从 SceneScript 重算，作为交叉校验）。
     pub duration: f64,
     /// 对象数（交叉校验）。
@@ -137,6 +149,8 @@ pub struct MetaInput {
     pub required_pods: Vec<Pod>,
     pub downgrades: Vec<Downgrade>,
     pub source_sha256: Option<String>,
+    /// 渲染参数（B4 Step 2）：默认 = 当前行为（§0.2 默认等效）。
+    pub render_params: RenderParams,
 }
 
 /// 当前运行时**能解释什么**（可还原性检查的输入）。
@@ -276,6 +290,7 @@ impl Bundle {
             required_pods: input.required_pods,
             downgrades: input.downgrades,
             source_sha256: input.source_sha256,
+            render_params: input.render_params,
             duration,
             object_count: script.len(),
             payload_sha256,
@@ -475,6 +490,7 @@ mod tests {
             required_pods: vec![Pod::new("scene", "0.1.0")],
             downgrades: Vec::new(),
             source_sha256: Some("deadbeef".to_string()),
+            render_params: RenderParams::default(),
         }
     }
 
@@ -539,6 +555,7 @@ mod tests {
                 required_pods: vec![Pod::new("scene", "0.1.0")],
                 downgrades: Vec::new(),
                 source_sha256: None,
+                render_params: RenderParams::default(),
             },
         )
         .expect("encode");

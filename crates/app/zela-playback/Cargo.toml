@@ -19,6 +19,8 @@ ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # 对象层：相机句柄与内容纹理默认配置。
 ze-scene-core = { path = "../../scene/ze-scene-core" }
 ze-notion = { path = "../../kernel/ze-notion" }
+# B4 Step 2：渲染参数的一致性校验（纯数据，kernel 层）。
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
 
 wgpu.workspace = true
 hecs.workspace = true

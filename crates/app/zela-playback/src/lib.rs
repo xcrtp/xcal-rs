@@ -111,9 +111,11 @@ fn scene_capability() -> Capability {
     Capability::new(name, meta.version)
 }
 
-/// **ZSB → Runtime**：可还原性检查 → 还原 `SceneScript` → commit → 公共尾装配。
+/// **ZSB → Runtime**：可还原性检查 → 渲染参数校验 → 还原 `SceneScript` → commit → 公共尾装配。
 pub fn build_bundle_runtime(render_ctx: RenderContext, bundle: &Bundle) -> Result<Runtime> {
     bundle.check_restorable(&available_playback_caps())?;
+    // B4 Step 2 / D1：参数非法 ⇒ 显式错误（不静默纠正）。
+    let _params = bundle_render_params(bundle)?;
 
     let script = bundle.script()?;
     let duration = script.duration();
@@ -143,6 +145,28 @@ pub fn build_bundle_runtime(render_ctx: RenderContext, bundle: &Bundle) -> Resul
             content_textures,
         },
     ))
+}
+
+/// **回放端读渲染参数**（B4 Step 2 / D1）：取 Meta → 有效性校验 → 返回。
+///
+/// 宿主拿到它之后还应调用 [`check_render_params_supported`]（需要后端的
+/// `Capabilities`），两者都不通过就**中止**，不得降级。
+pub fn bundle_render_params(bundle: &Bundle) -> Result<zela_scene_bundle::RenderParams> {
+    let params = bundle.meta().render_params;
+    params
+        .validate()
+        .map_err(|e| PlaybackError::Assembly(format!("ZSB 渲染参数非法：{e}")))?;
+    Ok(params)
+}
+
+/// **一致性校验**（B4 Step 2 / §0.3 ②）：后端不支持该参数 ⇒ 显式失败，不静默降级。
+pub fn check_render_params_supported(
+    params: &zela_scene_bundle::RenderParams,
+    caps: &ze_render_ir::Capabilities,
+) -> Result<()> {
+    params
+        .is_supported_by(caps)
+        .map_err(|e| PlaybackError::Assembly(format!("回放端不支持该渲染参数：{e}")))
 }
 
 /// **唯一的装配尾**：资源插入序列 + System 注册 + Driver pod。

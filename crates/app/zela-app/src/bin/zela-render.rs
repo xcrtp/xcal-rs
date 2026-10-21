@@ -221,6 +221,24 @@ fn run() -> Result<(), String> {
         a: 1.0,
     };
     let mut backends = StandardBackends::new(&ctx);
+
+    // B4 Step 2：渲染参数（档 1 默认值 = 当前行为；档 2 命令行覆盖 `--size`）。
+    // 有效性 + 一致性都在开渲前拦住（§0.3：不静默降级）。
+    let params = zela_scene_bundle::RenderParams {
+        size: args.size,
+        ..Default::default()
+    };
+    params
+        .validate()
+        .map_err(|e| format!("渲染参数非法：{e}"))?;
+    if let Some(adapter) = ctx.adapter() {
+        let caps = backends
+            .backend_3d_mut()
+            .capabilities(adapter)
+            .map_err(|e| format!("查询后端能力失败：{e}"))?;
+        zela_playback::check_render_params_supported(&params, &caps)
+            .map_err(|e| e.to_string())?;
+    }
     // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
     // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
     let mut frame_hash = FrameSequenceHash::new(width, height);
