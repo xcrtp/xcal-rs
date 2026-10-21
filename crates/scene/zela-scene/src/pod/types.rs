@@ -92,7 +92,10 @@ pub enum ShaderVariant {
     Pbr,
 }
 
-/// 3D 材质参数（B1-D；B1-C PBR 字段）。
+/// 3D 材质参数（B1-D；B1-C PBR 字段；B2-7 意图层字段）。
+///
+/// **只暴露意图**（D19）：`double_sided` / `transparent` 是作者语义，
+/// 后端把它们翻译成 `cull_mode` / `blend`（脚本不得出现 GPU 机制名）。
 #[derive(Clone, Copy, Debug, PartialEq, PodType)]
 #[pod_type(name = "zela.Material3D")]
 pub struct Material3D {
@@ -102,6 +105,10 @@ pub struct Material3D {
     pub metallic: f32,
     /// 粗糙度 [0,1]（仅 `variant = Pbr` 消费；默认 0.5）。
     pub roughness: f32,
+    /// 是否双面可见（B2-7 / D19；`false` = 封闭实体）。
+    pub double_sided: bool,
+    /// 是否按透明处理（B2-7 / D19；`false` = 不透明）。
+    pub transparent: bool,
 }
 
 /// 光源类型。

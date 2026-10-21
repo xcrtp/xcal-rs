@@ -18,6 +18,8 @@ local cube = scene.spawn({
         variant = ShaderVariant.Pbr,
         metallic = 0.3,
         roughness = 0.6,
+        double_sided = false,
+        transparent = false,
     },
     Transform3D {
         position = Vec3 { x = 0.0, y = 0.0, z = 0.0 },
@@ -55,6 +57,8 @@ local wire = scene.spawn({
         variant = ShaderVariant.Lambert,
         metallic = 0.0,
         roughness = 0.5,
+        double_sided = false,
+        transparent = false,
     },
     Transform3D {
         position = Vec3 { x = -2.8, y = 1.0, z = 0.0 },

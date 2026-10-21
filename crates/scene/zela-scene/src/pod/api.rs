@@ -21,7 +21,7 @@ use ze_pod_macro::capability;
 /// 宿主暴露给脚本的场景装配接口。
 #[capability(
     namespace = "zela.scene",
-    version = "5",
+    version = "6",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -124,4 +124,48 @@ pub struct ContentApi<'a> {
 
     /// 编译纯文本为描边路径（正文外观）。
     pub text: fn(&'a dyn Pod, spec: Text) -> PathList,
+}
+
+// ─── B2-9（D14）：能力指纹与版本的配对基线 ─────────────────────────────────
+//
+// 规则（硬，失败不是警告）：`signatures()` 变了而 `version` 没递增 ⇒ 测试红。
+// 改 API 的正确流程：**递增 `version`** → 更新对应版本常量 → 更新指纹常量。
+// 指纹算法是固定 FNV-1a（跨 Rust 版本稳定），见 `ze_pod_core::capability_fingerprint`。
+
+/// `zela.scene` 的当前自述版本（必须与 `#[capability(version = ...)]` 逐字一致）。
+pub const SCENE_API_VERSION: &str = "6";
+/// `zela.scene` 的 `hash(signatures())` 基线。
+pub const SCENE_API_FINGERPRINT: u64 = 13_421_122_430_392_971_548;
+/// `zela.content` 的当前自述版本。
+pub const CONTENT_API_VERSION: &str = "1";
+/// `zela.content` 的 `hash(signatures())` 基线。
+pub const CONTENT_API_FINGERPRINT: u64 = 8_902_159_905_904_593_513;
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::*;
+    use ze_pod_core::{Capability, capability_fingerprint};
+
+    fn check<C: Capability<'static>>(expected_version: &str, expected_fingerprint: u64) {
+        assert_eq!(
+            C::meta().version,
+            Some(expected_version),
+            "版本常量与 capability 声明不一致（以代码为准，先修常量）"
+        );
+        assert_eq!(
+            capability_fingerprint(C::signatures()),
+            expected_fingerprint,
+            "signatures 变了 ⇒ 必须递增 version **并**更新指纹常量（D14：变而未递增即 fail）"
+        );
+    }
+
+    #[test]
+    fn scene_api_fingerprint_is_pinned_to_version() {
+        check::<SceneApi<'static>>(SCENE_API_VERSION, SCENE_API_FINGERPRINT);
+    }
+
+    #[test]
+    fn content_api_fingerprint_is_pinned_to_version() {
+        check::<ContentApi<'static>>(CONTENT_API_VERSION, CONTENT_API_FINGERPRINT);
+    }
 }

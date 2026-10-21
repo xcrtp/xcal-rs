@@ -458,6 +458,9 @@ fn scene_material3d(pod: &dyn Pod, material: Material3D) -> Handle {
     };
     native.metallic = material.metallic;
     native.roughness = material.roughness;
+    // B2-7（D19）：意图层字段原样透传；后端负责翻译成 cull_mode / blend。
+    native.double_sided = material.double_sided;
+    native.transparent = material.transparent;
     service(pod)
         .rec
         .borrow_mut()
