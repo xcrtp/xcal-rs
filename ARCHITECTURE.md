@@ -651,6 +651,10 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   静默丢内容"。
 > - **`composite` 可声明（B3 Step 5-2）**：`SurfaceTexture.composite`（默认 `false`），
 >   `content_texture_specs` 不再硬编码。
+> - **视口不再重复绘制 Surface 内容（B3 Step 5 修正）**：`record_group` 用
+>   `SurfaceScope::{Viewport, Content}` 区分两条录制口径 —— 视口层**跳过**归属任一
+>   `Surface` 的对象（内容只进该 Surface 的纹理）。否则同一对象会被视口与内容两套
+>   相机各画一次，得到"出现两次且带偏移"的画面。
 > - **两个脚本作品（B3 Step 5-3/5-4）**：`surface_matrix.lua`（能力矩阵，
 >   `composite=true` 直视纹理 + 内容层命令数断言）与 `atlas.lua`（2D 公式内容
 >   → 3D 平面 consumer，带动画）；两者均已进 `cargo verify` 对拍 fixture。

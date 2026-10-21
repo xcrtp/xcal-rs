@@ -217,9 +217,12 @@ mod tests {
         assert!(queue.surface_errors().is_empty());
     }
 
-    /// Renderer2D ⇒ 默认 2D 路径（Step 4 才接纹理）。
+    /// Renderer2D ⇒ 内容只进该 Surface 的纹理层，**不再**重复画在屏幕视口上。
+    ///
+    /// 两套相机（视口 2D 相机 vs `SurfaceTexture::camera_for`）位置与缩放都不同，
+    /// 重复绘制会得到"同一对象出现两次且带偏移"的画面。
     #[test]
-    fn renderer2d_keeps_default_shape_path() {
+    fn renderer2d_content_is_not_drawn_in_viewport() {
         let mut world = World::new();
         let surface = spawn_surface(
             &mut world,
@@ -235,7 +238,7 @@ mod tests {
         let mut queue = DrawQueue::new();
         record_scene(&WorldView::new(&world), &camera(), &mut queue);
 
-        assert_eq!(queue.commands().len(), 1);
+        assert_eq!(queue.commands().len(), 0, "视口层不得重复绘制 Surface 内容");
         assert_eq!(queue.meshes().count(), 0);
         assert!(queue.surface_errors().is_empty());
     }

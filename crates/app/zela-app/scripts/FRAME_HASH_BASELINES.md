@@ -107,9 +107,9 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 
 > `surface_matrix` / `atlas` 于 2026-10-22（B3 Step 5）首次登记。首次登记时两项**没有旧值行**，
 > 只写 `# slotB:` 与生效行、**没有 `# slotA:`**（`--record` 允许"新增 key 直接登记"）。
-> 随后给作品 A 补了 `Path × Fill` 组合，做了第二次重录 ⇒ 现在 `surface_matrix` 的
-> `# slotA:` 是首次登记的 `38eb3d2d…`，`# slotB:`/生效行是补组合后的 `baafe1aa…`。
-> `atlas` 两次值相同，`slotA == slotB`。
+> 作品 A 之后重录过两次：① 补 `Path × Fill` 组合（`38eb3d2d… → baafe1aa…`）；
+> ② 修「Surface 归属内容被屏幕视口重复绘制」（`baafe1aa… → 7bed8a31…`）。
+> 因此它的 `# slotA:` 只保留**上一次**值，更早的值看 git 历史；`atlas` 三次值相同。
 >
 > `surface_matrix` 只渲 1 帧（静态能力矩阵）：像素覆盖的是"全部组合同屏一次"，
 > 组合覆盖度的主判据是**非像素断言**（`ContentTextureQueue` 里每种组合都录到，

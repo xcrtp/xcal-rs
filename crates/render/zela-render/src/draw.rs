@@ -566,6 +566,17 @@ pub fn apply_opacity(style: &mut Style2D, opacity: Opacity) {
     style.stroke = style.stroke.map(|c| opacity.apply(c));
 }
 
+/// 一次录制的 Surface 归属口径。
+///
+/// - [`SurfaceScope::Viewport`]：屏幕视口层。**跳过**归属任一 `Surface` 的对象
+///   （它们只进该 Surface 的纹理，否则同一内容会被画两次且两套相机不一致）。
+/// - [`SurfaceScope::Content`]：某 Surface 的内容层。**只录**归属该 Surface 的对象。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SurfaceScope {
+    Viewport,
+    Content(ObjectId),
+}
+
 /// 录制**一组** `(图元, 样式)` 组合：契约层访客形态 → [`DrawQueue`]。
 ///
 /// 拆出来是为了让 [`record_scene_tagged`] 的 9 组调用保持"一组一行"的可读性，
@@ -589,7 +600,7 @@ fn record_group<S, A, B>(
     worlds: Option<&ze_scene_core::WorldTransforms>,
     queue: &mut DrawQueue,
     z_default: f32,
-    surface_filter: Option<ObjectId>,
+    scope: SurfaceScope,
 ) where
     S: SceneRead,
     A: ToShape2D + Send + Sync + 'static,
@@ -600,7 +611,7 @@ fn record_group<S, A, B>(
             return;
         }
         // B3 Step 1：内容层录制按 Surface 归属过滤（Parent 链，唯一条件）。
-        if let Some(surface) = surface_filter {
+        if let SurfaceScope::Content(surface) = scope {
             match ze_scene_core::resolve_surface(scene, id) {
                 Ok(Some(owner)) if owner.surface == surface => {}
                 Ok(_) => return,
@@ -616,6 +627,13 @@ fn record_group<S, A, B>(
         // B3 Step 2：Surface 显式路由。Renderer3D ⇒ 派生为网格（不再走 2D）；
         // Renderer2D / 无 Surface ⇒ 默认 2D 路径（像素逐位不变）。
         if crate::surface_route::try_record_direct(scene, id, a, b, z.copied(), worlds, queue) {
+            return;
+        }
+        // B3 Step 5-7：归属某 `Surface` 的 2D 内容**只**进该 Surface 的纹理。
+        // 视口层再画一次就会与纹理/3D 载体重复（两套相机 ⇒ 位置与缩放都不一致）。
+        if scope == SurfaceScope::Viewport
+            && matches!(ze_scene_core::resolve_surface(scene, id), Ok(Some(_)))
+        {
             return;
         }
         // S5：优先用父子累乘的**世界矩阵**（S1：2D 读投影视图）；缺席 WorldTransforms / 该对象 ⇒ local。
@@ -708,18 +726,18 @@ pub fn record_scene_tagged_with<S: SceneRead>(
     let t = camera.to_transform2d();
     let scale = camera.scale;
 
-    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Circle, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Path, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Path, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
+    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Circle, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Path, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Path, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Line, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Rect, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
     // T2：箭头是**一等图元**，两种样式各一组（`FillSolid` ⇒ 实心箭头，`StrokeSolid` ⇒ 空心）。
     // 加在既有 7 组之后 ⇒ 同 `z` 下的绘制顺序向后追加，**不影响**已有对象之间的相对顺序
     // （`DrawQueue` 稳定排序）。
-    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
-    record_group::<S, Arrow, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, None);
+    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
+    record_group::<S, Arrow, FillSolid>(scene, &t, scale, camera_tag, groups, worlds, queue, Z, SurfaceScope::Viewport);
 }
 
 /// **内容层录制**（B3 Step 1）：只录归属某 `Surface` 的 2D 对象。
@@ -741,15 +759,15 @@ pub fn record_scene_for_surface<S: SceneRead>(
     let scale = camera.scale;
     let groups = GroupVisibility::default();
 
-    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Circle, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Path, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Path, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Line, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Rect, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
-    record_group::<S, Arrow, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, Some(surface));
+    record_group::<S, Circle, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Circle, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Path, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Path, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Line, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Rect, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Rect, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Arrow, StrokeSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
+    record_group::<S, Arrow, FillSolid>(scene, &t, scale, None, &groups, worlds, queue, Z, SurfaceScope::Content(surface));
 }
 
 /// 录制**单个**路径描边实体到队列（z=0，与 [`record_scene`] 同口径）。
