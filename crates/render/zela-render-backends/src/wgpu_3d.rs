@@ -51,7 +51,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU64;
 use std::sync::Mutex;
 
-use ze_notion::{Mat4, Vec2, Vec3};
+use ze_notion::Mat4;
 use wgpu::util::DeviceExt as _;
 
 use crate::gpu_util::{UniformArena, bytes_of};
@@ -1046,36 +1046,32 @@ impl WgpuBackend3D {
             let cached_copy = if let Some(handle_ref) = cache_guard.get(key) {
                 extract_buffers(handle_ref)
             } else {
-                let uvs = match &geometry.uvs {
-                    Some(uvs) => uvs.clone(),
-                    None => fallback_uvs(&geometry.positions, md.material.uv_projection),
-                };
-                let vertices = interleaved_pos_uv_normal(
-                    &geometry.positions,
-                    &uvs,
-                    geometry.normals.as_deref(),
-                );
+                // B3-0b：顶点生产（UV 兜底 / 法线补齐 / 交错打包）在渲染无关层，
+                // 后端只收字节并上传。失败 ⇒ **显式 panic**（不静默产空几何）。
+                let data = zela_render::vertex_record::mesh_vertex_buffer(
+                    geometry,
+                    md.material.uv_projection,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("不静默：3D 顶点生产失败（几何 id={}）：{error}", geometry.id())
+                });
                 let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("zela-3d-mesh-vertices"),
-                    contents: bytes_of(&vertices),
+                    contents: &data.vertices,
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let ib = geometry.indices.as_ref().map(|indices| {
+                let ib = (!data.indices.is_empty()).then(|| {
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-3d-mesh-indices"),
-                        contents: bytes_of(indices),
+                        contents: bytes_of(&data.indices),
                         usage: wgpu::BufferUsages::INDEX,
                     })
                 });
                 let cached = CachedMeshBuffers {
                     vertex_buffer: vb,
                     index_buffer: ib,
-                    vertex_count: geometry.positions.len() as u32,
-                    index_count: geometry
-                        .indices
-                        .as_ref()
-                        .map(|v| v.len() as u32)
-                        .unwrap_or(0),
+                    vertex_count: data.vertex_count,
+                    index_count: data.indices.len() as u32,
                     topology: geometry.topology,
                 };
                 let copy = CachedMeshBuffersCopy {
@@ -1157,24 +1153,14 @@ impl WgpuBackend3D {
             let cached_copy = if let Some(handle_ref) = cache_guard.get(line_key) {
                 extract_buffers(handle_ref)
             } else {
-                // line 无材质纹理 → UV 恒为 0；法线填 (0, 0, 1)，
-                // 配合默认头顶光（L = (0, 0, 1)）得 lit = 1，颜色不受光照影响。
-                let vertices: [[f32; 8]; 2] = [
-                    [
-                        line.start.x,
-                        line.start.y,
-                        line.start.z,
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                        1.0,
-                    ],
-                    [line.end.x, line.end.y, line.end.z, 0.0, 0.0, 0.0, 0.0, 1.0],
-                ];
+                // B3-0b：line 顶点也走生产端（B7：内联是第二份真源）。
+                let data = zela_render::vertex_record::line_vertex_buffer(line.start, line.end)
+                    .unwrap_or_else(|error| {
+                        panic!("不静默：3D 线段顶点生产失败：{error}")
+                    });
                 let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("zela-3d-line-vertices"),
-                    contents: bytes_of(&vertices),
+                    contents: &data.vertices,
                     usage: wgpu::BufferUsages::VERTEX,
                 });
                 let cached = CachedMeshBuffers {
@@ -1690,74 +1676,6 @@ fn uv_source_code(has_uvs: bool, projection: UvProjection) -> u64 {
             UvProjection::Triplanar => 3,
         }
     }
-}
-
-/// 交错顶点数据：每顶点 `[pos.xyz, uv.xy, normal.xyz]`（8 个 f32 = 32 字节）。
-///
-/// `uvs` 必须与 `positions` 等长（几何自带或 [`fallback_uvs`] 兜底）——不等长时
-/// 对缺失 UV 以 (0, 0) 补齐，保证布局稳定。`normals` 为 `None`（如线框立方体）
-/// 或长度不足时，对应顶点以 `(0, 0, 1)` 补齐：配合默认头顶
-/// 光照（`L = (0, 0, 1)`）得到 `lit = 1`，故未携带法线的几何外观与开启光照前一致。
-fn interleaved_pos_uv_normal(
-    positions: &[Vec3],
-    uvs: &[Vec2],
-    normals: Option<&[Vec3]>,
-) -> Vec<f32> {
-    let mut out = Vec::with_capacity(positions.len() * 8);
-    for (i, p) in positions.iter().enumerate() {
-        let uv = uvs.get(i).copied().unwrap_or(Vec2::ZERO);
-        let n = normals.and_then(|ns| ns.get(i).copied()).unwrap_or(Vec3::Z);
-        out.extend_from_slice(&[p.x, p.y, p.z, uv.x, uv.y, n.x, n.y, n.z]);
-    }
-    out
-}
-
-/// 几何未携带 UV 时的兜底 UV（包围盒归一化到 [0, 1]）。
-///
-/// - [`UvProjection::Planar`]：以 XY 平面投影（忽略 Z）；
-/// - [`UvProjection::Spherical`]：围绕包围盒中心的方向向量球面映射；
-/// - [`UvProjection::Triplanar`]：逐顶点按相对包围盒中心偏移最大的分量选主轴投影。
-///
-/// 退化包围盒（任一轴跨度为 0）时按最小值 1e-6 处理，避免除零。
-fn fallback_uvs(positions: &[Vec3], projection: UvProjection) -> Vec<Vec2> {
-    if positions.is_empty() {
-        return Vec::new();
-    }
-    let mut min = positions[0];
-    let mut max = positions[0];
-    for p in positions {
-        min = min.min(*p);
-        max = max.max(*p);
-    }
-    let size = (max - min).max(Vec3::splat(1e-6));
-    let center = (min + max) * 0.5;
-
-    positions
-        .iter()
-        .map(|p| {
-            let local = *p - min;
-            match projection {
-                UvProjection::Planar => Vec2::new(local.x / size.x, local.y / size.y),
-                UvProjection::Spherical => {
-                    let d = (*p - center).normalize_or_zero();
-                    // 方向向量 [-1, 1] → [0, 1]。
-                    Vec2::new(d.x * 0.5 + 0.5, d.y * 0.5 + 0.5)
-                }
-                UvProjection::Triplanar => {
-                    // 取相对中心偏移最大的分量作为主轴，对该主轴的正交两轴归一化。
-                    let rel = *p - center;
-                    let (ax, ay) = if rel.x.abs() >= rel.y.abs() && rel.x.abs() >= rel.z.abs() {
-                        (local.y / size.y, local.z / size.z)
-                    } else if rel.y.abs() >= rel.z.abs() {
-                        (local.x / size.x, local.z / size.z)
-                    } else {
-                        (local.x / size.x, local.y / size.y)
-                    };
-                    Vec2::new(ax, ay)
-                }
-            }
-        })
-        .collect()
 }
 
 // ─── tests ──────────────────────────────────────────────────────────────────

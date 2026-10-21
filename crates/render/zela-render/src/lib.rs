@@ -32,6 +32,7 @@ pub mod painter_3d;
 pub mod record_systems;
 pub mod shape_to_mesh;
 pub mod tessellate;
+pub mod vertex_record;
 pub mod view_rect;
 pub mod viewport;
 
