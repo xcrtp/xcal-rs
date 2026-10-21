@@ -75,6 +75,9 @@ pub struct SurfaceTexture {
     pub filter: TextureFilter,
     /// 是否生成/采样 mipmap（显式；默认值不隐藏）。
     pub mipmap: bool,
+    /// 内容适配边距：`None` = bounds 1:1 铺满；`Some(m)` = `Camera2D::fit_bounds` 语义
+    /// （`m × min(W/bx, H/by)`，见 B3 Step 4c-3）。
+    pub fit_margin: Option<f32>,
 }
 
 impl SurfaceTexture {
@@ -83,14 +86,22 @@ impl SurfaceTexture {
             texel_size,
             filter,
             mipmap,
+            fit_margin: None,
         }
     }
 
-    /// 固定尺寸 → 内容相机：`bounds`（世界/屏幕矩形）映射到整张纹理。
+    /// 指定适配边距（`fit_bounds` 语义；Step 4c-3）。
+    pub fn with_fit_margin(mut self, margin: f32) -> Self {
+        self.fit_margin = Some(margin);
+        self
+    }
+
+    /// 固定尺寸 → 内容相机：`bounds` 映射到整张纹理。
     ///
-    /// - 尺寸必须非零；
-    /// - `bounds` 必须非退化；
-    /// - x / y 缩放必须一致（否则是静默拉伸）⇒ 显式错误。
+    /// - `fit_margin = None`：bounds 1:1 铺满；宽高比不一致 ⇒ [`SurfaceError::AspectMismatch`]；
+    /// - `fit_margin = Some(m)`：直接调用 [`Camera2D::fit_bounds`]（**同一函数**，
+    ///   保证与 `demo3d` 原路径逐分量一致）；`m` 非有限或 `<= 0` ⇒ 显式错误；
+    /// - 尺寸非零、bounds 非退化在两条分支都强制。
     pub fn camera_for(&self, bounds: Rect2D) -> Result<Camera2D, SurfaceError> {
         let [width, height] = self.texel_size;
         if width == 0 || height == 0 {
@@ -100,9 +111,20 @@ impl SurfaceTexture {
             });
         }
         let size = bounds.size();
-        if !(size.x > 0.0 && size.y > 0.0) {
+        if !(size.x > 0.0 && size.y > 0.0) || !size.x.is_finite() || !size.y.is_finite() {
             return Err(SurfaceError::DegenerateBounds);
         }
+        let rect = Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32));
+
+        if let Some(margin) = self.fit_margin {
+            if !margin.is_finite() || margin <= 0.0 {
+                return Err(SurfaceError::InvalidFitMargin { margin });
+            }
+            // 与原路径**同一函数**：基底 scale 只在退化盒分支生效（这里已拒绝退化）。
+            let base = Camera2D::new(Vec2::ZERO, FIT_FALLBACK_SCALE, rect);
+            return Ok(base.fit_bounds(bounds, margin));
+        }
+
         let scale_x = width as f32 / size.x;
         let scale_y = height as f32 / size.y;
         let relative = (scale_x - scale_y).abs() / scale_x.max(scale_y);
@@ -114,13 +136,12 @@ impl SurfaceTexture {
                 scale_y,
             });
         }
-        Ok(Camera2D::new(
-            bounds.center(),
-            scale_x,
-            Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
-        ))
+        Ok(Camera2D::new(bounds.center(), scale_x, rect))
     }
 }
+
+/// `fit_bounds` 的退化盒兜底 scale（与原 `demo3d` 基底同值；正常路径不参与计算）。
+const FIT_FALLBACK_SCALE: f32 = 40.0;
 
 /// 归属结果：最近的 Surface 祖先 + 它的策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +163,8 @@ pub enum SurfaceError {
     InvalidTexelSize { width: u32, height: u32 },
     #[error("Surface.bounds 退化（宽高必须 > 0）")]
     DegenerateBounds,
+    #[error("SurfaceTexture.fit_margin 非法：{margin}（必须有限且 > 0）")]
+    InvalidFitMargin { margin: f32 },
     #[error(
         "SurfaceTexture 与 bounds 宽高比不一致（bounds={bounds:?}, texel={texel_size:?}, \
          scale_x={scale_x}, scale_y={scale_y}）：会静默拉伸，故拒绝"
@@ -391,6 +414,39 @@ mod tests {
         assert_eq!(camera.scale, 2.0);
         assert_eq!(camera.center, Vec2::new(40.0, 20.0));
         assert_eq!(camera.rect.size(), Vec2::new(200.0, 100.0));
+    }
+
+    /// `fit_margin = Some(m)` 与原 `fit_bounds` **逐分量**一致（Step 4c-3 / 零差异前提）。
+    #[test]
+    fn fit_margin_matches_fit_bounds_exactly() {
+        let texture = SurfaceTexture::new([512, 512], TextureFilter::Linear, false)
+            .with_fit_margin(0.8);
+        let bounds = Rect2D::new(Vec2::new(-2.8, -1.2), Vec2::new(3.0, 2.4));
+        let camera = texture.camera_for(bounds).unwrap();
+
+        let base = Camera2D::new(
+            Vec2::ZERO,
+            40.0,
+            Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0)),
+        );
+        let expected = base.fit_bounds(bounds, 0.8);
+
+        assert_eq!(camera.center, expected.center);
+        assert_eq!(camera.scale.to_bits(), expected.scale.to_bits(), "逐位相同");
+        assert_eq!(camera.rect, expected.rect);
+    }
+
+    /// 非法 `fit_margin` ⇒ 显式错误。
+    #[test]
+    fn invalid_fit_margin_errors_explicitly() {
+        for margin in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let texture = SurfaceTexture::new([16, 16], TextureFilter::Nearest, false)
+                .with_fit_margin(margin);
+            assert!(matches!(
+                texture.camera_for(bounds()),
+                Err(SurfaceError::InvalidFitMargin { .. })
+            ));
+        }
     }
 
     /// 尺寸非法 / bounds 退化 / 宽高比不一致 ⇒ 显式错误（不静默拉伸）。
