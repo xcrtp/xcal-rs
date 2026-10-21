@@ -511,6 +511,67 @@ mod tests {
     use zela_scene_ecs::{AnimValue, Interp};
     use zela_schedule::scheduler::Phase;
 
+    /// **B3 Step 5 / 作品 A（非像素断言）**：`surface_matrix.lua` 的每种
+    /// 脚本可表达组合都真的录进了内容层（Circle/Arrow 各 Fill+Stroke、Path Stroke）。
+    #[test]
+    fn surface_matrix_records_all_script_expressible_combos() {
+        use zela_render::{ContentTextureQueue, ContentTextureRecordSystem};
+        use zela_schedule::resource::Resources;
+        use zela_schedule::scheduler::Scheduler;
+
+        let assembly = crate::assembly::assemble(Arc::new(crate::formula::build_engine()))
+            .expect("脚本 Pod 装配成功");
+        let script = assembly
+            .run_script(include_str!("../scripts/surface_matrix.lua"))
+            .expect("surface_matrix.lua 执行成功");
+
+        let mut scene = Scene::new();
+        script.commit(&mut scene).expect("commit");
+        let specs = zela_scene_ecs::domain::content_texture_specs(&scene)
+            .expect("Surface 纹理规格生成成功");
+        assert_eq!(specs.0.len(), 1, "作品 A 只有一个内容层");
+
+        let mut res = Resources::new();
+        res.insert(specs.clone());
+        res.insert(ContentTextureQueue::default());
+        let mut scheduler = Scheduler::new(scene.into_world(), res);
+        scheduler.add_system(Phase::RenderCommit, ContentTextureRecordSystem);
+        scheduler.init_resources();
+        scheduler.run_frame(0.016);
+
+        let queue = scheduler
+            .resources()
+            .get::<ContentTextureQueue>()
+            .unwrap()
+            .get(specs.0[0].layer_id())
+            .expect("内容层已录制");
+
+        let mut circle_fill = 0;
+        let mut circle_stroke = 0;
+        let mut arrow_fill = 0;
+        let mut arrow_stroke = 0;
+        let mut path_stroke = 0;
+        let mut path_fill = 0;
+        for cmd in queue.commands() {
+            match (&cmd.shape, cmd.style.fill.is_some(), cmd.style.stroke.is_some()) {
+                (zela_render::Shape2D::Circle { .. }, true, false) => circle_fill += 1,
+                (zela_render::Shape2D::Circle { .. }, false, true) => circle_stroke += 1,
+                // Arrow 派生为 Group（杆 + 头两个 Polygon）。
+                (zela_render::Shape2D::Group { .. }, true, false) => arrow_fill += 1,
+                (zela_render::Shape2D::Group { .. }, false, true) => arrow_stroke += 1,
+                (zela_render::Shape2D::Path(_), false, true) => path_stroke += 1,
+                (zela_render::Shape2D::Path(_), true, false) => path_fill += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(circle_fill, 1, "Circle × Fill");
+        assert_eq!(circle_stroke, 1, "Circle × Stroke");
+        assert_eq!(arrow_fill, 1, "Arrow × Fill");
+        assert_eq!(arrow_stroke, 1, "Arrow × Stroke");
+        assert!(path_stroke >= 1, "Path × Stroke（文本路径）");
+        assert!(path_fill >= 1, "Path × Fill（文本轮廓填充）");
+    }
+
     /// **A3 验收**：默认启动与 `--script` 走**同一条消费路径**（都加载
     /// `storyboard.lua`）——对象数、时长与绑定数完全一致。
     #[test]
