@@ -5,39 +5,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# 兼容壳层（B3-1d）：实现已改名为 `zela-scene-ecs`。
+# 下游 259 处 `zela_scene::` import 保持不变；迁移完成后删除本壳层。
 [dependencies]
-# B3-1b：场景核心层（对象 / 组件 / 纯逻辑）。本 crate 只留 ECS 实现。
-ze-scene-core = { path = "../ze-scene-core" }
-# B3-1c：语言无关的 Pod 边界；本层只做 re-export（`zela_scene::pod`）。
-ze-scene-api = { path = "../ze-scene-api" }
-ze-macro = { path = "../../kernel/ze-macro" }
-ze-notion = { path = "../../kernel/ze-notion" }
-# 场景对象层（图元 newtype）：组件词汇由对象层定义，本层（ECS 实现）只消费。
-ze-object = { path = "../../object/ze-object" }
-# Pod（A 线）：内置数学函数以 `RegistryPod` 为唯一来源 —— zela-scene 是
-# `ze-pod-core` 的**第一个生产消费方**（`math_pod` 模块）。ze-notion 仍不依赖 ze-pod-core。
-ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
-# `TargetKind` 的 schema：target 枚举是持久化表与脚本绑定的**唯一真源**。
-ze-pod-macro = { path = "../../ze/pod/ze-pod-macro" }
-# 渲染 IR（样式组件）：ECS 里存的 `StrokeSolid` / `FillSolid` 组件来自此处。
-ze-render-ir = { path = "../../kernel/ze-render-ir" }
-# 契约层（M3-7/M3-8）：本层为 `ze_scene_contract::Scene` 提供 hecs 实现，
-# 从而渲染管线与装配对象不再认识 hecs。
-ze-scene-contract = { path = "../../kernel/ze-scene-contract" }
-ze-time = { path = "../../kernel/ze-time" }
-# 脚本 Pod 的 domain 侧（B2）：内容编译能力经 Injector 提供，不再住在解释器里。
-ze-content = { path = "../../kernel/ze-content" }
-ze-prerender = { path = "../../kernel/ze-prerender", default-features = false }
-zela-schedule = { path = "../../schedule/zela-schedule" }
-
-derive_more.workspace = true
-thiserror.workspace = true
-smart-default.workspace = true
-derive-new.workspace = true
-derive_builder.workspace = true
-hecs.workspace = true
-# 组件持久化：组件 serde + `Components` 的 tagged JSON 编码。
-serde.workspace = true
-serde_json.workspace = true
-
-[dev-dependencies]
+zela-scene-ecs = { path = "../zela-scene-ecs" }

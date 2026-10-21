@@ -26,12 +26,12 @@ use ze_object::{Arrow, Axes2D, Camera2DHandle, Framing2D, Path, Transform};
 use ze_prerender::InMemoryEngine;
 use ze_render_ir::{FillSolid, StrokeSolid};
 
-use crate::animation::{Camera2DFraming, RevealRange};
-use crate::content;
-use crate::scene::Scene;
-use crate::scene::components::Reveal;
-use crate::scene_script::{Handle, SceneEncoder};
-use crate::{AnimValue, BindingTable, ClockForest, Curve, Interp};
+use zela_scene_ecs::animation::{Camera2DFraming, RevealRange};
+use zela_scene_ecs::content;
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::scene::components::Reveal;
+use zela_scene_ecs::scene_script::{Handle, SceneEncoder};
+use zela_scene_ecs::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 
 /// 主 2D 相机初始取景（世界原点居中、40 px/世界单位）。
 const CAMERA_START: Framing2D = Framing2D {
@@ -274,8 +274,8 @@ fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::{Target, Timeline};
-    use crate::contract::{ObjectId, SceneRead};
+    use zela_scene_ecs::animation::{Target, Timeline};
+    use zela_scene_ecs::contract::{ObjectId, SceneRead};
     use ze_prerender::placeholder_engine;
 
     /// §11.1：六条分镜能被**声明**出来 —— 场景对象齐备且**时序正确**。

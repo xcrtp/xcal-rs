@@ -11,6 +11,8 @@ path = "src/bin/zela-render.rs"
 
 [dependencies]
 zela-scene = { path = "../../scene/zela-scene" }
+# B3-1e：场景作品（分镜 / demo）独立成 crate。
+zela-authored = { path = "../zela-authored" }
 # ZSB 装配产物（格式 + 可还原性检查）。不依赖任何语言适配器。
 zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
 # Pod 机制 + 静态插件装配（src/assembly.rs）。

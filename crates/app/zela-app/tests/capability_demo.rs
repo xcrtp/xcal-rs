@@ -7,7 +7,7 @@ use zela_render::{DrawQueue, SceneRecordSystem, ViewRect, record_scene_tagged};
 use zela_render_backends::{RenderContext, WgpuBackend2D};
 use zela_scene::TimeState;
 use zela_scene::animation::BindingApplySystem;
-use zela_scene::authored::capability_demo::{
+use zela_authored::capability_demo::{
     COLOR_CONTROL, COLOR_COS, COLOR_SIN, COS_OFFSET, CapabilityDemo, FADE_SECONDS, GROUP_COS,
     NAME_CONTROL, NAME_COS, NAME_SIN, build,
 };

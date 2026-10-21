@@ -1,0 +1,21 @@
+[package]
+name = "zela-authored"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 场景**作品**（B3-1e）：分镜 / 能力 demo / 3D demo 的声明处。
+#
+# 为什么独立：它们是"内容"，不是"场景基础设施"。留在场景层会让
+# `zela-scene` 的体量把作品算成框架代码；等价性测试与 app 需要时按需依赖。
+[dependencies]
+# 作品用真实的 ECS `Scene` 构建（`spawn_dyn` / `SceneScript`）。
+zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
+# 场景对象（图元 / 相机 / 装配对象）：兼容壳层，内容在 ze-scene-core::object。
+ze-object = { path = "../../object/ze-object" }
+ze-notion = { path = "../../kernel/ze-notion" }
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
+ze-time = { path = "../../kernel/ze-time" }
+ze-content = { path = "../../kernel/ze-content" }
+ze-prerender = { path = "../../kernel/ze-prerender", default-features = false }

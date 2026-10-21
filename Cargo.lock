@@ -6193,12 +6193,26 @@ dependencies = [
  "ze-pod-lua",
  "ze-pod-py",
  "ze-prerender",
+ "zela-authored",
  "zela-playback",
  "zela-render",
  "zela-render-backends",
  "zela-scene",
  "zela-scene-bundle",
  "zela-schedule",
+]
+
+[[package]]
+name = "zela-authored"
+version = "0.1.1"
+dependencies = [
+ "ze-content",
+ "ze-notion",
+ "ze-object",
+ "ze-prerender",
+ "ze-render-ir",
+ "ze-time",
+ "zela-scene-ecs",
 ]
 
 [[package]]
@@ -6351,6 +6365,23 @@ dependencies = [
 name = "zela-scene"
 version = "0.1.1"
 dependencies = [
+ "zela-scene-ecs",
+]
+
+[[package]]
+name = "zela-scene-bundle"
+version = "0.1.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ze-object",
+ "zela-scene",
+]
+
+[[package]]
+name = "zela-scene-ecs"
+version = "0.1.1"
+dependencies = [
  "derive-new",
  "derive_builder",
  "derive_more",
@@ -6372,16 +6403,6 @@ dependencies = [
  "ze-scene-core",
  "ze-time",
  "zela-schedule",
-]
-
-[[package]]
-name = "zela-scene-bundle"
-version = "0.1.1"
-dependencies = [
- "serde",
- "serde_json",
- "ze-object",
- "zela-scene",
 ]
 
 [[package]]

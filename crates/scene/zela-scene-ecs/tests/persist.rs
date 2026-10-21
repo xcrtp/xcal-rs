@@ -7,20 +7,20 @@ use ze_object::{
     Path, Projection, Rect, Transform, ZOrder,
 };
 use ze_render_ir::{FillSolid, Opacity, StrokeSolid};
-use zela_scene::animation::Timeline;
-use zela_scene::contract::{
+use zela_scene_ecs::animation::Timeline;
+use zela_scene_ecs::contract::{
     Components, Group, GroupId, Name, ObjectId, Parent, SceneRead, Visibility,
 };
-use zela_scene::domain::CameraMode;
-use zela_scene::persist::{
+use zela_scene_ecs::domain::CameraMode;
+use zela_scene_ecs::persist::{
     PersistError, TaggedComponent, deserialize_components, serialize_components,
 };
-use zela_scene::scene::Scene;
-use zela_scene::scene::components::{ContentTextureItem, MorphShape, PhaseAnim, Reveal};
-use zela_scene::{AnimValue, Curve, Interp, SceneEncoder, SceneScript};
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::scene::components::{ContentTextureItem, MorphShape, PhaseAnim, Reveal};
+use zela_scene_ecs::{AnimValue, Curve, Interp, SceneEncoder, SceneScript};
 
 /// 27 个登记组件的样例（与 `known_component_table!` 一一对应）。
-fn samples() -> zela_scene::contract::Components {
+fn samples() -> zela_scene_ecs::contract::Components {
     vec![
         Box::new(Circle::new((0.0, 0.0), 1.0)),
         Box::new(Line::new((0.0, 0.0), (1.0, 0.0))),
@@ -189,7 +189,7 @@ fn scene_script_round_trips_through_json() {
         Box::new(Name::new("hero")),
         Box::new(Opacity::new(0.75)),
     ]);
-    enc.animate::<zela_scene::animation::OpacityValue>(h, ramp(1.0), 1.0);
+    enc.animate::<zela_scene_ecs::animation::OpacityValue>(h, ramp(1.0), 1.0);
     enc.wait(0.5);
     let script = enc.finish();
 
@@ -213,8 +213,8 @@ fn scene_script_round_trips_through_json() {
 
     // 组件值一致（按名字取回）。
     let (ida, idb) = (
-        zela_scene::contract::find_by_name(&a, "hero").expect("a 中有 hero"),
-        zela_scene::contract::find_by_name(&b, "hero").expect("b 中有 hero"),
+        zela_scene_ecs::contract::find_by_name(&a, "hero").expect("a 中有 hero"),
+        zela_scene_ecs::contract::find_by_name(&b, "hero").expect("b 中有 hero"),
     );
     assert_eq!(
         a.with::<Circle, _>(ida, |c| (c.center, c.radius)),
@@ -234,7 +234,7 @@ fn cloned_script_can_be_committed_again() {
         Box::new(Circle::new((0.0, 0.0), 2.0)),
         Box::new(Name::new("dot")),
     ]);
-    enc.animate::<zela_scene::animation::OpacityValue>(h, ramp(2.0), 2.0);
+    enc.animate::<zela_scene_ecs::animation::OpacityValue>(h, ramp(2.0), 2.0);
     let script = enc.finish();
     let twin = script.clone();
 
@@ -251,8 +251,8 @@ fn cloned_script_can_be_committed_again() {
         "时序链路条数一致"
     );
     let (ida, idb) = (
-        zela_scene::contract::find_by_name(&a, "dot").unwrap(),
-        zela_scene::contract::find_by_name(&b, "dot").unwrap(),
+        zela_scene_ecs::contract::find_by_name(&a, "dot").unwrap(),
+        zela_scene_ecs::contract::find_by_name(&b, "dot").unwrap(),
     );
     assert_eq!(
         a.with::<Circle, _>(ida, |c| c.radius),
@@ -266,7 +266,7 @@ fn ready_target_is_not_persistable() {
     let mut tl = Timeline::new();
     tl.play(
         Curve::Const(AnimValue::Scalar(1.0)),
-        zela_scene::animation::CircleRadius {
+        zela_scene_ecs::animation::CircleRadius {
             id: ObjectId::DANGLING,
         },
         1.0,
@@ -281,8 +281,8 @@ fn ready_target_is_not_persistable() {
 fn ramp(dur: f64) -> Curve {
     Curve::Keyframes {
         keys: vec![
-            (0.0, zela_scene::AnimValue::Scalar(0.0)),
-            (dur, zela_scene::AnimValue::Scalar(1.0)),
+            (0.0, zela_scene_ecs::AnimValue::Scalar(0.0)),
+            (dur, zela_scene_ecs::AnimValue::Scalar(1.0)),
         ],
         interpolation: Interp::Linear,
     }

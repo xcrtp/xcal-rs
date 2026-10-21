@@ -66,6 +66,19 @@ const JQ_BACKENDS: &str = r#"
 | "\($n) -> \(.name)"
 "#;
 
+/// 结构性判据 2b（B3-1）：场景核心层 / Pod 能力层不得依赖 `zela-*` 或 hecs。
+///
+/// 光靠人记住"core 不能依赖实现"不行 —— 让 CI 守住（约定式不变量的教训）。
+const JQ_SCENE_LAYERS: &str = r#"
+.packages[]
+| select(.name | IN("ze-scene-core", "ze-scene-api"))
+| .name as $n
+| .dependencies[]
+| select(.kind != "dev")
+| select((.name | startswith("zela-")) or .name == "hecs" or .name == "zela-schedule")
+| "\($n) -> \(.name)"
+"#;
+
 /// 结构性判据 3：数学入口唯一（M0）—— 除豁免组外不得直接依赖 glam。
 const JQ_GLAM: &str = r#"
 .packages[]
@@ -557,6 +570,11 @@ fn step_structure(root: &Path) -> Result<(), String> {
             "zela-render-backends 的生产依赖边中出现了 zela-scene（违反 S2 分层规则）：",
         ),
         (
+            "ze-scene-core / ze-scene-api 不依赖 zela-* / hecs（B3-1）",
+            JQ_SCENE_LAYERS,
+            "场景核心层或 Pod 能力层出现了 zela-* / hecs 生产依赖（违反分层规则）：",
+        ),
+        (
             "除 ze-notion 与节点图组豁免外无直接 glam（M0）",
             JQ_GLAM,
             "依赖 ze-notion 的 crate 不得直接引 glam（数学入口唯一）：",
@@ -577,13 +595,13 @@ fn step_structure(root: &Path) -> Result<(), String> {
     // B2-9（D14）：能力指纹 × version 配对校验。
     // 只跑这两个护栏用例：它们断言 `hash(signatures())` 与 `version` 的钉住基线，
     // API 变了而未递增 version / 未更新指纹 ⇒ **fail**（不是警告）。
-    println!("[xtask] $ cargo test -p zela-scene --lib fingerprint_is_pinned");
+    println!("[xtask] $ cargo test -p ze-scene-api --lib fingerprint_is_pinned");
     let status = Command::new("cargo")
         .args([
             "test",
             "-q",
             "-p",
-            "zela-scene",
+            "ze-scene-api",
             "--lib",
             "fingerprint_is_pinned",
         ])

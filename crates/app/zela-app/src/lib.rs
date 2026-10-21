@@ -336,7 +336,7 @@ fn build_runtime(
     // headless 脚本是**独立作品**：不叠加 app 的 demo3d（否则 3D 物体会盖住脚本画面，
     // 且脚本无法关闭该图层）。
     let demo3d = with_demo3d
-        .then(|| zela_scene::authored::demo3d::build(&mut scene, engine.as_ref()));
+        .then(|| zela_authored::demo3d::build(&mut scene, engine.as_ref()));
 
     // ── 2D 场景：脚本 / 能力 demo（启动参数切换，见 `SceneChoice`）──────────
     // 两条来源产出**同形的三样东西**：时钟树 + 绑定表 + 主 2D 相机句柄；
@@ -448,7 +448,7 @@ fn build_scene_source(
             // N 线能力测试 demo：最小场景（两条曲线 + 一个对照组）。
             // 默认**不隐藏任何组**（全可见）⇒ 看得见 `cos` 淡出（N4）。
             eprintln!("[zela-app] 场景 = 能力 demo（N 线：Name / Group / Visibility / Opacity）");
-            let d = zela_scene::authored::capability_demo::build(scene);
+            let d = zela_authored::capability_demo::build(scene);
             Ok((d.forest, d.bindings, d.camera, d.group_visibility, 0.0))
         }
         SceneChoice::PythonStoryboard => {
@@ -1183,7 +1183,7 @@ mod tests {
         // 硬编码参考实现。
         let mut scene_a = Scene::new();
         let engine_a = placeholder_engine();
-        let sb = zela_scene::authored::storyboard::build(&mut scene_a, &engine_a);
+        let sb = zela_authored::storyboard::build(&mut scene_a, &engine_a);
 
         // 脚本版：同一个 placeholder 引擎（App 侧真实路径用 Typst 引擎）。
         let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))
@@ -1230,7 +1230,7 @@ mod tests {
         // 硬编码参考实现。
         let mut scene_a = Scene::new();
         let engine_a = placeholder_engine();
-        let sb = zela_scene::authored::storyboard::build(&mut scene_a, &engine_a);
+        let sb = zela_authored::storyboard::build(&mut scene_a, &engine_a);
 
         // Python 版：同一个 placeholder 引擎。
         let assembly = crate::assembly::assemble(std::sync::Arc::new(placeholder_engine()))

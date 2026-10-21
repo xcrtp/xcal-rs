@@ -13,13 +13,13 @@ use ze_object::{
 use ze_prerender::InMemoryEngine;
 use ze_render_ir::StrokeSolid;
 
-use crate::content;
-use crate::contract::object_id_of;
-use crate::domain::CameraMode;
-use crate::scene::Scene;
-use crate::scene::components::{ContentTextureItem, Material3D, TextureHandle};
-use crate::scene::primitives::{parametric_surface, wireframe_cube};
-use crate::types::Color32;
+use zela_scene_ecs::content;
+use zela_scene_ecs::contract::object_id_of;
+use zela_scene_ecs::domain::CameraMode;
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::scene::components::{ContentTextureItem, Material3D, TextureHandle};
+use zela_scene_ecs::scene::primitives::{parametric_surface, wireframe_cube};
+use zela_scene_ecs::types::Color32;
 
 /// 3D 场景装配产物。
 pub struct Demo3D {

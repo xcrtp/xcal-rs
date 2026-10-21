@@ -9,7 +9,7 @@ use std::f32::consts::FRAC_PI_2;
 use zela_render::{DrawQueue, RevealQueue, RevealRecordSystem, SceneRecordSystem, ViewRect};
 use zela_scene::TimeState;
 use zela_scene::animation::BindingApplySystem;
-use zela_scene::authored::storyboard::build;
+use zela_authored::storyboard::build;
 use zela_scene::contract::entity_of;
 use zela_scene::scene::Scene;
 use zela_schedule::resource::Resources;

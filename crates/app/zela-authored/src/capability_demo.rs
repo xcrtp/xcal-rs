@@ -33,12 +33,12 @@ use ze_notion::{MeasureSpace, Path2D};
 use ze_object::{Camera2DHandle, Framing2D, Path};
 use ze_render_ir::{Opacity, StrokeSolid};
 
-use crate::animation::OpacityValue;
-use crate::contract::{Group, GroupId, GroupVisibility, Name, ObjectId, Visibility, find_by_name};
-use crate::handle_ref;
-use crate::scene::Scene;
-use crate::scene_script::SceneEncoder;
-use crate::{AnimValue, BindingTable, ClockForest, Curve, Interp};
+use zela_scene_ecs::animation::OpacityValue;
+use zela_scene_ecs::contract::{Group, GroupId, GroupVisibility, Name, ObjectId, Visibility, find_by_name};
+use zela_scene_ecs::handle_ref;
+use zela_scene_ecs::scene::Scene;
+use zela_scene_ecs::scene_script::SceneEncoder;
+use zela_scene_ecs::{AnimValue, BindingTable, ClockForest, Curve, Interp};
 
 /// 主 2D 相机的初始取景（世界原点居中、45 px/世界单位）。
 const CAMERA_SCALE: f32 = 45.0;
