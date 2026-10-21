@@ -224,6 +224,13 @@ fn run() -> Result<(), String> {
     // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
     // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
     let mut frame_hash = FrameSequenceHash::new(width, height);
+    // B2-6（D7）：**分层标签旁路** —— `ZELA_FRAME_DIGEST_SAMPLE=N` 时每 N 帧打印
+    // 该帧的独立 digest。旁路不进入 `frame_hash`（判定与诊断分离）。
+    let digest_sample: u64 = std::env::var("ZELA_FRAME_DIGEST_SAMPLE")
+        .ok()
+        .and_then(|raw| raw.trim().parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(0);
 
     let mut sink = match &args.frames_dir {
         Some(dir) => Sink::Png {
@@ -254,7 +261,14 @@ fn run() -> Result<(), String> {
 
         let pixels = render_frame_headless(&ctx, &mut backends, &callback, screen, clear);
         // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
-        frame_hash.push_frame(&to_rgba(&ctx, &pixels));
+        let rgba = to_rgba(&ctx, &pixels);
+        // B2-6：旁路采样（只打印，不改序列哈希）。
+        if digest_sample > 0 && index % digest_sample == 0 {
+            let digest =
+                zela_scene_bundle::sha256::hex(&zela_scene_bundle::sha256::sha256(&rgba));
+            eprintln!("[frame-digest] frame = {index} digest = {digest}");
+        }
+        frame_hash.push_frame(&rgba);
         sink.write(&ctx, index, &pixels)?;
 
         runtime.driver.with_scheduler_mut(|scheduler| {

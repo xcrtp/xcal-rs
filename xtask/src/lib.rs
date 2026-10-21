@@ -444,3 +444,182 @@ fn emit_record_block(
     block.push(String::new());
     block
 }
+
+// ─── B2-6：双槽差分报告器（D6） ─────────────────────────────────────────────
+
+/// 一个基线槽位（`# slotA:` / `# slotB:` 托管注释）的值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotEntry {
+    pub hash: String,
+    pub commit: String,
+}
+
+/// 从 `baselines.txt` 文本解析双槽（仅托管注释行；生效行由 [`load_baselines`] 管）。
+///
+/// 键 = `(section, key)`；`[browser]` 段也照常收集（报告里标注"仅存档"）。
+pub fn parse_slots(text: &str) -> (BTreeMap<(String, String), SlotEntry>, BTreeMap<(String, String), SlotEntry>) {
+    let mut section = String::new();
+    let mut a = BTreeMap::new();
+    let mut b = BTreeMap::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.trim().to_string();
+            continue;
+        }
+        let Some(rest) = line.strip_prefix('#') else {
+            continue;
+        };
+        let rest = rest.trim();
+        let (slot, payload) = if let Some(p) = rest.strip_prefix("slotA:") {
+            (&mut a, p.trim())
+        } else if let Some(p) = rest.strip_prefix("slotB:") {
+            (&mut b, p.trim())
+        } else {
+            continue;
+        };
+        let Some((key, value)) = payload.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_string();
+        let (hash, commit) = match value.split_once('@') {
+            Some((hash, commit)) => (hash.trim().to_string(), commit.trim().to_string()),
+            None => (value.trim().to_string(), "pending".to_string()),
+        };
+        if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue; // 报告器只呈现合法值；合法性由 load_baselines 负责。
+        }
+        slot.insert(
+            (section.clone(), key),
+            SlotEntry {
+                hash: hash.to_ascii_lowercase(),
+                commit,
+            },
+        );
+    }
+    (a, b)
+}
+
+/// 差分报告的一行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffRow {
+    pub section: String,
+    pub key: String,
+    pub slot_a: Option<SlotEntry>,
+    pub slot_b: Option<SlotEntry>,
+    pub current: String,
+    pub status: DiffStatus,
+}
+
+/// 当前值与双槽的关系（只做呈现，不参与门禁判定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffStatus {
+    /// 当前值 == slotB（无 slotB 时 == slotA）。
+    Match,
+    /// 与两个槽都不同（像素演进的候选信号）。
+    Diff,
+    /// 两个槽都没有：无历史可比。
+    NoSlot,
+}
+
+impl DiffStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Match => "ok",
+            Self::Diff => "DIFF",
+            Self::NoSlot => "no-slot",
+        }
+    }
+}
+
+/// 收集一帧/一件作品的对拍结果，生成差分报告行（B2-6 / D6）。
+///
+/// `current` 的元组是 `(section, key, hash)`；顺序即报告顺序。
+pub fn build_diff_rows(
+    baseline_text: &str,
+    current: &[(&str, &str, &str)],
+) -> Vec<DiffRow> {
+    let (a, b) = parse_slots(baseline_text);
+    current
+        .iter()
+        .map(|(section, key, hash)| {
+            let k = (section.to_string(), key.to_string());
+            let slot_a = a.get(&k).cloned();
+            let slot_b = b.get(&k).cloned();
+            let reference = slot_b.as_ref().or(slot_a.as_ref());
+            let status = match reference {
+                None => DiffStatus::NoSlot,
+                Some(entry) if entry.hash == *hash => DiffStatus::Match,
+                Some(_) => DiffStatus::Diff,
+            };
+            DiffRow {
+                section: section.to_string(),
+                key: key.to_string(),
+                slot_a,
+                slot_b,
+                current: hash.to_string(),
+                status,
+            }
+        })
+        .collect()
+}
+
+/// 渲染差分报告（稳定、可粘贴；不改变任何退出码）。
+///
+/// 报告是**诊断旁路**（D7 同一思路）：它只呈现 slotA / slotB / current 三者关系，
+/// 门禁仍由 [`load_baselines`] 的生效行决定。
+pub fn render_diff_report(rows: &[DiffRow]) -> String {
+    let short = |s: &str| s.chars().take(12).collect::<String>();
+    let mut out = String::new();
+    out.push_str("[xtask] ===== 差分报告（诊断旁路，不参与门禁）=====\n");
+    out.push_str(&format!(
+        "  {:<10} {:<12} {:<14} {:<14} {:<14} {:<8}\n",
+        "section", "key", "slotA", "slotB", "current", "status"
+    ));
+    for row in rows {
+        let slot = |entry: &Option<SlotEntry>| match entry {
+            Some(e) => format!("{}@{}", short(&e.hash), e.commit),
+            None => "-".to_string(),
+        };
+        let current = short(&row.current);
+        let marker = match row.status {
+            DiffStatus::Match => "  ",
+            DiffStatus::Diff => "→ ",
+            DiffStatus::NoSlot => "? ",
+        };
+        out.push_str(&format!(
+            "  {marker}{:<10} {:<12} {:<14} {:<14} {:<14} {:<8}\n",
+            row.section,
+            row.key,
+            slot(&row.slot_a),
+            slot(&row.slot_b),
+            current,
+            row.status.label()
+        ));
+    }
+    let diffs = rows.iter().filter(|r| r.status == DiffStatus::Diff).count();
+    let no_slot = rows.iter().filter(|r| r.status == DiffStatus::NoSlot).count();
+    out.push_str(&format!(
+        "  合计 {} 项：ok {} · DIFF {} · no-slot {}\n",
+        rows.len(),
+        rows.len() - diffs - no_slot,
+        diffs,
+        no_slot
+    ));
+    out
+}
+
+// ─── B2-6：分层标签旁路（D7，逐帧 digest 采样） ────────────────────────────
+
+/// 逐帧 digest 采样间隔（`ZELA_FRAME_DIGEST_SAMPLE=N` ⇒ 每 N 帧打印一行）。
+///
+/// **旁路**：返回值只用于打印诊断，**不参与**序列哈希链（D7：判定与诊断分离）。
+pub fn frame_digest_sample_interval(raw: Option<&str>) -> Option<usize> {
+    let n: usize = raw?.trim().parse().ok()?;
+    (n > 0).then_some(n)
+}
+
+/// 单帧 digest 的标签行（含帧号与 64 位摘要；调用方提供 `digest`）。
+pub fn frame_digest_line(index: u64, digest: &str) -> String {
+    format!("[frame-digest] frame = {index} digest = {digest}")
+}

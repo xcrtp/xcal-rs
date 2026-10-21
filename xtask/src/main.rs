@@ -633,6 +633,12 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     prepare_hashes_dir(root)?;
     announce_baselines(&baseline_path);
 
+    // B2-6：对拍结果同时喂给差分报告器（诊断旁路，不参与门禁）。
+    let baseline_text = fs::read_to_string(&baseline_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
+    let mut current: Vec<(&str, &str, &str)> = Vec::new();
+    let mut hashes: Vec<(String, String)> = Vec::new();
+
     for work in ["fourier", "storyboard"] {
         let expected = if skip_baseline {
             None
@@ -645,8 +651,17 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
                     .as_str(),
             )
         };
-        let _ = compare_script_vs_bundle(root, work, "640x480", expected)?;
+        let hash = compare_script_vs_bundle(root, work, "640x480", expected)?;
+        hashes.push((work.to_string(), hash));
     }
+    current.extend(
+        hashes
+            .iter()
+            .map(|(work, hash)| ("native", work.as_str(), hash.as_str())),
+    );
+    // smoke 的当前值在 `--step hashes` 里不重算（由 `--step smoke` 负责）；
+    // 报告只呈现本次实测到的作品，未实测项不伪造。
+    print!("{}", xtask::render_diff_report(&xtask::build_diff_rows(&baseline_text, &current)));
     Ok(())
 }
 
