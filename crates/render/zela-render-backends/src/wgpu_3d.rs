@@ -155,6 +155,12 @@ const DEFAULT_TEXTURE_ID: u64 = 0;
 /// 共面 z-fighting，又小于单层几何厚度。**不引入常量 depth bias**。
 pub const Z_ORDER_EPSILON: f32 = 1e-4;
 
+/// B2-5：3D 默认 MSAA 采样数（与 2D 的 `MSAA_SAMPLES = 4` 对齐，Q5 决议）。
+///
+/// 这是**默认值**而非写死的命令：需要不同取值的调用方走
+/// [`WgpuBackend3D::new_with_samples`]，并先用 [`WgpuBackend3D::capabilities`] 校验。
+pub const DEFAULT_MSAA_SAMPLES: u32 = 4;
+
 /// [`RenderBackend3D::submit_layer`] 没有 `LayerId` 参数，用保留 id 承载其
 /// 颜色/深度目标的键（颜色目标来自 `layer.target.view`，仅深度目标需按 id 缓存）。
 pub const SUBMIT_LAYER_ID: LayerId = LayerId(u32::MAX);
@@ -270,6 +276,13 @@ fn to_wgpu_topology(topology: PrimitiveTopology) -> wgpu::PrimitiveTopology {
 /// RC.3：一张离屏颜色目标配套的深度目标（尺寸变化时整体重建）。
 struct DepthTarget {
     /// 持有纹理以延长生命周期（视图自身也引用纹理，此处显式保留）。
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
+}
+
+/// B2-5：一张图层的 **MSAA 颜色附件**（多采样），resolve 到单采样的离屏目标。
+struct MsaaTarget {
     _texture: wgpu::Texture,
     view: wgpu::TextureView,
     size: (u32, u32),
@@ -402,6 +415,13 @@ pub struct WgpuBackend3D {
     offscreen: Mutex<HashMap<LayerId, RenderTarget>>,
     /// RC.3：按 [`LayerId`] 分别持有的深度目标，尺寸随颜色目标一同重建。
     depth: Mutex<HashMap<LayerId, DepthTarget>>,
+    /// B2-5：MSAA 采样数（**能力**，非写死命令，D22）。
+    ///
+    /// 构造时由调用方给出（有能力查询的一侧用 [`Self::capabilities`] 的
+    /// `max_sample_count` 校验后传入）；`with_default_shader` 取 4 与 2D 对齐。
+    sample_count: u32,
+    /// B2-5：按 [`LayerId`] 持有的 MSAA 颜色附件（多采样 → resolve 到离屏单采样）。
+    msaa_color: Mutex<HashMap<LayerId, MsaaTarget>>,
 }
 
 // S1 徽章：egui 的 `CallbackResources` 在 native 上是
@@ -427,6 +447,26 @@ impl WgpuBackend3D {
         format: wgpu::TextureFormat,
         shader_source: &str,
     ) -> Self {
+        Self::new_with_samples(device, queue, format, shader_source, DEFAULT_MSAA_SAMPLES)
+    }
+
+    /// B2-5：显式给定 MSAA 采样数的构造（**能力驱动**，D22）。
+    ///
+    /// 调用方应先用 [`Self::capabilities`] 查询 `max_sample_count`，再用
+    /// `Capabilities::require_sample_count` 校验后传入；不支持的取值 ⇒ **显式 panic**
+    /// （铁律 2，不静默降级）。支持 1（关闭）与 4（与 2D 对齐）。
+    pub fn new_with_samples(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        shader_source: &str,
+        sample_count: u32,
+    ) -> Self {
+        assert!(
+            matches!(sample_count, 1 | 4),
+            "不静默：3D 后端仅支持 MSAA 1x / 4x（请求 {sample_count}x）；\
+             请先经 capabilities().require_sample_count 校验"
+        );
         let device = device.clone();
         let queue = queue.clone();
 
@@ -626,7 +666,14 @@ impl WgpuBackend3D {
             arena: Mutex::new(UniformArena::new(UNIFORM_SIZE, DYNAMIC_OFFSET_ALIGNMENT)),
             offscreen: Mutex::new(HashMap::new()),
             depth: Mutex::new(HashMap::new()),
+            sample_count,
+            msaa_color: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// B2-5：当前 MSAA 采样数（1 = 关闭，4 = 与 2D 对齐）。
+    pub fn sample_count(&self) -> u32 {
+        self.sample_count
     }
 
     /// 使用内置 [`DEFAULT_SHADER`] 构造。
@@ -773,6 +820,53 @@ impl WgpuBackend3D {
             .and_then(|t| t.texture.clone())
     }
 
+    /// B2-5：取得（必要时按尺寸重建）指定图层的 **MSAA 颜色附件**视图。
+    ///
+    /// 多采样纹理只作 render pass 的 color attachment，由 `resolve_target`
+    /// 解析到单采样的离屏目标（[`Self::offscreen_view`]）。`sample_count == 1` 时
+    /// 调用方不得使用本函数（走单采样直写路径）。
+    fn msaa_color_view(
+        &self,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        width: u32,
+        height: u32,
+    ) -> wgpu::TextureView {
+        let width = width.max(1);
+        let height = height.max(1);
+        let mut guard = self.msaa_color.lock().expect("msaa poisoned");
+        let recreate = match guard.get(&layer_id) {
+            Some(t) => t.size != (width, height),
+            None => true,
+        };
+        if recreate {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("zela-3d-msaa-color"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: self.sample_count,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            guard.insert(
+                layer_id,
+                MsaaTarget {
+                    _texture: texture,
+                    view,
+                    size: (width, height),
+                },
+            );
+        }
+        guard.get(&layer_id).expect("msaa target").view.clone()
+    }
+
     /// RC.3：取得（必要时按给定尺寸重建）指定图层的深度目标视图。
     ///
     /// 深度目标与颜色目标同尺寸、同 [`LayerId`] 键，尺寸变化时一并重建。
@@ -799,7 +893,8 @@ impl WgpuBackend3D {
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
-                sample_count: 1,
+                // B2-5：深度附件必须与颜色附件同采样数。
+                sample_count: self.sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: DEPTH_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1295,7 +1390,11 @@ impl WgpuBackend3D {
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
-                multisample: wgpu::MultisampleState::default(),
+                multisample: wgpu::MultisampleState {
+                    // B2-5（Q5）：3D MSAA 与 2D 对齐（默认 4x）；取值来自能力侧。
+                    count: self.sample_count,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             });
@@ -1363,14 +1462,25 @@ impl WgpuBackend3D {
         let offscreen = self.offscreen_view(&self.device, layer_id, viewport);
         // RC.3：本层深度目标（与离屏颜色目标同尺寸），清为最远（1.0）。
         let depth_view = self.depth_view(&self.device, layer_id, viewport.w, viewport.h);
+        // B2-5：MSAA 附件（多采样）→ resolve 到单采样离屏目标；1x 时直写。
+        let color_view = if self.sample_count > 1 {
+            self.msaa_color_view(&self.device, layer_id, viewport.w, viewport.h)
+        } else {
+            offscreen.clone()
+        };
+        let resolve_target = if self.sample_count > 1 {
+            Some(&offscreen)
+        } else {
+            None
+        };
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("zela-3d-layer-offscreen-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &offscreen,
+                    view: &color_view,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.0,
@@ -1433,13 +1543,29 @@ impl RenderBackend3D for WgpuBackend3D {
             layer.target.size.width,
             layer.target.size.height,
         );
+        // B2-5：MSAA 附件 → resolve 到宿主的单采样目标；1x 时直写。
+        let color_view = if self.sample_count > 1 {
+            self.msaa_color_view(
+                &self.device,
+                SUBMIT_LAYER_ID,
+                layer.target.size.width,
+                layer.target.size.height,
+            )
+        } else {
+            layer.target.view.clone()
+        };
+        let resolve_target = if self.sample_count > 1 {
+            Some(&layer.target.view)
+        } else {
+            None
+        };
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zela-3d-layer-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &layer.target.view,
+                view: &color_view,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: 0.0,
@@ -2739,6 +2865,50 @@ mod tests {
         assert!(
             center[2] > center[0],
             "对调 ZOrder 后红色应主导中心像素（BGRA：R=通道2），实际 {center:?}"
+        );
+    }
+
+    /// **B2-5 验收**：3D 上 MSAA 4x（与 2D 对齐），且采样数由构造侧给出（能力驱动）。
+    ///
+    /// 证伪：1x 后端对斜边只有全/全无两种覆盖；4x 后端应出现**部分覆盖**像素。
+    #[test]
+    fn test_b2_5_msaa_4x_produces_partial_coverage() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        assert_eq!(
+            backend.sample_count(),
+            DEFAULT_MSAA_SAMPLES,
+            "默认与 2D 对齐（4x）"
+        );
+
+        let one_x = WgpuBackend3D::new_with_samples(
+            ctx.device(),
+            ctx.queue(),
+            ctx.target_format(),
+            DEFAULT_SHADER,
+            1,
+        );
+        assert_eq!(one_x.sample_count(), 1);
+
+        let size = 64u32;
+        let mut draw = flat_plane(0.9, 0.9, 0.0, Color32::WHITE);
+        // 绕 Z 旋转 ⇒ 斜边（硬边在 1x 下只有 0 / 255 两种 alpha）。
+        draw.transform = Mat4::from_rotation_z(0.5) * draw.transform;
+
+        let p4 = render_planes(&backend, &ctx, LayerId(43), size, &[draw.clone()]);
+        let p1 = render_planes(&one_x, &ctx, LayerId(44), size, &[draw]);
+
+        let partial = |px: &[u8]| {
+            px.chunks_exact(4)
+                .filter(|c| c[3] > 0 && c[3] < 255)
+                .count()
+        };
+        assert!(
+            partial(&p4) > partial(&p1),
+            "4x 应产生更多部分覆盖像素（4x={}，1x={}）",
+            partial(&p4),
+            partial(&p1)
         );
     }
 
