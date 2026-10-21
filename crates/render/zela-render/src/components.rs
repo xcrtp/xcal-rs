@@ -1,7 +1,7 @@
 // components.rs — 场景组件与渲染样式的统一出口（**有意的兼容 facade，不是死代码**）
 //
 // 本文件只做**转发**，四路来源：
-//   - `zela_scene_ecs::scene::components`：纯逻辑场景组件（`PhaseAnim` / `marker` / `mesh` …）
+//   - `ze_scene_core::components`：纯逻辑场景组件（`PhaseAnim` / `marker` / `mesh` …）
 //   - `ze_notion`：连续数学元语（`FunctionX2Y` / `Sampler1D/2D` / `Interpolator` …）
 //   - `ze_object`：图元 newtype 与摆放（`Circle` / `Line` / `Path` / `Rect` / `Transform`）
 //   - `ze_render_ir`：样式组件（`StrokeSolid` / `FillSolid` / `StrokeStyle` / `FillStyle`）
@@ -22,7 +22,7 @@
 pub use ze_notion::{
     DynFn, FunctionX2Y, Interpolator, ParameterCurveT2XY, ParameterCurveT2XYZ, Sampler1D, Sampler2D,
 };
-pub use zela_scene_ecs::scene::components::{
+pub use ze_scene_core::components::{
     CPUDevice, PathMesh, PhaseAnim, QuadMesh, TriangleMesh, WGPUDevice, marker, mesh,
 };
 // 图元对象与摆放组件（M3-4/M3-5：定义在场景对象层 `ze-object`，此处转发）。

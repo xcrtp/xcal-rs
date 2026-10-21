@@ -13,8 +13,8 @@
 
 use ze_notion::Rect2D;
 use ze_scene_core::{Camera2DHandle, Camera3D, LayerKind};
-use zela_scene_ecs::contract::SceneRead;
-use zela_scene_ecs::domain::{
+use ze_scene_contract::SceneRead;
+use ze_scene_core::domain::{
     ContentHandle, ContentTextureSpec, LayerBlend, LayerDescriptor, LayerId, SceneView,
 };
 use zela_schedule::resource::Resources;
@@ -63,7 +63,7 @@ impl Default for FrameOptions {
 
 impl FrameOptions {
     /// 从场景 `UiConfig` 提取渲染相关字段（UI 层负责调用；本 crate 不反向依赖 UI）。
-    pub fn from_ui_config(config: &zela_scene_ecs::domain::UiConfig) -> Self {
+    pub fn from_ui_config(config: &ze_scene_core::domain::UiConfig) -> Self {
         Self {
             show_2d: config.show_2d,
             show_3d: config.show_3d,
@@ -226,7 +226,7 @@ pub fn draw_call_count(res: &Resources) -> usize {
 mod tests {
     use super::*;
     use ze_scene_core::{Camera3D, Framing2D, Projection};
-    use zela_scene_ecs::contract::WorldScene;
+    use ze_scene_hecs::object_id_of;
 
     fn spawn_3d_camera(world: &mut hecs::World) {
         world.spawn((Camera3D::new(
@@ -238,8 +238,8 @@ mod tests {
     }
 
     fn spawn_2d_camera(world: &mut hecs::World) -> Camera2DHandle {
-        let mut scene = WorldScene::new(world);
-        ze_scene_core::spawn_camera2d(&mut scene, Framing2D::default()).expect("Framing2D 已登记")
+        // `spawn_camera2d` 只创建 `Framing2D` 一个组件；直接 spawn 等价。
+        Camera2DHandle(object_id_of(world.spawn((Framing2D::default(),))))
     }
 
     /// headless：无 egui 上下文即可构建 SceneView；2D/3D 各一层、LayerId 唯一。
@@ -254,7 +254,7 @@ mod tests {
         res.insert(ViewRect::default());
 
         let view = build_scene_view(
-            &zela_scene_ecs::contract::WorldView::new(&world),
+            &ze_scene_hecs::WorldView::new(&world),
             &res,
             FrameOptions::default(),
         );
@@ -280,7 +280,7 @@ mod tests {
         res.insert(ViewRect::default());
 
         let view = build_scene_view(
-            &zela_scene_ecs::contract::WorldView::new(&world),
+            &ze_scene_hecs::WorldView::new(&world),
             &res,
             FrameOptions {
                 show_2d: true,

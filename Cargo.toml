@@ -15,6 +15,7 @@ members = [
     "crates/ze/pod/ze-pod",
     "crates/scene/ze-scene-core",
     "crates/scene/ze-scene-api",
+    "crates/scene/ze-scene-hecs",
     "crates/ze/graph/ze-node-core",
     "crates/ze/graph/ze-graph-algo",
     "crates/ze/graph/ze-graph-eval",

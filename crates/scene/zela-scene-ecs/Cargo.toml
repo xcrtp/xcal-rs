@@ -10,6 +10,8 @@ license.workspace = true
 ze-scene-core = { path = "../ze-scene-core" }
 # B3-1c：语言无关的 Pod 边界；本层只做 re-export（`zela_scene::pod`）。
 ze-scene-api = { path = "../ze-scene-api" }
+# B3-1 收尾：hecs 只读适配器（渲染层与本层共用，避免渲染层依赖本实现 crate）。
+ze-scene-hecs = { path = "../ze-scene-hecs" }
 ze-macro = { path = "../../kernel/ze-macro" }
 ze-notion = { path = "../../kernel/ze-notion" }
 # Pod（A 线）：内置数学函数以 `RegistryPod` 为唯一来源 —— zela-scene 是

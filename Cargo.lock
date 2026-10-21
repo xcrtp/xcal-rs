@@ -6660,6 +6660,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ze-scene-hecs"
+version = "0.1.1"
+dependencies = [
+ "hecs",
+ "ze-scene-contract",
+]
+
+[[package]]
 name = "ze-time"
 version = "0.1.1"
 dependencies = [
@@ -6848,8 +6856,8 @@ dependencies = [
  "ze-resource",
  "ze-scene-contract",
  "ze-scene-core",
+ "ze-scene-hecs",
  "ze-vertex",
- "zela-scene-ecs",
  "zela-schedule",
 ]
 
@@ -6864,9 +6872,12 @@ dependencies = [
  "hecs",
  "libc",
  "pollster 0.3.0",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "wgpu",
  "ze-notion",
+ "ze-pod-core",
  "ze-render-ir",
  "ze-resource",
  "ze-scene-core",
@@ -6907,6 +6918,7 @@ dependencies = [
  "ze-scene-api",
  "ze-scene-contract",
  "ze-scene-core",
+ "ze-scene-hecs",
  "ze-time",
  "zela-schedule",
 ]

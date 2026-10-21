@@ -10,7 +10,9 @@ license.workspace = true
 # 本 crate 禁止依赖 egui；**也不再依赖 wgpu**（B3-0.5e：GPU 侧模块已迁入
 # zela-render-backends，本 crate 是纯渲染无关层）。
 [dependencies]
-zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
+# B3-1 收尾：渲染层不再依赖场景 **ECS 实现**（`zela-scene-ecs`）。
+# 录制 System 只需要 `SceneRead` 适配器 —— 它来自 `ze-scene-hecs`（纯适配层）。
+ze-scene-hecs = { path = "../../scene/ze-scene-hecs" }
 # 调度内核：三个录制 System（record_systems.rs，P4 从 zela-egui 归位到渲染层）
 # 需要 `System` / `ExecutorContext`。
 zela-schedule = { path = "../../schedule/zela-schedule" }

@@ -21,7 +21,7 @@
 use ze_notion::{Path2D, Transform2D, Vec2, Vec3};
 use ze_render_ir::{Shape2D, Style2D, UvProjection};
 use ze_vertex::{bytes_of, VertexBufferData, VertexBufferError, VertexLayout};
-use zela_scene_ecs::scene::components::MeshGeometry;
+use ze_scene_core::components::MeshGeometry;
 
 use crate::tessellate::{TessKind, Tessellation2D, TessellateError, tessellate, tessellate_reveal};
 
@@ -275,7 +275,7 @@ pub fn line_vertex_buffer(start: Vec3, end: Vec3) -> Result<VertexBufferData, Ve
 mod tests {
     use super::*;
     use ze_notion::Color32;
-    use zela_scene_ecs::scene::primitives::wireframe_cube;
+    use ze_scene_core::mesh_primitives::wireframe_cube;
 
     /// 3D 顶点缓冲：stride 32、顶点数正确、字节序与布局一致。
     #[test]

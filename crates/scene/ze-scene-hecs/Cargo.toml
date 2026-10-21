@@ -1,0 +1,17 @@
+[package]
+name = "ze-scene-hecs"
+
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# hecs 适配层（B3-1 收尾）：只读适配器 + `ObjectId ↔ Entity` 位模式互转。
+#
+# 为什么单独成 crate：渲染层（`zela-render`）的录制 System 运行在
+# `ExecutorContext` 上，必须把 `&hecs::World` 接成契约层的 `SceneRead`；
+# 但 `ze-scene-contract` 的硬约束禁止出现 hecs，而渲染层又不该依赖
+# **场景 ECS 实现**（`zela-scene-ecs`，含组件登记表 / 系统 / 生命周期）。
+# 故把这段**唯一**的 hecs 接触面放在这里：渲染层与 ECS 实现都只依赖它。
+[dependencies]
+hecs.workspace = true
+ze-scene-contract = { path = "../../kernel/ze-scene-contract" }

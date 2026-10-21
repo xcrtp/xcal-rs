@@ -43,12 +43,13 @@
 
 use std::sync::Arc;
 
-use zela_scene_ecs::contract::{SceneRead, WorldView};
-use zela_scene_ecs::domain::ContentTextureSpec;
-use zela_scene_ecs::scene::components::{
+use ze_scene_contract::SceneRead;
+use ze_scene_hecs::WorldView;
+use ze_scene_core::domain::ContentTextureSpec;
+use ze_scene_core::components::{
     ContentTextureItem, Light, LightKind, Material3D, MeshGeometry, MorphShape, Reveal,
 };
-use zela_scene_ecs::transform_hierarchy::WorldTransforms;
+use ze_scene_core::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
@@ -398,9 +399,10 @@ mod tests {
     use ze_notion::{Path2D, PathCommand, Rect2D};
     use ze_scene_core::{Circle, Framing2D};
     use ze_render_ir::Opacity;
-    use zela_scene_ecs::contract::{GroupId, Visibility, WorldScene};
-    use zela_scene_ecs::scene::components::TextureHandle;
-    use zela_scene_ecs::types::Vec2;
+    use ze_scene_contract::{GroupId, Visibility};
+    use ze_scene_hecs::object_id_of;
+    use ze_scene_core::components::TextureHandle;
+    use ze_scene_core::types::Vec2;
     use zela_schedule::resource::Resources;
     use zela_schedule::scheduler::{Phase, Scheduler};
 
@@ -412,8 +414,9 @@ mod tests {
     }
 
     fn spawn_camera(world: &mut World, framing: Framing2D) -> Camera2DHandle {
-        let mut scene = WorldScene::new(world);
-        ze_scene_core::spawn_camera2d(&mut scene, framing).expect("Framing2D 已登记")
+        // `spawn_camera2d` 只创建 `Framing2D` 一个组件；直接 spawn 等价，
+        // 且不需要写适配器（渲染层不依赖 ECS 实现）。
+        Camera2DHandle(object_id_of(world.spawn((framing,))))
     }
 
     fn resources_with(rect: Rect2D, handle: Camera2DHandle) -> Resources {
@@ -726,9 +729,8 @@ mod tests {
     /// **S1-5 #2**：父子两级 3D，`DrawQueue3D` 的 model 矩阵 = **累乘结果**（不是 local）。
     #[test]
     fn record_3d_consumes_world_transforms() {
-        use zela_scene_ecs::contract::object_id_of;
-        use zela_scene_ecs::scene::primitives::wireframe_cube;
-        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
+        use ze_scene_core::mesh_primitives::wireframe_cube;
+        use ze_scene_hecs::object_id_of;
 
         let parent_geom = Arc::new(wireframe_cube(1.0));
         let child_geom = Arc::new(wireframe_cube(0.5));
@@ -742,7 +744,6 @@ mod tests {
         ));
         let parent_id = object_id_of(parent);
         // 子 local 平移 (0,5,0)，挂在 (10,0,0) 的父下 ⇒ 世界 = (10,5,0)。
-        // 若系统不吃 WorldTransforms（旧行为），子 model 会停在 local (0,5,0)。
         let child = world.spawn((
             Arc::clone(&child_geom),
             ze_scene_core::Transform {
@@ -751,12 +752,32 @@ mod tests {
             },
             ze_scene_contract::Parent(parent_id),
         ));
-        let _child_id = object_id_of(child);
+        let child_id = object_id_of(child);
+
+        // 世界矩阵由 ECS 层生产（`TransformHierarchySystem` 有自己的用例）；
+        // 本用例只验证**录制侧消费**：直接注入派生态。
+        let mut worlds = WorldTransforms::default();
+        worlds.insert(
+            parent_id,
+            ze_scene_core::Transform {
+                position: ze_notion::Vec3::new(10.0, 0.0, 0.0),
+                ..ze_scene_core::Transform::default()
+            }
+            .to_affine3d(),
+        );
+        worlds.insert(
+            child_id,
+            ze_scene_core::Transform {
+                position: ze_notion::Vec3::new(10.0, 5.0, 0.0),
+                ..ze_scene_core::Transform::default()
+            }
+            .to_affine3d(),
+        );
 
         let mut res = Resources::new();
         res.insert(DrawQueue3D::new());
+        res.insert(worlds);
         let mut sched = Scheduler::new(world, res);
-        sched.add_system(Phase::Prepare, TransformHierarchySystem);
         sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
         sched.init_resources();
         sched.run_frame(0.016);
@@ -788,9 +809,8 @@ mod tests {
     /// **S1-5 #3**：无 `Parent` 时 3D model 与旧 `transform.matrix()` **逐位相同**（回退不变性）。
     #[test]
     fn no_parent_3d_model_is_bitwise_local() {
-        use zela_scene_ecs::contract::object_id_of;
-        use zela_scene_ecs::scene::primitives::wireframe_cube;
-        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
+        use ze_scene_core::mesh_primitives::wireframe_cube;
+        use ze_scene_hecs::object_id_of;
 
         let tr = ze_scene_core::Transform {
             position: ze_notion::Vec3::new(1.0, -2.0, 3.0),
@@ -804,8 +824,9 @@ mod tests {
 
         let mut res = Resources::new();
         res.insert(DrawQueue3D::new());
+        // 无父 ⇒ 世界矩阵与 local 逐位相同；这里注入空派生态验证回退路径。
+        res.insert(WorldTransforms::default());
         let mut sched = Scheduler::new(world, res);
-        sched.add_system(Phase::Prepare, TransformHierarchySystem);
         sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
         sched.init_resources();
         sched.run_frame(0.016);
@@ -867,9 +888,8 @@ mod tests {
     #[test]
     fn record_point_lights_resolve_world_position() {
         use ze_notion::Color32;
-        use zela_scene_ecs::contract::object_id_of;
-        use zela_scene_ecs::scene::components::Light;
-        use zela_scene_ecs::transform_hierarchy::TransformHierarchySystem;
+        use ze_scene_core::components::Light;
+        use ze_scene_hecs::object_id_of;
 
         let mut world = World::new();
         // 父平移 (10, 0, 0)；点光挂在父下，local 平移 (0, 5, 0)
@@ -881,7 +901,7 @@ mod tests {
             },
         ));
         let parent_id = object_id_of(parent);
-        world.spawn((
+        let light = world.spawn((
             Light::point_with(3.0, Color32::new(255, 128, 0, 255), 2.0),
             ze_scene_core::Transform {
                 position: ze_notion::Vec3::new(0.0, 5.0, 0.0),
@@ -890,11 +910,23 @@ mod tests {
             ze_scene_contract::Parent(parent_id),
         ));
 
+        let light_id = object_id_of(light);
+
+        // 世界矩阵由 ECS 层生产；本用例只验证录制侧从派生态取位置。
+        let mut worlds = WorldTransforms::default();
+        worlds.insert(
+            light_id,
+            ze_scene_core::Transform {
+                position: ze_notion::Vec3::new(10.0, 5.0, 0.0),
+                ..ze_scene_core::Transform::default()
+            }
+            .to_affine3d(),
+        );
+
         let mut res = Resources::new();
         res.insert(DrawQueue3D::new());
+        res.insert(worlds);
         let mut sched = Scheduler::new(world, res);
-        // 世界矩阵由 TransformHierarchySystem 累乘（Prepare 相位，早于录制）。
-        sched.add_system(Phase::Prepare, TransformHierarchySystem);
         sched.add_system(Phase::RenderCommit, SceneRecord3DSystem);
         sched.init_resources();
         sched.run_frame(0.016);

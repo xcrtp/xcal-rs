@@ -122,8 +122,8 @@ pub use ze_resource::render_backend::{AccessError, GpuHandle, GpuResourceId};
 
 // 为下游用户提供与原 zela::scene::comp::{StrokeSolid, FillSolid} 一致的访问
 // 通过在 scene 根重新导出 components + render 组件。
+// B3-1 收尾：不再转发 ECS 的 `Scene`（渲染层不依赖场景 ECS 实现）。
 pub mod scene {
     pub use crate::components;
     pub use crate::components as comp;
-    pub use zela_scene_ecs::scene::Scene;
 }

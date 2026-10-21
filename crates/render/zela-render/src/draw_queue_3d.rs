@@ -20,7 +20,7 @@ use ze_notion::Mat4;
 use ze_notion::{Color32, Vec3};
 use ze_render_ir::{Shape2D, Style2D, ZOrder};
 use ze_scene_contract::ObjectId;
-use zela_scene_ecs::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
+use ze_scene_core::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
 use crate::draw::{DrawItem, DrawQueue};
 use crate::shape_to_mesh::ShapeMeshError;
@@ -219,7 +219,7 @@ impl DrawQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zela_scene_ecs::scene::primitives::wireframe_cube;
+    use ze_scene_core::mesh_primitives::wireframe_cube;
 
     #[test]
     fn test_queue_starts_empty() {

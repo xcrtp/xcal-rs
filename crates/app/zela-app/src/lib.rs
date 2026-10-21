@@ -15,12 +15,12 @@ use ze_notion::Rect2D;
 use ze_scene_core::{
     CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle,
 };
-use zela_render::scene::Scene;
 use zela_render_backends::RenderContext;
 pub use zela_scene_ecs::Result;
 use zela_scene_ecs::animation::BindingTable;
 use zela_scene_ecs::contract::GroupVisibility;
 use zela_scene_ecs::domain::ContentTextureSpec;
+use zela_scene_ecs::scene::Scene;
 use zela_scene_ecs::errors::Error;
 use zela_scene_ecs::scene::components::TextureHandle;
 use zela_scene_ecs::ClockForest;
