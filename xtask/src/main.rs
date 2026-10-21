@@ -510,7 +510,7 @@ fn step_wasm(root: &Path) -> Result<(), String> {
         ]),
     )?;
 
-    println!("[xtask] == zela-render (wgpu, no blocking) ==");
+    println!("[xtask] == zela-render (wasm32-unknown-unknown) ==");
     cargo(
         root,
         &strings(&[
@@ -519,9 +519,6 @@ fn step_wasm(root: &Path) -> Result<(), String> {
             "zela-render",
             "--target",
             "wasm32-unknown-unknown",
-            "--no-default-features",
-            "--features",
-            "wgpu",
         ]),
     )?;
 
