@@ -110,11 +110,20 @@ scene.spawn((Arc::new(wireframe_cube(1.0)), Material3D::color(WHITE)));
 scene.spawn((Arc::new(parametric_surface(..)), surface_material, Transform { .. }));
 let camera3d_entity = scene.spawn((Camera3D::new(..),));               // eye 由 Binding 驱动
 let engine = formula::build_engine();                                  // Typst / placeholder
+let surface = scene.spawn((
+    Surface::new(bounds, SurfaceMapping::World, Vec2::new(0.5, 0.5)),
+    SurfaceRenderer::Renderer2D,
+    SurfaceTexture::new([512, 512], TextureFilter::Linear, false).with_fit_margin(0.8),
+));
 if let Some(ir) = formula::rebuild(&engine, &spec /* "x^2 + 1" */) {
     for (path, color, width, space) in formula::compile_to_stroke_paths(&ir, &spec) {
-        scene.spawn((Path::new(path), StrokeSolid::new_in(width, color, space), ContentTextureItem));
+        scene.spawn((
+            Path::new(path),
+            StrokeSolid::new_in(width, color, space),
+            ContentTextureItem,
+            Parent(surface),                    // 归属沿 Parent 链解析
+        ));
     }
-    content_camera = Some(base_camera.fit_bounds(bounds, 0.8));         // 内容纹理取景
 }
 
 // ── 4. 2D 场景：分镜 / 能力 demo（启动参数切换，见 `SceneChoice`）──
@@ -156,7 +165,7 @@ r.insert(ViewRect::default());  // P4：来自 zela-render
 r.insert(InputEvents::default());
 r.insert(DrawQueue::new());
 r.insert(DrawQueue3D::new());
-r.insert(ContentTextureSpec { .. });      // S3-3
+r.insert(ContentTextureSpecs(..));        // S3-3 / B3 4c：由 Surface 生成（装配期唯一入口）
 r.insert(ContentTextureQueue::default());
 r.insert(MorphQueue::default());          // S4.3
 r.insert(RevealQueue::default());         // R0 书写动画

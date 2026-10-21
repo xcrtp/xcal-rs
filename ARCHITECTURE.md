@@ -637,8 +637,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   均为多实例容器；`ObjectId → LayerId → TextureHandle` 由
 >   `content_layer_id` / `content_texture_handle` **单一映射**派生，
 >   视口图层改用固定 id（不再 `layers.len()` 位置分配）。
-> - **Texture 路径（Step 4）与作品迁移（Step 5）尚未执行**：需要每帧编排
->   （`SceneCompositorCallback`）+ 纹理分辨率/过滤进契约（E-08 放大）。
+> - **Texture 路径落地（B3 Step 4c-4）**：demo3d 改走
+>   `Surface(Renderer2D) + SurfaceTexture(fit_margin=0.8)`，内容实体挂 `Parent(surface)`；
+>   材质纹理句柄由 `content_texture_handle` 派生。**四基线逐位不变（零差异）**。
+> - **作品迁移（Step 5）尚未执行**：fourier / storyboard 仍走默认 2D 路径；
+>   Step 5 会引入一次纹理采样（需重录）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

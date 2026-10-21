@@ -264,23 +264,21 @@ impl System for ContentTextureRecordSystem {
         ctx.with_world_and_resource_mut::<ContentTextureQueue, _>(|world, queues| {
             queues.0.clear();
             let scene = WorldView::new(world);
-            // B3 Step 4c-2：多实例。每份 spec 一个内容层；
-            // `surface = Some(id)` 时只收该 Surface 名下的 `ContentTextureItem`，
-            // `None` 是旧式单份（过渡期，Step 4c-4 后生产路径不再使用）。
+            // B3 Step 4c-2：多实例。每份 spec 一个内容层；只收该 Surface 名下的
+            // `ContentTextureItem`（归属沿 Parent 链解析，不存 surface_id）。
             for spec in &specs.0 {
                 let layer = spec.layer_id();
+                let surface = spec.surface;
                 let queue = queues.queue_mut(layer);
                 scene.for_each_pair_opt::<Path, StrokeSolid, ContentTextureItem>(
                     |id, path, stroke, mark| {
                         if mark.is_none() {
                             return;
                         }
-                        if let Some(surface) = spec.surface {
-                            match resolve_surface(&scene, id) {
-                                Ok(Some(owner)) if owner.surface == surface => {}
-                                // 不属于该 Surface（或归属无效）⇒ 不录进这一层。
-                                _ => return,
-                            }
+                        match resolve_surface(&scene, id) {
+                            Ok(Some(owner)) if owner.surface == surface => {}
+                            // 不属于该 Surface（或归属无效）⇒ 不录进这一层。
+                            _ => return,
                         }
                         record_path_stroke(queue, path, stroke, &spec.camera);
                     },
@@ -562,6 +560,15 @@ mod tests {
     #[test]
     fn content_texture_record_filters_unmarked() {
         let mut world = World::new();
+        let surface = object_id_of(world.spawn((
+            ze_scene_core::Surface::new(
+                Rect2D::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)),
+                ze_scene_core::SurfaceMapping::World,
+                Vec2::new(0.5, 0.5),
+            ),
+            ze_scene_core::SurfaceRenderer::Renderer2D,
+            ze_scene_core::SurfaceTexture::new([512, 512], ze_scene_core::TextureFilter::Linear, false),
+        )));
         world.spawn((
             Path::new(Path2D::from_polyline(
                 &[Vec2::new(-0.5, -0.5), Vec2::new(0.5, 0.5)],
@@ -569,6 +576,7 @@ mod tests {
             )),
             StrokeSolid::new(0.02, (255, 255, 255, 255)),
             ContentTextureItem,
+            ze_scene_contract::Parent(surface),
         ));
         world.spawn((
             Circle::new((0.0, 0.0), 0.2),
@@ -577,8 +585,7 @@ mod tests {
 
         let tex_rect = Rect2D::new(Vec2::ZERO, Vec2::new(512.0, 512.0));
         let spec = ContentTextureSpec {
-            // 过渡期旧式单份（Step 4c-4 后改由 Surface 派生）。
-            surface: None,
+            surface,
             camera: ze_scene_core::Camera2D::new(Vec2::ZERO, 25.0, tex_rect),
             size_px: [512, 512],
             composite: false,

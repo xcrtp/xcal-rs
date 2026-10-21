@@ -11,13 +11,13 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use ze_notion::Rect2D;
-use ze_scene_core::{CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_WIDTH, Camera2D, Camera2DHandle};
+use ze_scene_core::Camera2DHandle;
 use zela_render_backends::RenderContext;
 pub use zela_scene_ecs::Result;
 use zela_scene_ecs::animation::BindingTable;
 use zela_scene_ecs::contract::GroupVisibility;
-use zela_scene_ecs::domain::{ContentTextureSpec, ContentTextureSpecs};
 use zela_scene_ecs::scene::Scene;
 use zela_scene_ecs::errors::Error;
 use zela_scene_ecs::ClockForest;
@@ -344,30 +344,11 @@ fn build_runtime(
     let (forest2d, bindings2d, camera2d_handle, group_visibility, script_duration) =
         build_scene_source(&mut scene, &engine, &source)?;
 
-    // S3-3 内容纹理（仅 demo3d）：配置（唯一真相来源）。
-    let content_textures = demo3d.as_ref().map(|demo| {
-        // 内容相机缺省（公式编译失败）时退回一个"世界原点居中、无内容"的相机。
-        let content_camera = demo.content_camera.unwrap_or_else(|| {
-            Camera2D::new(
-                (0.0, 0.0).into(),
-                25.0,
-                Rect2D::new(
-                    ze_notion::Vec2::ZERO,
-                    ze_notion::Vec2::new(
-                        CONTENT_TEXTURE_WIDTH as f32,
-                        CONTENT_TEXTURE_HEIGHT as f32,
-                    ),
-                ),
-            )
-        });
-        ContentTextureSpecs(vec![ContentTextureSpec {
-            // 过渡期：demo3d 尚未声明 Surface（Step 4c-4 才迁移）。
-            surface: None,
-            camera: content_camera,
-            size_px: [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
-            composite: false,
-        }])
-    });
+    // S3-3 内容纹理：由场景中的 `Surface(Renderer2D)` 生成（唯一装配入口）。
+    // B3 Step 4c-4：demo3d 已改走 Surface；不再有硬编码尺寸 / 相机。
+    let content_textures = zela_scene_ecs::domain::content_texture_specs(&scene)
+        .map_err(|error| Error::InitializationError(format!("Surface 纹理装配失败：{error}")))?;
+    let content_textures = (!content_textures.is_empty()).then_some(content_textures);
 
     // **装配尾唯一实现**位于 `zela-playback`（脚本路径与 `--bundle` / 浏览器共用）。
     let assembly = zela_playback::SceneAssembly {

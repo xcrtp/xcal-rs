@@ -62,8 +62,8 @@ impl LayerDescriptor {
 /// 因此增删其它图层不会让内容层 id 漂移。
 #[derive(Debug, Clone, Copy)]
 pub struct ContentTextureSpec {
-    /// 归属 Surface；`None` = 旧式单份（过渡期，Step 4c-4 后生产路径不再使用）。
-    pub surface: Option<ObjectId>,
+    /// 归属 Surface（4c-4 起**必填**；容器不再有"旧式单份"分支）。
+    pub surface: ObjectId,
     /// 内容相机：`rect` 为**纹理矩形**（世界 → 纹理坐标的映射）。
     pub camera: Camera2D,
     /// 纹理尺寸（物理像素）。
@@ -73,20 +73,14 @@ pub struct ContentTextureSpec {
 }
 
 impl ContentTextureSpec {
-    /// 稳定图层 id：Surface 派生；旧式单份用保留常量。
+    /// 稳定图层 id：由 Surface 派生。
     pub fn layer_id(&self) -> LayerId {
-        match self.surface {
-            Some(surface) => content_layer_id(surface),
-            None => LAYER_ID_CONTENT_LEGACY,
-        }
+        content_layer_id(self.surface)
     }
 
     /// 稳定纹理句柄：与 `layer_id` 同一条 id 链派生（3D 材质用同一句柄引用）。
     pub fn texture_handle(&self) -> TextureHandle {
-        match self.surface {
-            Some(surface) => content_texture_handle(surface),
-            None => TextureHandle::new(crate::object::CONTENT_TEXTURE_ID),
-        }
+        content_texture_handle(self.surface)
     }
 }
 
@@ -103,12 +97,10 @@ impl ContentTextureSpecs {
 /// 视口图层的固定 id（不再用 `layers.len()` 位置分配）。
 pub const LAYER_ID_VIEWPORT_2D: LayerId = LayerId(0);
 pub const LAYER_ID_VIEWPORT_3D: LayerId = LayerId(1);
-/// 旧式单份内容层的保留 id（Step 4c-4 后生产路径不再使用）。
-pub const LAYER_ID_CONTENT_LEGACY: LayerId = LayerId(2);
 
-/// Surface 内容层的 id 基址（与视口 / 旧式 id 不重叠）。
+/// Surface 内容层的 id 基址（与视口 id 不重叠）。
 const CONTENT_LAYER_ID_BASE: u32 = 1 << 20;
-/// Surface 纹理句柄基址（避开 `CONTENT_TEXTURE_ID = 1`）。
+/// Surface 纹理句柄基址（避开 `CONTENT_TEXTURE_ID = 1` 的旧值）。
 const CONTENT_TEXTURE_ID_BASE: u64 = 1 << 32;
 
 /// `ObjectId → LayerId` 的**唯一**映射（内容层）。
@@ -119,6 +111,45 @@ pub fn content_layer_id(surface: ObjectId) -> LayerId {
 /// `ObjectId → TextureHandle` 的**唯一**映射（内容层）。
 pub fn content_texture_handle(surface: ObjectId) -> TextureHandle {
     TextureHandle::new(CONTENT_TEXTURE_ID_BASE + u64::from(surface.index))
+}
+
+/// 从场景里的 `Surface(Renderer2D)` 生成内容纹理规格（**唯一装配入口**）。
+///
+/// - 只收 `Renderer2D`（`Renderer3D` 走 Direct，不需要纹理）；
+/// - `SurfaceTexture` 必填（缺失 / 非法 ⇒ 显式错误）；
+/// - 顺序按 `ObjectId` 排序 ⇒ 帧间稳定。
+pub fn content_texture_specs(
+    scene: &impl ze_scene_contract::SceneRead,
+) -> Result<ContentTextureSpecs, crate::surface::SurfaceError> {
+    use crate::surface::{Surface, SurfaceError, SurfaceRenderer, SurfaceTexture};
+
+    let mut ids = Vec::new();
+    scene.for_each::<Surface>(|id, _| ids.push(id));
+    ids.sort();
+
+    let mut specs = Vec::with_capacity(ids.len());
+    for id in ids {
+        let renderer = scene
+            .with::<SurfaceRenderer, _>(id, |renderer| *renderer)
+            .ok_or(SurfaceError::MissingRenderer(id))?;
+        if renderer != SurfaceRenderer::Renderer2D {
+            continue;
+        }
+        let surface = scene
+            .with::<Surface, _>(id, |surface| *surface)
+            .ok_or(SurfaceError::MissingRenderer(id))?;
+        let texture = scene
+            .with::<SurfaceTexture, _>(id, |texture| *texture)
+            .ok_or(SurfaceError::MissingTexture(id))?;
+        let camera = texture.camera_for(surface.bounds)?;
+        specs.push(ContentTextureSpec {
+            surface: id,
+            camera,
+            size_px: texture.texel_size,
+            composite: false,
+        });
+    }
+    Ok(ContentTextureSpecs(specs))
 }
 
 /// 合成器清屏色默认值（与改动前 2D 图层内的背景矩形一致）。

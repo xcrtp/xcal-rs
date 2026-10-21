@@ -6,18 +6,19 @@
 use std::sync::Arc;
 
 use ze_notion::{Rect2D, SurfaceFn};
+use ze_scene_core::domain::content_texture_handle;
 use ze_scene_core::{
-    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH, Camera2D, Camera3D,
-    Camera3DHandle, Path, Projection, Transform,
+    CONTENT_TEXTURE_HEIGHT, CONTENT_TEXTURE_WIDTH, Camera3D, Camera3DHandle, Path, Projection,
+    Surface, SurfaceRenderer, SurfaceTexture, TextureFilter, Transform,
 };
 use ze_prerender::InMemoryEngine;
 use ze_render_ir::StrokeSolid;
 
 use zela_scene_ecs::content;
-use zela_scene_ecs::contract::object_id_of;
+use zela_scene_ecs::contract::{object_id_of, Parent};
 use zela_scene_ecs::domain::CameraMode;
 use zela_scene_ecs::scene::Scene;
-use zela_scene_ecs::scene::components::{ContentTextureItem, Material3D, TextureHandle};
+use zela_scene_ecs::scene::components::{ContentTextureItem, Material3D};
 use zela_scene_ecs::scene::primitives::{parametric_surface, wireframe_cube};
 use zela_scene_ecs::types::Color32;
 
@@ -25,8 +26,6 @@ use zela_scene_ecs::types::Color32;
 pub struct Demo3D {
     /// 3D 相机句柄（自动轨道绑定由 app 装配）。
     pub camera3d: Camera3DHandle,
-    /// 内容纹理相机（公式编译失败时为 `None`，由调用方回退）。
-    pub content_camera: Option<Camera2D>,
 }
 
 /// 把 3D demo 与内容纹理公式装配进场景。
@@ -38,6 +37,37 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
         Arc::new(wireframe_cube(1.0)),
         Material3D::color(Color32::WHITE),
     ));
+
+    // ── 公式接入（内容纹理源）：Typst 内容管线 → 2D 描边路径 ──────────
+    // B3 Step 4c-4：内容纹理不再走硬编码常量，改由 Surface(Renderer2D) 表达。
+    // 先烘焙公式并求包围盒（Surface.bounds），再 spawn Surface 与内容实体。
+    let mut outlines = match content::build_ir(engine, "x^2 + 1") {
+        Some(ir) => ze_content::stroke_outlines(&ir, 1.3, ze_notion::Vec2::new(-2.8, 3.0), false),
+        None => {
+            eprintln!("[zela-scene] 公式编译失败，跳过公式实体");
+            Vec::new()
+        }
+    };
+    let bounds = outlines
+        .iter_mut()
+        .map(|outline| outline.path.bounds())
+        .reduce(|acc, b| acc.union(&b))
+        .unwrap_or_else(|| Rect2D::new(ze_notion::Vec2::new(-1.0, -1.0), ze_notion::Vec2::new(1.0, 1.0)));
+
+    let surface_entity = scene.spawn((
+        Surface::new(bounds, ze_scene_core::SurfaceMapping::World, ze_notion::Vec2::new(0.5, 0.5)),
+        SurfaceRenderer::Renderer2D,
+        // Fixed 尺寸与 `CONTENT_TEXTURE_*` 同值；fit_margin 0.8 复刻 demo3d 原取景
+        // （`camera_for` 直接调用 `Camera2D::fit_bounds`，逐位一致）。
+        SurfaceTexture::new(
+            [CONTENT_TEXTURE_WIDTH, CONTENT_TEXTURE_HEIGHT],
+            TextureFilter::Linear,
+            false,
+        )
+        .with_fit_margin(0.8),
+    ));
+    let surface_id = object_id_of(surface_entity);
+    let content_texture = content_texture_handle(surface_id);
 
     // ── 3D 场景：参数曲面 z = 0.35·sin(3x)·cos(3y)，域 [-1.5, 1.5]² ──
     // 曲面自带真实法线，经 cube.wgsl 的头顶 Lambert 呈现明暗起伏（非纯色剪影）。
@@ -54,7 +84,8 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
     // `rgb = tex.rgb + color.rgb * lit * (1 - tex.a)`。内容纹理透明底 ⇒ 未覆盖像素
     // 退化为 `材质色 × lit`（蓝色保留明暗起伏）；墨迹恒为纯白、不被光照压暗。
     let mut surface_material = Material3D::color(Color32::new(120, 200, 255, 255));
-    surface_material.texture = Some(TextureHandle::new(CONTENT_TEXTURE_ID));
+    // 材质引用由 id 链派生（`ObjectId → TextureHandle`，与内容层 LayerId 同一映射）。
+    surface_material.texture = Some(content_texture);
     scene.spawn((
         Arc::new(surface),
         surface_material,
@@ -89,52 +120,18 @@ pub fn build(scene: &mut Scene, engine: &InMemoryEngine) -> Demo3D {
     ));
     let camera3d = Camera3DHandle(object_id_of(camera3d_entity));
 
-    // ── 公式接入（内容纹理源）：Typst 内容管线 → 2D 描边路径 ──────────
-    // 静态一条公式，启动时烘焙一次并 spawn 实体；它同时是 3D 曲面材质的纹理源
-    // （带 `ContentTextureItem` 标记）。零 System 改动：公式作为普通
-    // `(Path, StrokeSolid)` 对象参与既有录制。
-    // 内容纹理相机（S3-3）：由公式的世界包围盒导出——`rect` 即纹理矩形
-    // （0,0–512,512），让包围盒适配它（margin 0.8 ⇒ 公式宽度 ≈ 纹理宽 × 0.8）。
-    let texture_rect = Rect2D::new(
-        ze_notion::Vec2::ZERO,
-        ze_notion::Vec2::new(CONTENT_TEXTURE_WIDTH as f32, CONTENT_TEXTURE_HEIGHT as f32),
-    );
-    let mut content_camera: Option<Camera2D> = None;
-    match content::build_ir(engine, "x^2 + 1") {
-        Some(ir) => {
-            // 包围盒由理念层 `Path2D::bounds`（懒计算）给出 —— 不再遍历命令。
-            let mut bounds: Option<Rect2D> = None;
-            for outline in ze_content::stroke_outlines(&ir, 1.3, ze_notion::Vec2::new(-2.8, 3.0), false)
-            {
-                let mut path = outline.path;
-                bounds = Some(match bounds {
-                    Some(acc) => acc.union(&path.bounds()),
-                    None => path.bounds(),
-                });
-                scene.spawn((
-                    Path::new(path),
-                    // 公式描边是世界空间：与字形一同随缩放成比例变化。
-                    StrokeSolid::new_in(
-                        outline.width,
-                        outline.color,
-                        ze_notion::MeasureSpace::World,
-                    ),
-                    // S3-3：标记该实体进内容纹理（D5：只录带标记的实体）。
-                    ContentTextureItem,
-                ));
-            }
-            if let Some(bbox) = bounds {
-                // `fit_bounds` 自带退化保护（空盒 / 零宽 ⇒ 保持基底 scale）；
-                // 基底取 40，与原实现里退化分支的兜底值同值。
-                let base = Camera2D::new(ze_notion::Vec2::ZERO, 40.0, texture_rect);
-                content_camera = Some(base.fit_bounds(bbox, 0.8));
-            }
-        }
-        None => eprintln!("[zela-scene] 公式编译失败，跳过公式实体"),
+    // ── 公式实体：挂在 Surface 之下（归属由 Parent 链解析）──────────
+    // 零 System 改动：公式作为普通 `(Path, StrokeSolid)` 对象参与既有录制。
+    for outline in outlines.drain(..) {
+        scene.spawn((
+            Path::new(outline.path),
+            // 公式描边是世界空间：与字形一同随缩放成比例变化。
+            StrokeSolid::new_in(outline.width, outline.color, ze_notion::MeasureSpace::World),
+            // S3-3：标记该实体进内容纹理（D5：只录带标记的实体）。
+            ContentTextureItem,
+            Parent(surface_id),
+        ));
     }
 
-    Demo3D {
-        camera3d,
-        content_camera,
-    }
+    Demo3D { camera3d }
 }
