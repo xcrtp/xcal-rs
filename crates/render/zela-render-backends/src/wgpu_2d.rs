@@ -37,10 +37,12 @@ use ze_notion::{Color32, MeasureSpace, Rect2D, Transform2D, Vec2};
 use zela_render::resource_cache::{ResourceCache, ResourceKey};
 use zela_render::{
     AaModel, CacheStrategy, DrawQueue, GpuHandle, MorphItem, Painter2DTarget, REVEAL_STEP_PX,
-    RevealItem, Shape2D, Style2D, TessKind, Tessellation2D, Vertex2D, VertexInputDesc,
-    VertexLayout, hash_bytes, tessellate, tessellate_reveal, tolerance_for_scale,
+    RevealItem, Shape2D, Style2D, TessKind, VertexInputDesc, VertexLayout, hash_bytes,
+    tolerance_for_scale,
 };
+use zela_render::vertex_record;
 use ze_render_ir::LayerId;
+use ze_vertex::VertexBufferData;
 
 use crate::gpu_util::{UniformArena, bytes_of};
 use crate::vertex_layout::{to_wgpu, to_wgpu_buffers};
@@ -182,14 +184,13 @@ pub fn snapshot_queue(queue: &DrawQueue) -> Vec<Recorded2D> {
 
 // ─── GPU 资源 ─────────────────────────────────────────────────────────────
 
-/// 缓存条目：一条几何的**三角化结果（CPU 侧）**。
+/// 缓存条目：一条几何的**生产结果（CPU 侧）**。
 ///
-/// S4.2 起不再持有 GPU 缓冲——GPU 缓冲由**合批**（见 [`BatchBuffers`]）按
-/// `(color, stroke_width)` 统一持有：顶点/索引按批上传一次，批内容不变即命中，
-/// 稳态零上传。本条目只负责**免重复三角化**，并作为合批装配的数据源。
+/// B3-0c：条目形态从 `{vertices: Vec<Vertex2D>, indices}` 变为
+/// `VertexBufferData`（已按布局交错的字节 + 索引 + 顶点数）——**打包在生产端完成**，
+/// 后端只保存与拼接字节。两级缓存结构保持不变（B4）。
 struct CachedGeometry {
-    vertices: Vec<Vertex2D>,
-    indices: Vec<u32>,
+    data: VertexBufferData,
 }
 
 /// 合批缓存条目：同 `(color, stroke_width)` 的若干几何合并后的**一套** GPU 缓冲。
@@ -838,20 +839,17 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..draw.style
             };
-            let tessellated = match tessellate(&draw.shape, local, &style, tolerance) {
-                Ok(items) => items,
-                // ZSB D1：Custom 解析失败是**显式错误**并记录，不再静默产空几何。
-                Err(error) => {
-                    crate::diagnostics::record_skipped_draw();
-                    eprintln!("[zela-render] 三角化失败，已跳过该绘制：{error}");
+            // B3-0c：三角化 + 打包在渲染无关层（`vertex_record`）；后端只接字节。
+            // B3-0d（不静默）：失败 ⇒ **显式 panic**，不再 `eprintln + continue`。
+            let buffers = vertex_record::tessellate_to_buffers(&draw.shape, local, &style, tolerance)
+                .unwrap_or_else(|error| {
+                    panic!("不静默：2D 顶点生产失败（三角化/打包）：{error}")
+                });
+            for buffer in buffers {
+                if buffer.data.is_empty() || buffer.data.indices.is_empty() {
                     continue;
                 }
-            };
-            for tess in tessellated {
-                if tess.vertices.is_empty() || tess.indices.is_empty() {
-                    continue;
-                }
-                let hash = hash_tessellation(&tess);
+                let hash = hash_tessellated(buffer.kind, &buffer.data);
                 let key = ResourceKey::content::<Geometry2DTag>(hash);
                 stats.geom_requests += 1;
                 // ⚠️ 命中必须 `mark_used`：`ResourceCache::get` 不刷新 `last_used_frame`，
@@ -863,12 +861,11 @@ impl WgpuBackend2D {
                         key,
                         (),
                         GpuHandle::new(CachedGeometry {
-                            vertices: tess.vertices,
-                            indices: tess.indices,
+                            data: buffer.data,
                         }),
                     );
                 }
-                let color = match tess.kind {
+                let color = match buffer.kind {
                     TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
                     TessKind::Stroke => style.stroke.unwrap_or(Color32::BLACK),
                 };
@@ -895,8 +892,9 @@ impl WgpuBackend2D {
         for (color, width, keys) in &groups {
             let bkey = ResourceKey::content::<Batch2DTag>(hash_batch(*color, *width, keys));
             if !self.batch_cache.mark_used(&bkey) {
-                // 装配：成员顶点按序拼接，成员索引按各自顶点基址**重排**（rebase）。
-                let mut vertices: Vec<Vertex2D> = Vec::new();
+                // 装配：成员顶点字节按序拼接，成员索引按各自顶点基址**重排**（rebase）。
+                // B3-0c：顶点已是打包字节 ⇒ 只拼接，不再理解 `Vertex2D` 结构。
+                let mut vertices: Vec<u8> = Vec::new();
                 let mut indices: Vec<u32> = Vec::new();
                 for &h in keys {
                     let Some(handle) = self
@@ -908,9 +906,10 @@ impl WgpuBackend2D {
                     let geom = handle
                         .downcast_ref::<CachedGeometry>()
                         .expect("2D 几何缓存条目必须是 CachedGeometry");
-                    let base = vertices.len() as u32;
-                    vertices.extend_from_slice(&geom.vertices);
-                    indices.extend(geom.indices.iter().map(|i| i + base));
+                    let stride = geom.data.layout.stride as usize;
+                    let base = (vertices.len() / stride) as u32;
+                    vertices.extend_from_slice(&geom.data.vertices);
+                    indices.extend(geom.data.indices.iter().map(|i| i + base));
                 }
                 if indices.is_empty() {
                     continue;
@@ -919,7 +918,7 @@ impl WgpuBackend2D {
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-batch-vertices"),
-                        contents: bytes_of(&vertices),
+                        contents: &vertices,
                         usage: wgpu::BufferUsages::VERTEX,
                     });
                 let ib = self
@@ -984,72 +983,37 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..item.style
             };
-            let from_tess = match tessellate(&Shape2D::Path(from_path.clone()), local, &style, tolerance) {
-                Ok(items) => items,
-                Err(error) => {
-                    crate::diagnostics::record_skipped_draw();
-                    eprintln!("[zela-render] 形变 from 三角化失败，已跳过：{error}");
-                    continue;
-                }
-            };
-            let to_tess = match tessellate(&Shape2D::Path(to_path.clone()), local, &style, tolerance) {
-                Ok(items) => items,
-                Err(error) => {
-                    crate::diagnostics::record_skipped_draw();
-                    eprintln!("[zela-render] 形变 to 三角化失败，已跳过：{error}");
-                    continue;
-                }
-            };
-            // 闭合描边折线各产出一条几何（等点重采样 ⇒ 顶点数相同 ⇒ 拓扑一致）。
-            //
-            // ⚠️ **退化一侧的合成**（P5 实测修）：`from` 是"退化点"（全部点重合）时
-            // lyon 不产出任何几何（实测 `t_len = 0`），若直接跳过，整条形变项就消失
-            // ——表现为"画面空白，而队列层（`MorphQueue`）看不出任何异常"。
-            // 故用**可三角化的一侧**的拓扑合成退化侧：顶点位置塌到该侧路径的点、
-            // 法线归零 ⇒ `t = 0` 时三角形退化（不可见），随 `t` 平滑长出，
-            // 且索引/顶点数**按构造相等**（拓扑一致是逐点插值的前提）。
-            let (from_tess, to_tess) =
-                match (from_tess.into_iter().next(), to_tess.into_iter().next()) {
-                    (Some(f), Some(t)) => (f, t),
-                    (None, Some(t)) => (collapsed_like(&t, &from_path), t),
-                    (Some(f), None) => {
-                        let c = collapsed_like(&f, &to_path);
-                        (f, c)
-                    }
-                    // 两侧都没有几何（空路径已在上方挡掉）⇒ 无从合成。
-                    (None, None) => continue,
-                };
-            let (from_tess, to_tess) = (&from_tess, &to_tess);
-            if from_tess.indices.len() != to_tess.indices.len()
-                || from_tess.vertices.len() != to_tess.vertices.len()
-            {
-                // 拓扑不一致 ⇒ 逐点插值无意义。等点重采样后理论上不会发生；
-                // 真发生则跳过（宁可少画，不可画出错位形变）。
-                debug_assert!(
-                    false,
-                    "形变两端拓扑不一致：顶点 {} vs {}、索引 {} vs {}",
-                    from_tess.vertices.len(),
-                    to_tess.vertices.len(),
-                    from_tess.indices.len(),
-                    to_tess.indices.len()
-                );
+            // B3-0c：形变端点生产（含"退化一侧合成"与拓扑校验）在渲染无关层。
+            // 失败 / 拓扑不一致 ⇒ 显式错误（B3-0d：不再 eprintln + continue）。
+            let Some(endpoints) = vertex_record::morph_endpoint_buffers(
+                &from_path,
+                &to_path,
+                local,
+                &style,
+                tolerance,
+            )
+            .unwrap_or_else(|error| panic!("不静默：形变顶点生产失败：{error}"))
+            else {
+                // 两侧都没有几何（空路径已在上方挡掉）⇒ 无从合成。
                 continue;
-            }
-            let mkey = ResourceKey::content::<Morph2DTag>(hash_morph(from_tess, to_tess));
+            };
+            let from_data = &endpoints.from.data;
+            let to_data = &endpoints.to.data;
+            let mkey = ResourceKey::content::<Morph2DTag>(hash_morph(&endpoints.from, &endpoints.to));
             if !self.morph_cache.mark_used(&mkey) {
                 stats.morph_misses += 1;
                 let fvb = self
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-morph-from-vertices"),
-                        contents: bytes_of(&from_tess.vertices),
+                        contents: &from_data.vertices,
                         usage: wgpu::BufferUsages::VERTEX,
                     });
                 let tvb = self
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-morph-to-vertices"),
-                        contents: bytes_of(&to_tess.vertices),
+                        contents: &to_data.vertices,
                         usage: wgpu::BufferUsages::VERTEX,
                     });
                 // 两侧拓扑一致 ⇒ 共用 from 的索引表。
@@ -1057,7 +1021,7 @@ impl WgpuBackend2D {
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-morph-indices"),
-                        contents: bytes_of(&from_tess.indices),
+                        contents: bytes_of(&from_data.indices),
                         usage: wgpu::BufferUsages::INDEX,
                     });
                 self.morph_cache.insert_handle(
@@ -1067,7 +1031,7 @@ impl WgpuBackend2D {
                         from_vertex_buffer: fvb,
                         to_vertex_buffer: tvb,
                         index_buffer: ib,
-                        index_count: from_tess.indices.len() as u32,
+                        index_count: from_data.indices.len() as u32,
                     }),
                 );
             }
@@ -1116,29 +1080,36 @@ impl WgpuBackend2D {
                 space: MeasureSpace::Screen,
                 ..item.style
             };
-            let Some(tess) =
-                tessellate_reveal(&item.path, local, &style, tolerance, REVEAL_STEP_PX)
+            // B3-0c：书写动画顶点生产也在渲染无关层。
+            let Some(buffer) = vertex_record::tessellate_reveal_to_buffer(
+                &item.path,
+                local,
+                &style,
+                tolerance,
+                REVEAL_STEP_PX,
+            )
+            .unwrap_or_else(|error| panic!("不静默：书写动画顶点生产失败：{error}"))
             else {
                 continue;
             };
-            if tess.vertices.is_empty() || tess.indices.is_empty() {
+            if buffer.data.is_empty() || buffer.data.indices.is_empty() {
                 continue;
             }
-            let rkey = ResourceKey::content::<Reveal2DTag>(hash_tessellation(&tess));
+            let rkey = ResourceKey::content::<Reveal2DTag>(hash_tessellated(buffer.kind, &buffer.data));
             if !self.reveal_cache.mark_used(&rkey) {
                 stats.reveal_misses += 1;
                 let vb = self
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-reveal-vertices"),
-                        contents: bytes_of(&tess.vertices),
+                        contents: &buffer.data.vertices,
                         usage: wgpu::BufferUsages::VERTEX,
                     });
                 let ib = self
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("zela-2d-reveal-indices"),
-                        contents: bytes_of(&tess.indices),
+                        contents: bytes_of(&buffer.data.indices),
                         usage: wgpu::BufferUsages::INDEX,
                     });
                 self.reveal_cache.insert_handle(
@@ -1147,7 +1118,7 @@ impl WgpuBackend2D {
                     GpuHandle::new(RevealBuffers {
                         vertex_buffer: vb,
                         index_buffer: ib,
-                        index_count: tess.indices.len() as u32,
+                        index_count: buffer.data.indices.len() as u32,
                     }),
                 );
             }
@@ -1214,13 +1185,13 @@ impl Painter2DTarget for WgpuBackend2D {
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 /// 三角化结果的内容哈希（顶点 + 索引 + 种类），用于几何缓存复用。
-fn hash_tessellation(t: &Tessellation2D) -> u64 {
-    let mut h = hash_bytes(bytes_of(&t.vertices));
-    for &i in &t.indices {
+fn hash_tessellated(kind: TessKind, data: &VertexBufferData) -> u64 {
+    let mut h = hash_bytes(&data.vertices);
+    for &i in &data.indices {
         h ^= i as u64;
         h = h.wrapping_mul(0x100_0000_01b3);
     }
-    h ^= match t.kind {
+    h ^= match kind {
         TessKind::Fill => 0,
         TessKind::Stroke => 0x9E37_79B9_7F4A_7C15,
     };
@@ -1246,28 +1217,16 @@ fn hash_batch(color: Color32, stroke_width: f32, keys: &[u64]) -> u64 {
 ///
 /// 这正是"逐帧只写 t"能成立的原因：`t` 变 ⇒ 键不变 ⇒ 命中 ⇒ 零装配零上传。
 /// 用**可三角化的一侧**（`template`）的拓扑，合成**退化侧**的几何：
-/// 全部顶点位置塌到 `zero_path` 的首点、法线归零。
+/// 形变缓存键：两端**已打包缓冲**的内容哈希（与 `t` 无关 ⇒ 稳态命中）。
 ///
-/// 为什么需要（P5 实测）：`from` 是"退化点"（全部点重合）时 lyon 不产出任何几何，
-/// 形变项会被整条跳过 —— 画面空白，而队列层看不出异常。
-/// 合成后：`t = 0` 时三角形退化（不可见），随 `t` 平滑长出；
-/// 且索引 / 顶点数与 `template` **按构造相同**（逐点插值的前提）。
-fn collapsed_like(template: &Tessellation2D, zero_path: &ze_notion::Path2D) -> Tessellation2D {
-    let pivot = zero_path
-        .flatten(0.0)
-        .first()
-        .copied()
-        .unwrap_or(Vec2::ZERO);
-    let mut out = template.clone();
-    for v in &mut out.vertices {
-        v.position = [pivot.x, pivot.y];
-        v.normal = [0.0, 0.0];
-    }
-    out
-}
-
-fn hash_morph(from: &Tessellation2D, to: &Tessellation2D) -> u64 {
-    hash_tessellation(from).rotate_left(13) ^ hash_tessellation(to).wrapping_mul(0x100_0000_01b3)
+/// B3-0c 起"退化一侧合成"在生产端（`vertex_record::morph_endpoint_buffers`），
+/// 后端不再持有 `Tessellation2D` / `Vertex2D` 知识。
+fn hash_morph(
+    from: &zela_render::vertex_record::TessellatedBuffer,
+    to: &zela_render::vertex_record::TessellatedBuffer,
+) -> u64 {
+    hash_tessellated(from.kind, &from.data).rotate_left(13)
+        ^ hash_tessellated(to.kind, &to.data).wrapping_mul(0x100_0000_01b3)
 }
 
 /// uniform 字节：mat4 列主序（64）+ 预乘颜色 vec4（16）+ params vec4（16）。
@@ -1330,6 +1289,8 @@ fn uniform_bytes_reveal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // B3-0c：生产函数移到 `zela_render`；测试仍直接调用三角化做几何断言。
+    use zela_render::tessellate;
     use zela_render::{DrawCommand, ZIndex};
     use zela_scene::domain::LayerBlend;
 
@@ -1808,6 +1769,38 @@ mod tests {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("提交后 poll");
         }
+    }
+
+    /// 🔴 B3-0d：三角化失败**不再 `eprintln + continue`**，而是显式 panic
+    /// （错误路径可达、有测试；铁律 2「不静默」）。
+    #[test]
+    #[should_panic(expected = "不静默：2D 顶点生产失败")]
+    fn gpu_unregistered_custom_shape_panics_explicitly() {
+        let Some((_gpu, ctx)) = crate::gpu_test::require_gpu() else {
+            return;
+        };
+        let mut backend = WgpuBackend2D::new(&ctx.device, &ctx.queue);
+        let g = geometry(64.0, 64.0, 1.0, [128, 128]);
+        backend.begin_frame_at(g);
+        backend.push(
+            &Shape2D::Custom(zela_render::CustomShapeData::new(
+                zela_render::SpecId::new("test.missing"),
+                Rect2D::new(Vec2::ZERO, Vec2::new(10.0, 10.0)),
+            )),
+            &Transform2D::identity(),
+            &Style2D {
+                fill: Some(Color32::WHITE),
+                space: MeasureSpace::Screen,
+                ..Default::default()
+            },
+            0,
+        );
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("zela-2d-explicit-error"),
+            });
+        let _ = backend.finish_frame(&mut enc, LayerId(0), &g);
     }
 
     /// 🔴 R1 的业务效果 / R5-1：几何内容（顶点数 + index 表 + 路径点）**与描边宽度无关**。

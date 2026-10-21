@@ -19,6 +19,10 @@ static FRAME_SKIPPED: AtomicUsize = AtomicUsize::new(0);
 static TOTAL_SKIPPED: AtomicUsize = AtomicUsize::new(0);
 
 /// 记录一次"因三角化失败而跳过"的绘制（后端调用）。
+///
+/// B3-0d 起 2D 三角化失败改为**显式错误**（不再跳过）⇒ 生产路径不再调用本函数；
+/// 计数器与其对外读取口保留（诊断 API 稳定，测试仍覆盖）。
+#[allow(dead_code)]
 pub(crate) fn record_skipped_draw() {
     FRAME_SKIPPED.fetch_add(1, Ordering::Relaxed);
     TOTAL_SKIPPED.fetch_add(1, Ordering::Relaxed);
