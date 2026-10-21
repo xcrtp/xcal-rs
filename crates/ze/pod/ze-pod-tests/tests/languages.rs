@@ -1,12 +1,12 @@
-//! 7. Lua 与 Python **两侧各跑同一套绑定生成用例**。
+//! 7. Lua / Python / JS **各跑同一套绑定生成用例**。
 //!
-//! 两种语言使用同一份 `MiniApi`（`calls()` / `docs()`），脚本语义逐项等价；
-//! 断言两侧的录制结果逐字段相同，且文档生成都来自同一份 `CapabilityDocs`。
+//! 三种语言使用同一份 `MiniApi`（`calls()` / `docs()`），脚本语义逐项等价；
+//! 断言各侧的录制结果逐字段相同，且文档生成都来自同一份 `CapabilityDocs`。
 //!
 //! # feature 门控
 //!
 //! Python 执行侧需要系统 Python（`ze-pod-py/python`），由本 crate 的
-//! `python` feature 转发。默认路径只跑 Lua + 两侧共用的代码生成，
+//! `python` feature 转发。JS 侧用纯 Rust 的 boa，**默认就编**。
 //! 因此 `cargo test -p ze-pod-tests` 不需要 Python。
 
 use std::any::Any;
@@ -17,15 +17,25 @@ use ze_pod_binding::CapabilityDocs;
 use ze_pod_lua::{LuaPod, RUN_ENTRY, lua_ls};
 #[cfg(feature = "python")]
 use ze_pod_py::PyPod;
+use ze_pod_js::{JsPod, RUN_ENTRY as JS_RUN_ENTRY};
 use ze_pod_tests::{MiniApi, MiniOutput, MiniRecorderPod};
 
-/// Lua 版：与 Python 版逐项等价。
+/// Lua 版：与 Python / JS 版逐项等价。
 const LUA_SOURCE: &str = r#"
     local dot = Dot { x = 1.0, y = 2.0, r = 0.5 }
     scene.emit(3.5)
     scene.kind(Kind.Const)
     scene.kind(Kind.Weight { value = 2.0 })
     scene.emit(scene.total() + 1.0)
+"#;
+
+/// JS 版：同一套操作（JS 只有 number；结构体是对象，枚举靠构造器）。
+const JS_SOURCE: &str = r#"
+    const dot = Dot({ x: 1.0, y: 2.0, r: 0.5 });
+    scene.emit(3.5);
+    scene.kind(Kind.Const);
+    scene.kind(Kind.Weight({ value: 2.0 }));
+    scene.emit(scene.total() + 1.0);
 "#;
 
 /// Python 版：同一套操作（仅 `python` feature 下编译）。
@@ -76,6 +86,23 @@ fn run_python(source: &str) -> MiniOutput {
     py.run::<MiniOutput>(source).expect("Python 脚本执行成功")
 }
 
+fn run_js(source: &str) -> MiniOutput {
+    let recorder = Arc::new(MiniRecorderPod::new());
+    let js = Arc::new(JsPod::new());
+    js.register_capability::<MiniApi>("scene", true);
+    // boa 的 Context 是 !Send + !Sync ⇒ 不登记 SyncPod 徽章（与 Lua 同）。
+    let broker = Broker::new(vec![
+        PodNode::new_sync("scene", recorder, &["scene"]),
+        PodNode::new("js", Arc::clone(&js) as Arc<dyn Pod>, &["script"]),
+    ]);
+    broker.assemble().expect("JS 装配成功");
+    let owned = source.to_string();
+    let arg: &dyn Any = &owned;
+    broker
+        .run_with::<MiniOutput>("js", JS_RUN_ENTRY, &[arg])
+        .expect("JS 脚本执行成功")
+}
+
 /// Lua 侧基线（默认 feature 集即可运行，不依赖 Python）。
 #[test]
 fn lua_script_produces_the_shared_binding_results() {
@@ -99,8 +126,22 @@ fn lua_and_python_agree_on_the_same_binding_cases() {
     eprintln!("[P6-7] Python = {python:?}");
 }
 
+/// **B3-Pd 核心验收**：Lua 与 JS 逐字段一致（同一份 `MiniApi`，不需要任何 feature）。
 #[test]
-fn lua_and_python_generate_docs_from_the_same_calls() {
+fn lua_and_js_agree_on_the_same_binding_cases() {
+    let lua = run_lua(LUA_SOURCE);
+    let js = run_js(JS_SOURCE);
+
+    assert_eq!(lua, expected(), "Lua 侧结果");
+    assert_eq!(js, expected(), "JS 侧结果");
+    assert_eq!(lua, js, "两种语言必须逐字段相同");
+
+    eprintln!("[B3-Pd] Lua = {lua:?}");
+    eprintln!("[B3-Pd] JS  = {js:?}");
+}
+
+#[test]
+fn all_languages_generate_docs_from_the_same_calls() {
     let capabilities = [CapabilityDocs {
         name: "mini",
         calls: MiniApi::calls(),
@@ -117,6 +158,16 @@ fn lua_and_python_generate_docs_from_the_same_calls() {
         );
     }
     assert!(lua_text.contains("---@class Dot"), "LuaLS 缺少类型 Dot");
+
+    // JS：TypeScript `.d.ts`（同一份 `MiniApi`，同一份 JSON 真源）。
+    let ts_text = ze_pod_js::d_ts(&capabilities);
+    for function in ["dot", "emit", "total", "kind"] {
+        assert!(
+            ts_text.contains(&format!("  {function}(")),
+            "`.d.ts` 缺少 `{function}`：\n{ts_text}"
+        );
+    }
+    assert!(ts_text.contains("export interface Dot"), "`.d.ts` 缺少类型 Dot");
 
     // Python：`.pyi` 文件树。
     let pyi = ze_pod_py::pyi_files(&capabilities);

@@ -24,6 +24,8 @@ ze-pod-core = { path = "../ze-pod-core" }
 ze-pod-macro = { path = "../ze-pod-macro" }
 ze-pod-binding = { path = "../ze-pod-binding" }
 ze-pod-lua = { path = "../ze-pod-lua" }
+# JS 适配器（boa，纯 Rust）：默认就编，不依赖系统解释器。
+ze-pod-js = { path = "../ze-pod-js" }
 # 默认不带 `python` feature ⇒ 不触发 pyo3 / 系统 Python 依赖。
 ze-pod-py = { path = "../ze-pod-py" }
 

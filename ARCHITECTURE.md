@@ -46,6 +46,7 @@ graph TD
         ze_pod_macro["ze-pod-macro（核心组）"]
         ze_pod_lua["ze-pod-lua（语言适配器组）"]
         ze_pod_py["ze-pod-py（语言适配器组）"]
+        ze_pod_js["ze-pod-js（语言适配器组，boa）"]
         ze_pod_tests["ze-pod-tests（测试组，publish=false）"]
     end
 
@@ -105,11 +106,14 @@ graph TD
     ze_pod_py --> ze_pod_macro
     ze_pod_lua --> ze_pod_core
     ze_pod_lua --> ze_pod_binding
+    ze_pod_js --> ze_pod_core
+    ze_pod_js --> ze_pod_binding
     ze_pod_tests --> ze_pod_core
     ze_pod_tests --> ze_pod_binding
     ze_pod_tests --> ze_pod_macro
     ze_pod_tests --> ze_pod_lua
     ze_pod_tests --> ze_pod_py
+    ze_pod_tests --> ze_pod_js
 
     %% 原 ze-object 的依赖边已归入 ze_scene_core（见上）
 

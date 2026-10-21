@@ -212,6 +212,22 @@
 
 ---
 
+## H-bis. B3-P 批次记账（JS Pod，2026-10-21）
+
+> 计划《B3-P执行计划_JS_Pod.md》：新增 `ze-pod-js`（boa，纯 Rust），
+> 与 Lua / Python 同形地复用 `ze-pod-binding`；**只接装配期**，不碰回放。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| P-01 | `host-js`（浏览器原生引擎）**未接线** | JS 适配器 | **明确不做（B3-Pe 可选）** | `ze-pod-js/src/lib.rs` 两条 `compile_error!`：非 wasm 启用 ⇒ 编译期报错（J3）；wasm 启用 ⇒ 显式"尚未接线"（不静默降级） |
+| P-02 | wasm 体积尚未基线化 | 构建 | 仍成立 | `js` feature 默认不开；`zela-web` 未引用 `ze-pod-js` ⇒ 浏览器产物体积不变（未变即无需记录前后值） |
+| P-03 | JS 只有 `number`（f64） | JS 适配器 | **已处理** | `exact_integer()` 显式校验整值 / 范围（i32 / u32 / u8 / u64 各自边界）；u64 上限取 `2^53-1`（精确整数）；越界报错不截断 |
+| P-04 | 语言适配器不在 wasm gate 名单 | CI | 沿用 | `ze-pod-js` 与 lua / py 同组：不进 `KERNEL_CRATES` / `FACADE_CRATES`；J7 由 xtask `JQ_POD_LAYER` 守住 |
+
+**H-bis 段小计（B3-P）**：已处理 2 · 明确不做 1（P-01）· 仍成立 1（P-02）。
+
+---
+
 ## H. B3-1 批次记账（场景层分层重构，2026-10-21）
 
 > 计划《B3-1执行计划_场景层分层重构.md》：把 12k 行的 `zela-scene` 分成

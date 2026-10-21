@@ -86,6 +86,7 @@ crates/
 │   │   ├── ze-pod-macro        #[capability] 与 #[derive(PodType)] 过程宏
 │   │   ├── ze-pod-lua          Lua 适配器（mlua，解释器 vendored）
 │   │   ├── ze-pod-py           Python 适配器（pyo3，feature 门控）
+│   │   ├── ze-pod-js           JS 适配器（boa，纯 Rust；native/wasm 同一引擎）
 │   │   ├── ze-pod-tests        集成测试 + 基准（publish = false）
 │   │   └── ze-pod              门面：core + binding + macro（不含 lua / py，保持 wasm32）
 │   └── graph/
@@ -133,10 +134,10 @@ crates/
 - `zela-*` crate 可依赖 `ze-*`，但不得依赖 `zela-app`
 - 装配尾只有 `zela-playback` 一份；`zela-app` / `zela-web` 调用它，
   `zela-gui` / `zela-compile` 只是壳（**`zela-app` 不依赖 `zela-egui`**）
-- 语言适配器（`ze-pod-lua` / `ze-pod-py`）属于 `crates/ze/pod/` 的语言适配器组，**生产依赖不含任何 `zela-*`**；
+- 语言适配器（`ze-pod-lua` / `ze-pod-py` / `ze-pod-js`）属于 `crates/ze/pod/` 的语言适配器组，**生产依赖不含任何 `zela-*`**；
   domain 能力由 App 通过 `register_capability::<SceneApi>(..)` 注入
 - `crates/ze/pod/` 的核心组（`ze-pod-core` / `ze-pod-binding` / `ze-pod-macro`）平台无关，必须过 wasm gate；
-  语言适配器组（mlua / pyo3）**不在** wasm gate 名单内（CI 注释已注明原因）
+  语言适配器组（mlua / pyo3 / boa）**不在** wasm gate 名单内（CI 注释已注明原因）
 
 ## Crate 一览
 
@@ -167,7 +168,8 @@ crates/
 | `zela-scene-bundle` | scene | ZSB 装配产物：容器 / payload SHA-256 / Meta（cap+pod 版本）/ 可还原性检查；**无脚本依赖** |
 | `ze-pod-lua` | pod（语言适配器组） | Lua 适配器（mlua vendored）：Lua codec + 能力表 + run 入口；不依赖任何 `zela-*` |
 | `ze-pod-py` | pod（语言适配器组） | Python 适配器（pyo3，`python` feature 门控）：批量能力 / run 入口 / `.pyi` 导出 |
-| `ze-pod-tests` | pod（测试组） | 集成测试 + 基准（`publish = false`）：mini pod、topic 扇出、逻辑时序、flush、Lua/Python 对称性 |
+| `ze-pod-js` | pod（语言适配器组） | JS 适配器（boa，`js` feature 门控）：同一引擎覆盖 native / wasm / run 入口 / `.d.ts` 导出 |
+| `ze-pod-tests` | pod（测试组） | 集成测试 + 基准（`publish = false`）：mini pod、topic 扇出、逻辑时序、flush、Lua/Python/JS 对称性 |
 | `ze-pod` | pod（门面） | 聚合 `ze-pod-core` + `ze-pod-binding` + `ze-pod-macro`；不含 lua / py，保持 wasm32 |
 | `ze-node` | graph（门面） | 聚合 `ze-node-core` + `ze-node-schema` + `ze-graph-algo` + `ze-graph-eval`；不含 UI |
 | `zela` | zela（门面） | 聚合 `ze-pod` + `ze-node`，作为基础层统一入口 |
@@ -229,10 +231,10 @@ crates/
 
 ## 脚本装配（Pod / Broker）
 
-Lua / Python 脚本只在**装配期**参与，不参与每帧采样：
+Lua / Python / JS 脚本只在**装配期**参与，不参与每帧采样：
 
 ```
-Lua / Python 脚本
+Lua / Python / JS 脚本
   → Injector 注入的 SceneApi / ContentApi（typed capability）
   → SceneScript（对象 + Binding / ClockForest 描述）
   → zela-app::assembly（静态插件清单）
@@ -240,10 +242,11 @@ Lua / Python 脚本
   → Scene + BindingTable + ClockForest
 ```
 
-- `ze-pod-lua` / `ze-pod-py` 的生产依赖不含任何 `zela-*`；domain 能力由 App 注入；
+- `ze-pod-lua` / `ze-pod-py` / `ze-pod-js` 的生产依赖不含任何 `zela-*`；domain 能力由 App 注入；
 - 入口：`cargo run -p zela-gui -- --script`（Lua）/ `--python`（Python）；
+  JS 走 headless 的 `.js` 脚本（`zela-app` 的 `js` feature，boa 引擎）；
 - 文档导出：`cargo run -p zela-app --example export_scene_api`
-  （`target/scene_api/` 下的 JSON + LuaLS + `.pyi`）。
+  （`target/scene_api/` 下的 JSON + LuaLS + `.pyi` +（`js` feature）`.d.ts`）。
 
 ## 运行
 
@@ -286,6 +289,6 @@ cargo doc --no-deps -p zela-scene-ecs -p zela-render
 [LICENSE-MIT](LICENSE-MIT) 与 [LICENSE-APACHE](LICENSE-APACHE)。
 
 可独立发布的 crate：`ze-pod-core`、`ze-pod-binding`、`ze-pod-macro`、
-`ze-pod-lua`、`ze-pod-py`、`ze-pod`、`ze-node-core`、`ze-node-schema`、
+`ze-pod-lua`、`ze-pod-py`、`ze-pod-js`、`ze-pod`、`ze-node-core`、`ze-node-schema`、
 `ze-node-schema-macros`、`ze-graph-algo`、`ze-graph-eval`、`ze-node`、`zela`。
 `ze-pod-tests` 为内部测试 crate（`publish = false`）。

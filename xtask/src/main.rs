@@ -47,7 +47,7 @@ const FACADE_CRATES: &[&str] = &["ze-pod", "ze-node", "zela"];
 const JQ_POD_LAYER: &str = r#"
 .packages[]
 | select(.name | IN("ze-pod-core", "ze-pod-binding", "ze-pod-macro",
-                    "ze-pod-lua", "ze-pod-py", "ze-pod-tests", "ze-pod"))
+                    "ze-pod-lua", "ze-pod-py", "ze-pod-js", "ze-pod-tests", "ze-pod"))
 | .name as $n
 | .dependencies[]
 | select(.kind != "dev")
