@@ -40,6 +40,11 @@ pub enum ShapeMeshError {
         kind: &'static str,
         message: String,
     },
+    #[error(
+        "2D 图元 {kind} 同时声明了 fill 与 stroke：Direct 单材质会丢失描边；\
+         请把该 Surface 改为 Renderer2D"
+    )]
+    FillAndStroke { kind: &'static str },
 }
 
 /// 派生结果：平面网格 + 意图化材质 + 是否透明。
@@ -64,6 +69,11 @@ pub fn derive_mesh(shape: &Shape2D, style: &Style2D) -> Result<DerivedMesh, Shap
     }
 
     let color = style.fill.or(style.stroke).unwrap_or(Color32::WHITE);
+
+    // 不静默：单材质无法同时表达填充与描边（`DerivedMesh` 只有一份 `Material3D`）。
+    if style.fill.is_some() && style.stroke.is_some() {
+        return Err(ShapeMeshError::FillAndStroke { kind: kind_of(shape) });
+    }
 
     // 单材质：fill 优先；只有描边时走 `TessKind::Stroke`（替换旧的粗糙矩形带）。
     let tess_style = Style2D {
@@ -265,6 +275,25 @@ mod tests {
         let d = derive_mesh(&shape, &style).unwrap();
         assert_plane_geometry(&d);
         assert!(d.geometry.positions.len() >= 4);
+    }
+
+    /// Direct 单材质无法同时表达 fill + stroke ⇒ 显式错误（Step 4a-B）。
+    #[test]
+    fn fill_and_stroke_errors_explicitly() {
+        let shape = Shape2D::Circle {
+            center: Vec2::ZERO,
+            radius: 1.0,
+        };
+        let style = Style2D {
+            fill: Some(Color32::WHITE),
+            stroke: Some(Color32::new(255, 0, 0, 255)),
+            stroke_width: 2.0,
+            ..Style2D::default()
+        };
+        assert!(matches!(
+            derive_mesh(&shape, &style),
+            Err(ShapeMeshError::FillAndStroke { kind: "Circle" })
+        ));
     }
 
     /// Direct 路径未声明的图元必须**显式报错**（不静默）。
