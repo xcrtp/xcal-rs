@@ -6363,6 +6363,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
+
+[[package]]
 name = "yaml-rust"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6830,6 +6836,7 @@ dependencies = [
  "wgpu",
  "ze-notion",
  "ze-pod-core",
+ "ze-render-ir",
  "ze-scene-core",
  "zela-render",
  "zela-render-backends",
@@ -6888,11 +6895,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zela-render-vector"
+version = "0.1.1"
+dependencies = [
+ "bytemuck",
+ "serde",
+ "thiserror 2.0.20",
+ "wgpu",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "zela-scene-bundle"
 version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
+ "ze-render-ir",
  "ze-scene-core",
  "zela-scene-ecs",
 ]
