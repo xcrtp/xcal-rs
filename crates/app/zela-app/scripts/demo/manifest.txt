@@ -18,6 +18,9 @@ fourier         傅里叶级数展开      fourier.lua     f8ed3eae3a4212edd2235
 storyboard      分镜演示            storyboard.lua  - 
 demo3d          3D 场景             demo3d.lua      - 
 fusion          融合演示(双面+透明) fusion.lua      - 
+pbr_materials   PBR材质画廊        pbr_materials.lua - 
+pbr_lights      PBR光照实验室      pbr_lights.lua   - 
+pbr_scene       PBR材质秀          pbr_scene.lua    - 
 pendulum        钟摆动画            pendulum.lua    - 
 orbit           公转行星            orbit.lua       - 
 spring          弹跳小球            spring.lua      - 
