@@ -28,6 +28,7 @@ pub mod degrade;
 pub mod draw;
 pub mod layer;
 pub mod mesh;
+pub mod params;
 pub mod pipeline;
 pub mod shape;
 pub mod style;
@@ -42,9 +43,13 @@ pub use caps::{
 pub use draw::{DrawCommand, ZIndex, ZOrder};
 pub use layer::{LayerBlend, LayerId};
 pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
+pub use params::{
+    AmbientOcclusion, Bloom, MAX_SUPERSAMPLE, Msaa, RenderParamError, RenderParams, TextureFilter,
+    ToneCurve, ToneMapping,
+};
 pub use pipeline::{
     Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, PassDepth, PassDesc,
-    PipelineDesc,
+    PipelineDesc, PostCaps,
 };
 pub use shape::{CustomShapeData, CustomSpec, CustomSpecs, Shape2D, SpecId, Style2D};
 pub use style::{

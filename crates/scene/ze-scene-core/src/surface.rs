@@ -57,11 +57,10 @@ pub enum SurfaceRenderer {
 }
 
 /// 纹理采样过滤（**显式**；不靠后端默认值）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TextureFilter {
-    Nearest,
-    Linear,
-}
+///
+/// B4 Step 1：类型移入 `ze-render-ir::params`（渲染参数与 Surface 共用同一型），
+/// 此处转发以保持 `ze_scene_core::TextureFilter` 的既有调用点不变。
+pub use ze_render_ir::TextureFilter;
 
 /// `Renderer2D` 的纹理契约（Fixed 尺寸；用户拍板不随视口/DPI 变化）。
 ///

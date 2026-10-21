@@ -89,6 +89,40 @@ pub enum DepthFormat {
     Depth32Float,
 }
 
+/// 后处理 / IBL 的**后端自述**能力（B4 Step 1）。
+///
+/// 未实现的后端一律 `none()`；`RenderParams::is_supported_by` 用它拦下不支持的参数，
+/// **不静默降级**（§0.3 ②）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct PostCaps {
+    pub tone: bool,
+    pub bloom: bool,
+    pub ao: bool,
+    pub env: bool,
+}
+
+impl PostCaps {
+    /// 全部不支持（wgpu 三角化后端当前形态）。
+    pub const fn none() -> Self {
+        Self {
+            tone: false,
+            bloom: false,
+            ao: false,
+            env: false,
+        }
+    }
+
+    /// 全部支持（矢量后端移植后的形态）。
+    pub const fn all() -> Self {
+        Self {
+            tone: true,
+            bloom: true,
+            ao: true,
+            env: true,
+        }
+    }
+}
+
 /// 后端声明的**能力**（不是命令）：target 相关的采样数 / 格式。
 ///
 /// 消费者（如 B2-5 的 AA 统一）先查询，再决定请求值；**不支持 ⇒ 显式报错**
@@ -99,6 +133,8 @@ pub struct Capabilities {
     pub max_sample_count: u32,
     pub color_format: ColorFormat,
     pub depth_format: DepthFormat,
+    /// 后处理 / IBL 能力（B4 Step 1）。
+    pub post: PostCaps,
 }
 
 impl Capabilities {
@@ -203,6 +239,7 @@ mod tests {
             max_sample_count: 4,
             color_format: ColorFormat::Rgba8UnormSrgb,
             depth_format: DepthFormat::Depth32Float,
+            post: PostCaps::none(),
         };
         assert_eq!(caps.require_sample_count(1).unwrap(), 1);
         assert_eq!(caps.require_sample_count(4).unwrap(), 4);

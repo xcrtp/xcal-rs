@@ -63,7 +63,7 @@ use crate::render_backend::{GpuHandle, RenderBackend3D};
 use crate::render_layer::RenderLayer;
 use crate::render_target::RenderTarget;
 use crate::resource_cache::{ResourceCache, ResourceKey};
-use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
+use ze_render_ir::{LayerId, PostCaps, PrimitiveTopology, ShaderVariant, UvProjection};
 use ze_render_ir::{
     Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, LayerBlend, ZOrder,
 };
@@ -1419,6 +1419,8 @@ impl WgpuBackend3D {
             max_sample_count: max_sample_count_from_flags(flags),
             color_format,
             depth_format: DepthFormat::Depth32Float,
+            // wgpu 三角化后端没有后处理栈 / IBL：显式声明不支持（B4 Step 1）。
+            post: PostCaps::none(),
         })
     }
 
@@ -1780,12 +1782,14 @@ mod tests {
             max_sample_count: 2,
             color_format: ColorFormat::Rgba8UnormSrgb,
             depth_format: DepthFormat::Depth32Float,
+            post: PostCaps::none(),
         };
         assert!(caps.require_sample_count(4).is_err());
         let caps = Capabilities {
             max_sample_count: 4,
             color_format: ColorFormat::Rgba8UnormSrgb,
             depth_format: DepthFormat::Depth32Float,
+            post: PostCaps::none(),
         };
         assert_eq!(caps.require_sample_count(4).unwrap(), 4);
     }
@@ -3409,3 +3413,4 @@ mod tests {
         assert_eq!(frames[0], p_base, "轨迹起点 = 初始位姿 ⇒ 画面应逐位一致");
     }
 }
+
