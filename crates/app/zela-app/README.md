@@ -304,7 +304,7 @@ Typst 源码 → ze-prerender::engine（typst [feature] / placeholder）
 **P5 后**：形变由**分镜脚本**消费 —— 分镜 3（曲线生长）与分镜 6（公式浮现）都是
 `MorphShape(退化点, 目标折线)` + `MorphT` 绑定，走同一条 GPU 形变链路。
 
-- **链路**：`MorphT`（`zela_scene::animation::target::MorphT`）写 `t`；
+- **链路**：`MorphT`（`ze_scene_core::animation::target::MorphT`）写 `t`；
   `MorphRecordSystem`（`zela-render::record_systems`，RenderCommit）把实体录成
   `MorphItem`（`from`/`to` + `t`），由 2D 后端的**形变管线**做 GPU 插值
   （双 vertex buffer + `t` uniform，见 S4.3）。两端几何经弧长等点重采样，
@@ -321,7 +321,7 @@ Typst 源码 → ze-prerender::engine（typst [feature] / placeholder）
   早期版本恒按闭合环处理，开口曲线（分镜 3 的 `y = sin x`）会因此多出一条
   **首尾相接的弦**（画面上是 x 轴上多出的一条直线）。用例：
   `open_morph_endpoints_stay_open_without_chord` / `closed_morph_endpoints_stay_closed`。
-- **CPU 回退**：`zela_scene::animation::MorphApplySystem` 仍可把形变落成 `Path`
+- **CPU 回退**：`zela_scene_ecs::animation::MorphApplySystem` 仍可把形变落成 `Path`
   （实体同时带 `MorphShape` + `Path` 时生效，供 headless / 无 GPU 宿主使用）。
   App **不注册**它，形变走 GPU。
 - **S1a/S1b 旧 demo**（圆↔方、`x²`↔`x³` 语义形变）**已从 App 移除**（被分镜取代）；

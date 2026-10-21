@@ -66,6 +66,7 @@ graph TD
 
     subgraph scene[crates/scene]
         ze_scene_core["ze-scene-core"]
+        ze_scene_hecs["ze-scene-hecs"]
         ze_scene_api["ze-scene-api"]
         zela_scene_ecs["zela-scene-ecs"]
     end
@@ -129,6 +130,8 @@ graph TD
     %% 场景分层（B3-1）：ECS 实现 → 核心 / 能力层（壳层已删除）
     zela_scene_ecs --> ze_scene_core
     zela_scene_ecs --> ze_scene_api
+    zela_scene_ecs --> ze_scene_hecs
+    ze_scene_hecs --> ze_scene_contract
     zela_scene_ecs --> zela_schedule
     zela_scene_ecs --> ze_pod_core
     zela_scene_ecs --> ze_pod_macro
@@ -150,7 +153,7 @@ graph TD
     zela_render --> ze_scene_core
     zela_render --> ze_vertex
     zela_render --> ze_resource
-    zela_render --> zela_scene_ecs
+    zela_render --> ze_scene_hecs
     zela_render --> zela_schedule
     zela_render --> ze_scene_contract
     zela_render_backends --> ze_notion
@@ -326,7 +329,7 @@ FrameEnd:      —（内容提交由 host.present 承担；
 ```
 
 **M4 起，几何不再出现在 UI 层**：坐标轴 / 网格（相机裁剪、步长自适应、刻度线）
-归 `ze_object::Axes2D`，函数采样归 `ze_object::FunctionGraph`；`Prepare` 阶段的两个
+归 `ze_scene_core::Axes2D`，函数采样归 `ze_scene_core::FunctionGraph`；`Prepare` 阶段的两个
 System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原先的 `GridBuildSystem`
 已退役（其几何四段全部归位）。
 
@@ -393,7 +396,7 @@ zela-scene  ：MorphShape 组件 + target::MorphT（`Arc<dyn Target>`，P0）+ M
 - 对齐按**弧长**（非索引）：`flatten` 输出点分布不均，按索引配对会让直线段被拉伸、
   曲线段被压缩，形变过程"抽动"。
 - 输出顶点数**恒为 `samples`**（默认 128）→ 稳定开销，与输入复杂度无关。
-- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `zela_scene::animation::MorphT`），
+- **场景接缝**：`MorphShape{from, to, t}` 只写 `t`（经 `ze_scene_core::animation::MorphT`），
   生产路径由 `zela-render::record_systems::MorphRecordSystem` 录成 `MorphItem`
   （from/to 常量 + 逐帧 `t`）交 GPU 形变管线；`MorphApplySystem` 是 CPU 回退
   （实体同时带 `Path` 时生效）。from/to 不每帧重建。
@@ -603,8 +606,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **`ze-scene-api`**（新）：`SceneApi` / `ContentApi` + 两个 Service Pod（原 `pod/`）。
 >   **零 hecs、零 zela-***；能力 namespace / version 不变（`zela.scene@6` / `zela.content@1`）。
 > - **`zela-scene-ecs`**：只留 ECS 实现（world / resources / System 接线 / 生命周期）。
->   兼容壳层 `zela-scene` **已在同批删除**：237 处 `zela_scene::` 全部改为
+>   兼容壳层 `zela-scene` **已在同批删除**：237 处旧 `zela_scene` 路径全部改为
 >   `zela_scene_ecs::`，ze-macro 派生代码改指向 `ze_scene_core::transform`。
+> - **`ze-scene-hecs`**（收尾新增）：契约层 `SceneRead` 的 hecs 只读适配器
+>   （`WorldView` / `object_id_of` / `entity_of`）。渲染层因此不再依赖 ECS 实现，
+>   `cargo tree -p zela-render` 中 `zela-scene-ecs` 归零。
+> - **`WorldTransforms` 下沉**：容器移入 `ze_scene_core::world_transforms`
+>   （`from_map` / `insert` / `get` / `get2d`），生产仍由 ECS 侧
+>   `TransformHierarchySystem` 负责。
 > - **`zela-authored`**（新）：分镜 / demo 等**作品**移出场景层，app 按需依赖。
 > - **`SceneWrite` 擦除写入口**：动画目标（`Target`）不再接受 `WorldScene`，
 >   核心层因此完全不知道 hecs；ECS 用组件登记表实现具体分发。
@@ -636,7 +645,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 
 > M4 起另有两项从"未接线"转为**已接线**：`Scene` trait 的**第二实现**
 > （`zela-render` 测试里的非 ECS `TestScene`，与 hecs 侧 `WorldView` / `WorldScene` /
-> `zela_scene::Scene` 并存），以及契约层的 `Scene::set` 写路径
+> `zela_scene_ecs::Scene` 并存），以及契约层的 `Scene::set` 写路径
 > （消费方 `FunctionGraph::refresh`）。
 >
 > **W3 记账约束**：节点编辑器**后期可能引入破坏性变更**（用户决策），因此
@@ -853,7 +862,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `kernel → object / graph → schedule → scene → render → ui → app`）。
 > - **P3 app 归位**：后端安装 → `zela_render_backends::install_standard_backends`（app 一行）；
 >   CJK 字体 → `EguiSceneHost::install_cjk_font`（跨平台候选 + `ZELA_CJK_FONT`，不再硬编码
->   Windows 路径）；内容纹理常量 → `ze_object::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
+>   Windows 路径）；内容纹理常量 → `ze_scene_core::{CONTENT_TEXTURE_ID, CONTENT_TEXTURE_WIDTH,
 >   CONTENT_TEXTURE_HEIGHT}`（值不变 1 / 512 / 512）；可观测与帧管理 →
 >   `EguiSceneHost::draw_call_count` / `end_frame`。
 > - **依赖图无变化**：本轮只移动目录与搬内部实现，**没有新增/删除任何依赖边**，
@@ -868,13 +877,13 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `MorphT` / `Camera2DFraming`（新增）。新增驱动目标**不改枚举、不改 System 源码**。
 >   代价（记账）：失去 enum exhaustiveness；`dyn Trait` 不能 serde。为 UI 分类当时另加了
 >   无载荷的类别判别式（**T0-② 已删除**：改由 target 自报 `name()` / `target_id()`）。
-> - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`ze_object::Framing2D`，
+> - **P1 相机归位 + 解绑**：`AppCamera` 删除 → 相机是**场景对象**（`ze_scene_core::Framing2D`，
 >   无 `rect`）；`Camera2D` 与渲染目标 `rect` 解绑（录制时经 `ViewRect` 绑定，方案 a）；
 >   控制器纯函数移到 `zela-scene::camera_input::apply_pan_zoom`；
 >   `SceneRead` 新增只读**点查询** —— 实现为访客形态 `with<T, R>(id, f)`：
 >   hecs 0.11 的 `World::get::<&T>` 返回**借用守卫** `Ref<'_, T>`，`&T` 交不出去
 >   （与 `for_each` 同一约束；计划原文的 `Option<&T>` 断言与代码事实不符，以代码为准）。
-> - **P2 相机句柄**：`ze_object::Camera2DHandle(pub ObjectId)` + `resolve(scene, rect)`
+> - **P2 相机句柄**：`ze_scene_core::Camera2DHandle(pub ObjectId)` + `resolve(scene, rect)`
 >   + `spawn_camera2d`；本轮**只做引用型**，自由相机内联参数按 §5.1 延后（分镜用不到）。
 > - **P3 Timeline**：`zela-scene::animation::timeline`，顺序游标 → 每段一个
 >   `ClockNode{local_offset, span:(0,dur), mode:Hold}` + `Binding`；`parallel()` 表达
@@ -913,7 +922,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   其余 no-op（`PanZoom`：Pan/Zoom；`Orbit`：Orbit/Dolly；`Fps`：Look/Move；`Path`：全部忽略）。
 >   `SceneEvent::Camera` 的 `layer` 字段因此**未被消费**（单视口 + 模式互不重叠）。
 > - **K1 FPS**：新增命令 `Look{delta_yaw,delta_pitch}` / `Move{delta:Vec3}`（x=右/y=上/z=前）
->   + 组件 `ze_object::FpsView{yaw,pitch}`（**显式存朝向**：增量旋转会漂移且 pitch 无法 clamp）
+>   + 组件 `ze_scene_core::FpsView{yaw,pitch}`（**显式存朝向**：增量旋转会漂移且 pitch 无法 clamp）
 >   + 纯函数 `apply_fps`；pitch 钳 `±FPS_PITCH_LIMIT = π/2 − 0.01`。
 > - **K2 轨迹相机**：`Path` 模式**忽略全部交互命令**（与既有语义注释一致）；
 >   轨迹**未新增 Curve 变体** —— `Keyframes`/`Sampled` 已能驱动 `Framing2D.center` /
@@ -1064,7 +1073,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 在 `ze-render-ir`），与 `Parent` 同一判据："描述场景中的关系，不是数学概念"。
 >
 > - **N1 `Name`**：`Name(pub String)`，缺席 = 匿名。查找走
->   `zela_scene::contract::find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`
+>   `zela_scene_ecs::contract::find_by_name(&impl SceneRead, &str) -> Option<ObjectId>`
 >   （`for_each::<Name>` 遍历、返回**第一个**命中）—— **契约层不新增 trait 方法**
 >   （加方法要动 4 个实现，成本不匹配收益；几十个对象的 O(n) 足够）。
 > - **N2 `Group` / `GroupId`**：纯标签（**只含标识、不含变换**，这是与 `Parent` 的根本

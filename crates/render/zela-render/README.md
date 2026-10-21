@@ -3,7 +3,7 @@
 > **渲染 trait + 调度 + 资源管理层**。位于三层架构的中间层：
 >
 > ```text
-> ze-notion / zela-scene  ←── zela-render ──→  zela-render-backends
+> ze-notion / ze-scene-core  ←── zela-render ──→  zela-render-backends
 > ```
 >
 > 定义 2D 与 3D 的绘制器 trait、绘制队列、视口/渲染目标/渲染层抽象与新图元体系。
@@ -37,7 +37,7 @@ zela-render 同时承载两套渲染抽象：
   `(形状, 样式)` 引用对经泛型 blanket impl 自动获得 `Drawable`；
   `record_scene` 负责把**契约层 `SceneRead`**（`for_each_pair_opt`）里的
   `Circle/Path/Line/Rect` 组合成 `Drawable` 后调用它。**M3-7：不认识 hecs** ——
-  hecs 侧经 `zela-scene` 的 `WorldView` 只读适配器接入。层级（M4）：对象上
+  hecs 侧经 `ze-scene-hecs` 的 `WorldView` 只读适配器接入。层级（M4）：对象上
   **可选**的 `ZOrder` 组件优先（网格 z = -100 / 坐标轴 z = -90），缺席用默认层（0）。
   旧「逐组件穷举宏」已删除 ⇒
   **新增图元只需实现 `ToShape2D`，不必改动录制逻辑**。
@@ -120,7 +120,7 @@ position/attrib0/attrib1/attrib2）：
 
 | 模块 | 说明 |
 |------|------|
-| `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`ze-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, DynFn`）、`ze-object` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）、`ze-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`）、`zela-scene` 的纯逻辑组件（`PhaseAnim, marker, mesh, PathMesh, …`） |
+| `components` | 2D 管线的组件统一出口（**纯转发**，无自有组件）：`ze-notion` 的数学元语（`FunctionX2Y, Sampler1D/2D, ParameterCurve*, Interpolator, DynFn`）、`ze-scene-core` 的图元与摆放（`Circle, Line, Path, Rect, Transform`）与纯逻辑组件（`PhaseAnim, mesh, PathMesh, …`）、`ze-render-ir` 的样式组件（`StrokeSolid, FillSolid, StrokeStyle, FillStyle`） |
 | `draw` | `Painter2D + DrawQueue + DrawCommand + Shape2D/Style2D + Drawable + record_drawables + record_scene + **record_scene_tagged（N5）** + push_morph_item + push_reveal_item + **visible_for / opacity_of / apply_opacity（N5）**`（统一 2D 管线；`record_scene<S: SceneRead>` 不认识 hecs，层级读对象上的 `ZOrder`，可见性读对象上的 `Visibility`） |
 | `record_systems` | P4 从 `zela-egui` 归位的录制 System：`SceneRecordSystem` / `MorphRecordSystem` / `ContentTextureRecordSystem` + **R0 新增 `RevealRecordSystem`**（**渲染动作住渲染层**；只读 `ViewRect` + `Camera2DHandle` + **N5 的 `GroupVisibility`**，不读 UI 类型）。**N5**：三个 2D 录制 System 都消费对象级 `Visibility` / `Opacity`（相机 tag 取自 `Camera2DHandle`）；`ContentTextureRecordSystem` 是纹理源、**本轮不参与过滤**（记账） |
 | `view_rect` | `ViewRect`（P4 下沉）：本帧 2D 渲染目标矩形；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑） |
@@ -131,7 +131,7 @@ position/attrib0/attrib1/attrib2）：
 | `shape` | `Shape2D` + `Style2D` + `CustomShapeData`/`SpecId`/`CustomSpec`/`CustomSpecs`（自定义图元按**具名规格**解析） |
 | `viewport` | `Viewport`（纯数据） |
 | `render_backend`（导出项） | 根导出 `GpuHandle / GpuResourceId / AccessError`（kernel 来源）；`RenderBackend / RenderBackend3D` 已迁入 `zela-render-backends` |
-| `scene` (mod) | `use zela_render::scene::{comp, Scene}` 重新导出 components + zela_scene Scene |
+| `scene` (mod) | `use zela_render::scene::{comp}` 重新导出 components（B3-1 收尾起不再转发 ECS 的 `Scene`） |
 | `content_ir` | `ir_to_draw_cmds`：ze-content `ContentIR` → `Shape2D + Style2D + Transform2D`（scale = target / nominal_font_size，描边宽度同步换算为世界单位并标 `MeasureSpace::World`） |
 | `vertex` | 顶点格式契约（已下沉 kernel `ze-vertex`，经 `pub use ze_vertex as vertex;` 保持路径）：`VertexLayout` / `VertexAttrib` / `AaModel` / `CacheStrategy` / `StaticConsistencyChecker`；需 `serde` 可序列化 |
 
@@ -182,8 +182,8 @@ assert!(items.iter().all(|t| t.layout == zela_render::tessellation_layout()));
 ```rust
 use std::sync::Arc;
 use zela_render::DrawQueue3D;
-use zela_scene::scene::components::Material3D;
-use zela_scene::scene::primitives::wireframe_cube;
+use ze_scene_core::components::Material3D;
+use ze_scene_core::mesh_primitives::wireframe_cube;
 use ze_notion::Color32;
 
 let white = Color32::new(255, 255, 255, 255);
@@ -250,11 +250,11 @@ cargo doc  -p zela-render --no-deps
 ## 依赖
 
 ```toml
-zela-scene        = { path = "../../scene/zela-scene", default-features = false }
+ze-scene-hecs     = { path = "../../scene/ze-scene-hecs" }      # SceneRead 只读适配器（不依赖 ECS 实现）
 zela-schedule     = { path = "../../schedule/zela-schedule" }    # P4：录制 System 需要 System / ExecutorContext
 ze-notion         = { path = "../../kernel/ze-notion" }
 ze-render-ir      = { path = "../../kernel/ze-render-ir" }       # Shape2D / Style2D / 样式组件 / 降级 trait
-ze-object         = { path = "../../object/ze-object" }          # 图元 newtype / Camera2D / ZOrder
+ze-scene-core     = { path = "../../scene/ze-scene-core" }      # 图元 / 相机 / 组件 / WorldTransforms
 ze-scene-contract = { path = "../../kernel/ze-scene-contract" }  # record_scene 的唯一入参抽象（SceneRead）
 ze-content        = { path = "../../kernel/ze-content" }         # content_ir 消费侧：ir_to_draw_cmds
 ze-vertex         = { path = "../../kernel/ze-vertex" }          # 顶点格式契约（已下沉 kernel）
@@ -268,8 +268,8 @@ lyon_path         = "1.0"
 ```
 
 > **无 hecs（库本体）**（M3-7）：`record_scene<S: SceneRead>` 与 P4 归位的三个录制 System
-> 都只吃契约层抽象（`WorldView` 是 hecs 侧适配器，在 `zela-scene`）——
+> 都只吃契约层抽象（`WorldView` 是 hecs 侧适配器，在 `ze-scene-hecs`）——
 > `Cargo.toml` 的 `[dependencies]` **没有 hecs**。
 > ⚠️ P4 新增 `[dev-dependencies] hecs`（**仅测试**）：驱动 `Scheduler` 的容器就是
 > `hecs::World`，录制 System 的用例无法绕开。库本体的 hecs 零引用不变。
-> （树中一直会出现传递的 hecs，因为本 crate 依赖 `zela-scene` —— 那是 ECS 实现层。）
+> （树中会出现传递的 hecs，因为本 crate 依赖 `ze-scene-hecs` —— 那是契约层的 hecs 适配器。）

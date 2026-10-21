@@ -110,7 +110,7 @@ let v = eye.try_vec3().unwrap();           // 类型安全取值：不匹配返�
 
 > **`PathMorph` 状态：已就绪、未接线。** 已实现并有单测覆盖，但当前**无生产接线**
 > （`render/`、`app/` 无引用）。场景侧（首个数学动画原型的分镜 3 / 分镜 6）走的是
-> `zela_scene::animation::MorphT` + `MorphShape` 路线 —— 持有 from/to、只写 `t`，
+> `ze_scene_core::animation::MorphT` + `MorphShape` 路线 —— 持有 from/to、只写 `t`，
 > 由 GPU 形变管线插值（from/to 上传一次、每帧一个 float）；`PathMorph` 是"路径对
 > **直接**插值、一次性 CPU 产出路径"的另一条用法，供将来按需接线。
 

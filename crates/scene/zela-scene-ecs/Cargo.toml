@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 # B3-1b：场景核心层（对象 / 组件 / 纯逻辑）。本 crate 只留 ECS 实现。
 ze-scene-core = { path = "../ze-scene-core" }
-# B3-1c：语言无关的 Pod 边界；本层只做 re-export（`zela_scene::pod`）。
+# B3-1c：语言无关的 Pod 边界；本层只做 re-export（Pod 实现在 `ze-scene-api`）。
 ze-scene-api = { path = "../ze-scene-api" }
 # B3-1 收尾：hecs 只读适配器（渲染层与本层共用，避免渲染层依赖本实现 crate）。
 ze-scene-hecs = { path = "../ze-scene-hecs" }

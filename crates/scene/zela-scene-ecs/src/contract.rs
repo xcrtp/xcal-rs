@@ -35,7 +35,7 @@
 // 造出"少了一半组件"的对象）。新增可装配组件时，在 `known_component_table!`
 // 里加一行即可 —— **正向 / 类型名 / 克隆三向同时生效**（同一张表，只写一处）。
 
-use hecs::{Entity, EntityBuilder, World};
+use hecs::{EntityBuilder, World};
 
 use crate::scene::components::{Light, Material3D, MeshGeometry};
 use std::sync::Arc;

@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use ze_notion::{Transform2D, Transform3D};
+use ze_notion::Transform3D;
 use ze_scene_core::Transform;
 use ze_scene_contract::{ObjectId, Parent, SceneRead};
 use zela_schedule::context::ExecutorContext;

@@ -154,7 +154,7 @@
 |---|---|---|---|---|
 | E-01 | `PipelineKey` 含 wgpu 类型（`Option<wgpu::Face>` / `BlendState`）→ 改为 IR `CullMode` / `LayerBlend`，并补第五维 `VertexLayout`（D15） | 渲染后端 | **已关闭（B2-2）** | `grep -n "struct PipelineKey" -A 8` 零 wgpu 类型；`test_b2_2_pipeline_state_dimensions`（1→2→3 条） |
 | E-02 | `cull_mode` 由拓扑推导、`blend` 硬编码 `REPLACE`（#2/#3）→ 意图层 `Material3D.double_sided` / `transparent` 驱动 | 渲染 / 场景组件 | **已关闭（B2-2）** | `test_b2_2_double_sided_visible_from_back`（背面可见） |
-| E-03 | 2D / 3D 两个队列、3D 无层序（#11/D2）→ **一个 `DrawQueue`**（2D 形状 + 3D 网格/线段共存）+ 统一 `ZOrder`（IR 唯一声明，`ze_object::ZOrder` re-export） | 渲染管线 | **已关闭（B2-1）** | `test_queue_stable_within_equal_zorder`（R-F 显式锁定）、`test_unified_queue_mixes_2d_and_3d_by_zorder` |
+| E-03 | 2D / 3D 两个队列、3D 无层序（#11/D2）→ **一个 `DrawQueue`**（2D 形状 + 3D 网格/线段共存）+ 统一 `ZOrder`（IR 唯一声明，`ze_scene_core::ZOrder` re-export） | 渲染管线 | **已关闭（B2-1）** | `test_queue_stable_within_equal_zorder`（R-F 显式锁定）、`test_unified_queue_mixes_2d_and_3d_by_zorder` |
 | E-04 | 2D 图元无法参与 3D（融合缺口）→ `derive_mesh`（Rect/Circle/Ellipse/Polygon/Line → 平面网格，Flat + double_sided 材质默认化） | 渲染管线 | **新增能力（B2-3）** | `test_b2_3_derived_2d_rect_renders_in_3d`；`Path`/`Group`/`Custom` 显式报错（不静默） |
 | E-05 | 透明物体无排序（无透明桶）→ 不透明先画、透明按 `ZOrder` 升序后画；透明 pipeline **不写深度**（R-A） | 渲染后端 | **已关闭（B2-3）** | `test_b2_3_transparent_bucket_orders_by_zorder`（对调 ZOrder 后主导色对调） |
 | E-06 | 共面 z-fighting → `ZOrder × Z_ORDER_EPSILON` 的 **normal offset**（不用常量 depth bias，D4） | 渲染后端 | **已关闭（B2-4）** | `test_b2_4_epsilon_from_zorder_resolves_coplanar`；`DepthBiasState::default()` 未改 |
@@ -220,7 +220,7 @@
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
 | H-01 | `pod/types.rs` / `scene_service.rs` 反向依赖 ECS 内部（`crate::animation` / `crate::scene::components` / `crate::scene_script`） | 场景层 | **已关闭（B3-1a/b）** | `grep "^use crate::" ze-scene-api/src` = 0（仅剩 crate 内 `crate::types` / `crate::content_service`） |
-| H-02 | `ze-object` 与 `zela-scene` 组件/纯逻辑混居 | 分层 | **已关闭（B3-1b/f）** | `ze-scene-core::object` 承接全部对象；`ze-object` crate 删除；`grep ze_object:: crates/` = 0 |
+| H-02 | `ze-object` 与 `zela-scene` 组件/纯逻辑混居 | 分层 | **已关闭（B3-1b/f）** | `ze-scene-core::object` 承接全部对象；`ze-object` crate 已删除（`cargo tree` 中无该包） |
 | H-03 | 动画目标 `Target::apply(&mut WorldScene)` 把 hecs 适配器钉进"数据层" | 核心层 | **已关闭（B3-1b）** | 新增 `ze_scene_core::scene_write::{SceneWrite, with_component}`（object-safe 擦除写）；ECS 用组件登记表实现分发 |
 | H-04 | 组件登记表 / persist / math_pod 写在 ECS 实现里，脚本数据（core）却要依赖它 | 核心层 | **已关闭（B3-1b）** | `registry` / `persist` / `math_pod` 下沉 core；ECS 的 `add_known` 与 `SceneWrite` 共用导出的 `known_component_table!` |
 | H-05 | `pod/` 与实现同 crate，语言边界不独立 | 场景层 | **已关闭（B3-1c）** | 新 crate `ze-scene-api`；`cargo tree` 中 `zela-` / `hecs` = **0**；能力指纹未变 |
@@ -229,10 +229,11 @@
 | H-08 | `ze-scene-core` / `ze-scene-api` 的"不能依赖实现"只是约定 | CI | **已关闭（B3-1f）** | `structure` 步新增 jq 判据（`JQ_SCENE_LAYERS`） |
 | H-09 | `Target` 的 `apply` 签名变化（`&mut dyn SceneWrite`）会波及下游实现者 | 公开 API | **仍成立（有意）** | 仓内只有 `authored` 测试实现；这是分层必要的破坏性变更，未留兼容 shim |
 | H-10 | `scene_script.rs` 的 `commit` 用例需要真实 hecs 场景 | 测试布局 | **已关闭（B3-1b）** | 用例迁至 `zela-scene-ecs/src/scene_script_tests.rs`（实现与用例分离，语义不变） |
-| H-11 | `zela-scene` 壳层与 `ze-object` 壳层的删除时机 | 兼容层 | **已关闭（B3-1 收尾）** | `ze-object` 与 `zela-scene` 壳层均已删除；237 处 `zela_scene::` 改为 `zela_scene_ecs::`；ze-macro 派生代码指向 `ze_scene_core::transform`（不再需要任何 `zela_scene` 路径） |
-| H-12 | `WGPUDevice` / `CPUDevice` 仍在组件层（D7） | 场景核心 | **仍成立（按计划不占本批预算）** | 计划 §三 D7 与 §十：建议作为 B3-0.5 收尾先做；本批只做搬迁，未动语义。现位于 `ze-scene-core::components::marker`，`zela-render::components` 仍转发 |
+| H-11 | `zela-scene` 壳层与 `ze-object` 壳层的删除时机 | 兼容层 | **已关闭（B3-1 收尾）** | `ze-object` 与 `zela-scene` 壳层均已删除；237 处旧 `zela_scene` 路径改为 `zela_scene_ecs::`；ze-macro 派生代码指向 `ze_scene_core::transform`（不再需要任何 `zela_scene` 路径） |
+| H-12 | `WGPUDevice` / `CPUDevice` 仍在组件层（D7） | 场景核心 | **已关闭（B3-1 收尾）** | 全仓零消费方 ⇒ 删除 `components::marker` 整块；`zela-render::components` 的转发同步移除 |
+| H-13 | `zela-render` 生产依赖场景 **ECS 实现**（`zela-scene-ecs`，45 处引用；含 `WorldView` / `WorldTransforms`） | 分层 | **已关闭（B3-1 收尾）** | `WorldTransforms` 下沉 core；新增 `ze-scene-hecs`（`SceneRead` 只读适配器 + `ObjectId↔Entity`）；`cargo tree -p zela-render \| grep zela-scene-ecs` = **0** |
 
-**H 段小计（B3-1）**：已关闭 10 · 仍成立 2（H-09 / H-12）。
+**H 段小计（B3-1）**：已关闭 12 · 仍成立 1（H-09）。
 
 ---
 

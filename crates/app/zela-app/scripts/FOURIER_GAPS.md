@@ -44,7 +44,7 @@ demo 逐位不变。
 
 1. **脚本层 `Curve.Keyframes` 只有标量**（**内核已支持向量**）：
    `ze_time::AnimValue` 已含 `Vec2` / `Vec3` / `Color` / `Path`，`Curve::Keyframes`
-   本身也用它；缺口只在脚本入口 —— `zela_scene::pod::types::Curve::Keyframes`
+   本身也用它；缺口只在脚本入口 —— `ze_scene_api::types::Curve::Keyframes`
    目前是 `Vec<ScalarKey>`，只能写标量。位置/向量的多关键帧编排仍要靠
    `Ramp2`（仅两端）或多段。
 2. ~~**`WorldTransforms` 只有 2D 仿射**~~ **已关闭（S1，2026-10-20）**：

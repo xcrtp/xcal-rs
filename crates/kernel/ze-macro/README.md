@@ -19,12 +19,12 @@ zela-render / zela-egui / zela-app
 用户通常**不直接**依赖本 crate，而是通过 `zela-scene` 间接获得派生宏：
 
 ```rust
-use zela_scene::Transform2DInto;   // trait（定义于 zela_scene::transform）
+use ze_scene_core::Transform2DInto;   // trait（定义于 ze_scene_core::transform）
 use ze_macro::Transform2DInto;     // 派生宏
 ```
 
-注意两者**同名但不同物**：`zela_scene::Transform2DInto` 是位于
-`zela_scene::transform` 的 trait，而 `ze_macro::Transform2DInto` 是过程宏。
+注意两者**同名但不同物**：`ze_scene_core::Transform2DInto` 是位于
+`ze_scene_core::transform` 的 trait，而 `ze_macro::Transform2DInto` 是过程宏。
 派生时需分别导入（或写全路径 `#[derive(ze_macro::Transform2DInto)]`）。
 
 ---
@@ -33,7 +33,7 @@ use ze_macro::Transform2DInto;     // 派生宏
 
 ### `#[derive(Transform2DInto)]`
 
-为结构体自动派生 `zela_scene::transform::Transform2DInto`（消耗 `self` 的版本）。
+为结构体自动派生 `ze_scene_core::transform::Transform2DInto`（消耗 `self` 的版本）。
 非消耗版本的 `Transform2D` trait 由 blanket impl 自动提供（要求类型
 `impl Clone`）。
 
@@ -65,8 +65,8 @@ use ze_macro::Transform2DInto;     // 派生宏
 // trait 仍在场景层（`Transform2DInto` 是 `zela-scene` 的本地 trait，
 // 见 M4 计划 §1.6：它已不依赖场景层向量的具体身份，无需搬家）；
 // 但方法签名里的 `Camera2D` 归**场景对象层** `ze-object`（M3-2 归位）。
-use zela_scene::{Transform2D, Transform2DInto};
-use ze_object::Camera2D;
+use ze_scene_core::{Transform2D, Transform2DInto};
+use ze_scene_core::Camera2D;
 use ze_macro::Transform2DInto;
 
 #[derive(Clone, Transform2DInto)]

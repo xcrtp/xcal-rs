@@ -41,8 +41,8 @@ zela-gui（GUI 可执行壳；`zela-app` **不依赖本层**）
 | `ViewRect`（定义在 `zela-scene::domain`，`zela-render` 转发）| — | 本帧渲染目标矩形。由 `EguiSceneHost::update_view_rect` 写入；相机在录制时绑定它得到 `Camera2D`（P1-2 解绑）|
 | `DrawQueue` / `DrawQueue3D` / `ContentTextureQueue` / `MorphQueue` / `RevealQueue`（来自 zela-render）| — | 各渲染队列；由 `zela-render::record_systems` 的四个录制 System 与 app 的 3D 录制写入（`RevealQueue` = R0 书写动画）|
 
-> `AppCamera` **已删除**（P1-1）：相机状态是**场景对象**（`ze_object::Framing2D`），
-> UI 只发 `CameraCommand`（控制器纯函数 `zela_scene::camera_input::apply_pan_zoom`）。
+> `AppCamera` **已删除**（P1-1）：相机状态是**场景对象**（`ze_scene_core::Framing2D`），
+> UI 只发 `CameraCommand`（控制器纯函数 `ze_scene_core::camera_input::apply_pan_zoom`）。
 
 > `EguiFrameContext` **已删除**（B 阶段 UI 解耦）：egui 访问收敛到 `EguiSceneHost`，
 > 场景侧 System 只依赖纯数据 `InputEvents`，因此可 headless 测试。
@@ -67,8 +67,8 @@ zela-gui（GUI 可执行壳；`zela-app` **不依赖本层**）
 | `TransformHierarchySystem` | `zela-scene::transform_hierarchy` | Prepare |
 
 > **M4：UI 层不含几何计算。** 原网格构建 System（相机裁剪 / 步长自适应 / 刻度线 /
-> 坐标轴，279 行）已退役，四段逻辑整体归 `ze_object::Axes2D`；函数采样归
-> `ze_object::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
+> 坐标轴，279 行）已退役，四段逻辑整体归 `ze_scene_core::Axes2D`；函数采样归
+> `ze_scene_core::FunctionGraph`。本 crate 因此不再读写相机缩放，也不产生任何
 > 世界↔屏幕换算（换算只在 `zela-render` 的唯一换算点）。
 
 ---

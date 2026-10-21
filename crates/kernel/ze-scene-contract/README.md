@@ -26,7 +26,7 @@ zela-render        渲染管线    三角化 / 合批 / 队列
 
 **为什么 `ObjectId` 不用 `hecs::Entity`**：契约层的价值正是"不认识 ECS"。
 `ObjectId { index, generation }` 借用了 hecs 的**模型**（见 `id.rs`），但不借用它的**类型**；
-实现方负责两者无损互转（`zela_scene::contract::{object_id_of, entity_of}`）。
+实现方负责两者无损互转（`ze_scene_hecs::{object_id_of, entity_of}`）。
 
 **契约消费方（FanIn = 3，另有经转发的间接消费者）**：
 
@@ -35,7 +35,7 @@ zela-render        渲染管线    三角化 / 合批 / 队列
 | `ze-object` | 图元/装配对象实现 `Describable`；`Axes2D`/`FunctionGraph` 经 `Scene` 装配 |
 | `zela-scene` | 本层 trait 的 **hecs 实现**（`WorldView` / `WorldScene` / `Scene`） |
 | `zela-render` | `record_scene<S: SceneRead>` 的唯一入参抽象 |
-| `zela-egui` | 经 `zela_scene::contract::{SceneRead, WorldScene, WorldView}` 转发使用（不直连本层）|
+| `zela-egui` | 经 `ze_scene_contract::SceneRead` 与 `ze_scene_hecs::WorldView`（`WorldScene` 在 `zela_scene_ecs::contract`） 转发使用（不直连本层）|
 
 ---
 
@@ -113,7 +113,7 @@ pub trait Scene: SceneRead {                    // 写路径
 4. **`with` 是访客形态而非 `Option<&T>`（P1-3，实测修正）**：hecs 0.11 的
    `World::get::<&T>(entity)` 返回的是**借用守卫** `Ref<'_, T>`（生命周期绑在 `&World`
    的借用上，守卫本身必须存活），**`&T` 交不出去** —— 与 `for_each*` 是同一约束。
-   消费方：相机**句柄**（`ze_object::Camera2DHandle::resolve`）按 `ObjectId` 取场景对象上的
+   消费方：相机**句柄**（`ze_scene_core::Camera2DHandle::resolve`）按 `ObjectId` 取场景对象上的
    取景参数（`Framing2D`），而渲染录制只拿得到 `&S`（`SceneRead`）、没有 `&mut`。
 
 `spawn_dyn` 的**组件登记表**在实现方（hecs 无类型擦除 bundle 入口）：未登记的组件类型 ⇒
@@ -163,7 +163,7 @@ let style = circle.apply(&(
 // 声明式引用 + 分组（纯标签，不含变换 —— 与 `Parent` 的根本区别）
 let comps: Components = vec![Box::new(Name::new("curve")), Box::new(Group::new(GroupId::new(3)))];
 let id = scene.spawn_dyn(comps);
-let found = zela_scene::contract::find_by_name(&scene, "curve");  // Option<ObjectId>（第一个命中）
+let found = zela_scene_ecs::contract::find_by_name(&scene, "curve");  // Option<ObjectId>（第一个命中）
 
 // 「对谁可见」：非空 tag 集合，**任一命中即可见**（并，非交）
 let v = Visibility::for_camera(camera_id).with_tag(VisibilityTag::Group(g));
