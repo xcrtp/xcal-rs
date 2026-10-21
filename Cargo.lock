@@ -6532,8 +6532,10 @@ name = "ze-pod-js"
 version = "0.1.1"
 dependencies = [
  "boa_engine",
+ "serde_json",
  "ze-pod-binding",
  "ze-pod-core",
+ "ze-pod-macro",
 ]
 
 [[package]]
@@ -6575,6 +6577,7 @@ dependencies = [
  "serde_json",
  "ze-pod-binding",
  "ze-pod-core",
+ "ze-pod-js",
  "ze-pod-lua",
  "ze-pod-macro",
  "ze-pod-py",
@@ -6699,6 +6702,7 @@ dependencies = [
  "ze-notion",
  "ze-pod-binding",
  "ze-pod-core",
+ "ze-pod-js",
  "ze-pod-lua",
  "ze-pod-py",
  "ze-prerender",

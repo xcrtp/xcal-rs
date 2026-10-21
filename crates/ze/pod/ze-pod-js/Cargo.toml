@@ -1,0 +1,41 @@
+[package]
+name = "ze-pod-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "纯 JS 适配器（boa）：能力注入 + 宿主→脚本入口"
+
+[features]
+# 默认引擎 = boa（纯 Rust）。native 与 wasm 跑**同一个实现**（B3-P 铁律 2）。
+default = ["boa"]
+boa = ["dep:boa_engine"]
+# 可选：wasm 下改用宿主原生引擎（`eval`）。**非 wasm 目标启用 ⇒ 编译期报错**（J3）。
+host-js = []
+# 只用于负向编译探针（`examples/send_probe.rs`）；正常构建 / 测试不启用。
+send-probe = []
+
+[[example]]
+name = "send_probe"
+required-features = ["send-probe"]
+
+[dependencies]
+# 只依赖机制层：**生产边不含任何 `zela-*`**（J7）。
+ze-pod-core = { path = "../ze-pod-core", version = "0.1.1" }
+ze-pod-binding = { path = "../ze-pod-binding", version = "0.1.1" }
+
+# 一致引擎：纯 Rust，可编到 wasm32-unknown-unknown（§一）。
+# 关掉默认 features（float16 / xsum / temporal）以压低 wasm 体积（R-2）。
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+boa_engine = { version = "0.22", default-features = false, optional = true }
+
+# wasm 侧额外需要 `js`（getrandom/wasm_js + time/wasm-bindgen）。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+boa_engine = { version = "0.22", default-features = false, features = [
+    "js",
+], optional = true }
+
+[dev-dependencies]
+# 测试自建 mini domain Pod（dev 边不计入生产依赖图）。
+ze-pod-macro = { path = "../ze-pod-macro" }
+serde_json.workspace = true

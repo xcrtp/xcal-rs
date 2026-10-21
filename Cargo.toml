@@ -25,6 +25,7 @@ members = [
     "crates/scene/zela-scene-bundle",
     "crates/ze/pod/ze-pod-lua",
     "crates/ze/pod/ze-pod-py",
+    "crates/ze/pod/ze-pod-js",
     # 测试专用（publish = false）：集成测试 + 基准，不进 wasm gate、不被生产反向依赖。
     "crates/ze/pod/ze-pod-tests",
     "crates/schedule/zela-schedule",
