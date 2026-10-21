@@ -212,22 +212,6 @@
 
 ---
 
-## H-bis. B3-P 批次记账（JS Pod，2026-10-21）
-
-> 计划《B3-P执行计划_JS_Pod.md》：新增 `ze-pod-js`（boa，纯 Rust），
-> 与 Lua / Python 同形地复用 `ze-pod-binding`；**只接装配期**，不碰回放。
-
-| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
-|---|---|---|---|---|
-| P-01 | `host-js`（浏览器原生引擎）**未接线** | JS 适配器 | **明确不做（B3-Pe 可选）** | `ze-pod-js/src/lib.rs` 两条 `compile_error!`：非 wasm 启用 ⇒ 编译期报错（J3）；wasm 启用 ⇒ 显式"尚未接线"（不静默降级） |
-| P-02 | wasm 体积尚未基线化 | 构建 | 仍成立 | `js` feature 默认不开；`zela-web` 未引用 `ze-pod-js` ⇒ 浏览器产物体积不变（未变即无需记录前后值） |
-| P-03 | JS 只有 `number`（f64） | JS 适配器 | **已处理** | `exact_integer()` 显式校验整值 / 范围（i32 / u32 / u8 / u64 各自边界）；u64 上限取 `2^53-1`（精确整数）；越界报错不截断 |
-| P-04 | 语言适配器不在 wasm gate 名单 | CI | 沿用 | `ze-pod-js` 与 lua / py 同组：不进 `KERNEL_CRATES` / `FACADE_CRATES`；J7 由 xtask `JQ_POD_LAYER` 守住 |
-
-**H-bis 段小计（B3-P）**：已处理 2 · 明确不做 1（P-01）· 仍成立 1（P-02）。
-
----
-
 ## H. B3-1 批次记账（场景层分层重构，2026-10-21）
 
 > 计划《B3-1执行计划_场景层分层重构.md》：把 12k 行的 `zela-scene` 分成
@@ -250,7 +234,62 @@
 
 **H 段小计（B3-1）**：已关闭 10 · 仍成立 2（H-09 / H-12）。
 
+---
 
+## H-bis. B3-P 批次记账（JS Pod，2026-10-21）
+
+> 计划《B3-P执行计划_JS_Pod.md》：新增 `ze-pod-js`（boa，纯 Rust），
+> 与 Lua / Python 同形地复用 `ze-pod-binding`；**只接装配期**，不碰回放。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| P-01 | `host-js`（浏览器原生引擎）**未接线** | JS 适配器 | **明确不做（B3-Pe 可选）** | `ze-pod-js/src/lib.rs` 两条 `compile_error!`：非 wasm 启用 ⇒ 编译期报错（J3）；wasm 启用 ⇒ 显式"尚未接线"（不静默降级） |
+| P-02 | wasm 体积尚未基线化 | 构建 | 仍成立 | `js` feature 默认不开；`zela-web` 未引用 `ze-pod-js` ⇒ 浏览器产物体积不变（未变即无需记录前后值） |
+| P-03 | JS 只有 `number`（f64） | JS 适配器 | **已处理** | `exact_integer()` 显式校验整值 / 范围（i32 / u32 / u8 / u64 各自边界）；u64 上限取 `2^53-1`（精确整数）；越界报错不截断 |
+| P-04 | 语言适配器不在 wasm gate 名单 | CI | **已关闭（A1）** | xtask 新增 `OPTIONAL_WASM_CRATES = ["ze-pod-js"]`，`step_wasm` 对其实跑 `cargo check --target wasm32-unknown-unknown`；lua / py 仍不进（mlua 不适配 wasm 内核路径、pyo3 编不到） |
+| P-05 | **wasm 运行时对拍未做** | JS 适配器 | 仍成立 | 本机无浏览器宿主：只做了 `cargo check --target wasm32`（编译期）与 native 运行时用例；"同一脚本在浏览器里行为一致"尚未被任何用例覆盖 |
+
+**H-bis 段小计（B3-P）**：已关闭 1（P-04）· 已处理 1（P-03）· 明确不做 1（P-01）· 仍成立 2（P-02 / P-05）。
+
+---
+
+## I. B3-R 批次记账（Render Pod 契约探针，2026-10-21）
+
+> 计划《Pod 线：JS Pod 收尾 + Render Pod 探针》B 组：`zela.render2d` 的四条签名
+> （`ze_render_ir/src/caps.rs:24-29`）从未被实现，却已被 `PINNED_FINGERPRINTS`
+> 钉住。本段记录**真实实现**（`zela-render-backends/src/render_pod_probe.rs`，
+> 仅 `#[cfg(test)]`）得到的结论。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| R-01 | 四条签名从未被实现却被指纹门禁冻结 | 渲染 IR | **已闭合（B3-R）** | `RenderProbePod` 真实现 `capabilities` / `create_target` / `upload` / `draw_2d`；typed 直调与 Pod 边界两条路径**逐字节相同**（`pod_boundary_matches_typed_path`） |
+| R-02 | `upload(PodBytes) -> Handle` **每次调用新开槽**；契约无 release / 原地更新 | 渲染 IR | **仍成立（有意保留）** | `upload_allocates_a_new_slot_per_call` 取证：两次 upload 得到不同槽位、旧句柄仍存活；生产接线前必须补 `release(Handle)`（或 `upload_into(Handle, PodBytes)`）。本轮**不改签名**：没有第二个消费方时冻结错误形状的风险高于泄漏风险 |
+| R-03 | `RenderTargetDesc.format` / `sample_count` 被 2D 后端忽略 | 渲染 IR / 后端 | **仍成立（探针显式收窄）** | `wgpu_2d.rs:630-651`：离屏固定 `OFFSCREEN_FORMAT` + `MSAA_SAMPLES`。探针对非 `Rgba8Unorm` / 非 4x 的 desc **显式报错**（`target_desc_is_narrowed_explicitly`）；契约侧应改用 `capabilities()` 查询（返回类型目前未定义） |
+| R-04 | `draw_2d` 无法表达**视口 / 相机 / 清屏** | 渲染 IR | **仍成立** | `create_target` 只有尺寸 / 格式（无视口 rect、无 pixel ratio）；2D 离屏固定清透明（`wgpu_2d.rs:70-75`），背景归合成器；相机变换只能预烘焙进载荷 ⇒ 探针约定"整目标 = 视口、1pt = 1px、坐标已是屏幕点" |
+| R-05 | `Handle` 无法同时表达"目标 + 批次" | 渲染 IR | **仍成立** | `draw_2d(Handle, PodBytes)` 只有一个 Handle；探针把批次句柄编码进 `ProbeFrame { batch_slot, batch_generation }` —— 即 `PodBytes` 缺 `Handle` 的表示规则（只能自定义编码） |
+| R-06 | `Handle ↔ GpuHandle` 映射 | 渲染 IR / 资源 | **可行（有前提）** | `ze_pod_core::HandleTable<Slot>` 承载映射（世代防 ABA）；`GpuHandle` 是 `Box<dyn Any>`（`ze-resource/src/render_backend.rs:78-84`，`!Send + !Sync`）⇒ 只能留在 Pod 内部；`Handle.slot` 可与 `GpuResourceId.index()` 对齐，`generation` 对齐 |
+| R-07 | `Send + Sync` 是否硬阻塞 | Pod / 后端 | **平台相关：native 不阻塞，wasm 阻塞** | `wgpu_2d.rs:352-362` 有 `#[cfg(not(target_arch = "wasm32"))] unsafe impl Send/Sync for WgpuBackend2D`（S1 徽章，`GpuHandle` 本身是 `Box<dyn Any>` ⇒ `!Send + !Sync`）。native：`ProbeState: Send + Sync` ⇒ `RefCell` 换 `Mutex` 即可登记 `SyncPod`（`probe_state_is_send_and_sync_on_native`）；wasm：徽章不存在 ⇒ `examples/send_probe.rs` 在 `--target wasm32` 下必须失败 |
+| R-08 | `DrawCommand` / `Style2D` 无 serde | 渲染 IR | **仍成立（独立决策）** | 探针用自定义可序列化载荷（`ProbeBatch` / `ProbeFrame`）跑通边界 ⇒ serde **不是**"边界可行"的前提；但生产接线需要稳定编码（补 serde 或定义显式二进制格式）。`Shape2D` 已有 serde，补齐的收益集中在 `Style2D` |
+
+### B4 结论（逐条）
+
+1. **`draw_2d` 四条够不够**：**单帧够用，生命周期不够**。四条能跑通"建目标 → 上传 → 画一帧"；
+   但缺 `release` / 原地更新（R-02）、缺视口与相机语义（R-04）、缺清屏（R-04）。
+   ⇒ **不改签名**（触发条件：出现第一个真消费方且需要 >1 帧或 buffer 更新）。
+2. **`upload` 返回 Handle vs 写入已有 Handle**：**返回 Handle 是对的** —— 它与本仓
+   "句柄 = 不可变资源标识 + 世代"的模型一致；"写入已有"会要求 Handle 参数 + 可变语义，
+   与 `HandleTable::get_mut` 的借用模型冲突。**但必须配套 release**（契约缺，R-02）。
+3. **`Handle ↔ GpuHandle` 映射**：**可行**（R-06）。规则：`Handle.slot` ↔ `GpuResourceId.index`、
+   `Handle.generation` ↔ `GpuResourceId.generation`；`GpuHandle` 永不出 Pod。
+4. **"Send+Sync 是硬阻塞"**：**分平台**（R-07）。`Pod` 自身不要求 `Send + Sync`
+   （`PodNode::new` 合法）；native 上 2D 后端带 S1 徽章（`unsafe impl Send/Sync`）
+   ⇒ `ProbeState: Send + Sync`，把 `RefCell` 换 `Mutex` 就能登记 `SyncPod`；
+   **wasm 上徽章不存在**（wgpu 资源含 `Rc<RefCell<..>>`）⇒ 跨平台统一的 SyncPod 不成立。
+5. **`DrawCommand` / `Style2D` 要不要补 serde**：**要，但不是本批**（R-08）。探针证明边界
+   可以靠自定义编码跑通；生产接线前需要稳定编码，届时补齐 `Style2D`（`Shape2D` 已有）。
+
+**I 段小计（B3-R）**：已闭合 1（R-01）· 可行 1（R-06）· 成立 1（R-08）· 平台相关 1（R-07）· 仍成立 4（R-02 / R-03 / R-04 / R-05）。
+签名**未改** ⇒ `PINNED_FINGERPRINTS` 不变。
 
 ---
 
