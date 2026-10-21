@@ -254,7 +254,7 @@
 
 ---
 
-## I. B3-R 批次记账（Render Pod 契约探针，2026-10-21）
+## I. B3-2 批次记账（Render Pod 契约探针，2026-10-21）
 
 > 计划《Pod 线：JS Pod 收尾 + Render Pod 探针》B 组：`zela.render2d` 的四条签名
 > （`ze_render_ir/src/caps.rs:24-29`）从未被实现，却已被 `PINNED_FINGERPRINTS`
@@ -263,7 +263,7 @@
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| R-01 | 四条签名从未被实现却被指纹门禁冻结 | 渲染 IR | **已闭合（B3-R）** | `RenderProbePod` 真实现 `capabilities` / `create_target` / `upload` / `draw_2d`；typed 直调与 Pod 边界两条路径**逐字节相同**（`pod_boundary_matches_typed_path`） |
+| R-01 | 四条签名从未被实现却被指纹门禁冻结 | 渲染 IR | **已闭合（B3-2）** | `RenderProbePod` 真实现 `capabilities` / `create_target` / `upload` / `draw_2d`；typed 直调与 Pod 边界两条路径**逐字节相同**（`pod_boundary_matches_typed_path`） |
 | R-02 | `upload(PodBytes) -> Handle` **每次调用新开槽**；契约无 release / 原地更新 | 渲染 IR | **仍成立（有意保留）** | `upload_allocates_a_new_slot_per_call` 取证：两次 upload 得到不同槽位、旧句柄仍存活；生产接线前必须补 `release(Handle)`（或 `upload_into(Handle, PodBytes)`）。本轮**不改签名**：没有第二个消费方时冻结错误形状的风险高于泄漏风险 |
 | R-03 | `RenderTargetDesc.format` / `sample_count` 被 2D 后端忽略 | 渲染 IR / 后端 | **仍成立（探针显式收窄）** | `wgpu_2d.rs:630-651`：离屏固定 `OFFSCREEN_FORMAT` + `MSAA_SAMPLES`。探针对非 `Rgba8Unorm` / 非 4x 的 desc **显式报错**（`target_desc_is_narrowed_explicitly`）；契约侧应改用 `capabilities()` 查询（返回类型目前未定义） |
 | R-04 | `draw_2d` 无法表达**视口 / 相机 / 清屏** | 渲染 IR | **仍成立** | `create_target` 只有尺寸 / 格式（无视口 rect、无 pixel ratio）；2D 离屏固定清透明（`wgpu_2d.rs:70-75`），背景归合成器；相机变换只能预烘焙进载荷 ⇒ 探针约定"整目标 = 视口、1pt = 1px、坐标已是屏幕点" |
@@ -272,7 +272,7 @@
 | R-07 | `Send + Sync` 是否硬阻塞 | Pod / 后端 | **平台相关：native 不阻塞，wasm 阻塞** | `wgpu_2d.rs:352-362` 有 `#[cfg(not(target_arch = "wasm32"))] unsafe impl Send/Sync for WgpuBackend2D`（S1 徽章，`GpuHandle` 本身是 `Box<dyn Any>` ⇒ `!Send + !Sync`）。native：`ProbeState: Send + Sync` ⇒ `RefCell` 换 `Mutex` 即可登记 `SyncPod`（`probe_state_is_send_and_sync_on_native`）；wasm：徽章不存在 ⇒ `examples/send_probe.rs` 在 `--target wasm32` 下必须失败 |
 | R-08 | `DrawCommand` / `Style2D` 无 serde | 渲染 IR | **仍成立（独立决策）** | 探针用自定义可序列化载荷（`ProbeBatch` / `ProbeFrame`）跑通边界 ⇒ serde **不是**"边界可行"的前提；但生产接线需要稳定编码（补 serde 或定义显式二进制格式）。`Shape2D` 已有 serde，补齐的收益集中在 `Style2D` |
 
-### B4 结论（逐条）
+### B3-2d 结论（逐条）
 
 1. **`draw_2d` 四条够不够**：**单帧够用，生命周期不够**。四条能跑通"建目标 → 上传 → 画一帧"；
    但缺 `release` / 原地更新（R-02）、缺视口与相机语义（R-04）、缺清屏（R-04）。
@@ -289,7 +289,7 @@
 5. **`DrawCommand` / `Style2D` 要不要补 serde**：**要，但不是本批**（R-08）。探针证明边界
    可以靠自定义编码跑通；生产接线前需要稳定编码，届时补齐 `Style2D`（`Shape2D` 已有）。
 
-**I 段小计（B3-R）**：已闭合 1（R-01）· 可行 1（R-06）· 成立 1（R-08）· 平台相关 1（R-07）· 仍成立 4（R-02 / R-03 / R-04 / R-05）。
+**I 段小计（B3-2）**：已闭合 1（R-01）· 可行 1（R-06）· 成立 1（R-08）· 平台相关 1（R-07）· 仍成立 4（R-02 / R-03 / R-04 / R-05）。
 签名**未改** ⇒ `PINNED_FINGERPRINTS` 不变。
 
 ---

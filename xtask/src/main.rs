@@ -86,6 +86,21 @@ const JQ_SCENE_LAYERS: &str = r#"
 | "\($n) -> \(.name)"
 "#;
 
+/// 结构性判据 2c（B3 收尾）：`zela-render` 的生产依赖边不得出现场景 **ECS 实现**。
+///
+/// B3-1 收尾已把这条边断开（渲染层改依赖 `ze-scene-hecs`）；没有门禁时，
+/// 后来者加一行 `zela-scene-ecs = {...}` 就能让分层悄悄回退。
+/// ⚠️ `ze-scene-hecs` / `zela-schedule` 是**设计意图**，不在禁止之列。
+const JQ_RENDER_LAYER: &str = r#"
+.packages[]
+| select(.name == "zela-render")
+| .name as $n
+| .dependencies[]
+| select(.kind != "dev")
+| select(.name == "zela-scene-ecs")
+| "\($n) -> \(.name)"
+"#;
+
 /// 结构性判据 3：数学入口唯一（M0）—— 除豁免组外不得直接依赖 glam。
 const JQ_GLAM: &str = r#"
 .packages[]
@@ -586,6 +601,11 @@ fn step_structure(root: &Path) -> Result<(), String> {
             "ze-scene-core / ze-scene-api 不依赖 zela-* / hecs（B3-1）",
             JQ_SCENE_LAYERS,
             "场景核心层或 Pod 能力层出现了 zela-* / hecs 生产依赖（违反分层规则）：",
+        ),
+        (
+            "zela-render 生产依赖不含 zela-scene-ecs（B3-1 收尾）",
+            JQ_RENDER_LAYER,
+            "zela-render 的生产依赖边中出现了 zela-scene-ecs（渲染层只能依赖 ze-scene-hecs）：",
         ),
         (
             "除 ze-notion 与节点图组豁免外无直接 glam（M0）",

@@ -76,7 +76,7 @@ pub mod scene_callback;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod frame;
 
-// B3-R：渲染契约探针（**仅测试**）——真的实现 `zela.render2d` 四条签名并双路径对拍。
+// B3-2：渲染契约探针（**仅测试**）——真的实现 `zela.render2d` 四条签名并双路径对拍。
 // 不进生产构建：`StandardBackends` / `SceneCompositorCallback` / `assemble_runtime` 均不受影响。
 #[cfg(all(test, feature = "blocking", any(feature = "wgpu", feature = "egui-wgpu")))]
 mod render_pod_probe;

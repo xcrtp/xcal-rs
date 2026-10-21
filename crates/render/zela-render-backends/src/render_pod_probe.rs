@@ -1,4 +1,4 @@
-// render_pod_probe.rs — **渲染契约探针**（B3-R）。
+// render_pod_probe.rs — **渲染契约探针**（B3-2）。
 //
 // # 目的：契约证伪，不是生产接线
 //
@@ -279,7 +279,7 @@ impl Pod for RenderProbePod {
     /// **一律 None**：本探针只提供 erased 慢路径。
     ///
     /// `pod.rs:63-66` 明写 None = "没有（或只有 erased 实现）" ⇒ 合法。
-    /// 这条也为 B4 ④ 取证：`Pod` 不要求 `Send + Sync`，瓶颈在别处。
+    /// 这条也为 B3-2d ④ 取证：`Pod` 不要求 `Send + Sync`，瓶颈在别处。
     fn resolve(&self, _name: &QualifiedName) -> Option<&(dyn Any + Send + Sync)> {
         None
     }
@@ -527,7 +527,7 @@ mod tests {
         }
     }
 
-    /// **B4 ④ 实证（native）**：`Send + Sync` **不是**硬阻塞。
+    /// **B3-2d ④ 实证（native）**：`Send + Sync` **不是**硬阻塞。
     ///
     /// `WgpuBackend2D` 自带 S1 徽章（`wgpu_2d.rs:352-362`：`#[cfg(not(wasm32))]
     /// unsafe impl Send/Sync`），本探针的状态因此也是 `Send + Sync` ⇒
@@ -554,7 +554,7 @@ mod tests {
         assert!(shared.as_any().downcast_ref::<RenderProbePod>().is_some());
     }
 
-    /// **B4 ① 实证**：契约比后端窄 —— `format` / `sample_count` 必须显式拒绝，
+    /// **B3-2d ① 实证**：契约比后端窄 —— `format` / `sample_count` 必须显式拒绝，
     /// 不得静默忽略。
     #[test]
     fn target_desc_is_narrowed_explicitly() {
@@ -579,7 +579,7 @@ mod tests {
         assert!(err.to_string().contains("MSAA"), "实际：{err}");
     }
 
-    /// **B4 ② 实证**：`upload` 每次调用都新开槽（契约无 release / 原地更新）。
+    /// **B3-2d ② 实证**：`upload` 每次调用都新开槽（契约无 release / 原地更新）。
     ///
     /// 这条用例是**证据**而不是期望行为：两次 upload 得到两个不同的 handle，
     /// 且旧句柄仍然存活 —— 生产化必须补 `release`（GAPS I-02）。
