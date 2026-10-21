@@ -307,7 +307,7 @@
 | S1-01 | 派生桥手写 ellipse / polygon / line_ribbon（第二份三角化真源） | 渲染管线 | **已关闭（B3 Step 1）** | 统一走 `tessellate_with`（lyon）；7 种图元（含 Path / Group）；三个手写函数已删 |
 | S1-02 | 2D 的边法线（attrib0）/ advance（attrib2）在 3D 布局里无对应槽 | 渲染管线 | **仍成立（显式限制）** | 转换时丢弃边法线，着色法线恒 +Z；Direct 对 `Reveal` 显式报错 |
 | S1-03 | `Polyline` / `Custom` 仍不可派生 | 渲染管线 | **仍成立（显式报错）** | `ShapeMeshError::Unsupported`；Direct 路径未声明支持，不静默 |
-| S1-04 | Direct 单材质：`fill` + `stroke` 同时存在时只派生填充 | 渲染管线 | **仍成立（文档化限制）** | `derive_mesh` 返回单一 `Material3D`；描边仅在 `fill=None` 时走 `TessKind::Stroke`（与 B2-3 行为一致）。多材质需 `Vec<DerivedMesh>`，留待 Step 4/5 |
+| S1-04 | Direct 单材质：`fill` + `stroke` 同时存在时只派生填充 | 渲染管线 | **已关闭（B3 Step 4a-A）** | `derive_mesh → Vec<DerivedMesh>`：fill / stroke 各一份，各自材质颜色；不再丢描边 |
 | S2-01 | Direct 路径的触发条件不能靠内容类型推断 | 渲染管线 | **已关闭（B3 Step 2）** | 只由 `SurfaceRenderer::Renderer3D` 决定（`surface_route.rs`）；无 Surface ⇒ 默认 2D |
 | S2-02 | Direct 失败无处表达（`System::run` 无返回值） | 渲染管线 | **已关闭（B3 Step 2）** | `DrawQueue::surface_errors()` 收集显式错误；不影响其它对象录制 |
 | S2-03 | Direct + `SurfaceMapping::Screen` 的 3D 语义未定义 | 渲染管线 | **仍成立（显式拒绝）** | `ScreenMappingUnsupported`；不猜映射 |
@@ -316,7 +316,7 @@
 | S4-01 | Texture 路径（2D 离屏 → 纹理 → 代理平面） | 渲染后端 | **未执行** | 需改 `SceneCompositorCallback` 的每帧编排；并须先把纹理分辨率/过滤写进契约（E-08 放大） |
 | S5-01 | fourier / storyboard 迁移 + 重录 | 作品 | **未执行** | 依赖 S4-01；且必须先完成 Step 0-2（已做） |
 
-**J 段小计（B3，已执行部分）**：已关闭 7（S0-01/02/03、S1-01、S2-01/02、S3-01）· 仍成立/显式拒绝 4（S1-02/03/04、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 8（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01）· 仍成立/显式拒绝 3（S1-02/03、S2-03）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 2（S4-01 / S5-01）。
 
 ---
 

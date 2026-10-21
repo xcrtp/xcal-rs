@@ -2692,15 +2692,21 @@ mod tests {
             ..Default::default()
         };
         let derived = zela_render::derive_mesh(&shape, &style).expect("Rect 必须可派生");
-        assert!(derived.material.double_sided);
-        assert_eq!(derived.material.variant, ShaderVariant::Flat);
+        assert!(!derived.is_empty());
+        let part = &derived[0];
+        assert!(part.material.double_sided);
+        assert_eq!(part.material.variant, ShaderVariant::Flat);
 
         let px = render_planes(
             &backend,
             &ctx,
             LayerId(41),
             size,
-            &[MeshDraw::new(derived.geometry, Mat4::IDENTITY, derived.material)],
+            &[MeshDraw::new(
+                part.geometry.clone(),
+                Mat4::IDENTITY,
+                part.material,
+            )],
         );
         assert_eq!(
             pixel_at(&px, size, 16, 16),

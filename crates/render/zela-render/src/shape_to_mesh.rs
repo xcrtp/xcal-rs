@@ -26,7 +26,7 @@ use ze_notion::{Color32, Transform2D, Vec2, Vec3};
 use ze_render_ir::{CustomSpecs, Shape2D, ShaderVariant, Style2D};
 use ze_scene_core::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
-use crate::tessellate::{tessellate_with, tolerance_for_scale};
+use crate::tessellate::{tessellate_with, tolerance_for_scale, TessKind};
 
 /// 2D → 3D 派生失败的原因（显式错误，铁律 2）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -40,11 +40,6 @@ pub enum ShapeMeshError {
         kind: &'static str,
         message: String,
     },
-    #[error(
-        "2D 图元 {kind} 同时声明了 fill 与 stroke：Direct 单材质会丢失描边；\
-         请把该 Surface 改为 Renderer2D"
-    )]
-    FillAndStroke { kind: &'static str },
 }
 
 /// 派生结果：平面网格 + 意图化材质 + 是否透明。
@@ -54,10 +49,14 @@ pub struct DerivedMesh {
     pub transparent: bool,
 }
 
-/// 把 2D 图元派生为**朝向 +Z 的平面网格**（B2-3 / B3 Step 1）。
+/// 把 2D 图元派生为**朝向 +Z 的平面网格**（B2-3 / B3 Step 4a）。
 ///
-/// `style` 只消费颜色与描边宽度：填充色优先，否则描边色；两者都缺席 ⇒ 白色。
-pub fn derive_mesh(shape: &Shape2D, style: &Style2D) -> Result<DerivedMesh, ShapeMeshError> {
+/// 返回**多份**网格：填充一份、描边一份（各自带自己的材质颜色）。
+/// 单份材质的旧行为（`fill` 优先）已由 [`Vec`] 取代 —— 不再静默丢描边。
+pub fn derive_mesh(
+    shape: &Shape2D,
+    style: &Style2D,
+) -> Result<Vec<DerivedMesh>, ShapeMeshError> {
     // Direct 路径未声明支持的两类：显式拒绝（铁律 1）。
     match shape {
         Shape2D::Polyline { .. } => {
@@ -68,30 +67,11 @@ pub fn derive_mesh(shape: &Shape2D, style: &Style2D) -> Result<DerivedMesh, Shap
         _ => {}
     }
 
-    let color = style.fill.or(style.stroke).unwrap_or(Color32::WHITE);
-
-    // 不静默：单材质无法同时表达填充与描边（`DerivedMesh` 只有一份 `Material3D`）。
-    if style.fill.is_some() && style.stroke.is_some() {
-        return Err(ShapeMeshError::FillAndStroke { kind: kind_of(shape) });
-    }
-
-    // 单材质：fill 优先；只有描边时走 `TessKind::Stroke`（替换旧的粗糙矩形带）。
-    let tess_style = Style2D {
-        fill: style.fill,
-        stroke: if style.fill.is_none() {
-            style.stroke
-        } else {
-            None
-        },
-        stroke_width: style.stroke_width,
-        space: style.space,
-    };
-
     // 1 point = 1 px（Direct 路径的约定；相机 scale 在 Step 3 的 Surface 映射里）。
     let parts = tessellate_with(
         shape,
         &Transform2D::identity(),
-        &tess_style,
+        style,
         tolerance_for_scale(1.0),
         &CustomSpecs::EMPTY,
     )
@@ -100,48 +80,51 @@ pub fn derive_mesh(shape: &Shape2D, style: &Style2D) -> Result<DerivedMesh, Shap
         message: error.to_string(),
     })?;
 
-    let vertex_count: usize = parts.iter().map(|part| part.vertices.len()).sum();
-    let index_count: usize = parts.iter().map(|part| part.indices.len()).sum();
-    if vertex_count == 0 || index_count == 0 {
+    if parts.is_empty() {
         return Err(ShapeMeshError::Degenerate { kind: kind_of(shape) });
     }
 
-    let mut positions = Vec::with_capacity(vertex_count);
-    let mut uvs = Vec::with_capacity(vertex_count);
-    let mut indices = Vec::with_capacity(index_count);
+    let mut meshes = Vec::with_capacity(parts.len());
     for part in &parts {
-        let base = positions.len() as u32;
+        let color = match part.kind {
+            TessKind::Fill => style.fill.unwrap_or(Color32::WHITE),
+            TessKind::Stroke => style.stroke.unwrap_or(Color32::WHITE),
+        };
+        if part.vertices.is_empty() || part.indices.is_empty() {
+            return Err(ShapeMeshError::Degenerate { kind: kind_of(shape) });
+        }
+
+        let mut positions = Vec::with_capacity(part.vertices.len());
+        let mut uvs = Vec::with_capacity(part.vertices.len());
         for vertex in &part.vertices {
             let [x, y] = vertex.position;
             positions.push(Vec3::new(x, y, 0.0));
             // 平面片无纹理语义：UV 直接取 XY（0..1 的归一化留给纹理路径）。
             uvs.push(Vec2::new(x, y));
         }
-        indices.extend(part.indices.iter().map(|index| index + base));
+        // 2D 的 `attrib0`（边法线）在这里**丢弃**：着色法线恒 +Z。
+        let normals = vec![Vec3::new(0.0, 0.0, 1.0); positions.len()];
+        let mut geometry =
+            MeshGeometry::new(positions, Some(part.indices.clone()), PrimitiveTopology::Triangles);
+        geometry.normals = Some(normals);
+        geometry.uvs = Some(uvs);
+
+        let transparent = color.a < 255;
+        meshes.push(DerivedMesh {
+            geometry: Arc::new(geometry),
+            material: Material3D {
+                color,
+                // 二维图元不参与光照：颜色即终值。
+                variant: ShaderVariant::Flat,
+                // B2-3 / D19：派生片是纸片，双面可见（背面不剔除）。
+                double_sided: true,
+                transparent,
+                ..Material3D::default()
+            },
+            transparent,
+        });
     }
-
-    // 2D 的 `attrib0`（边法线）在这里**丢弃**：着色法线恒 +Z。
-    let normals = vec![Vec3::new(0.0, 0.0, 1.0); positions.len()];
-    let mut geometry = MeshGeometry::new(positions, Some(indices), PrimitiveTopology::Triangles);
-    geometry.normals = Some(normals);
-    geometry.uvs = Some(uvs);
-
-    let transparent = color.a < 255;
-    let material = Material3D {
-        color,
-        // 二维图元不参与光照：颜色即终值。
-        variant: ShaderVariant::Flat,
-        // B2-3 / D19：派生片是纸片，双面可见（背面不剔除）。
-        double_sided: true,
-        transparent,
-        ..Material3D::default()
-    };
-
-    Ok(DerivedMesh {
-        geometry: Arc::new(geometry),
-        material,
-        transparent,
-    })
+    Ok(meshes)
 }
 
 fn kind_of(shape: &Shape2D) -> &'static str {
@@ -194,12 +177,14 @@ mod tests {
         }
     }
 
-    /// Rect → 平面三角形列表；材质走 Flat + 双面；不透明色 ⇒ transparent=false。
+    /// Rect → 单份平面网格；材质走 Flat + 双面；不透明色 ⇒ transparent=false。
     #[test]
     fn rect_derives_plane_triangles_and_flat_double_sided_material() {
         let shape = Shape2D::Rect(Rect2D::new(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0)));
-        let d = derive_mesh(&shape, &style(Color32::WHITE)).unwrap();
-        assert_plane_geometry(&d);
+        let meshes = derive_mesh(&shape, &style(Color32::WHITE)).unwrap();
+        assert_eq!(meshes.len(), 1);
+        let d = &meshes[0];
+        assert_plane_geometry(d);
         assert_eq!(d.geometry.indices.as_ref().unwrap().len(), 6);
         assert_eq!(d.material.variant, ShaderVariant::Flat);
         assert!(d.material.double_sided, "2D 派生片必须双面可见");
@@ -210,9 +195,9 @@ mod tests {
     #[test]
     fn translucent_color_marks_transparent() {
         let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(1.0, 1.0)));
-        let d = derive_mesh(&shape, &style(Color32::new(255, 0, 0, 128))).unwrap();
-        assert!(d.transparent);
-        assert!(d.material.transparent);
+        let meshes = derive_mesh(&shape, &style(Color32::new(255, 0, 0, 128))).unwrap();
+        assert!(meshes[0].transparent);
+        assert!(meshes[0].material.transparent);
     }
 
     /// Circle 走 lyon 三角化（不再手写扇形）。
@@ -222,9 +207,10 @@ mod tests {
             center: Vec2::ZERO,
             radius: 1.0,
         };
-        let d = derive_mesh(&shape, &style(Color32::WHITE)).unwrap();
-        assert_plane_geometry(&d);
-        assert!(d.geometry.positions.len() >= 3);
+        let meshes = derive_mesh(&shape, &style(Color32::WHITE)).unwrap();
+        assert_eq!(meshes.len(), 1);
+        assert_plane_geometry(&meshes[0]);
+        assert!(meshes[0].geometry.positions.len() >= 3);
     }
 
     /// **Step 1 核心**：Path 不再 Unsupported，复用 tessellate。
@@ -239,8 +225,11 @@ mod tests {
             ],
             true,
         );
-        let d = derive_mesh(&Shape2D::Path(path), &style(Color32::WHITE)).unwrap();
-        assert_plane_geometry(&d);
+        let meshes = derive_mesh(&Shape2D::Path(path), &style(Color32::WHITE)).unwrap();
+        assert!(!meshes.is_empty());
+        for mesh in &meshes {
+            assert_plane_geometry(mesh);
+        }
     }
 
     /// Group 递归展开为多项，再合并为一份网格。
@@ -255,8 +244,11 @@ mod tests {
                 },
             ],
         };
-        let d = derive_mesh(&group, &style(Color32::WHITE)).unwrap();
-        assert_plane_geometry(&d);
+        let meshes = derive_mesh(&group, &style(Color32::WHITE)).unwrap();
+        assert!(!meshes.is_empty());
+        for mesh in &meshes {
+            assert_plane_geometry(mesh);
+        }
     }
 
     /// 只有描边的 Line 走 `TessKind::Stroke`（旧实现是手写矩形带）。
@@ -272,28 +264,34 @@ mod tests {
             stroke_width: 2.0,
             ..Style2D::default()
         };
-        let d = derive_mesh(&shape, &style).unwrap();
-        assert_plane_geometry(&d);
-        assert!(d.geometry.positions.len() >= 4);
+        let meshes = derive_mesh(&shape, &style).unwrap();
+        assert_eq!(meshes.len(), 1);
+        assert_plane_geometry(&meshes[0]);
+        assert!(meshes[0].geometry.positions.len() >= 4);
     }
 
-    /// Direct 单材质无法同时表达 fill + stroke ⇒ 显式错误（Step 4a-B）。
+    /// **Step 4a-A**：fill + stroke 共存 ⇒ 两份网格，各自材质颜色。
     #[test]
-    fn fill_and_stroke_errors_explicitly() {
+    fn fill_and_stroke_produce_two_meshes() {
         let shape = Shape2D::Circle {
             center: Vec2::ZERO,
             radius: 1.0,
         };
+        let fill = Color32::new(10, 20, 30, 255);
+        let stroke = Color32::new(200, 100, 50, 255);
         let style = Style2D {
-            fill: Some(Color32::WHITE),
-            stroke: Some(Color32::new(255, 0, 0, 255)),
+            fill: Some(fill),
+            stroke: Some(stroke),
             stroke_width: 2.0,
             ..Style2D::default()
         };
-        assert!(matches!(
-            derive_mesh(&shape, &style),
-            Err(ShapeMeshError::FillAndStroke { kind: "Circle" })
-        ));
+        let meshes = derive_mesh(&shape, &style).unwrap();
+        assert_eq!(meshes.len(), 2, "fill 与 stroke 各一份");
+        assert_eq!(meshes[0].material.color, fill);
+        assert_eq!(meshes[1].material.color, stroke);
+        for mesh in &meshes {
+            assert_plane_geometry(mesh);
+        }
     }
 
     /// Direct 路径未声明的图元必须**显式报错**（不静默）。

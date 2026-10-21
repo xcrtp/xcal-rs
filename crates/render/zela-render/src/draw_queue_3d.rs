@@ -183,11 +183,14 @@ impl DrawQueue {
         style: &Style2D,
     ) -> Result<(), ShapeMeshError> {
         let derived = crate::shape_to_mesh::derive_mesh(shape, style)?;
-        self.push_item(DrawItem::Mesh(
-            MeshDraw::new(derived.geometry, Mat4::IDENTITY, derived.material)
-                .with_entity(entity)
-                .with_z(z),
-        ));
+        // Step 4a-A：fill / stroke 各一份网格，各自材质（不再丢描边）。
+        for part in derived {
+            self.push_item(DrawItem::Mesh(
+                MeshDraw::new(part.geometry, Mat4::IDENTITY, part.material)
+                    .with_entity(entity)
+                    .with_z(z),
+            ));
+        }
         Ok(())
     }
 

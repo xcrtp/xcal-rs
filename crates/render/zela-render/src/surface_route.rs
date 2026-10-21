@@ -146,11 +146,14 @@ where
         .unwrap_or_else(Transform2D::identity);
     let model = Mat4::from_mat3(world.matrix);
 
-    queue.push_item(DrawItem::Mesh(
-        MeshDraw::new(derived.geometry, model, derived.material)
-            .with_entity(id)
-            .with_z(z.unwrap_or_default()),
-    ));
+    // Step 4a-A：fill / stroke 各一份网格。
+    for part in derived {
+        queue.push_item(DrawItem::Mesh(
+            MeshDraw::new(part.geometry, model, part.material)
+                .with_entity(id)
+                .with_z(z.unwrap_or_default()),
+        ));
+    }
     true
 }
 
