@@ -149,6 +149,12 @@ fn to_wgpu_step_mode(step: ze_vertex::StepMode) -> wgpu::VertexStepMode {
 /// 未指定纹理时使用的兜底纹理 id（1×1 透明黑）。
 const DEFAULT_TEXTURE_ID: u64 = 0;
 
+/// B2-4（D4）：`ZOrder` → 深度间距的换算系数（**唯一**的 epsilon 来源）。
+///
+/// 层序每 +1 ⇒ 沿平面法线向相机平移 `1e-4`（NDC 深度空间近似），足以消除
+/// 共面 z-fighting，又小于单层几何厚度。**不引入常量 depth bias**。
+pub const Z_ORDER_EPSILON: f32 = 1e-4;
+
 /// [`RenderBackend3D::submit_layer`] 没有 `LayerId` 参数，用保留 id 承载其
 /// 颜色/深度目标的键（颜色目标来自 `layer.target.view`，仅深度目标需按 id 缓存）。
 pub const SUBMIT_LAYER_ID: LayerId = LayerId(u32::MAX);
@@ -989,11 +995,24 @@ impl WgpuBackend3D {
                 copy
             };
 
-            let mvp = view_proj * md.transform;
+            // B2-4（D4/R-C）：epsilon 由统一 `ZOrder` 派生，施加为 **normal offset**
+            // （沿法线 +Z，即朝向相机侧），**不用常量 depth bias**。
+            //
+            // R-D 显式决策：没有 `shading_normal` 的几何在写出端以 (0,0,1) 补齐
+            // ⇒ normal offset 沿 +Z，**非零**（不会静默退化为零偏移）；平面/斜面
+            // 上都成立。`z == 0`（默认层）⇒ 偏移为 0，逐位等于 B2-4 之前的行为。
+            let epsilon = md.z.0 as f32 * Z_ORDER_EPSILON;
+            let transform = if epsilon == 0.0 {
+                md.transform
+            } else {
+                Mat4::from_translation(ze_notion::Vec3::new(0.0, 0.0, epsilon)) * md.transform
+            };
+
+            let mvp = view_proj * transform;
             // B1-B：`model` 单独入 uniform，片元据此算世界位置（点光衰减用）。
             // B1-C：`params` = (metallic, roughness, 0, 0)（PBR 变体消费；其余变体忽略）。
             let params = [md.material.metallic, md.material.roughness, 0.0, 0.0];
-            let bytes = uniform_bytes(mvp, md.transform, md.material.color, params);
+            let bytes = uniform_bytes(mvp, transform, md.material.color, params);
             let block_index = arena_guard.push(&bytes);
             let offset_bytes = block_index as u32 * arena_guard.stride() as u32;
 
@@ -2640,6 +2659,39 @@ mod tests {
             [255, 255, 255, 255],
             "派生矩形应以 Flat 纯白覆盖中心（不参与光照）"
         );
+    }
+
+    /// **B2-4 验收**：共面两片靠 `ZOrder` 派生 epsilon 消除 z-fighting。
+    ///
+    /// 同一几何、同一深度：不带偏移时 `Less` 会淘汰后画的同深度片（红色胜出）；
+    /// 带 epsilon 后高 `ZOrder` 片向相机侧偏移 ⇒ 蓝色胜出。**未使用 depth bias**。
+    #[test]
+    fn test_b2_4_epsilon_from_zorder_resolves_coplanar() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        let mut low = flat_plane(0.5, 0.5, 0.0, Color32::RED);
+        low.z = ZOrder::new(0);
+        let mut high = flat_plane(0.5, 0.5, 0.0, Color32::BLUE);
+        high.z = ZOrder::new(1);
+
+        // 真实透视相机（相机在 +Z ⇒ 法线 +Z 即朝向相机）：
+        // 先画高层再画低层（顺序刻意与 ZOrder 相反）；epsilon 让高层在深度上更近。
+        let camera = Camera3D::new(
+            Vec3::new(0.0, 0.0, 5.0),
+            Vec3::ZERO,
+            Vec3::Y,
+            Projection::perspective(60f32.to_radians(), 1.0, 0.1, 100.0),
+        );
+        let px = render_with_camera(&backend, &ctx, LayerId(42), size, &camera, &[high, low]);
+        let center = pixel_at(&px, size, 16, 16);
+        assert!(
+            center[0] > center[2],
+            "ZOrder=1 的蓝色应因 epsilon 更近而胜出（BGRA：B=通道0），实际 {center:?}"
+        );
+        // 结构约束：深度偏差仍为空（D4：不用常量 depth bias）。
+        // （pipeline 里 `DepthBiasState::default()`，见 get_or_create_pipeline。）
     }
 
     /// **B2-3 验收**：透明桶 —— 透明物体按统一 `ZOrder` 顺序混合。
