@@ -41,6 +41,54 @@ pub enum PodValue {
     Enum(&'static str, &'static str, Vec<(&'static str, PodValue)>),
     Array(Vec<PodValue>),
     Opaque(Handle),
+    /// **bulk 字节块**（B3-0.5a / D4.3）：顶点 / uniform 等大块数据的契约表示。
+    ///
+    /// 用 [`PodBytes`] newtype 而不是特化 `Vec<u8>`：`Vec<u8>` 的既有语义是
+    /// `Array(U8)`（逐字节），两者若同时存在会产生"到底走哪条"的歧义。
+    Bytes(PodBytes),
+}
+
+/// bulk 字节块（`PodValue::Bytes` 的载荷）。
+///
+/// 契约类型（用于 `signatures()` / 绑定层）；**bulk 传输的优化路径**是 typed
+/// 快路径（`Pod::resolve()` 直接拿 `&[u8]`），本类型不参与逐元素转换。
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PodBytes(pub Vec<u8>);
+
+impl PodBytes {
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(bytes.into())
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl PodType for PodBytes {
+    /// schema 上与 `Array<u8>` 同构（字节串）；区别在**值层**（`PodValue::Bytes`）。
+    const SPEC: &'static TypeSpec = &TypeSpec::Array {
+        elem: &TypeSpec::Scalar(ScalarKind::U8),
+    };
+
+    fn to_pod_value(&self) -> PodValue {
+        PodValue::Bytes(self.clone())
+    }
+
+    fn from_pod_value(value: &PodValue) -> Result<Self, PodValueError> {
+        match value {
+            PodValue::Bytes(bytes) => Ok(bytes.clone()),
+            other => Err(mismatch("字节块（PodBytes）", other)),
+        }
+    }
 }
 
 /// 值 / 类型不匹配的明确错误（不 panic）。
@@ -133,6 +181,7 @@ pub fn describe(value: &PodValue) -> String {
         PodValue::Enum(name, variant, _) => format!("枚举 `{name}::{variant}`"),
         PodValue::Array(_) => "数组".to_string(),
         PodValue::Opaque(_) => "不透明句柄".to_string(),
+        PodValue::Bytes(bytes) => format!("字节块（{} 字节）", bytes.len()),
     }
 }
 
@@ -224,5 +273,53 @@ impl<T: PodType> PodType for Vec<T> {
             PodValue::Array(items) => items.iter().map(T::from_pod_value).collect(),
             other => Err(mismatch("数组", other)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **已知向量**（B3-0.5a）：`PodBytes` 的契约表示是 `Bytes`，字节原样保留。
+    #[test]
+    fn pod_bytes_known_vector() {
+        let bytes = PodBytes::new(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        let value = bytes.to_pod_value();
+        match &value {
+            PodValue::Bytes(v) => assert_eq!(v.as_slice(), &[0xDE, 0xAD, 0xBE, 0xEF]),
+            other => panic!("PodBytes 必须走 Bytes 变体，实际 {}", describe(other)),
+        }
+        assert_eq!(PodBytes::from_pod_value(&value).unwrap(), bytes);
+    }
+
+    /// 往返：`from_pod_value(to_pod_value(x)) == x`。
+    #[test]
+    fn pod_bytes_roundtrip() {
+        for len in [0usize, 1, 24, 32, 4096] {
+            let bytes = PodBytes::new(vec![0xA5u8; len]);
+            let back = PodBytes::from_pod_value(&bytes.to_pod_value()).unwrap();
+            assert_eq!(back, bytes);
+        }
+    }
+
+    /// **防回归歧义**（D4.3）：`Vec<u8>` 仍是 `Array(U8)`，不得变成 `Bytes`。
+    #[test]
+    fn vec_u8_still_uses_array() {
+        let value = vec![1u8, 2, 3].to_pod_value();
+        match &value {
+            PodValue::Array(items) => {
+                assert_eq!(items.len(), 3);
+                assert!(items.iter().all(|v| matches!(v, PodValue::Scalar(ScalarValue::U8(_)))));
+            }
+            other => panic!("Vec<u8> 必须走 Array(U8)，实际 {}", describe(other)),
+        }
+        // 反向：Array 不能被当成 PodBytes 解出（显式错误）。
+        assert!(PodBytes::from_pod_value(&value).is_err());
+    }
+
+    /// schema 层与 `Array<u8>` 同构（绑定生成器不需要新分支）。
+    #[test]
+    fn pod_bytes_spec_is_array_of_u8() {
+        assert_eq!(PodBytes::SPEC, <Vec<u8> as PodType>::SPEC);
     }
 }

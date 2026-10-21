@@ -108,6 +108,7 @@ pub use typespec::{
     ErasedFn, Field, FnIo, HANDLE_SPEC, ParamSpec, ScalarKind, TypeSpec, UNIT_SPEC, Variant,
 };
 pub use value::{
-    ScalarValue, PodType, PodValue, PodValueError, describe, expect_enum, expect_struct, field,
+    PodBytes, ScalarValue, PodType, PodValue, PodValueError, describe, expect_enum, expect_struct,
+    field,
 };
 pub use pod::{FunctionId, Pod, SyncPod, negotiate_dyn};

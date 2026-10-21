@@ -305,6 +305,11 @@ fn pod_to_lua(lua: &Lua, value: &PodValue) -> mlua::Result<Value> {
             }
             Ok(Value::Table(table))
         }
+        // B3-0.5a：bulk 字节块不走脚本绑定（契约在签名层；传输走 typed 快路径）。
+        PodValue::Bytes(bytes) => Err(mlua::Error::RuntimeError(format!(
+            "字节块（{} 字节）不在脚本绑定层传输；请走 typed 快路径（D4.4）",
+            bytes.len()
+        ))),
     }
 }
 
