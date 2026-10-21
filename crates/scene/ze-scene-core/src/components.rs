@@ -1,8 +1,11 @@
 // components.rs
 //
-// 场景组件集合（文件模块）：marker / mesh / 3D 核心类型，
+// 场景组件集合（文件模块）：mesh / 3D 核心类型，
 // 以及 Circle/Path/Line/PhaseAnim 等纯逻辑 2D 组件。
 // 渲染相关样式组件（StrokeSolid/FillSolid）在 zela-render 中。
+//
+// B3-1 收尾（H-12）：原 `marker::{Device, WGPUDevice, CPUDevice}` 已删除 ——
+// 后端设备概念不该编码在场景组件里（D7），且全仓无消费方。
 //
 // 注：旧动画组件（ClockState / LocalClock / CircleAnim / OrbitAnim）已删除，
 // 动画统一由 Binding 表 + ze-time::Curve 纯函数驱动。
@@ -15,14 +18,6 @@
 // （newtype 封装理念层 `Circle2D` / `Path2D` / `Line2D`，消掉"字段两处定义"）。
 // 本层（ECS 实现）只消费，不再定义；`Transform` / `Parent` / `MorphShape` 等
 // 仍在下方（它们的归位见交付说明的延后清单）。
-
-pub mod marker {
-    pub trait Device {}
-    pub struct WGPUDevice;
-    impl Device for WGPUDevice {}
-    pub struct CPUDevice;
-    impl Device for CPUDevice {}
-}
 
 pub mod mesh {
     use ze_notion::Vec3;
@@ -48,7 +43,6 @@ pub mod mesh {
 #[path = "components/3d.rs"]
 pub mod three_d;
 
-pub use marker::*;
 pub use mesh::*;
 pub use three_d::*;
 
