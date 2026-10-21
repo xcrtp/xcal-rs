@@ -82,7 +82,9 @@ mod value;
 mod pod;
 
 pub use broker::{AssemblyPlan, AssemblyReport, Broker, BrokerError, NodeSpec, PodNode};
-pub use capability::{Capability, CapabilityMeta, FnDoc, FnSig, Resolved};
+pub use capability::{
+    Capability, CapabilityMeta, FnDoc, FnSig, Resolved, capability_fingerprint,
+};
 pub use command::{
     BROADCAST_NAMESPACE, Broadcast, COMMAND_NAMESPACE, CommandQueue, EVENT_SINK_NAMESPACE,
     EventSink, Receipt,

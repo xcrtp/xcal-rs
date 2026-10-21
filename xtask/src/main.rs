@@ -570,6 +570,29 @@ fn step_structure(root: &Path) -> Result<(), String> {
             return Err(format!("结构性判据未通过：{title}"));
         }
     }
+
+    // B2-9（D14）：能力指纹 × version 配对校验。
+    // 只跑这两个护栏用例：它们断言 `hash(signatures())` 与 `version` 的钉住基线，
+    // API 变了而未递增 version / 未更新指纹 ⇒ **fail**（不是警告）。
+    println!("[xtask] $ cargo test -p zela-scene --lib fingerprint_is_pinned");
+    let status = Command::new("cargo")
+        .args([
+            "test",
+            "-q",
+            "-p",
+            "zela-scene",
+            "--lib",
+            "fingerprint_is_pinned",
+        ])
+        .current_dir(root)
+        .status()
+        .map_err(|error| format!("启动能力指纹校验失败：{error}"))?;
+    if !status.success() {
+        return Err(
+            "能力指纹校验失败：signatures 变了但 version/指纹常量未同步（D14）".to_string(),
+        );
+    }
+    println!("[xtask] OK: 能力指纹与 version 配对（zela.scene / zela.content）");
     Ok(())
 }
 

@@ -92,6 +92,40 @@ impl FnSig {
     }
 }
 
+/// **能力指纹**（B2-9 / D14）：`hash(signatures())`，与 `meta().version` 配对校验。
+///
+/// # 为什么自带 FNV-1a 而不是 `DefaultHasher`
+/// 指纹会被**钉成常量**（版本配对的基线），必须跨 Rust 版本稳定；
+/// `DefaultHasher` 的算法不保证跨版本一致。FNV-1a 是固定算法，永远稳定。
+///
+/// # 用法
+/// 能力实现侧固定一个小表：`(version, fingerprint)`。API 变了 ⇒ 指纹变 ⇒
+/// 必须**同时**递增 `version` 并更新表；否则该能力的护栏测试变红（不是警告）。
+pub fn capability_fingerprint(signatures: &[FnSig]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = FNV_OFFSET;
+    let mut eat = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        // 字段分隔符（0xFF 不是合法 UTF-8 字节，避免拼接歧义）。
+        hash ^= 0xFF;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    };
+    for sig in signatures {
+        eat(sig.namespace.as_bytes());
+        eat(sig.name.as_bytes());
+        for param in sig.params {
+            eat(param.as_bytes());
+        }
+        eat(sig.ret.as_bytes());
+    }
+    hash
+}
+
 /// 一条函数的**文档**（编译期常量）。
 ///
 /// 与 [`FnSig`] **按序对应**：`signatures()[i]` 与 `docs()[i]` 描述同一个函数。
