@@ -160,11 +160,14 @@ pub struct Recorded2D {
     pub z: i32,
 }
 
-/// 从 [`DrawQueue`] 抓取快照（按 `ZIndex` 稳定排序，同 z 保录制顺序）。
+/// 从 [`DrawQueue`] 抓取 2D 快照（按 `ZOrder` 稳定排序，同 z 保录制顺序）。
+///
+/// B2-1 起 `DrawQueue` 是**统一队列**（2D 形状 + 3D 网格/线段共存）：
+/// 本函数只取 `Shape` 载荷，3D 项由 3D 后端消费。
 pub fn snapshot_queue(queue: &DrawQueue) -> Vec<Recorded2D> {
     let mut cmds: Vec<Recorded2D> = queue
         .commands()
-        .iter()
+        .into_iter()
         .map(|c| Recorded2D {
             shape: c.shape.clone(),
             transform: Transform2D::identity(),

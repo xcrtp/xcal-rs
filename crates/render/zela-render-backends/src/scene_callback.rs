@@ -119,8 +119,16 @@ impl SceneCompositorCallback {
             filters,
             draws_2d: if needs_2d { snapshot_queue(queue_2d) } else { Vec::new() },
             content,
-            meshes_3d: if needs_3d { queue_3d.meshes().to_vec() } else { Vec::new() },
-            lines_3d: if needs_3d { queue_3d.lines().to_vec() } else { Vec::new() },
+            meshes_3d: if needs_3d {
+                queue_3d.meshes().cloned().collect()
+            } else {
+                Vec::new()
+            },
+            lines_3d: if needs_3d {
+                queue_3d.lines().cloned().collect()
+            } else {
+                Vec::new()
+            },
             // B1-A：光源快照（仅 3D 图层存在时采集；空 ⇒ 后端默认光照）。
             lights_3d: if needs_3d {
                 lights.directional.clone()

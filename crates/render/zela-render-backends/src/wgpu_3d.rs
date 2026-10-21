@@ -799,17 +799,24 @@ impl WgpuBackend3D {
     /// - bind_group：每帧最多创建一次（arena 未扩容时复用 bind_group）。
     // 体检第 9 项（观察，暂不改）：本函数约 240 行，可按
     // 「mesh 缓存 → line 缓存 → uniform 装配 → bind group 缓存」拆分。
-    pub fn prepare_draws(
+    pub fn prepare_draws<'a, M, L>(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         view_proj: Mat4,
         camera_pos: ze_notion::Vec3,
-        meshes: &[MeshDraw],
-        lines: &[LineDraw],
+        meshes: M,
+        lines: L,
         lights: &[DirectionalLightRecord],
         point_lights: &[PointLightRecord],
-    ) -> Frame3DData {
+    ) -> Frame3DData
+    where
+        M: IntoIterator<Item = &'a MeshDraw>,
+        L: IntoIterator<Item = &'a LineDraw>,
+    {
+        // B2-1：统一队列的消费方按载荷过滤后以迭代器传入；此处收敛为切片式视图。
+        let meshes: Vec<&MeshDraw> = meshes.into_iter().collect();
+        let lines: Vec<&LineDraw> = lines.into_iter().collect();
         // B1-A/B/C：每帧覆写场景级光源 uniform。**空灯光 = 默认光照**（单方向光
         // (0,0,1) + ambient 0.2，与硬编码时代逐位一致）；超限**显式报错**
         // （铁律 2：不静默丢弃）。`camera_pos` 一并写入（PBR 视线向量用）。

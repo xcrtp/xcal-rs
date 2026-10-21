@@ -10,26 +10,46 @@
 
 use crate::shape::{Shape2D, Style2D};
 
-/// 绘制层级。值越小越先绘制（位于画面下层）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ZIndex(pub i32);
+/// 绘制层级（B2-1：**统一排序概念**，吸收原 2D `ZIndex`）。
+///
+/// 值越小越先绘制（位于画面下层）。2D 与 3D 命令共用这一个排序键 —— 3D 此前
+/// 没有层序概念（#11），B2-1 起由它承担，B2-4 的 epsilon 也由它派生（R-C）。
+///
+/// 与场景对象层的 `ze_object::ZOrder` 是**同一个类型**（后者 re-export 本类型），
+/// 保证"排序概念只有一份"（铁律 3）。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct ZOrder(pub i32);
 
-impl ZIndex {
+impl ZOrder {
+    /// 默认层（无显式声明时的取值）。
+    pub const DEFAULT: Self = Self(0);
+
     pub const fn new(z: i32) -> Self {
         Self(z)
     }
 }
 
-/// 单条 2D 绘制命令 = [`ZIndex`] + [`Shape2D`] + [`Style2D`]。
+impl Default for ZOrder {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// 旧名兼容别名（B2-1 起 `ZIndex` 统一为 [`ZOrder`]；下游路径保持可用）。
+pub type ZIndex = ZOrder;
+
+/// 单条 2D 绘制命令 = [`ZOrder`] + [`Shape2D`] + [`Style2D`]。
 #[derive(Debug, Clone)]
 pub struct DrawCommand {
-    pub z: ZIndex,
+    pub z: ZOrder,
     pub shape: Shape2D,
     pub style: Style2D,
 }
 
 impl DrawCommand {
-    pub fn new(z: ZIndex, shape: Shape2D, style: Style2D) -> Self {
+    pub fn new(z: ZOrder, shape: Shape2D, style: Style2D) -> Self {
         Self { z, shape, style }
     }
 }

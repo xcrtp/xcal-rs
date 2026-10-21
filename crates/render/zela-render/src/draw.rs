@@ -30,6 +30,7 @@ use ze_notion::Transform2D as Affine2D;
 use ze_object::Camera2D;
 // 对象层的绘制层级（M4）：可缺席 —— 缺席即用录制默认层。
 // T1：逐对象摆放（`Transform`，可缺席 ⇒ 恒等）。
+// `ZOrder` 由对象层 re-export（唯一声明在 IR，B2-1 单一真源）。
 use ze_object::{Transform, ZOrder};
 // `Path::to_screen(camera)`（世界 → 屏幕）由 zela-scene 的场景层 trait 提供。
 use zela_scene::transform::Transform2D as _;
@@ -59,9 +60,40 @@ pub trait Painter2D {
     fn paint(&self, shape: &Shape2D, style: &Style2D);
 }
 
-/// 2D 绘制命令队列，按 [`ZIndex`] 自动排序（延迟排序）。
+/// 队列中的一条绘制项（B2-1：**一个 DrawQueue**，2D / 3D 命令共存，D2）。
+///
+/// 三种载荷共享同一个排序键 [`ZOrder`]；消费方按载荷过滤（2D 后端只取
+/// `Shape`，3D 后端只取 `Mesh` / `Line`）。
+#[derive(Debug, Clone)]
+pub enum DrawItem {
+    /// 2D 形状命令（屏幕空间）。
+    Shape(DrawCommand),
+    /// 3D 网格绘制命令。
+    Mesh(crate::draw_queue_3d::MeshDraw),
+    /// 3D 线段绘制命令。
+    Line(crate::draw_queue_3d::LineDraw),
+}
+
+impl DrawItem {
+    /// 统一排序键。
+    pub fn zorder(&self) -> ZOrder {
+        match self {
+            Self::Shape(cmd) => cmd.z,
+            Self::Mesh(mesh) => mesh.z,
+            Self::Line(line) => line.z,
+        }
+    }
+}
+
+/// 绘制命令队列（B2-1 统一队列）：2D 形状与 3D 网格/线段共存，
+/// 按 [`ZOrder`] **稳定**排序（延迟排序）。
+///
+/// # 确定性保证（R-F）
+/// 排序是**稳定**的（`Vec::sort_by_key`）：同 `ZOrder` 内严格保持**插入序**。
+/// 这是对拍逐位一致的隐含前提，必须先写成显式测试（`test_queue_stable_within_equal_zorder`），
+/// 任何改用非稳定排序的改动都会让它变红。
 pub struct DrawQueue {
-    commands: Vec<DrawCommand>,
+    items: Vec<DrawItem>,
     sorted: bool,
 }
 
@@ -78,21 +110,27 @@ fn rect_shape(r: &Rect) -> Shape2D {
 impl DrawQueue {
     pub fn new() -> Self {
         Self {
-            commands: Vec::new(),
+            items: Vec::new(),
             sorted: true,
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            commands: Vec::with_capacity(capacity),
+            items: Vec::with_capacity(capacity),
             sorted: true,
         }
     }
 
-    /// 追加一条命令。O(1)，不立即排序。
+    /// 追加一条 2D 命令。O(1)，不立即排序。
     pub fn push(&mut self, cmd: DrawCommand) {
-        self.commands.push(cmd);
+        self.items.push(DrawItem::Shape(cmd));
+        self.sorted = false;
+    }
+
+    /// 追加任意队列项（3D 载荷经此入队；crate 内使用）。
+    pub(crate) fn push_item(&mut self, item: DrawItem) {
+        self.items.push(item);
         self.sorted = false;
     }
 
@@ -170,66 +208,82 @@ impl DrawQueue {
         ));
     }
 
+    /// 稳定排序（同 `ZOrder` 内保持插入序 —— R-F 的确定性保证）。
     pub fn ensure_sorted(&mut self) {
         if !self.sorted {
-            self.commands.sort();
+            // `sort_by_key` 是**稳定**排序；不得改用 `sort_unstable_by_key`。
+            self.items.sort_by_key(DrawItem::zorder);
             self.sorted = true;
         }
     }
 
     pub fn len(&self) -> usize {
-        self.commands.len()
+        self.items.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
+        self.items.is_empty()
     }
 
     pub fn is_sorted(&self) -> bool {
         self.sorted
     }
 
-    pub fn commands(&self) -> &[DrawCommand] {
-        &self.commands
+    /// 全部队列项（结构判据 / 测试用；2D 消费方用 [`Self::commands`]）。
+    pub fn items(&self) -> &[DrawItem] {
+        &self.items
     }
 
-    /// 归并两个队列，结果保持按 [`ZIndex`] 升序。
-    pub fn merge(mut self, mut other: Self) -> Self {
+    /// 2D 形状命令（按当前队列顺序；未排序时即插入序）。
+    pub fn commands(&self) -> Vec<&DrawCommand> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                DrawItem::Shape(cmd) => Some(cmd),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// [`Self::commands`] 的语义化别名（2D 后端用）。
+    pub fn shapes(&self) -> Vec<&DrawCommand> {
+        self.commands()
+    }
+
+    /// 归并两个队列，结果保持按 [`ZOrder`] 升序（稳定：self 在 other 之前）。
+    pub fn merge(mut self, other: Self) -> Self {
+        self.items.extend(other.items);
+        self.sorted = false;
         self.ensure_sorted();
-        other.ensure_sorted();
-        let total = self.commands.len() + other.commands.len();
-        let mut a = self.commands.into_iter().peekable();
-        let mut b = other.commands.into_iter().peekable();
-        let mut merged = Vec::with_capacity(total);
-        while let (Some(ac), Some(bc)) = (a.peek(), b.peek()) {
-            if ac <= bc {
-                merged.push(a.next().unwrap());
-            } else {
-                merged.push(b.next().unwrap());
-            }
-        }
-        merged.extend(a);
-        merged.extend(b);
-        Self {
-            commands: merged,
-            sorted: true,
-        }
+        self
     }
 
-    /// 排序后逐条 `paint`。
+    /// 排序后逐条 `paint`（只回放 2D 形状；3D 项由后端消费）。
     ///
     /// ⚠️ S4.1 后**零生产调用者**（仅测试 mock）——生产路径是后端直接消费
     /// [`DrawQueue::commands`]；保留原因见 [`Painter2D`] 的"当前状态"。
     pub fn execute<P: Painter2D>(&mut self, painter: &P) {
         self.ensure_sorted();
-        for cmd in &self.commands {
-            painter.paint(&cmd.shape, &cmd.style);
+        for item in &self.items {
+            if let DrawItem::Shape(cmd) = item {
+                painter.paint(&cmd.shape, &cmd.style);
+            }
         }
     }
 
+    /// 清空整个队列（2D + 3D）；帧末统一清理用。
     pub fn clear(&mut self) {
-        self.commands.clear();
+        self.items.clear();
         self.sorted = true;
+    }
+
+    /// 只清空 3D 项（2D 项保留）。
+    ///
+    /// 录制 System 各自清自己的载荷：2D / 3D 录制同相位执行、顺序不保证，
+    /// 用整队 `clear()` 会互相擦除（B2-1 合并队列后的必守约束）。
+    pub fn clear_meshes_and_lines(&mut self) {
+        self.items
+            .retain(|item| !matches!(item, DrawItem::Mesh(_) | DrawItem::Line(_)));
     }
 }
 
@@ -1493,5 +1547,116 @@ mod tests {
                 "{name} 应保持闭合"
             );
         }
+    }
+
+    // ─── B2-1：统一队列 + 统一 ZOrder（R-F 显式锁定）───────────────────────
+
+    /// 🔴 **R-F**：同 `ZOrder` 内**必须保持插入序**（稳定排序）。
+    ///
+    /// 这条保证原先是隐式的（`cmp` 只比 z + `Vec::sort` 稳定）。B2-1 重构队列后
+    /// 把它写成显式测试：任何 `sort_unstable_*` 的实现都会让本用例变红。
+    #[test]
+    fn test_queue_stable_within_equal_zorder() {
+        let mut q = DrawQueue::new();
+        // 交错插入：z=5 三条、z=1 两条，各自保持相对顺序
+        q.circle_stroke(ZIndex::new(5), mk_circle(1.0), mk_stroke()); // A
+        q.circle_fill(ZIndex::new(1), mk_circle(2.0), mk_fill()); // B
+        q.path_stroke(ZIndex::new(5), mk_path(), mk_stroke()); // C
+        q.line_stroke(ZIndex::new(1), mk_line(3.0), mk_stroke()); // D
+        q.circle_fill(ZIndex::new(5), mk_circle(4.0), mk_fill()); // E
+
+        q.ensure_sorted();
+        let kinds: Vec<&str> = q
+            .commands()
+            .iter()
+            .map(|c| {
+                if c.style.fill.is_some() {
+                    "fill"
+                } else {
+                    "stroke"
+                }
+            })
+            .collect();
+        // z=1 的两条（B 填充、D 描边）保持插入序；z=5 的三条（A 描边、C 描边、E 填充）
+        // 保持插入序 —— 若排序不稳定，同 z 组内顺序可能被重排。
+        assert_eq!(kinds, vec!["fill", "stroke", "stroke", "stroke", "fill"]);
+        let zs: Vec<i32> = q.commands().iter().map(|c| c.z.0).collect();
+        assert_eq!(zs, vec![1, 1, 5, 5, 5]);
+
+        // 幂等：再排一次结果不变（同 z 序不被二次扰动）
+        let first: Vec<i32> = q
+            .commands()
+            .iter()
+            .map(|c| match &c.shape {
+                Shape2D::Circle { radius, .. } => *radius as i32,
+                _ => -1,
+            })
+            .collect();
+        q.ensure_sorted();
+        let second: Vec<i32> = q
+            .commands()
+            .iter()
+            .map(|c| match &c.shape {
+                Shape2D::Circle { radius, .. } => *radius as i32,
+                _ => -1,
+            })
+            .collect();
+        assert_eq!(first, second, "重复排序必须幂等");
+    }
+
+    /// B2-1：2D / 3D 命令共处一个队列，共享同一 `ZOrder` 排序。
+    #[test]
+    fn test_unified_queue_mixes_2d_and_3d_by_zorder() {
+        use std::sync::Arc;
+
+        use zela_scene::scene::components::Material3D;
+        use zela_scene::scene::primitives::wireframe_cube;
+
+        let mut q = DrawQueue::new();
+        q.draw_line(
+            ze_notion::Vec3::ZERO,
+            ze_notion::Vec3::X,
+            ze_notion::Color32::RED,
+        ); // z=0
+        q.circle_fill(ZIndex::new(-1), mk_circle(1.0), mk_fill()); // z=-1
+        q.draw_mesh(
+            Arc::new(wireframe_cube(1.0)),
+            ze_notion::Mat4::IDENTITY,
+            Material3D::color(ze_notion::Color32::WHITE),
+        ); // z=0
+
+        assert_eq!(q.len(), 3, "一个队列容纳 2D 与 3D");
+        assert_eq!(q.commands().len(), 1, "2D 视图只看到 Shape");
+        assert_eq!(q.mesh_count(), 1);
+        assert_eq!(q.line_count(), 1);
+
+        q.ensure_sorted();
+        let zs: Vec<i32> = q.items().iter().map(|i| i.zorder().0).collect();
+        assert_eq!(zs, vec![-1, 0, 0], "混合队列按 ZOrder 升序");
+        // 同 z（0）内：先插入的 line 在 mesh 之前
+        match (&q.items()[1], &q.items()[2]) {
+            (DrawItem::Line(_), DrawItem::Mesh(_)) => {}
+            other => panic!("同 z 内应保持插入序，实际 {other:?}"),
+        }
+    }
+
+    /// B2-1：3D 录制只清 3D 项，不擦掉同帧已录的 2D 形状。
+    #[test]
+    fn test_clear_meshes_and_lines_keeps_shapes() {
+        use std::sync::Arc;
+
+        use zela_scene::scene::components::Material3D;
+        use zela_scene::scene::primitives::wireframe_cube;
+
+        let mut q = DrawQueue::new();
+        q.circle_fill(ZIndex::new(0), mk_circle(1.0), mk_fill());
+        q.draw_mesh(
+            Arc::new(wireframe_cube(1.0)),
+            ze_notion::Mat4::IDENTITY,
+            Material3D::color(ze_notion::Color32::WHITE),
+        );
+        q.clear_meshes_and_lines();
+        assert_eq!(q.commands().len(), 1);
+        assert_eq!(q.mesh_count(), 0);
     }
 }

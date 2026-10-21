@@ -214,13 +214,12 @@ pub fn build_frame_inputs<'a>(
     })
 }
 
-/// 本帧的**绘制调用数**（2D 命令 + 3D mesh/line 条数）。
+/// 本帧的**绘制调用数**（2D 形状命令 + 3D mesh/line 条数）。
+///
+/// B2-1 起 2D / 3D 共处同一个 [`DrawQueue`]，故只统计一次（避免重复计入）。
 pub fn draw_call_count(res: &Resources) -> usize {
-    let two_d = res.get::<DrawQueue>().map_or(0, |q| q.len());
-    let three_d = res
-        .get::<DrawQueue3D>()
-        .map_or(0, |q| q.mesh_count() + q.line_count());
-    two_d + three_d
+    res.get::<DrawQueue>()
+        .map_or(0, |q| q.len())
 }
 
 #[cfg(test)]

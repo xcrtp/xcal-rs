@@ -52,7 +52,7 @@ use zela_scene::transform_hierarchy::WorldTransforms;
 use zela_schedule::context::ExecutorContext;
 use zela_schedule::system::System;
 
-use ze_object::{Camera2DHandle, Path, Transform};
+use ze_object::{Camera2DHandle, Path, Transform, ZOrder};
 
 use crate::draw::{
     ContentTextureQueue, DrawQueue, MorphQueue, RevealQueue, opacity_of, push_morph_item,
@@ -325,13 +325,18 @@ impl System for SceneRecord3DSystem {
             });
         });
         ctx.with_world_and_resource_mut::<DrawQueue3D, _>(|world, queue| {
-            queue.clear();
+            // B2-1：统一队列里 2D / 3D 共存，只清 3D 载荷（顺序不保证，整队清会擦掉 2D）。
+            queue.clear_meshes_and_lines();
             let scene = WorldView::new(world);
             // 先收集（读借用），再统一入队（写借用已由 `queue` 独占）。
             let mut items = Vec::new();
             scene.for_each::<Arc<MeshGeometry>>(|id, mesh| {
                 let material = scene
                     .with::<Material3D, _>(id, |material| *material)
+                    .unwrap_or_default();
+                // B2-1：统一层序（缺席 ⇒ 默认层 0），与 2D 共用同一个 ZOrder 概念。
+                let z = scene
+                    .with::<ZOrder, _>(id, |z| *z)
                     .unwrap_or_default();
                 // S1：世界矩阵优先（父子累乘结果）；缺席该对象 / WorldTransforms ⇒ local，
                 // 逐位等于旧行为（`transform.matrix()`）。
@@ -341,11 +346,11 @@ impl System for SceneRecord3DSystem {
                     .map(|t| t.matrix)
                     .or_else(|| scene.with::<Transform, _>(id, |transform| transform.matrix()))
                     .unwrap_or(ze_notion::Mat4::IDENTITY);
-                items.push((id, Arc::clone(mesh), model, material));
+                items.push((id, z, Arc::clone(mesh), model, material));
             });
-            // B2-0a：逐对象录制带实体身份（G7 记账前提 2）。
-            for (id, mesh, model, material) in items {
-                queue.draw_mesh_for(id, mesh, model, material);
+            // B2-0a：逐对象录制带实体身份（G7 记账前提 2）；B2-1：带统一层序。
+            for (id, z, mesh, model, material) in items {
+                queue.draw_mesh_with(id, z, mesh, model, material);
             }
         });
     }
@@ -789,7 +794,7 @@ mod tests {
         let q = sched.resources().get::<DrawQueue3D>().unwrap();
         assert_eq!(q.mesh_count(), 1);
         assert_eq!(
-            q.meshes()[0].transform,
+            q.meshes().next().unwrap().transform,
             expected,
             "无 Parent 时 3D model 必须逐位等于 local matrix"
         );

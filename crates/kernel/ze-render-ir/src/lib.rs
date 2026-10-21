@@ -33,7 +33,7 @@ pub mod style;
 pub mod uniform;
 
 pub use degrade::ToShape2D;
-pub use draw::{DrawCommand, ZIndex};
+pub use draw::{DrawCommand, ZIndex, ZOrder};
 pub use layer::{LayerBlend, LayerId};
 pub use mesh::{PrimitiveTopology, ShaderVariant, TextureHandle, UvProjection};
 pub use pipeline::{
