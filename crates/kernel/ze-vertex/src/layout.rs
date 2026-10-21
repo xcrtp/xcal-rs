@@ -2,8 +2,11 @@
 //
 // 顶点布局描述符（V1 + V4 + 实例化扩展 + R0 四槽）。
 //
-// 契约（§4.1）：固定属性 position + 三个通用槽 attrib0/attrib1/attrib2，
-// 不再增加固定属性。通用槽的含义由 [`AaModel`](super::aa::AaModel) 决定（见 super::aa）。
+// 契约（§4.1）：2D AA 契约 = 固定属性 position + 三个通用槽 attrib0/attrib1/attrib2，
+// 不再增加固定属性；通用槽的含义由 [`AaModel`](super::aa::AaModel) 决定（见 super::aa）。
+// B2-0a（D1/D3）追加 **3D 契约**：`standard_3d()` 用 position(F32x3) + uv(F32x2) +
+// shading_normal(F32x3)（法线槽命名 `shading_normal`，区别于 2D 边法线），
+// 语义加入词汇表（纯增量，2D 布局不受影响）——3D 走硬件 MSAA，不参与 2D AA 契约。
 //
 // 为什么留通用槽而不是按需扩展有意义：从 MSAA 切到解析 AA 时，
 // 顶点格式不动，只换 shader 变体和三角化器实现。
@@ -66,12 +69,15 @@ impl AttribType {
         }
     }
 
-    /// 对齐规则：对齐到属性自身大小。
+    /// 对齐规则：**后端要求**（WebGPU / wgpu：顶点属性 `offset` 必须是 4 字节的倍数）。
     ///
-    /// 保守且后端安全 —— offset 是自身大小的整数倍时，必然满足各后端
-    /// （含 wgpu 校验）更宽松的 4 字节对齐要求。
+    /// B2-0a 修正：原规则是「对齐到属性自身大小」，但 3D 契约的紧凑布局
+    /// （`uv(F32x2)@12` / `shading_normal(F32x3)@20`，stride 32）在该规则下无法表达
+    /// （会算出 16 / 24 / stride 36），而这两个偏移是既有几何写出端的真实字节布局
+    /// （铁律 4：不得改顶点格式）。按后端的最小合法对齐（4）计算，既满足后端校验，
+    /// 又让 2D 既有布局的 offset **逐位不变**（`standard()` 仍是 0/8/16/20，stride 24）。
     pub const fn alignment(self) -> u32 {
-        self.size()
+        4
     }
 }
 
@@ -80,8 +86,9 @@ impl AttribType {
 /// 单个顶点属性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct VertexAttrib {
-    /// 语义标签。契约词汇表固定为 `"position"` / `"attrib0"` / `"attrib1"` /
-    /// `"attrib2"`（§4.1）。
+    /// 语义标签。契约词汇表（§4.1 + B2-0a 3D 追加）见 [`VertexAttrib::VOCABULARY`]：
+    /// 2D = `"position"` / `"attrib0"` / `"attrib1"` / `"attrib2"`；3D = `"position"` /
+    /// `"uv"` / `"shading_normal"`（D3）。
     pub semantic: &'static str,
     pub ty: AttribType,
     /// 字节偏移。由 [`VertexLayout::compute_layout`] 填写；手工构造时置 0 即可。
@@ -89,8 +96,15 @@ pub struct VertexAttrib {
 }
 
 impl VertexAttrib {
-    /// 契约词汇表（§4.1：固定属性 + 三个通用槽，不再增加）。
-    pub const VOCABULARY: [&'static str; 4] = ["position", "attrib0", "attrib1", "attrib2"];
+    /// 契约词汇表（§4.1 + B2-0a 追加 3D 语义）。
+    ///
+    /// **纯增量**：2D AA 契约仍只消费前四者（position + 三个通用槽）；`uv` /
+    /// `shading_normal` 是 3D 布局（[`VertexLayout::standard_3d`]）专用（D1 顶点格式
+    /// 不统一）。`validate()` 对 Vertex 步进 buffer 做**成员判定**（不是完整性判定），
+    /// 扩词汇表不破坏任何既有布局。
+    pub const VOCABULARY: [&'static str; 6] = [
+        "position", "uv", "shading_normal", "attrib0", "attrib1", "attrib2",
+    ];
 }
 
 // 反序列化宽松：接受任意非空语义名。
@@ -184,7 +198,7 @@ pub enum VertexLayoutError {
         needed: u32,
     },
     // ── 实例化扩展 ──
-    #[error("Vertex 步进 buffer 的属性（下标 {index}）语义 {semantic:?} 不在契约词汇表 [\"position\", \"attrib0\", \"attrib1\", \"attrib2\"] 内（宿主自定义语义请放 Instance 步进 buffer）")]
+    #[error("Vertex 步进 buffer 的属性（下标 {index}）语义 {semantic:?} 不在契约词汇表 [\"position\", \"uv\", \"shading_normal\", \"attrib0\", \"attrib1\", \"attrib2\"] 内（宿主自定义语义请放 Instance 步进 buffer）")]
     IllegalSemantic { index: usize, semantic: String },
     #[error("顶点输入描述至少需要一个 buffer")]
     EmptyInput,
@@ -224,6 +238,44 @@ impl VertexLayout {
             stride,
             aa_model: aa,
             cache,
+            step_mode: StepMode::Vertex,
+        }
+    }
+
+    /// 3D 标准布局（B2-0a，D1/D3）：
+    /// `position(F32x3)@0 + uv(F32x2)@12 + shading_normal(F32x3)@20` → stride = 32。
+    ///
+    /// - `shading_normal` 命名按 D3（与 2D 边法线区分；normal offset 不得误读边法线）；
+    /// - `aa_model = None`：3D 走硬件 MSAA，顶点槽无 AA 语义（2D 解析 AA 不参与）；
+    /// - `cache = Static`（**R-E 实测**，非想当然）：3D mesh 缓冲按
+    ///   `ResourceKey::versioned(geometry.id(), version×4+uv_code)` **内容寻址、跨帧复用**，
+    ///   line 缓冲按端点内容哈希寻址 —— 顶点数据帧间稳定（内容变 ⇒ version 递增 ⇒ 缓存
+    ///   失效重建），与 `CacheStrategy::Static`（内容寻址、上传一次）语义一致，
+    ///   故 `StaticConsistencyChecker` 覆盖对其成立（G7 接线在 B2-6+）。
+    pub fn standard_3d() -> Self {
+        let mut attribs = vec![
+            VertexAttrib {
+                semantic: "position",
+                ty: AttribType::F32x3,
+                offset: 0,
+            },
+            VertexAttrib {
+                semantic: "uv",
+                ty: AttribType::F32x2,
+                offset: 0,
+            },
+            VertexAttrib {
+                semantic: "shading_normal",
+                ty: AttribType::F32x3,
+                offset: 0,
+            },
+        ];
+        let stride = Self::compute_layout(&mut attribs);
+        Self {
+            attribs,
+            stride,
+            aa_model: AaModel::None,
+            cache: CacheStrategy::Static,
             step_mode: StepMode::Vertex,
         }
     }
@@ -382,8 +434,52 @@ mod tests {
         l.validate().unwrap();
     }
 
+    // ── B2-0a：3D 契约（D1/D3）────────────────────────────────────────────
+
+    /// 3D 布局契约：stride 32、pos3@0 + uv2@12 + shading_normal3@20、
+    /// aa_model = None（硬件 MSAA）、cache = Static（R-E 实测）、词汇表校验通过。
     #[test]
-    fn alignment_pads_f32x3_after_f32() {
+    fn test_standard_3d_contract() {
+        let l = VertexLayout::standard_3d();
+        assert_eq!(l.attribs.len(), 3);
+        assert_eq!(l.attribs[0].semantic, "position");
+        assert_eq!(l.attribs[0].ty, AttribType::F32x3);
+        assert_eq!(l.attribs[0].offset, 0);
+        assert_eq!(l.attribs[1].semantic, "uv");
+        assert_eq!(l.attribs[1].ty, AttribType::F32x2);
+        assert_eq!(l.attribs[1].offset, 12);
+        assert_eq!(l.attribs[2].semantic, "shading_normal");
+        assert_eq!(l.attribs[2].ty, AttribType::F32x3);
+        assert_eq!(l.attribs[2].offset, 20);
+        assert_eq!(l.stride, 32);
+        assert_eq!(l.aa_model, AaModel::None);
+        assert_eq!(l.cache, CacheStrategy::Static, "R-E 实测：3D mesh/line 按版本/内容寻址跨帧复用");
+        l.validate().unwrap();
+    }
+
+    /// 词汇表增量：3D 语义在契约词汇表内（validate 通过），2D 语义仍是合法子集。
+    #[test]
+    fn test_3d_semantics_are_in_vocabulary() {
+        let l = VertexLayout::standard_3d();
+        for a in &l.attribs {
+            assert!(
+                VertexAttrib::VOCABULARY.contains(&a.semantic),
+                "语义 {} 必须在契约词汇表内",
+                a.semantic
+            );
+        }
+        // 2D standard() 仍是合法子集
+        standard().validate().unwrap();
+        // 3D 布局可序列化往返（V4）
+        let json = serde_json::to_string(&l).unwrap();
+        let back: VertexLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, l);
+        assert!(json.contains("shading_normal"));
+    }
+
+    /// B2-0a 修正后：对齐按后端 4 字节规则 ⇒ 紧凑打包（不再按自身大小填充）。
+    #[test]
+    fn alignment_uses_backend_four_byte_rule() {
         let mut attribs = vec![
             VertexAttrib {
                 semantic: "position",
@@ -402,10 +498,10 @@ mod tests {
             },
         ];
         let stride = VertexLayout::compute_layout(&mut attribs);
-        // F32@0(4) → F32x3 对齐到 12 → F32x2 对齐到 24
-        assert_eq!(attribs[1].offset, 12);
-        assert_eq!(attribs[2].offset, 24);
-        assert_eq!(stride, 32);
+        // F32@0(4) → F32x3@4(12) → F32x2@16(8) ⇒ stride 24
+        assert_eq!(attribs[1].offset, 4);
+        assert_eq!(attribs[2].offset, 16);
+        assert_eq!(stride, 24);
     }
 
     #[test]
@@ -435,8 +531,8 @@ mod tests {
         let (a2, s2) = make();
         assert_eq!(s1, s2);
         assert_eq!(a1, a2, "相同输入必须产出相同 offset（顺序稳定）");
-        // F32x2@0(0..8) → F32@8(8..12) → F32x4 对齐到 16(16..32)
-        assert_eq!(s1, 32);
+        // F32x2@0(0..8) → F32@8(8..12) → F32x4@12(12..28) ⇒ stride 28（4 字节对齐）
+        assert_eq!(s1, 28);
     }
 
     #[test]

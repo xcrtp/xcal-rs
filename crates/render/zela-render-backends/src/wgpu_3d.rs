@@ -35,18 +35,16 @@
 //
 // # G7 回校（R6）：为什么这里**不**接 `StaticConsistencyChecker`
 //
-// 计划倾向于"只接 3D 侧"，但本仓库的 3D 路径缺少接线所需的两个前提：
-//   1. **没有顶点布局契约声明** —— 3D pipeline 的顶点布局是硬编码 bespoke
-//      （`Float32x3` / stride 12），`VertexLayout` 从未参与，checker 的
-//      `(layout, identity)` 对没有输入可比；
-//   2. **没有 entity identity 契约** —— `DrawQueue3D` 不携带 entity id。
-//      （RB 起 `MeshDraw` 已携带稳定几何 identity：`MeshGeometry::id()/version()`，
-//      但它是"几何资源身份"而非"ECS 实体身份"，仍不足以支撑 checker 的
-//      `(layout, identity)` 输入——顶点布局契约仍是第 1 点未解的问题。）
+// 计划倾向于"只接 3D 侧"，但接线需要两个前提。**B2-0a 已把两个前提补齐**：
+//   1. **顶点布局契约声明** —— 3D pipeline 的顶点布局改为翻译 kernel 契约
+//      [`ze_vertex::VertexLayout::standard_3d`]（`get_or_create_pipeline` 内），
+//      不再硬编码；
+//   2. **entity identity** —— `DrawQueue3D` 的 `MeshDraw` / `LineDraw` 携带
+//      `entity: ObjectId`（逐对象录制用 `draw_mesh_for` / `draw_line_for` 填真实实体，
+//      无来源绘制为 `ObjectId::DANGLING` 哨兵）。
+// checker 的实际接线（`prepare_draws` / `record_prepared` 入口）仍留在后续可观测性
+// 步骤（B2-6），本步只补契约与身份，不改变渲染行为。
 // 2D 侧则相反：内容（形变 / 相机 / group）每帧都变，接上必然大量误报。
-// 因此 R6 决策 = **两侧都不接**，把事实记在此处；将来 3D 引入 VertexLayout 契约
-// 声明 + 稳定 entity identity 后，可在 `prepare_draws` /
-// `record_prepared` 入口补齐。
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -64,6 +62,7 @@ use zela_render::{
     RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
+use ze_vertex::AttribType;
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
 pub const DEFAULT_SHADER: &str = include_str!("../shaders/cube.wgsl");
@@ -106,38 +105,43 @@ const DEFAULT_AMBIENT: f32 = 0.2;
 /// wgpu dynamic uniform offset 要求的最小对齐。
 pub const DYNAMIC_OFFSET_ALIGNMENT: u64 = 256;
 
-/// 顶点步长：vec3 position（12 字节）+ vec2 uv（8 字节）+ vec3 normal（12 字节）= 32 字节。
-const VERTEX_STRIDE: u64 = 32;
-/// UV 属性在顶点内的字节偏移（紧随 position 之后）。
-const VERTEX_UV_OFFSET: u64 = 12;
-/// 法线属性在顶点内的字节偏移（紧随 uv 之后）。
-const VERTEX_NORMAL_OFFSET: u64 = 20;
+/// B2-0a：3D 顶点布局由 kernel 层契约声明
+/// [`ze_vertex::VertexLayout::standard_3d`]（pos3@0 + uv2@12 + shading_normal3@20，stride 32），
+/// 后端只做「契约 → wgpu 类型」翻译。原硬编码 `VERTEX_ATTRIBUTES` / `VERTEX_LAYOUT`
+/// 已删除（铁律 4：产物字节格式逐位不变，只是声明来源换成契约）。
+fn to_wgpu_format(ty: AttribType) -> wgpu::VertexFormat {
+    match ty {
+        AttribType::F32 => wgpu::VertexFormat::Float32,
+        AttribType::F32x2 => wgpu::VertexFormat::Float32x2,
+        AttribType::F32x3 => wgpu::VertexFormat::Float32x3,
+        AttribType::F32x4 => wgpu::VertexFormat::Float32x4,
+    }
+}
 
-/// RC.1/RC 补充：3D 顶点布局 = 位置（Float32x3 @0）+ UV（Float32x2 @12）+ 法线（Float32x3 @20）。
-/// B1-E 起静态化：pipeline **按需构建**（`get_or_create_pipeline`）时不再借用
-/// `new()` 的局部数组，直接引用本 static。铁律 4 —— 不加任何属性槽。
-const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Float32x3,
-        offset: 0,
-        shader_location: 0,
-    },
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Float32x2,
-        offset: VERTEX_UV_OFFSET,
-        shader_location: 1,
-    },
-    wgpu::VertexAttribute {
-        format: wgpu::VertexFormat::Float32x3,
-        offset: VERTEX_NORMAL_OFFSET,
-        shader_location: 2,
-    },
-];
-static VERTEX_LAYOUT: [Option<wgpu::VertexBufferLayout<'static>>; 1] = [Some(wgpu::VertexBufferLayout {
-    array_stride: VERTEX_STRIDE,
-    step_mode: wgpu::VertexStepMode::Vertex,
-    attributes: &VERTEX_ATTRIBUTES,
-})];
+/// 契约 → wgpu 顶点属性列表（shader location = 属性下标，单 buffer）。
+///
+/// 返回的 `Vec` 由调用点持有并在 `create_render_pipeline` 期间保持存活
+/// （wgpu 在创建时拷贝属性数据）。
+fn to_wgpu_vertex_attributes(layout: &ze_vertex::VertexLayout) -> Vec<wgpu::VertexAttribute> {
+    layout
+        .attribs
+        .iter()
+        .enumerate()
+        .map(|(index, a)| wgpu::VertexAttribute {
+            format: to_wgpu_format(a.ty),
+            offset: u64::from(a.offset),
+            shader_location: index as u32,
+        })
+        .collect()
+}
+
+/// 契约 → wgpu 步进模式。
+fn to_wgpu_step_mode(step: ze_vertex::StepMode) -> wgpu::VertexStepMode {
+    match step {
+        ze_vertex::StepMode::Vertex => wgpu::VertexStepMode::Vertex,
+        ze_vertex::StepMode::Instance => wgpu::VertexStepMode::Instance,
+    }
+}
 
 /// 未指定纹理时使用的兜底纹理 id（1×1 透明黑）。
 const DEFAULT_TEXTURE_ID: u64 = 0;
@@ -427,8 +431,9 @@ impl WgpuBackend3D {
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // B1-E：pipeline **不在此预建** —— 顶点布局是 static（`VERTEX_LAYOUT`），
-        // pipeline 按需构建 + 缓存在 `get_or_create_pipeline`（key 四维定齐）。
+        // B1-E：pipeline **不在此预建** —— 顶点布局在 `get_or_create_pipeline`
+        // 内由 kernel 契约 [`ze_vertex::VertexLayout::standard_3d`] 现场翻译（B2-0a），
+        // pipeline 按需构建 + 缓存（key 四维定齐）。
         // 原 `(topology, variant)` 笛卡尔积预建已删除：pipeline 数不再随 variant
         // 数爆炸（结构判据）。
 
@@ -1119,6 +1124,15 @@ impl WgpuBackend3D {
             return p.clone();
         }
         let label = format!("zela-3d-pipeline-{key:?}");
+        // B2-0a：顶点布局来自 kernel 契约（standard_3d），翻译成本地具名数据，
+        // 在 create_render_pipeline 期间保持存活（wgpu 创建时拷贝）。
+        let layout_desc = ze_vertex::VertexLayout::standard_3d();
+        let attributes = to_wgpu_vertex_attributes(&layout_desc);
+        let vertex_buffers = [Some(wgpu::VertexBufferLayout {
+            array_stride: u64::from(layout_desc.stride),
+            step_mode: to_wgpu_step_mode(layout_desc.step_mode),
+            attributes: &attributes,
+        })];
         let pipeline = self
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1128,7 +1142,7 @@ impl WgpuBackend3D {
                     module: &self.shader,
                     entry_point: Some("vs_main"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &VERTEX_LAYOUT,
+                    buffers: &vertex_buffers,
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &self.shader,
@@ -1490,6 +1504,34 @@ mod tests {
     }
 
     // ── B1-A：光源 uniform 打包（纯 CPU，无需 GPU） ─────────────────────
+
+    /// B2-0a：3D 顶点布局契约 → wgpu 翻译产物与旧硬编码布局**逐位相同**
+    /// （铁律 4：只换声明来源，不改顶点格式；因此像素不变）。
+    #[test]
+    fn test_vertex_layout_translation_matches_legacy_format() {
+        let layout = ze_vertex::VertexLayout::standard_3d();
+        assert_eq!(layout.stride, 32, "旧 VERTEX_STRIDE = 32");
+        let attrs = to_wgpu_vertex_attributes(&layout);
+        assert_eq!(attrs.len(), 3);
+
+        // position: Float32x3 @0 → location 0
+        assert_eq!(attrs[0].format, wgpu::VertexFormat::Float32x3);
+        assert_eq!(attrs[0].offset, 0);
+        assert_eq!(attrs[0].shader_location, 0);
+        // uv: Float32x2 @12 → location 1（旧 VERTEX_UV_OFFSET）
+        assert_eq!(attrs[1].format, wgpu::VertexFormat::Float32x2);
+        assert_eq!(attrs[1].offset, 12);
+        assert_eq!(attrs[1].shader_location, 1);
+        // shading_normal: Float32x3 @20 → location 2（旧 VERTEX_NORMAL_OFFSET）
+        assert_eq!(attrs[2].format, wgpu::VertexFormat::Float32x3);
+        assert_eq!(attrs[2].offset, 20);
+        assert_eq!(attrs[2].shader_location, 2);
+
+        assert_eq!(
+            to_wgpu_step_mode(layout.step_mode),
+            wgpu::VertexStepMode::Vertex
+        );
+    }
 
     /// 读取打包字节中第 `i` 个 f32。
     fn word_at(bytes: &[u8], i: usize) -> f32 {

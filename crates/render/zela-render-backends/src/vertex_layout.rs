@@ -179,9 +179,9 @@ mod tests {
         assert_eq!(l.attributes[0].format, wgpu::VertexFormat::Float32);
         assert_eq!(l.attributes[0].offset, 0);
         assert_eq!(l.attributes[1].format, wgpu::VertexFormat::Float32x3);
-        assert_eq!(l.attributes[1].offset, 12);
+        assert_eq!(l.attributes[1].offset, 4);
         assert_eq!(l.attributes[2].format, wgpu::VertexFormat::Float32x2);
-        assert_eq!(l.attributes[2].offset, 24);
+        assert_eq!(l.attributes[2].offset, 16);
         assert_eq!(l.attributes[2].shader_location, 2);
     }
 

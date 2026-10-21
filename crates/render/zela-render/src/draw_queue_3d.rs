@@ -11,11 +11,15 @@ use std::sync::Arc;
 
 use ze_notion::Mat4;
 use ze_notion::{Color32, Vec3};
+use ze_scene_contract::ObjectId;
 use zela_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
-/// 一次网格绘制命令：共享几何 + 模型变换 + 材质。
+/// 一次网格绘制命令：共享几何 + 模型变换 + 材质 + **实体身份**。
 ///
 /// 几何用 [`Arc`] 共享：`clone` 只递增引用计数，不深拷贝顶点数据。
+///
+/// `entity`（B2-0a，G7 记账前提 2）：绘制该网格的 ECS 实体身份。无实体来源的绘制
+/// （调试线框 / 测试）用 [`ObjectId::DANGLING`] 哨兵。
 #[derive(Debug, Clone)]
 pub struct MeshDraw {
     /// 网格几何（顶点/法线/UV/索引/拓扑），多引用者共享。
@@ -24,6 +28,8 @@ pub struct MeshDraw {
     pub transform: Mat4,
     /// 本次绘制材质（颜色/纹理/UV 兜底投影）。
     pub material: Material3D,
+    /// 绘制该网格的实体身份（`ObjectId::DANGLING` = 无实体）。
+    pub entity: ObjectId,
 }
 
 impl MeshDraw {
@@ -32,7 +38,14 @@ impl MeshDraw {
             geometry,
             transform,
             material,
+            entity: ObjectId::DANGLING,
         }
+    }
+
+    /// 带实体身份构造（记录系统逐对象录制时用）。
+    pub fn with_entity(mut self, entity: ObjectId) -> Self {
+        self.entity = entity;
+        self
     }
 
     /// 拓扑（转发自几何）。
@@ -41,7 +54,7 @@ impl MeshDraw {
     }
 }
 
-/// 一次线段绘制命令（世界空间两个端点）。
+/// 一次线段绘制命令（世界空间两个端点）+ 实体身份。
 #[derive(Debug, Clone, Copy)]
 pub struct LineDraw {
     /// 线段起点（世界空间）。
@@ -50,11 +63,24 @@ pub struct LineDraw {
     pub end: Vec3,
     /// 线段颜色。
     pub color: Color32,
+    /// 绘制该线段的实体身份（`ObjectId::DANGLING` = 无实体，B2-0a）。
+    pub entity: ObjectId,
 }
 
 impl LineDraw {
     pub fn new(start: Vec3, end: Vec3, color: Color32) -> Self {
-        Self { start, end, color }
+        Self {
+            start,
+            end,
+            color,
+            entity: ObjectId::DANGLING,
+        }
+    }
+
+    /// 带实体身份构造。
+    pub fn with_entity(mut self, entity: ObjectId) -> Self {
+        self.entity = entity;
+        self
     }
 }
 
@@ -102,7 +128,7 @@ impl DrawQueue3D {
         }
     }
 
-    /// 追加一个网格绘制命令。
+    /// 追加一个网格绘制命令（无实体来源，entity = `ObjectId::DANGLING`）。
     pub fn draw_mesh(
         &mut self,
         geometry: Arc<MeshGeometry>,
@@ -113,9 +139,27 @@ impl DrawQueue3D {
             .push(MeshDraw::new(geometry, transform, material));
     }
 
-    /// 追加一条世界空间线段。
+    /// 追加一个带实体身份的网格绘制命令（记录系统逐对象录制时用，G7 记账前提 2）。
+    pub fn draw_mesh_for(
+        &mut self,
+        entity: ObjectId,
+        geometry: Arc<MeshGeometry>,
+        transform: Mat4,
+        material: Material3D,
+    ) {
+        self.meshes
+            .push(MeshDraw::new(geometry, transform, material).with_entity(entity));
+    }
+
+    /// 追加一条世界空间线段（无实体来源，entity = `ObjectId::DANGLING`）。
     pub fn draw_line(&mut self, start: Vec3, end: Vec3, color: Color32) {
         self.lines.push(LineDraw::new(start, end, color));
+    }
+
+    /// 追加一条带实体身份的世界空间线段。
+    pub fn draw_line_for(&mut self, entity: ObjectId, start: Vec3, end: Vec3, color: Color32) {
+        self.lines
+            .push(LineDraw::new(start, end, color).with_entity(entity));
     }
 
     /// 清空队列（每帧录制前调用）。
@@ -207,5 +251,36 @@ mod tests {
         );
         assert_eq!(q.line_count(), 2);
         assert_eq!(q.lines().len(), 2);
+    }
+
+    /// B2-0a：队列命令携带实体身份（G7 记账前提 2）。
+    ///
+    /// 无来源绘制 = `DANGLING`（哨兵），逐对象录制 = 真实 `ObjectId`；
+    /// mesh 与 line 两条路径都要有。
+    #[test]
+    fn test_draw_commands_carry_entity_identity() {
+        // 默认构造：哨兵
+        let mut q = DrawQueue3D::new();
+        q.draw_mesh(
+            Arc::new(wireframe_cube(1.0)),
+            Mat4::IDENTITY,
+            Material3D::color(Color32::WHITE),
+        );
+        q.draw_line(Vec3::ZERO, Vec3::X, Color32::RED);
+        assert_eq!(q.meshes()[0].entity, ObjectId::DANGLING);
+        assert_eq!(q.lines()[0].entity, ObjectId::DANGLING);
+
+        // 带身份构造：真实 ObjectId 原样保留
+        let id = ObjectId::new(7, 3);
+        q.clear();
+        q.draw_mesh_for(
+            id,
+            Arc::new(wireframe_cube(1.0)),
+            Mat4::IDENTITY,
+            Material3D::color(Color32::WHITE),
+        );
+        q.draw_line_for(id, Vec3::ZERO, Vec3::Y, Color32::GREEN);
+        assert_eq!(q.meshes()[0].entity, id);
+        assert_eq!(q.lines()[0].entity, id);
     }
 }

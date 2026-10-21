@@ -341,10 +341,11 @@ impl System for SceneRecord3DSystem {
                     .map(|t| t.matrix)
                     .or_else(|| scene.with::<Transform, _>(id, |transform| transform.matrix()))
                     .unwrap_or(ze_notion::Mat4::IDENTITY);
-                items.push((Arc::clone(mesh), model, material));
+                items.push((id, Arc::clone(mesh), model, material));
             });
-            for (mesh, model, material) in items {
-                queue.draw_mesh(mesh, model, material);
+            // B2-0a：逐对象录制带实体身份（G7 记账前提 2）。
+            for (id, mesh, model, material) in items {
+                queue.draw_mesh_for(id, mesh, model, material);
             }
         });
     }

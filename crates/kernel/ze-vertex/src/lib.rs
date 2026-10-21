@@ -19,7 +19,8 @@
 // `VertexLayout` 是**跨着色风格共享的契约**：新增着色风格（体素 / 卡通 / PBR …）时
 // **不得**改顶点格式，只能加 shader 变体与 pipeline —— 否则每加一种风格都要动格式，
 // "换风格 = 换数据"的可替换性随之失效。
-// （注：3D 顶点布局目前硬编码在 zela-render-backends::wgpu_3d，本 crate 不参与其定义。）
+// （B2-0a：3D 布局由本 crate 的 [`layout::VertexLayout::standard_3d`] 声明并消费 ——
+// `zela-render-backends::wgpu_3d` 的硬编码已改为契约翻译，见 wgpu_3d.rs。）
 
 pub mod aa;
 pub mod cache;

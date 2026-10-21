@@ -12,6 +12,9 @@ ze-notion = { path = "../../kernel/ze-notion" }
 ze-object = { path = "../../object/ze-object" }
 # S2：图层合成概念与 3D 渲染描述符已下沉渲染 IR 层；后端不再直接依赖 zela-scene。
 ze-render-ir = { path = "../../kernel/ze-render-ir" }
+# B2-0a：3D 顶点布局契约在 kernel 层声明（VertexLayout::standard_3d），
+# 后端只做「契约 → wgpu 类型」的翻译（铁律 4：不改顶点格式）。
+ze-vertex = { path = "../../kernel/ze-vertex" }
 
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
