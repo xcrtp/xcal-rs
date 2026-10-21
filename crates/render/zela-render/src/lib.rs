@@ -30,6 +30,7 @@ pub mod light_queue;
 pub mod painter_2d;
 pub mod painter_3d;
 pub mod record_systems;
+pub mod shape_to_mesh;
 pub mod tessellate;
 pub mod view_rect;
 pub mod viewport;
@@ -69,6 +70,8 @@ pub use ze_render_ir::{
     CustomShapeData, CustomSpec, CustomSpecs, DrawCommand, FillSolid, FillStyle, Opacity,
     ResolveStyle, Shape2D, SpecId, StrokeSolid, StrokeStyle, Style2D, ToShape2D, ZIndex, ZOrder,
 };
+// B2-3：2D 图元 → 3D 平面网格（派生桥）。
+pub use shape_to_mesh::{DerivedMesh, ShapeMeshError, derive_mesh};
 
 // ─── 呈现层度量空间（宽度所属空间）───────────────────────────────────────
 // 由 `record_scene` 统一解析（唯一换算点）；下游（UI/App）用它声明描边宽度

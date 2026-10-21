@@ -62,7 +62,9 @@ use zela_render::{
     RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
-use ze_render_ir::{Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, LayerBlend};
+use ze_render_ir::{
+    Capabilities, CapabilityError, ColorFormat, CullMode, DepthFormat, LayerBlend, ZOrder,
+};
 use ze_vertex::AttribType;
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
@@ -899,6 +901,8 @@ impl WgpuBackend3D {
             cull: CullMode,
             /// B2-2：混合语义（pipeline 查表键）。
             blend: LayerBlend,
+            /// B2-3：统一层序（透明桶排序键）。
+            z: ZOrder,
             uniform_offset: u32,
             /// 材质纹理 id（bind group 的缓存键）。
             texture_id: u64,
@@ -1007,6 +1011,7 @@ impl WgpuBackend3D {
                 } else {
                     LayerBlend::Opaque
                 },
+                z: md.z,
                 uniform_offset: offset_bytes,
                 texture_id: md
                     .material
@@ -1094,6 +1099,7 @@ impl WgpuBackend3D {
                 // B2-2：线段没有面朝向 ⇒ 恒不剔除；不透明混合（与旧行为一致）。
                 cull: CullMode::None,
                 blend: LayerBlend::Opaque,
+                z: line.z,
                 uniform_offset: offset_bytes,
                 // line 无材质纹理 → 绑定 1×1 **透明黑**兜底纹理（`DEFAULT_TEXTURE_ID = 0`
                 // 未注册，`resolve_texture_view` 回退），着色式退化为 `color * lit`。
@@ -1117,6 +1123,25 @@ impl WgpuBackend3D {
         // ── 按纹理 id 解析 / 缓存材质 bind group ────────────────────
         // bind group 绑定 arena buffer + 纹理视图 + sampler。buffer 重建
         // （generation 变化）时全部失效；纹理注册时由 register_texture 清空。
+        // ── B2-3：透明桶 ─────────────────────────────────────────────
+        // 不透明先画（深度测试定遮挡）；透明最后画，按统一 `ZOrder` **升序**
+        // （低层在前、高层后叠加 —— 与 2D 画家算法同一顺序，稳定排序）。
+        // 透明物体由 pipeline 的 Alpha blend 混合，深度写入仍开（B2-3 范围内不变）。
+        {
+            let mut opaque = Vec::new();
+            let mut transparent = Vec::new();
+            for s in skeletons {
+                if s.blend == LayerBlend::Opaque {
+                    opaque.push(s);
+                } else {
+                    transparent.push(s);
+                }
+            }
+            transparent.sort_by_key(|s| s.z);
+            opaque.extend(transparent);
+            skeletons = opaque;
+        }
+
         let mut bg_guard = self.bind_groups.lock().expect("bind_groups poisoned");
         if bg_guard.arena_generation != arena_generation {
             bg_guard.entries.clear();
@@ -1241,10 +1266,12 @@ impl WgpuBackend3D {
                     cull_mode: to_wgpu_cull_mode(key.cull),
                     ..Default::default()
                 },
-                // RC.3：深度测试（Less：近处像素深度更小者胜出），写入深度。
+                // RC.3：深度测试（Less：近处像素深度更小者胜出）。
+                // B2-3（R-A）：**透明桶不写深度** —— 否则同深度的透明面会在
+                // 后画者上被 `Less` 判掉，混合顺序无法由 ZOrder 控制。
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(key.blend == LayerBlend::Opaque),
                     depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
@@ -2579,6 +2606,87 @@ mod tests {
         assert!(
             pixel_at(&px, size, 16, 16)[3] > 0,
             "双面材质从背面必须可见（cull None）"
+        );
+    }
+
+    /// **B2-3 验收**：2D 图元派生网格**真的能进 3D 管线**（派生 → 上传 → 绘制）。
+    #[test]
+    fn test_b2_3_derived_2d_rect_renders_in_3d() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        let shape = ze_render_ir::Shape2D::Rect(ze_notion::Rect2D::new(
+            ze_notion::Vec2::new(-0.5, -0.5),
+            ze_notion::Vec2::new(0.5, 0.5),
+        ));
+        let style = ze_render_ir::Style2D {
+            fill: Some(Color32::WHITE),
+            ..Default::default()
+        };
+        let derived = zela_render::derive_mesh(&shape, &style).expect("Rect 必须可派生");
+        assert!(derived.material.double_sided);
+        assert_eq!(derived.material.variant, ShaderVariant::Flat);
+
+        let px = render_planes(
+            &backend,
+            &ctx,
+            LayerId(41),
+            size,
+            &[MeshDraw::new(derived.geometry, Mat4::IDENTITY, derived.material)],
+        );
+        assert_eq!(
+            pixel_at(&px, size, 16, 16),
+            [255, 255, 255, 255],
+            "派生矩形应以 Flat 纯白覆盖中心（不参与光照）"
+        );
+    }
+
+    /// **B2-3 验收**：透明桶 —— 透明物体按统一 `ZOrder` 顺序混合。
+    ///
+    /// 两片**同深度**的半透明面（不写深度 ⇒ 都能通过深度测试）：ZOrder 大者后画，
+    /// 其颜色应主导中心像素；把 ZOrder 对调 ⇒ 主导色随之对调（可证伪）。
+    #[test]
+    fn test_b2_3_transparent_bucket_orders_by_zorder() {
+        let Some((_gpu, backend, ctx)) = headless_backend() else {
+            return;
+        };
+        let size = 32u32;
+        let red = Color32::new(255, 0, 0, 128);
+        let blue = Color32::new(0, 0, 255, 128);
+
+        let mut red_q = flat_plane(0.5, 0.5, 0.0, red);
+        red_q.material.transparent = true;
+        red_q.z = ZOrder::new(0);
+        let mut blue_q = flat_plane(0.5, 0.5, 0.0, blue);
+        blue_q.material.transparent = true;
+        blue_q.z = ZOrder::new(1);
+
+        // RED(z=0) 先画、BLUE(z=1) 后画 ⇒ 中心偏蓝。
+        // 目标格式是 Bgra8（headless 默认）⇒ 字节 0 = B、字节 2 = R。
+        let a = render_planes(&backend, &ctx, LayerId(39), size, &[red_q.clone(), blue_q.clone()]);
+        let center = pixel_at(&a, size, 16, 16);
+        assert!(
+            center[0] > center[2],
+            "ZOrder 较大者后画，蓝色应主导中心像素（BGRA：B=通道0），实际 {center:?}"
+        );
+
+        // 对调 ZOrder ⇒ 红色主导。
+        let mut red_q2 = red_q.clone();
+        red_q2.z = ZOrder::new(1);
+        let mut blue_q2 = blue_q.clone();
+        blue_q2.z = ZOrder::new(0);
+        let b = render_planes(
+            &backend,
+            &ctx,
+            LayerId(40),
+            size,
+            &[blue_q2, red_q2],
+        );
+        let center = pixel_at(&b, size, 16, 16);
+        assert!(
+            center[2] > center[0],
+            "对调 ZOrder 后红色应主导中心像素（BGRA：R=通道2），实际 {center:?}"
         );
     }
 

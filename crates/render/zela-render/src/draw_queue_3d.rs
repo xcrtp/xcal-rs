@@ -18,11 +18,12 @@ use std::sync::Arc;
 
 use ze_notion::Mat4;
 use ze_notion::{Color32, Vec3};
-use ze_render_ir::ZOrder;
+use ze_render_ir::{Shape2D, Style2D, ZOrder};
 use ze_scene_contract::ObjectId;
 use zela_scene::scene::components::{Material3D, MeshGeometry, PrimitiveTopology};
 
 use crate::draw::{DrawItem, DrawQueue};
+use crate::shape_to_mesh::ShapeMeshError;
 
 /// **兼容别名**（B2-1）：3D 队列就是统一队列，不再是独立结构。
 pub type DrawQueue3D = DrawQueue;
@@ -168,6 +169,26 @@ impl DrawQueue {
         self.push_item(DrawItem::Line(
             LineDraw::new(start, end, color).with_entity(entity),
         ));
+    }
+
+    /// **B2-3：2D 图元派生为 3D 平面网格**并入队（融合的基础能力）。
+    ///
+    /// 材质自动默认化：`Flat` 变体（不参与光照）+ `double_sided = true`（纸片双面可见）
+    /// + `transparent` 由颜色 alpha 推导。不支持的图元 ⇒ [`ShapeMeshError`]（不静默）。
+    pub fn draw_shape_as_mesh(
+        &mut self,
+        entity: ObjectId,
+        z: ZOrder,
+        shape: &Shape2D,
+        style: &Style2D,
+    ) -> Result<(), ShapeMeshError> {
+        let derived = crate::shape_to_mesh::derive_mesh(shape, style)?;
+        self.push_item(DrawItem::Mesh(
+            MeshDraw::new(derived.geometry, Mat4::IDENTITY, derived.material)
+                .with_entity(entity)
+                .with_z(z),
+        ));
+        Ok(())
     }
 
     /// 3D 网格项（按队列顺序）。
