@@ -121,6 +121,8 @@ pub enum CapabilityError {
         requested: u32,
         max_supported: u32,
     },
+    #[error("目标颜色格式不受 IR 能力声明支持（仅 Rgba8UnormSrgb / Rgba8Unorm；不静默）")]
+    UnsupportedColorFormat,
 }
 
 #[cfg(test)]

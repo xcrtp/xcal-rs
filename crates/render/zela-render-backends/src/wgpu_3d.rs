@@ -62,6 +62,7 @@ use zela_render::{
     RenderTarget, ResourceCache, ResourceKey, Viewport,
 };
 use ze_render_ir::{LayerId, PrimitiveTopology, ShaderVariant, UvProjection};
+use ze_render_ir::{Capabilities, CapabilityError, ColorFormat, DepthFormat};
 use ze_vertex::AttribType;
 
 /// 默认着色器（cube.wgsl）：uniform = mat4 mvp + mat4 model + vec4 color。
@@ -168,6 +169,24 @@ fn variant_entry_point(variant: ShaderVariant) -> &'static str {
         ShaderVariant::Lambert => "fs_lambert",
         ShaderVariant::Pbr => "fs_pbr",
     }
+}
+
+/// B2-0c（D22）：格式特性位 → 最大 MSAA 采样数（纯函数，可用合成 flags 单测）。
+///
+/// wgpu 30 的 `get_texture_format_features` 在 `Adapter` 上（不在 `Device`），
+/// 故 `capabilities` 显式接收 adapter；本函数把位运算隔离出来，无需 GPU 即可验证。
+fn max_sample_count_from_flags(flags: wgpu::TextureFormatFeatureFlags) -> u32 {
+    let mut max = 1;
+    if flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2) {
+        max = 2;
+    }
+    if flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4) {
+        max = 4;
+    }
+    if flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8) {
+        max = 8;
+    }
+    max
 }
 
 /// B1-E：pipeline **按需构建**的查表键。四个维度一次定齐：
@@ -1181,6 +1200,30 @@ impl WgpuBackend3D {
         self.pipelines.lock().expect("pipelines poisoned").len()
     }
 
+    /// B2-0c（D22）：**能力查询** —— target 决定的最大 MSAA 采样数与格式。
+    ///
+    /// `sample_count` / 颜色格式 / 深度格式是"能力"不是"命令"：消费者（B2-5 的
+    /// AA 统一）先查后请求；不支持 ⇒ [`CapabilityError`]（铁律 2，不静默降级）。
+    ///
+    /// 需要 `adapter`：wgpu 30 的 `get_texture_format_features` 是 `Adapter` 方法
+    /// （`Device` 上没有）。调用方必须持有 adapter（B2-5 接线时补进装配层）。
+    pub fn capabilities(
+        &self,
+        adapter: &wgpu::Adapter,
+    ) -> Result<Capabilities, CapabilityError> {
+        let color_format = match self.format {
+            wgpu::TextureFormat::Rgba8UnormSrgb => ColorFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm => ColorFormat::Rgba8Unorm,
+            _ => return Err(CapabilityError::UnsupportedColorFormat),
+        };
+        let flags = adapter.get_texture_format_features(self.format).flags;
+        Ok(Capabilities {
+            max_sample_count: max_sample_count_from_flags(flags),
+            color_format,
+            depth_format: DepthFormat::Depth32Float,
+        })
+    }
+
     /// C3：把一个 3D 图层渲染到**自己的离屏纹理**（透明清屏）。
     ///
     /// 产出 [`Layer3DFrame`]，由 `SceneCompositorCallback::prepare` 交给合成器按声明顺序混合。
@@ -1531,6 +1574,63 @@ mod tests {
             to_wgpu_step_mode(layout.step_mode),
             wgpu::VertexStepMode::Vertex
         );
+    }
+
+    /// B2-0d（D18）：IR 的 `UniformLayout` 必须与 `cube.wgsl` 的两个结构逐位一致。
+    ///
+    /// 纯 CPU 测试（不需要 GPU）：wgsl 侧改动 ⇒ 这里红 ⇒ 强制同步 IR 声明，
+    /// 消灭 `pack_uniform_bytes` / `pack_light_bytes` 的魔数偏移漂移。
+    #[test]
+    fn test_uniform_layout_matches_cube_wgsl() {
+        let uniforms = ze_render_ir::cube_uniforms_layout();
+        assert_eq!(uniforms.size, UNIFORM_SIZE as u32);
+        assert_eq!(uniforms.offset_of("mvp"), Some(0));
+        assert_eq!(uniforms.offset_of("model"), Some(64));
+        assert_eq!(uniforms.offset_of("color"), Some(128));
+        assert_eq!(uniforms.offset_of("params"), Some(144));
+
+        let lights = ze_render_ir::cube_lights_layout();
+        assert_eq!(lights.size, LIGHT_UNIFORM_SIZE as u32);
+        assert_eq!(lights.offset_of("counts"), Some(0));
+        assert_eq!(lights.offset_of("dirs"), Some(16));
+        assert_eq!(lights.offset_of("colors"), Some(80));
+        assert_eq!(lights.offset_of("points"), Some(144));
+        assert_eq!(lights.offset_of("point_colors"), Some(208));
+        assert_eq!(lights.offset_of("camera"), Some(272));
+    }
+
+    /// B2-0c（D22）：能力查询的采样数映射（纯 CPU，合成 flags，无需 GPU）。
+    ///
+    /// 覆盖 1/2/4/8 四档；调用方（B2-5）据 `require_sample_count` 决定请求值，
+    /// 超限即显式错误（不静默降级）。
+    #[test]
+    fn test_max_sample_count_from_flags() {
+        use wgpu::TextureFormatFeatureFlags as F;
+        assert_eq!(max_sample_count_from_flags(F::empty()), 1);
+        assert_eq!(max_sample_count_from_flags(F::MULTISAMPLE_X2), 2);
+        assert_eq!(max_sample_count_from_flags(F::MULTISAMPLE_X2 | F::MULTISAMPLE_X4), 4);
+        assert_eq!(
+            max_sample_count_from_flags(
+                F::MULTISAMPLE_X2 | F::MULTISAMPLE_X4 | F::MULTISAMPLE_X8
+            ),
+            8
+        );
+        // 高位独在也要取到（不要求低位连续）
+        assert_eq!(max_sample_count_from_flags(F::MULTISAMPLE_X4), 4);
+
+        // IR 侧的能力门槛：4x 在 max=4 时可行、max=2 时显式报错
+        let caps = Capabilities {
+            max_sample_count: 2,
+            color_format: ColorFormat::Rgba8UnormSrgb,
+            depth_format: DepthFormat::Depth32Float,
+        };
+        assert!(caps.require_sample_count(4).is_err());
+        let caps = Capabilities {
+            max_sample_count: 4,
+            color_format: ColorFormat::Rgba8UnormSrgb,
+            depth_format: DepthFormat::Depth32Float,
+        };
+        assert_eq!(caps.require_sample_count(4).unwrap(), 4);
     }
 
     /// 读取打包字节中第 `i` 个 f32。

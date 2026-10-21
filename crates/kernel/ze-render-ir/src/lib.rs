@@ -30,6 +30,7 @@ pub mod mesh;
 pub mod pipeline;
 pub mod shape;
 pub mod style;
+pub mod uniform;
 
 pub use degrade::ToShape2D;
 pub use draw::{DrawCommand, ZIndex};
@@ -43,6 +44,10 @@ pub use shape::{CustomShapeData, CustomSpec, CustomSpecs, Shape2D, SpecId, Style
 pub use style::{
     FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,
     stroke_style_raw,
+};
+pub use uniform::{
+    UniformField, UniformLayout, UniformLayoutError, UniformType, cube_lights_layout,
+    cube_uniforms_layout,
 };
 
 /// 呈现层度量空间：宽度属**世界**（随缩放）还是**屏幕**（不随缩放）。
