@@ -6891,6 +6891,7 @@ dependencies = [
  "ze-scene-core",
  "ze-vertex",
  "zela-render",
+ "zela-render-vector",
  "zela-scene-ecs",
 ]
 
@@ -6899,6 +6900,7 @@ name = "zela-render-vector"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
+ "pollster 1.0.1",
  "serde",
  "thiserror 2.0.20",
  "wgpu",

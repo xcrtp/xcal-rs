@@ -22,8 +22,15 @@ bytemuck = { version = "1.25", features = ["derive", "extern_crate_alloc", "min_
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 thiserror.workspace = true
 serde.workspace = true
+# 上游 `Gpu::new()` 用 `pollster::block_on` 起 GPU（与本仓库其它后端同一做法）。
+pollster = "1.0.1"
 
 [features]
-default = []
-# 移植落地后由 `zela-render-backends` 打开；当前为空壳（B4 Step 3 只立规范）。
+# 本 crate 即矢量渲染色；`render` 默认开启（保留上游 `#[cfg(feature = "render")]` 标注）。
+default = ["render"]
 render = []
+# 上游代码里保留的 feature 名（本 crate **不启用**）：声明出来只为让
+# `cfg(feature = ...)` 合规，不引入任何依赖。
+python = []
+player = []
+export = []
