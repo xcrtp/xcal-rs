@@ -692,12 +692,15 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **双后端容差回归（Step 6）**：`zela-render-backends/tests/vector_vs_wgpu.rs`
 >   在同一进程里同时挂载两个后端，同一形状各渲一帧，**不断言像素相同**
 >   （解析 AA vs MSAA 本来就不同），只断言：非空 + 覆盖率相对差 ≤ 10% + 逐像素
->   RGB MAE ≤ 24/255。实测：轴对齐矩形逐位一致（MAE 0.00），非 45° 斜边三角形
->   MAE 12.18/255。
-> - **矢量后端尚未接进作品管线（记账，见 `GAPS.md` V2-06/V2-07）**：
->   `DrawCommand` → `Record` 的全量映射（描边 / 渐变 / 图片）、`zela.render.shapes`
->   与 `BackendKind::Vector` 的可用性都还没接；因此**没有**矢量作品基线，
->   既有 6 条基线全部走 wgpu 路径且逐位不变。
+>   RGB MAE ≤ 8/255，且内部区 MAE ≤ 2/255（区分"AA 方式不同"与"色彩管线不同"）。
+>   实测：轴对齐矩形逐位一致（MAE 0.00），非 45° 斜边三角形 MAE 0.09（内部区 0.00、
+>   边缘带 3.44；早期 12.18 的读数来自夹具把屏幕坐标当世界坐标的镜像错误）。
+> - **矢量后端的场景适配（V2-06，B4 验收：填充族）**：`zela-render-vector::scene`
+>   把 `Shape2D + Transform2D + Style2D` 映射成上游填充记录（圆/椭圆 → 4 段三次曲线、
+>   矩形/多边形、路径含 Quad/Cubic/Arc），变换与"画布中心为原点、y 向上"的坐标换算
+>   在 CPU 侧烘进控制点；描边 / 渐变 / `Custom` **显式报错**（不静默丢图元）。
+>   真实 `DrawQueue` 帧对拍：覆盖率 4568 vs 4580、MAE 0.05/255、内部区 0.00。
+>   仍缺描边 / 渐变 / 纹理 ⇒ `BackendKind::Vector` 仍不可注册，也没有矢量作品基线。
 > - **合成层保比例适配（S4-11，B4 验收）**：`CompositeOp::fit` 为 `Some(源尺寸)` 时，
 >   顶点阶段按 per-layer uniform 的 `rect` 把全 NDC 四边形收窄成 **contain + 居中**
 >   （letterbox），宽高比不一致不再拉伸；`fit = None`（视口层）仍是全 NDC ⇒ 逐位不变。

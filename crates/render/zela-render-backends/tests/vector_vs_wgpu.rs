@@ -186,6 +186,74 @@ fn vector_backend_matches_wgpu_on_an_axis_aligned_rect() {
     assert!(relative < 1e-9 && mae < 1e-9, "轴对齐矩形应逐位一致：相对差 {relative:.6}，MAE {mae:.6}");
 }
 
+/// **场景适配回归（V2-06）**：真实 `DrawQueue`（矩形 + 圆，两种图元）走
+/// `snapshot_queue → SceneItem → fill_paths` 的映射路径，与 wgpu 同一帧按容差比较。
+/// 这比手搓 `FilledPath` 更接近"作品级别"的每帧对拍。
+#[test]
+fn scene_mapping_matches_wgpu_on_a_filled_frame() {
+    let mut queue = DrawQueue::new();
+    queue.rect_fill(
+        ZIndex::new(0),
+        Rect2D::new(Vec2::new(32.0, 32.0), Vec2::new(96.0, 96.0)),
+        FillSolid::new(Color32::RED),
+    );
+    queue.circle_fill(
+        ZIndex::new(1),
+        ze_scene_core::Circle::new(Vec2::new(64.0, 16.0), 12.0),
+        FillSolid::new(Color32::RED),
+    );
+    let snapshot = zela_render_backends::snapshot_queue(&queue);
+    let items: Vec<zela_render_vector::SceneItem<'_>> = snapshot
+        .iter()
+        .map(|recorded| zela_render_vector::SceneItem {
+            shape: &recorded.shape,
+            transform: recorded.transform,
+            style: recorded.style,
+        })
+        .collect();
+
+    let Some((_gpu, ctx)) = zela_render_backends::gpu_test::require_gpu() else {
+        panic!("本机起不来 GPU（对拍需要真实设备）");
+    };
+    let layers = vec![SceneLayer {
+        id: LayerId(0),
+        kind: LayerKind::Viewport2D {
+            camera: Camera2D::new(
+                Vec2::new(64.0, 64.0),
+                1.0,
+                Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
+            ),
+        },
+        blend: LayerBlend::Alpha,
+        opacity: 1.0,
+    }];
+    let callback = SceneCompositorCallback::new(
+        Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
+        layers,
+        &queue,
+        &DrawQueue3D::new(),
+        &LightQueue::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        PostFilterChain::default(),
+    );
+    let mut backends = StandardBackends::new(&ctx);
+    let wgpu = bgra_to_rgba(&render_frame_headless(
+        &ctx,
+        &mut backends,
+        &callback,
+        ScreenParams::new([SIZE, SIZE], 1.0),
+        wgpu::Color::BLACK,
+    ));
+    let vector = zela_render_vector::render_scene_2d(SIZE, SIZE, 1, [0.0, 0.0, 0.0, 1.0], &items)
+        .expect("场景映射 / 矢量渲染失败");
+
+    let (relative, mae) = assert_within_tolerance(&wgpu, &vector);
+    assert!(relative < 0.02, "覆盖率相对差应很小：{relative:.4}");
+    assert!(mae < 2.0, "整帧 MAE 应很小：{mae:.2}/255");
+}
+
 /// 斜边三角形：边缘以非 45° 斜率穿过像素内部 ⇒ 解析 AA 与 MSAA 必然不同，
 /// 容差判据在这里生效（45° 斜边恰好切在像素角上，两边会逐位相同，测不出差异）。
 #[test]

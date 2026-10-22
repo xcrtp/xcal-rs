@@ -32,7 +32,8 @@ impl BackendKind {
     pub fn namespaces(self) -> &'static [&'static str] {
         match self {
             BackendKind::Wgpu => IMPLEMENTED_NAMESPACES,
-            // 移植完成后改为 `&[caps::shapes::NAMESPACE]`（Step 5 接线）。
+            // 矢量的**填充族**映射已就绪（`zela-render-vector::scene`），但描边 /
+            // 渐变 / 纹理尚未映射 ⇒ 仍不自述 `zela.render2d`（见 GAPS V2-06）。
             BackendKind::Vector => &[],
         }
     }

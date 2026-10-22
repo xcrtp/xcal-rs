@@ -6905,6 +6905,8 @@ dependencies = [
  "thiserror 2.0.20",
  "wgpu",
  "xxhash-rust",
+ "ze-notion",
+ "ze-render-ir",
 ]
 
 [[package]]

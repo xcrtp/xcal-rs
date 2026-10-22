@@ -355,12 +355,12 @@
 | V2-03 | 上游是 `m1/m2` 双变换 + **GPU 插值**；我们是 CPU 每帧烘单矩阵 | 渲染后端 | **记账（移植时已知非等价）** | 移植时令 `m1 = m2` 可跑通，但**丢掉"一次上传、GPU 插值"的性能模型**；确定性分镜不受影响（逐帧渲染） |
 | V2-04 | 三角化资产（`tessellate.rs` / `VertexBufferData` / `shape_to_mesh`）在矢量路线下不是唯一真源 | 文档 / 分层 | **记账（性质变更）** | 不删除、不破坏分层；在 ARCHITECTURE 写明"wgpu 后端专用路径"，避免后人误以为全局唯一 |
 | V2-05 | 旧 ZSB 没有 `render_params` 字段 | 装配产物 | **已按兼容策略关闭（V1-03）** | `#[serde(default)]` ⇒ 缺字段按 `RenderParams::default()`（= 当前行为）；不升容器版本（该字段不进 hash） |
-| V2-06 | 矢量后端**未接进作品管线**：`DrawCommand` / `Path2D` → `Record` 的全量映射（描边 / 渐变 / 图片 / 圆角）未做；`zela.render.shapes` 未实现；`BackendKind::Vector` 仍 `is_available() == false` | 渲染后端 / 装配 | **未执行（Step 5 场景适配，B4 未排入）** | 现状只打通"填充多边形 → 一帧"（`api::render_2d`）；`BackendKind::Vector::capabilities()` 仍为空集、`namespaces()` 为空 |
+| V2-06 | 矢量后端**未接进作品管线**：`DrawCommand` / `Path2D` → `Record` 的全量映射（描边 / 渐变 / 图片 / 圆角）未做；`zela.render.shapes` 未实现；`BackendKind::Vector` 仍 `is_available() == false` | 渲染后端 / 装配 | **部分关闭（B4 验收：填充族已映射）** | 新增 `zela-render-vector::scene`：`Shape2D + Transform2D + Style2D` → 填充记录（圆/椭圆 4 段三次曲线、矩形/多边形、路径含 Quad/Cubic/Arc；变换烘进控制点并按"画布中心为原点、y 向上"换算）。**未支持项显式报错**（描边 / `Custom`）。真实 `DrawQueue` 帧对拍：`scene_mapping_matches_wgpu_on_a_filled_frame` 覆盖 4568 vs 4580 像素、MAE 0.05/255、内部区 0.00。仍缺：描边（cap/joint/宽度）、渐变笔刷行、纹理图片 ⇒ `BackendKind::Vector` 仍不可注册 |
 | V2-07 | 矢量作品新基线（计划 §6.3）依赖 V2-06 | 验收 / 基线 | **未执行（依赖 V2-06）** | 新增基线需要"脚本 → ZSB → 矢量后端出帧"整链；当前 `cargo verify` 的 6 条基线全部走 wgpu 路径，**逐位不变** |
 | V2-08 | 基线归因：`--record` 在**脏工作树**上把值标成 `@ <HEAD>`，但该提交并不包含这份状态（6 条值全标 `@ da9ea93`，实际由 `642b9d4` 携带）；slotA → slotB 的差异也无逐条说明 | 验收 / 基线 | **已关闭（B4 验收 P1-4，口径 D）** | `--record` 检测脏树 ⇒ 写 `@ <sha>+dirty`；新 `cargo verify --rebind`（要求干净树）把 `<sha>+dirty` **整段**换成携带录制的提交并自校验；`smoke` / `hashes` 在见到未归因 `+dirty` 时**直接失败**；`# delta:` 逐条留痕（slotA→slotB 前缀 + 原因指针）；存量 `baselines.txt` 已按真实血缘重写（demo3d `dc8b1388→ddd69b3e`、atlas `efe5bf39→93632049`，@ `642b9d4`）。文档：`FRAME_HASH_BASELINES.md` 口径 D；测试：`xtask/tests/parser_tests.rs` 5 条 |
 | V2-09 | 双后端对拍的**口径**问题（B4 验收 P1-1/2/3）：① MAE 12.18 无法区分"AA 方式不同"与"色彩管线不同"；② 矢量自测在起不来 GPU 时静默 `return`（仍然 passed）；③ 对拍注释声称"验证注册机制"，实际绕过 `BackendRegistry` | 测试 / 对拍 | **已关闭（B4 验收）** | ① MAE 拆「内部区 / 边缘带」并输出计数，内部区门禁 ≤ 2/255；**诊断出真 bug**：斜边夹具把屏幕坐标（y 向下）当成世界坐标（y 向上）⇒ 比的是镜像形状。修正后实测全图 MAE 0.09（内部区 0.00、边缘带 3.44），全局阈值由 24 收紧到 8。② `api.rs` 起不来即 `panic!`（与对拍同口径）。③ 注释改为"本对拍不经过 `BackendRegistry`，注册机制由 `registry.rs` 单测覆盖" |
 
-**K 段小计（B4）**：已关闭 9（V1-01..05、V2-01/02、V2-08/09）· 记账 2（V2-03/04）· 未执行 2（V2-06/07）。
+**K 段小计（B4）**：已关闭 9（V1-01..05、V2-01/02、V2-08/09）· 部分关闭 1（V2-06）· 记账 2（V2-03/04）· 未执行 1（V2-07）。
 
 ---
 

@@ -37,6 +37,9 @@ mod render;
 
 pub mod api;
 pub use api::{FilledPath, render_2d};
+// B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充记录（只依赖 kernel 层）。
+pub mod scene;
+pub use scene::{SceneItem, SceneMapError, fill_paths, render_scene_2d};
 
 /// 内容 key：xxh3（64 位，0 保留）。等值内容只上传一次。
 pub fn digest<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> u64 {
