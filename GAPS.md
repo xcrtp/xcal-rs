@@ -341,7 +341,7 @@
 ## K. B4 批次记账（矢量后端移植与渲染参数契约，2026-10-22）
 
 > 计划《B4执行计划_矢量后端移植与渲染参数契约》。上游 `manimgx @ dcfe01a`（本地快照在仓库内 `manimgx/`，已 gitignore）。
-> 本批 Step 1 / 2 / 3 / 4 已落地；**Step 5（移植）与 Step 6（双后端共存验证 + 新基线）未执行**，单列说明。
+> 本批 Step 1 / 2 / 3 / 4 / 5 / 6 已落地；矢量后端**能画、能对拍**，但尚未接进作品管线（V2-06 / V2-07）。
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
@@ -350,13 +350,15 @@
 | V1-03 | ZSB 不承载渲染参数，回放端各写各的默认值 | 装配产物 / 回放 | **已关闭（B4 Step 2）** | `Meta.render_params`（`#[serde(default)]`，不进内容 hash）；`zela-playback::bundle_render_params` + `check_render_params_supported`；`zela-render` 开渲前校验 |
 | V1-04 | 许可证基线未立：上游多数文件**自身没有 SPDX 头** | 依赖 / 合规 | **已关闭（B4 Step 3）** | 新 crate `zela-render-vector`：`LICENSES/{MIT,Apache-2.0}.txt` 逐字复制；`UPSTREAM.md` 记录 SHA + 逐文件许可（light/occlusion/tone/bloom + dfg.bin 为 Apache-2.0）；只开 `render` feature |
 | V1-05 | `RenderCapabilitySet::ALL` 把"只有一个后端"写进类型；无后端注册/选择点 | 渲染后端 | **已关闭（B4 Step 4）** | 删除 `ALL`，新增 `union()`；`BackendKind::{Wgpu, Vector}` 各自自述；`BackendRegistry` 注册 / 选择 / 协商（未实现或未注册 ⇒ 显式错误）；测试锁住"wgpu-only 协商 shapes 必须失败" |
-| V2-01 | 矢量后端本身尚未移植（`vector.*` / `render.rs` 公共类型 / 着色栈 / 光栅后端，约 9.9k 行） | 渲染后端 | **未执行（B4 Step 5）** | 落点与规范已就绪：crate 骨架 + `UPSTREAM.md` 的范围表 / 剔除表 / 依赖边界；`BackendKind::Vector` 在移植前 `is_available() == false` |
-| V2-02 | 双后端共存验证 + 矢量作品新基线 | 测试 / 对拍 | **未执行（B4 Step 6，依赖 V2-01）** | 断言口径已定：不比像素相同（解析 AA vs MSAA），只比"非空 + 覆盖率阈值 + 边缘质量定性" |
+| V2-01 | 矢量后端本身尚未移植（`vector.*` / `render.rs` 公共类型 / 着色栈 / 光栅后端，约 9.9k 行） | 渲染后端 | **已关闭（B4 Step 5）** | `zela-render-vector` 收录上游源码（`vector.*` + `vector_buffers/compute` + `render.rs` 公共类型 + `blend*` / `depth` / `paint` / `mesh` / `shadow` / `bloom` / `occlusion` / `environment` + 着色栈 wgsl + `dfg.bin`）；逐个补 SPDX 头；宿主适配层 `api::FilledPath` / `render_2d`。验证：`cargo test -p zela-render-vector` 26 passed（含上游自带用例 + `filled_square_draws`） |
+| V2-02 | 双后端共存验证 + 矢量作品新基线 | 测试 / 对拍 | **已关闭（B4 Step 6，新基线拆到 V2-07）** | `zela-render-backends/tests/vector_vs_wgpu.rs`：同一进程内 wgpu 与矢量各渲一帧，判据 = 非空 + 覆盖率相对差 ≤ 10% + 逐像素 RGB MAE ≤ 24/255。实测：轴对齐矩形 4096/4096 像素、MAE 0.00；非 45° 斜边三角形 MAE 12.18/255、覆盖率相对差 0.005 |
 | V2-03 | 上游是 `m1/m2` 双变换 + **GPU 插值**；我们是 CPU 每帧烘单矩阵 | 渲染后端 | **记账（移植时已知非等价）** | 移植时令 `m1 = m2` 可跑通，但**丢掉"一次上传、GPU 插值"的性能模型**；确定性分镜不受影响（逐帧渲染） |
 | V2-04 | 三角化资产（`tessellate.rs` / `VertexBufferData` / `shape_to_mesh`）在矢量路线下不是唯一真源 | 文档 / 分层 | **记账（性质变更）** | 不删除、不破坏分层；在 ARCHITECTURE 写明"wgpu 后端专用路径"，避免后人误以为全局唯一 |
 | V2-05 | 旧 ZSB 没有 `render_params` 字段 | 装配产物 | **已按兼容策略关闭（V1-03）** | `#[serde(default)]` ⇒ 缺字段按 `RenderParams::default()`（= 当前行为）；不升容器版本（该字段不进 hash） |
+| V2-06 | 矢量后端**未接进作品管线**：`DrawCommand` / `Path2D` → `Record` 的全量映射（描边 / 渐变 / 图片 / 圆角）未做；`zela.render.shapes` 未实现；`BackendKind::Vector` 仍 `is_available() == false` | 渲染后端 / 装配 | **未执行（Step 5 场景适配，B4 未排入）** | 现状只打通"填充多边形 → 一帧"（`api::render_2d`）；`BackendKind::Vector::capabilities()` 仍为空集、`namespaces()` 为空 |
+| V2-07 | 矢量作品新基线（计划 §6.3）依赖 V2-06 | 验收 / 基线 | **未执行（依赖 V2-06）** | 新增基线需要"脚本 → ZSB → 矢量后端出帧"整链；当前 `cargo verify` 的 6 条基线全部走 wgpu 路径，**逐位不变** |
 
-**K 段小计（B4，已执行部分）**：已关闭 5（V1-01..05）· 记账 2（V2-03/04）· 未执行 2（V2-01/02）。
+**K 段小计（B4）**：已关闭 7（V1-01..05、V2-01/02）· 记账 2（V2-03/04）· 未执行 2（V2-06/07）。
 
 ---
 

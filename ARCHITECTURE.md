@@ -664,7 +664,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **fourier / storyboard 迁移到纹理路径仍未执行（S5-01）**：两者仍走默认 2D
 >   直画路径；迁移会引入一次纹理采样 ⇒ 需重录。
 
-> **B4 批次（2026-10-22，Step 1-4 已落地，Step 5-6 未执行）**：渲染参数契约 + 矢量后端移植。
+> **B4 批次（2026-10-22，Step 1-6 已落地）**：渲染参数契约 + 矢量后端移植。
 > - **`RenderParams` 进 IR（Step 1）**：`ze_render_ir::params` 收口
 >   size / supersample / msaa / filter / tone / bloom / ao / env。`Default` 逐字段
 >   等价当前行为；`validate()` 管有效性、`is_supported_by(&Capabilities)` 管一致性
@@ -684,8 +684,20 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `BackendRegistry` 提供注册 / 选择 / 协商（未实现或未注册 ⇒ 显式错误）。
 > - **三角化资产的性质（记账）**：`tessellate.rs` / `shape_to_mesh` 在双后端下是
 >   **wgpu 后端专用路径**，不是全局唯一真源（矢量后端不做三角化）。
-> - **矢量后端移植（Step 5）与双后端共存验证（Step 6）未执行**：落点与规范已就绪，
->   移植量约 9.9k 行；`BackendKind::Vector` 在移植前 `is_available() == false`。
+> - **矢量后端移植（Step 5）**：`zela-render-vector` 收录上游 `manimgx` 的三 pass
+>   路径渲染（flatten / raster / composite，**解析 AA**，无三角化 / 无 stencil / 无 MSAA）
+>   与着色栈、光栅后端；每个 `.rs` / `.wgsl` 都带 SPDX 头，修改处标 `Modified by Zela`。
+>   宿主适配层 `api::{FilledPath, render_2d}` 把 zela 的填充路径喂到离屏一帧。
+>   移植时令 `m1 = m2`（丢掉上游"一次上传 + GPU 插值"的性能模型，见 `GAPS.md` V2-03）。
+> - **双后端容差回归（Step 6）**：`zela-render-backends/tests/vector_vs_wgpu.rs`
+>   在同一进程里同时挂载两个后端，同一形状各渲一帧，**不断言像素相同**
+>   （解析 AA vs MSAA 本来就不同），只断言：非空 + 覆盖率相对差 ≤ 10% + 逐像素
+>   RGB MAE ≤ 24/255。实测：轴对齐矩形逐位一致（MAE 0.00），非 45° 斜边三角形
+>   MAE 12.18/255。
+> - **矢量后端尚未接进作品管线（记账，见 `GAPS.md` V2-06/V2-07）**：
+>   `DrawCommand` → `Record` 的全量映射（描边 / 渐变 / 图片）、`zela.render.shapes`
+>   与 `BackendKind::Vector` 的可用性都还没接；因此**没有**矢量作品基线，
+>   既有 6 条基线全部走 wgpu 路径且逐位不变。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）
