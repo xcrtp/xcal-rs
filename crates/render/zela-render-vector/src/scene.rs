@@ -546,7 +546,10 @@ mod tests {
 
     #[test]
     fn custom_shapes_fail_explicitly() {
-        let shape = Shape2D::Custom(ze_render_ir::CustomShapeData::default());
+        let shape = Shape2D::Custom(ze_render_ir::CustomShapeData::new(
+            "test.spec",
+            ze_notion::Rect2D::new(Vec2::ZERO, Vec2::splat(1.0)),
+        ));
         let item = SceneItem {
             shape: &shape,
             transform: Transform2D::identity(),
