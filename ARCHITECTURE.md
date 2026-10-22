@@ -698,6 +698,14 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `DrawCommand` → `Record` 的全量映射（描边 / 渐变 / 图片）、`zela.render.shapes`
 >   与 `BackendKind::Vector` 的可用性都还没接；因此**没有**矢量作品基线，
 >   既有 6 条基线全部走 wgpu 路径且逐位不变。
+> - **合成层保比例适配（S4-11，B4 验收）**：`CompositeOp::fit` 为 `Some(源尺寸)` 时，
+>   顶点阶段按 per-layer uniform 的 `rect` 把全 NDC 四边形收窄成 **contain + 居中**
+>   （letterbox），宽高比不一致不再拉伸；`fit = None`（视口层）仍是全 NDC ⇒ 逐位不变。
+>   作品 A/B 的 4:3 = 4:3 换算为精确的 `(-1, 1, -1, 1)`，基线未动。
+> - **基线归因口径 D（B4 验收 P1-4）**：`--record` 在脏工作树上写 `@ <sha>+dirty`，
+>   提交后 `cargo verify --rebind` 把整段换成携带录制的提交；`smoke` / `hashes`
+>   见到未归因的 `+dirty` 直接失败；`# delta:` 逐条记录 slotA → slotB 的变化。
+>   （详见 `FRAME_HASH_BASELINES.md`；`GAPS.md` V2-08。）
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

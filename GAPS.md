@@ -325,7 +325,7 @@
 | S4-08 | `SurfaceTexture.filter` / `mipmap` 已进契约，但后端采样仍用全局默认 | 渲染后端 | **仍成立（未接线）** | 为保持 demo3d 零差异，4c 未改后端 sampler；mipmap 生成本就未实现（E-08）。触发条件：出现对过滤敏感的 Surface 内容 / 引入 mipmap 生成 |
 | S4-09 | 内容层录制只支持 `(Path, StrokeSolid)`，其它组合走 Surface 会静默丢内容 | 渲染管线 | **已关闭（B3 Step 5-1）** | 新增 `record_scene_for_surface`：复用 9 组全组合 + Parent 归属过滤；`ContentTextureItem` 标记**不再必需**（组件保留登记以兼容旧数据）；demo3d 零差异 |
 | S4-10 | Surface 归属的 2D 内容被**屏幕视口重复绘制**（同一对象出现两次且带偏移） | 渲染管线 | **已关闭（B3 Step 5 修正）** | `record_group` 引入 `SurfaceScope::{Viewport, Content}`：视口层跳过归属任一 `Surface` 的对象（内容只进该 Surface 的纹理）；test `renderer2d_content_is_not_drawn_in_viewport`；`surface_matrix` 重录 `baafe1aa… → 7bed8a31…`，既有四基线不变 |
-| S4-11 | `composite = true` 把整张纹理**铺满视口**（无 letterbox / 无目标矩形）⇒ 纹素宽高比 ≠ 输出宽高比时画面被拉伸（圆变椭圆） | 渲染后端 | **仍成立（已知限制）** | 作品 A/B 已按「bounds = texel = 承载平面 = 4:3」对齐规避；触发条件：窗口比例与 texel 比例不一致（如 16:9 输出 4:3 纹理）。修法需给合成四边形加目标矩形或 UV 缩放 |
+| S4-11 | `composite = true` 把整张纹理**铺满视口**（无 letterbox / 无目标矩形）⇒ 纹素宽高比 ≠ 输出宽高比时画面被拉伸（圆变椭圆） | 渲染后端 | **已关闭（B4 验收）** | `CompositeOp.fit: Option<(u32,u32)>`：`Some` ⇒ 按源纹理宽高比 **contain + 居中**（`fit_rect` + `rect_to_ndc`，顶点阶段按 per-layer uniform 的 `rect` 重映射四边形）；`None` ⇒ 铺满（视口层，离屏尺寸 == 视口尺寸 ⇒ 恒等）。验收：`gpu_fit_letterboxes_instead_of_stretching`（2:1 源进 4×4 ⇒ 上下各 1 行黑边）+ 3 条纯函数用例；既有 5 条 native 基线**逐位不变**（作品 A/B 本就是 4:3 = 4:3，rect 换算为精确的 `(-1,1,-1,1)`） |
 | S4-12 | `Planar` 兜底 UV 的 V 轴方向反了：贴图在无 UV 几何上**上下倒转** | 渲染管线 | **已关闭（B3 Step 5 修正）** | `fallback_uvs` Planar 改为 `v = 1 - y`（纹理行首在模型 +y，与 `parametric_surface` 手写的 `1.0 - v` 同口径）；test `planar_fallback_uv_puts_image_top_at_positive_y` |
 | S4-13 | `solid_cube` 只有 8 个共享顶点、**无 UV / 无法线**：Planar 兜底在侧面（x=常量）退化成 0 面积 ⇒ PBR 法线 TBN 除以 `det≈0` 得 NaN（右脸随机噪点）；面法线恒 +Z ⇒ 三个面同亮度 | 渲染管线 | **已关闭（B3 Step 5 修正）** | 改 24 顶点（每面 4 个）：显式 UV（图像行首在 `+y`）+ 面法线；`cube.wgsl` 的 TBN 在 `abs(det) ≤ 1e-6` 时跳过法线贴图；tests `test_solid_cube_faces_have_non_degenerate_uv`；demo3d 重录 `dc8b1388… → ddd69b3e…`（噪点消失 + 面法线正确着色，逐条可解释） |
 | S5-01 | fourier / storyboard 迁移到纹理路径 + 重录 | 作品 | **未执行** | 本批 Step 5 只做**新作品的 fixture 注册 + 重录**，不含迁移；两者仍走默认 2D 直画路径。迁移会引入一次纹理采样 ⇒ 必须重录 |
@@ -334,7 +334,7 @@
 | S6-03 | Rust 版 `authored/demo3d.rs` 不进任何对拍 / 测试（验证盲区） | 作品 / 测试 | **仍成立（记账）** | `build_script_runtime` 用 `with_demo3d = false`，`--script` / `--bundle` 都不构建它；`tests/` 只覆盖能力 demo 与分镜 ⇒ 该模块的改动无人验（4c-4 的"零差异"对它是平凡真）。触发条件：给它加对拍入口，或显式降级为"仅 GUI 示例" |
 | S6-04 | 脚本可表达的图元是 9 组录制表的**真子集** | 脚本 API | **仍成立（已知）** | `ze-scene-api` 只有 `Circle` / `Polyline` / `Arrow` / `PathShape`（无 Rect / Line / Ellipse / Polygon）；作品 A 因此只能覆盖 Circle / Arrow / Path × {Fill, Stroke}，Rect / Line 组合**无法用脚本表达** |
 
-**J 段小计（B3，已执行部分）**：已关闭 19（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10/12/13、S6-01）· 仍成立/显式拒绝 8（S1-02/03、S2-03、S4-08、S4-11、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 20（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10/11/12/13、S6-01）· 仍成立/显式拒绝 7（S1-02/03、S2-03、S4-08、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
 
 ---
 
@@ -357,8 +357,10 @@
 | V2-05 | 旧 ZSB 没有 `render_params` 字段 | 装配产物 | **已按兼容策略关闭（V1-03）** | `#[serde(default)]` ⇒ 缺字段按 `RenderParams::default()`（= 当前行为）；不升容器版本（该字段不进 hash） |
 | V2-06 | 矢量后端**未接进作品管线**：`DrawCommand` / `Path2D` → `Record` 的全量映射（描边 / 渐变 / 图片 / 圆角）未做；`zela.render.shapes` 未实现；`BackendKind::Vector` 仍 `is_available() == false` | 渲染后端 / 装配 | **未执行（Step 5 场景适配，B4 未排入）** | 现状只打通"填充多边形 → 一帧"（`api::render_2d`）；`BackendKind::Vector::capabilities()` 仍为空集、`namespaces()` 为空 |
 | V2-07 | 矢量作品新基线（计划 §6.3）依赖 V2-06 | 验收 / 基线 | **未执行（依赖 V2-06）** | 新增基线需要"脚本 → ZSB → 矢量后端出帧"整链；当前 `cargo verify` 的 6 条基线全部走 wgpu 路径，**逐位不变** |
+| V2-08 | 基线归因：`--record` 在**脏工作树**上把值标成 `@ <HEAD>`，但该提交并不包含这份状态（6 条值全标 `@ da9ea93`，实际由 `642b9d4` 携带）；slotA → slotB 的差异也无逐条说明 | 验收 / 基线 | **已关闭（B4 验收 P1-4，口径 D）** | `--record` 检测脏树 ⇒ 写 `@ <sha>+dirty`；新 `cargo verify --rebind`（要求干净树）把 `<sha>+dirty` **整段**换成携带录制的提交并自校验；`smoke` / `hashes` 在见到未归因 `+dirty` 时**直接失败**；`# delta:` 逐条留痕（slotA→slotB 前缀 + 原因指针）；存量 `baselines.txt` 已按真实血缘重写（demo3d `dc8b1388→ddd69b3e`、atlas `efe5bf39→93632049`，@ `642b9d4`）。文档：`FRAME_HASH_BASELINES.md` 口径 D；测试：`xtask/tests/parser_tests.rs` 5 条 |
+| V2-09 | 双后端对拍的**口径**问题（B4 验收 P1-1/2/3）：① MAE 12.18 无法区分"AA 方式不同"与"色彩管线不同"；② 矢量自测在起不来 GPU 时静默 `return`（仍然 passed）；③ 对拍注释声称"验证注册机制"，实际绕过 `BackendRegistry` | 测试 / 对拍 | **已关闭（B4 验收）** | ① MAE 拆「内部区 / 边缘带」并输出计数，内部区门禁 ≤ 2/255；**诊断出真 bug**：斜边夹具把屏幕坐标（y 向下）当成世界坐标（y 向上）⇒ 比的是镜像形状。修正后实测全图 MAE 0.09（内部区 0.00、边缘带 3.44），全局阈值由 24 收紧到 8。② `api.rs` 起不来即 `panic!`（与对拍同口径）。③ 注释改为"本对拍不经过 `BackendRegistry`，注册机制由 `registry.rs` 单测覆盖" |
 
-**K 段小计（B4）**：已关闭 7（V1-01..05、V2-01/02）· 记账 2（V2-03/04）· 未执行 2（V2-06/07）。
+**K 段小计（B4）**：已关闭 9（V1-01..05、V2-01/02、V2-08/09）· 记账 2（V2-03/04）· 未执行 2（V2-06/07）。
 
 ---
 
