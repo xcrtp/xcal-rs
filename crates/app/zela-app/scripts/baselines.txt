@@ -18,44 +18,44 @@
 # （S1 零扰动补证：ff2751d 与 ba75687 两侧均复现本值，见 GAPS.md G-101 补证）
 # B2-8（Q4）：3D 首次进入 frame hash 对拍网（demo3d 升级为 fixture）。
 # device = windows / RTX 4060 Laptop
-# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 74129d8+dirty
+# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 07b108c
 # slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 642b9d4
 # slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 642b9d4
 # slotA: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 642b9d4
 # slotA: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 642b9d4
 # slotA: atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 642b9d4
-# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 74129d8+dirty
-# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 74129d8+dirty
-# slotB: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 74129d8+dirty
-# slotB: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 74129d8+dirty
-# slotB: atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 74129d8+dirty
-fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 74129d8+dirty
-storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 74129d8+dirty
-demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 74129d8+dirty
-surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 74129d8+dirty
-atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 74129d8+dirty
+# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 07b108c
+# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 07b108c
+# slotB: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 07b108c
+# slotB: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 07b108c
+# slotB: atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 07b108c
+fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 07b108c
+storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 07b108c
+demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 07b108c
+surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 07b108c
+atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 07b108c
 
 [smoke]
 # 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
 # device = windows / RTX 4060 Laptop
-# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 74129d8+dirty
+# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 07b108c
 # slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 642b9d4
-# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 74129d8+dirty
-smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 74129d8+dirty
+# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 07b108c
+smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 07b108c
 
 [vector]
 # 640×480，纯 2D 作品（vector_paths.lua）：同一脚本 / 同一 bundle，走 `--backend vector`。
 # 覆盖填充 + 描边（butt/miter、折线 Reveal）+ 文本路径；静态 1 帧。
 # 口径与 [native] 相同：不符即 fail；`--script` 与 `--bundle` 两条路径逐位相同。
 # device = windows / RTX 4060 Laptop
-# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 74129d8+dirty
+# reason: B6 Step 3：矢量后端作品基线（新增 [vector] 段；vector_paths.lua 走 --backend vector，背景与 wgpu 分支同源用 CLI clear） @ 07b108c
 # slotA: vector_paths = d19962e76d199e9880c195e0301fe8b415632820d816540ab8b9248a06c26d2a @ pending
 # （slotA 是同批次脏树里的探针值，从未进入提交 ⇒ 标 pending，不冒充任何 commit。）
 # delta: vector_paths d19962e76d19 -> 98d61c1a9e53（本次重录改变，原因见上一条 reason）
-# slotB: vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 74129d8+dirty
-vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 74129d8+dirty
+# slotB: vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 07b108c
+vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 07b108c
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档
