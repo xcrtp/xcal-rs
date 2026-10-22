@@ -196,23 +196,9 @@ fn vector_backend_matches_wgpu_on_an_axis_aligned_rect() {
     assert!(relative < 1e-9 && mae < 1e-9, "轴对齐矩形应逐位一致：相对差 {relative:.6}，MAE {mae:.6}");
 }
 
-/// **场景适配回归（V2-06）**：真实 `DrawQueue`（矩形 + 圆，两种图元）走
-/// `snapshot_queue → SceneItem → fill_paths` 的映射路径，与 wgpu 同一帧按容差比较。
-/// 这比手搓 `FilledPath` 更接近"作品级别"的每帧对拍。
-#[test]
-fn scene_mapping_matches_wgpu_on_a_filled_frame() {
-    let mut queue = DrawQueue::new();
-    queue.rect_fill(
-        ZIndex::new(0),
-        Rect2D::new(Vec2::new(32.0, 32.0), Vec2::new(96.0, 96.0)),
-        FillSolid::new(Color32::RED),
-    );
-    queue.circle_fill(
-        ZIndex::new(1),
-        ze_scene_core::Circle::new(Vec2::new(64.0, 16.0), 12.0),
-        FillSolid::new(Color32::RED),
-    );
-    let snapshot = zela_render_backends::snapshot_queue(&queue);
+/// 同一个 `DrawQueue` 分别走 wgpu 与"快照 → 矢量映射"，返回两帧 RGBA。
+fn render_queue_both(queue: &DrawQueue) -> (Vec<u8>, Vec<u8>) {
+    let snapshot = zela_render_backends::snapshot_queue(queue);
     let items: Vec<zela_render_vector::SceneItem<'_>> = snapshot
         .iter()
         .map(|recorded| zela_render_vector::SceneItem {
@@ -240,7 +226,7 @@ fn scene_mapping_matches_wgpu_on_a_filled_frame() {
     let callback = SceneCompositorCallback::new(
         Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
         layers,
-        &queue,
+        queue,
         &DrawQueue3D::new(),
         &LightQueue::new(),
         Vec::new(),
@@ -258,7 +244,100 @@ fn scene_mapping_matches_wgpu_on_a_filled_frame() {
     ));
     let vector = zela_render_vector::render_scene_2d(SIZE, SIZE, 1, [0.0, 0.0, 0.0, 1.0], &items)
         .expect("场景映射 / 矢量渲染失败");
+    (wgpu, vector)
+}
 
+/// 两帧之间的逐像素 RGB MAE（用于时域稳定性）。
+fn frame_mae(a: &[u8], b: &[u8]) -> f64 {
+    let total = (SIZE * SIZE) as usize;
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .map(|(p, q)| (0..3).map(|k| (p[k] as f64 - q[k] as f64).abs()).sum::<f64>() / 3.0)
+        .sum::<f64>()
+        / total as f64
+}
+
+/// **时域稳定性（B6 Step 4）**：动画逐帧跑双后端，逐帧都过容差门禁，
+/// 且**帧间 MAE 序列**不出现异常跳变（静态单帧测不出闪烁）。
+///
+/// 阈值来源：先测数据再定（不预设"宽到永远绿"的阈值）—— 见函数末尾打印。
+#[test]
+fn per_frame_tolerance_holds_across_an_animation() {
+    let mut temporal = Vec::new();
+    let mut previous: Option<Vec<u8>> = None;
+    let mut maes = Vec::new();
+
+    for step in 0..8 {
+        let angle = (step as f32) * 0.12;
+        let offset = (step as f32) * 4.0 - 14.0;
+        // 几何本身旋转 + 平移（`DrawQueue` 不携带变换 ⇒ 直接把点烘进去），这样两侧
+        // 看到的是同一批点、同一帧。
+        let (sin, cos) = angle.sin_cos();
+        let corners: Vec<Vec2> = [
+            (-18.0, -10.0),
+            (18.0, -10.0),
+            (18.0, 10.0),
+            (-18.0, 10.0),
+        ]
+        .iter()
+        .map(|(x, y)| {
+            Vec2::new(
+                64.0 + offset + x * cos - y * sin,
+                64.0 + x * sin + y * cos,
+            )
+        })
+        .collect();
+        let mut queue = DrawQueue::new();
+        queue.path_fill(
+            ZIndex::new(0),
+            Path::new(Path2D::from_polyline(&corners, true)),
+            FillSolid::new(Color32::RED),
+        );
+
+        let (wgpu, vector) = render_queue_both(&queue);
+        // 逐帧都过同一套容差门禁。
+        let (_relative, mae) = assert_within_tolerance(&wgpu, &vector);
+        maes.push(mae);
+        if let Some(previous) = &previous {
+            temporal.push(frame_mae(previous, &vector));
+        }
+        previous = Some(vector);
+    }
+
+    // ① 逐帧都不是逐位相同（防两侧退化成同一实现）。
+    assert!(maes.iter().any(|m| *m > 0.0), "逐帧 MAE 全为 0 ⇒ 可能退化为同一实现");
+    // ② 时域：动画在动，且帧间 MAE 不出现异常跳变（阈值 = 3×均值，先测数据再定）。
+    let mean = temporal.iter().sum::<f64>() / temporal.len() as f64;
+    assert!(mean > 0.0, "动画帧之间必须不同（否则测不出闪烁）");
+    let worst = temporal.iter().cloned().fold(0.0f64, f64::max);
+    eprintln!(
+        "时域稳定性：逐帧 MAE {maes:?}；帧间 MAE 均值 {mean:.3}/255、最大 {worst:.3}/255"
+    );
+    assert!(
+        worst <= mean * 3.0,
+        "帧间 MAE 出现异常跳变：最大 {worst:.3}/255 > 3×均值 {:.3}/255",
+        mean * 3.0
+    );
+}
+
+/// **场景适配回归（V2-06）**：真实 `DrawQueue`（矩形 + 圆，两种图元）走
+/// `snapshot_queue → SceneItem → fill_paths` 的映射路径，与 wgpu 同一帧按容差比较。
+/// 这比手搓 `FilledPath` 更接近"作品级别"的每帧对拍。
+#[test]
+fn scene_mapping_matches_wgpu_on_a_filled_frame() {
+    let mut queue = DrawQueue::new();
+    queue.rect_fill(
+        ZIndex::new(0),
+        Rect2D::new(Vec2::new(32.0, 32.0), Vec2::new(96.0, 96.0)),
+        FillSolid::new(Color32::RED),
+    );
+    queue.circle_fill(
+        ZIndex::new(1),
+        ze_scene_core::Circle::new(Vec2::new(64.0, 16.0), 12.0),
+        FillSolid::new(Color32::RED),
+    );
+
+    let (wgpu, vector) = render_queue_both(&queue);
     let (relative, mae) = assert_within_tolerance(&wgpu, &vector);
     assert!(relative < 0.02, "覆盖率相对差应很小：{relative:.4}");
     assert!(mae < 2.0, "整帧 MAE 应很小：{mae:.2}/255");
@@ -281,52 +360,7 @@ fn stroke_matches_wgpu_on_a_closed_polyline() {
         Path::new(Path2D::from_polyline(&points, true)),
         ze_render_ir::StrokeSolid::new(4.0, Color32::RED),
     );
-    let snapshot = zela_render_backends::snapshot_queue(&queue);
-    let items: Vec<zela_render_vector::SceneItem<'_>> = snapshot
-        .iter()
-        .map(|recorded| zela_render_vector::SceneItem {
-            shape: &recorded.shape,
-            transform: recorded.transform,
-            style: recorded.style,
-        })
-        .collect();
-
-    let Some((_gpu, ctx)) = zela_render_backends::gpu_test::require_gpu() else {
-        panic!("本机起不来 GPU（对拍需要真实设备）");
-    };
-    let layers = vec![SceneLayer {
-        id: LayerId(0),
-        kind: LayerKind::Viewport2D {
-            camera: Camera2D::new(
-                Vec2::new(64.0, 64.0),
-                1.0,
-                Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
-            ),
-        },
-        blend: LayerBlend::Alpha,
-        opacity: 1.0,
-    }];
-    let callback = SceneCompositorCallback::new(
-        Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
-        layers,
-        &queue,
-        &DrawQueue3D::new(),
-        &LightQueue::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        PostFilterChain::default(),
-    );
-    let mut backends = StandardBackends::new(&ctx);
-    let wgpu = bgra_to_rgba(&render_frame_headless(
-        &ctx,
-        &mut backends,
-        &callback,
-        ScreenParams::new([SIZE, SIZE], 1.0),
-        wgpu::Color::BLACK,
-    ));
-    let vector = zela_render_vector::render_scene_2d(SIZE, SIZE, 1, [0.0, 0.0, 0.0, 1.0], &items)
-        .expect("描边映射 / 矢量渲染失败");
+    let (wgpu, vector) = render_queue_both(&queue);
 
     let (relative, mae) = assert_within_tolerance(&wgpu, &vector);
     // 差异必须存在（两侧不是同一实现），但必须在容差内。

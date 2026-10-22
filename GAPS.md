@@ -367,9 +367,10 @@
 | V2-14 | 矢量后端的**描边记录**未接 | 渲染后端 | **已关闭（B6 Step 2.1）** | ⚠️ B5 的阻塞理由**不成立**：`Curves.miter` 由 `render.rs:476 Store::add_path` 自动计算，与 `vector.rs` 无关；真正缺的只是 `Record` 的描边构造。现在 `Record::stroked`（`stroke` + `params.z` = **宽度** + `flags >> STYLE` = `cap \| joint << 2`）已落地，`scene::scene_records` 按"先填充后描边"产出。**事实更正**：`params.w` 是背景描边的宽度，不是 miter；miter limit 硬编码在 wgsl（见 V2-11）。宽度语义由实测钉住（传半宽会画出一半宽）。对拍：描边三角形 934 vs 954 像素、MAE 0.20/255、内部区 0.29 |
 | V2-15 | 着色栈的**结构事实**：`tone` 由 bloom 的合成 pass 应用，而那条 pass 只在**存在 3D layered 计划**时运行（`render.rs:2419`）；`occlusion_of()` 还要求存在环境光（类型 4）或全向光（类型 0），否则 AO 静默不生效 | 渲染后端 | **记账（B6 §2.4/2.5 修正）** | 结论：B6 §2.5 说 "bloom/tone 独立于光照" **不成立**。本批已把 `ViewOptions` 的槽位填进 view（`api::render_2d_with`，默认与 `render_2d` 逐位相同），但 2D-only 帧上它们**没有消费者**（用例 `tone_mapping_changes_pixels_and_defaults_are_identical` 钉住这一点）。触发：接 3D 视图 / 环境图时补"有 3D 时 AgX ≠ clip、AO 凹陷变暗"的用例 |
 | V2-16 | `ToneCurve` 语义错配（B4 建契约时按常见命名猜的）：`Reinhard` / `Aces`，而 `tone.wgsl` 只有 `0 = clip` / `1 = AgX` | 渲染 IR | **已关闭（B6 Step 1.1）** | 改为 `ToneCurve { Clip, #[default] AgX }`；`default_for(caps)` 按后端能力取默认（wgpu 全关 / 矢量全开），显式请求不支持项仍报错 —— 与"静默降级"的区别写进 `RenderParams::default_for` 文档 |
+| V2-17 | 校验口径：静态单帧测不出**闪烁**（时域不稳定） | 测试 / 对拍 | **已关闭（B6 Step 4）** | `per_frame_tolerance_holds_across_an_animation`：8 帧旋转 + 平移矩形，逐帧走**同一套**门禁（非空 + 覆盖率 ≤10% + 全图 MAE ≤ 8 + 内部区 ≤ 2），再对帧间 MAE 序列取"最大 ≤ 3×均值"。实测：逐帧 MAE 0.03–0.08，帧间均值 1.31 / 最大 1.54 ⇒ 无异常跳变。阈值来自实测数据（不是先设一个宽到永远绿的数） |
 | S4-14 | 孤儿 Surface：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用 ⇒ 内容既不在视口画（S4-10 起跳过）、也不参与合成、也没有代理平面 ⇒ **完全不可见且不报错** | 渲染管线 | **已关闭（B5 A-2）** | `content_texture_specs` 在同一趟里 `for_each::<Material3D>` 查引用；无人引用 ⇒ `SurfaceError::UnconsumedSurface`（报错文案给出修法：设 `composite=true` 或让 3D 材质引用）。测试 `unconsumed_content_surface_errors_explicitly`（无人引用报错 / 有引用通过 / composite=true 通过） |
 
-**K 段小计（B4 + B5 + B6）**：已关闭 13（V1-01..05、V2-01/02、V2-08/09、V2-10、V2-14、V2-16、S4-14）· 部分关闭 1（V2-06）· 记账 5（V2-03/04、V2-11、V2-13、V2-15）· 未执行 2（V2-07、V2-12）。
+**K 段小计（B4 + B5 + B6）**：已关闭 14（V1-01..05、V2-01/02、V2-08/09、V2-10、V2-14、V2-16/17、S4-14）· 部分关闭 1（V2-06）· 记账 5（V2-03/04、V2-11、V2-13、V2-15）· 未执行 2（V2-07、V2-12）。
 
 ---
 
