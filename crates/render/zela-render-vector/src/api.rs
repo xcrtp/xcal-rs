@@ -181,10 +181,9 @@ mod tests {
         );
         let frame = match render_2d(w, h, 1, [0.0, 0.0, 0.0, 1.0], &[square]) {
             Ok(frame) => frame,
-            Err(error) => {
-                eprintln!("跳过：本机起不来矢量后端（{error}）");
-                return;
-            }
+            // 起不来就**响亮失败**：静默 return 会让"什么都没渲染"也算 passed
+            // （与 `zela-render-backends/tests/vector_vs_wgpu.rs` 同口径）。
+            Err(error) => panic!("矢量后端起不来：{error}"),
         };
         let center = pixel(&frame, w, 64, 64);
         assert!(center[0] > 200, "中央应为红色：{center:?}");

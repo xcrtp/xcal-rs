@@ -8,11 +8,15 @@
 //! 判据（B4 计划 §6.1，**不断言像素相同**）：
 //! 1. 两条路都产出非空帧；
 //! 2. 覆盖率（非背景像素占比）相对差 ≤ 10%；
-//! 3. 逐像素 RGB 平均绝对误差 ≤ 24/255（边缘抗锯齿方式不同，取宽容差）。
+//! 3. 逐像素 RGB 平均绝对误差 ≤ 8/255（全图；实测 0.09，阈值放宽 2 个量级已足够），
+//!    且**内部区** MAE ≤ 2/255（内部区只该受色彩管线影响，不该受 AA 影响）。
 //!
-//! 两个用例：轴对齐矩形（边缘落在像素边界上，两边应逐位一致）与斜边菱形
+//! 两个用例：轴对齐矩形（边缘落在像素边界上，两边应逐位一致）与斜边三角形
 //! （边缘落在像素内部，解析 AA 与 MSAA 必然不同 —— 容差在这里才有意义）。
-//! 两个后端在**同一进程**内同时挂载，顺带验证 §四 的注册机制。
+//!
+//! **本对拍不经过 `BackendRegistry`**（`BackendKind::Vector` 目前还不可用）：
+//! 两个后端只是**在同一进程**内各渲一帧。注册 / 协商机制由 `registry.rs` 的单测
+//! 与 `BackendRegistry` 的测试覆盖，不由本文件覆盖。
 
 use ze_notion::{Color32, Path2D, Rect2D, Vec2};
 use ze_render_ir::{FillSolid, LayerBlend, LayerId, ZIndex};
@@ -89,7 +93,11 @@ fn render_both(
     (wgpu, vector)
 }
 
-/// 三条判据；返回（覆盖率相对差，MAE）。
+/// 三条判据；返回（覆盖率相对差，全图 MAE）。
+///
+/// **P1-1 诊断**：MAE 同时拆成「内部区」与「边缘带」两组并打印。
+/// 内部区 MAE ≈ 0 才说明差异**只**来自抗锯齿方式；若内部区也显著 > 0，
+/// 说明存在系统性色彩管线差异（gamma / 预乘 / sRGB），那是另一种 bug。
 fn assert_within_tolerance(wgpu: &[u8], vector: &[u8]) -> (f64, f64) {
     // ① 两条路都非空。
     let (a, b) = (coverage(wgpu), coverage(vector));
@@ -105,16 +113,51 @@ fn assert_within_tolerance(wgpu: &[u8], vector: &[u8]) -> (f64, f64) {
         "覆盖率差异超阈值：wgpu={a} vector={b}（相对差 {relative:.3}）"
     );
 
-    // ③ 逐像素 RGB 平均绝对误差 ≤ 24/255。
-    let mae: f64 = wgpu
-        .chunks_exact(4)
-        .zip(vector.chunks_exact(4))
-        .map(|(p, q)| (0..3).map(|k| (p[k] as f64 - q[k] as f64).abs()).sum::<f64>() / 3.0)
-        .sum::<f64>()
-        / (SIZE as f64 * SIZE as f64);
-    assert!(mae <= 24.0, "逐像素 MAE 超阈值：{mae:.2}/255");
+    // ③ 逐像素 RGB 平均绝对误差 ≤ 8/255。
+    let mae_at = |index: usize| -> f64 {
+        let p = &wgpu[index * 4..index * 4 + 4];
+        let q = &vector[index * 4..index * 4 + 4];
+        (0..3).map(|k| (p[k] as f64 - q[k] as f64).abs()).sum::<f64>() / 3.0
+    };
+    let total = (SIZE * SIZE) as usize;
+    let mae: f64 = (0..total).map(mae_at).sum::<f64>() / total as f64;
+    assert!(mae <= 8.0, "逐像素 MAE 超阈值：{mae:.2}/255");
 
-    eprintln!("双后端对拍：wgpu={a} 像素 / vector={b} 像素（相对差 {relative:.3}），MAE={mae:.2}/255");
+    // ── 拆分：以**矢量帧**的形状掩码定性（红 > 128 视为被覆盖）──
+    let covered = |frame: &[u8], index: usize| frame[index * 4] > 128;
+    let index_of = |x: u32, y: u32| (y * SIZE + x) as usize;
+    let mut interior = (0usize, 0.0f64);
+    let mut edge = (0usize, 0.0f64);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let i = index_of(x, y);
+            if !covered(vector, i) {
+                continue;
+            }
+            // 4 邻域里只要有一个未被覆盖 ⇒ 边缘带；否则算内部区。
+            let is_edge = [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)]
+                .into_iter()
+                .filter(|&(nx, ny)| nx < SIZE && ny < SIZE)
+                .any(|(nx, ny)| !covered(vector, index_of(nx, ny)));
+            let bucket = if is_edge { &mut edge } else { &mut interior };
+            bucket.0 += 1;
+            bucket.1 += mae_at(i);
+        }
+    }
+    let mean = |(count, sum): (usize, f64)| if count == 0 { 0.0 } else { sum / count as f64 };
+    let (interior_mae, edge_mae) = (mean(interior), mean(edge));
+    eprintln!(
+        "双后端对拍：wgpu={a} 像素 / vector={b} 像素（相对差 {relative:.3}），\
+         MAE={mae:.2}/255（内部区 {interior_mae:.2}/255 / {} px，边缘带 {edge_mae:.2}/255 / {} px）",
+        interior.0, edge.0
+    );
+
+    // P1-1 判据：内部区必须**基本一致**。若这里变大，先查色彩管线（不是 AA）。
+    assert!(
+        interior_mae <= 2.0,
+        "内部区 MAE 超阈值（说明存在系统性色彩管线差异，不是抗锯齿）：{interior_mae:.2}/255，{} px",
+        interior.0
+    );
     (relative, mae)
 }
 
@@ -160,11 +203,14 @@ fn vector_backend_matches_wgpu_on_a_diagonal_edge() {
                 FillSolid::new(Color32::RED),
             );
         },
+        // 注意坐标系：`DrawQueue` 用**屏幕坐标（y 向下）**，矢量后端的 2D 视图
+        // 用**世界坐标（y 向上）** ⇒ 这里必须把 y 取负，否则比的是镜像形状
+        // （P1-1 拆分出的"内部区 MAE"会立刻暴露这一点）。
         &[FilledPath::polygon(
             &[
-                [0.0, -40.0, 0.0],
-                [40.0, 32.0, 0.0],
-                [-40.0, 32.0, 0.0],
+                [0.0, 40.0, 0.0],
+                [40.0, -32.0, 0.0],
+                [-40.0, -32.0, 0.0],
             ],
             [1.0, 0.0, 0.0, 1.0],
         )],
