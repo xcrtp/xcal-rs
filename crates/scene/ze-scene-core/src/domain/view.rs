@@ -156,6 +156,13 @@ pub fn content_texture_specs(
                     consumed = true;
                 }
             });
+            // 脚本作者写的是 `Texture.Surface{surface}`：装配期以 `SurfaceTextureRef`
+            // 承载（提交时才解析成句柄）⇒ 它同样是"消费者"，必须认。
+            scene.for_each::<crate::surface::SurfaceTextureRef>(|_, reference| {
+                if reference.0 == id {
+                    consumed = true;
+                }
+            });
             if !consumed {
                 return Err(SurfaceError::UnconsumedSurface { surface: id });
             }

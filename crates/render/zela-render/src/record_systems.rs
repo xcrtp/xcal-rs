@@ -624,7 +624,7 @@ mod tests {
                 [256, 256],
                 ze_scene_core::TextureFilter::Linear,
                 false,
-            ),
+            ).with_composite(true),
         )));
         let surface_b = object_id_of(world.spawn((
             ze_scene_core::Surface::new(
@@ -637,7 +637,7 @@ mod tests {
                 [256, 256],
                 ze_scene_core::TextureFilter::Linear,
                 false,
-            ),
+            ).with_composite(true),
         )));
 
         // A：1 世界单位长的线（屏幕跨度 ≈ 128px）；B：0.2 单位（≈ 25.6px）。
