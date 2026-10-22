@@ -193,13 +193,16 @@ zela 的 GPU 2D 后端（S4.1 起是**唯一** 2D 路径）：**离屏纹理 + M
 可任意叠放（此前 3D 硬编码在 2D 之上），并为 S3-3（互为纹理）铺路。
 
 ```rust
-let frame = compositor.prepare(&device, &[CompositeOp { texture, src_format,
-                                    blend, opacity, rect_px }, /* ... */]);
+let frame = compositor.prepare(&device, viewport, &[CompositeOp { texture, src_format,
+                                    blend, opacity, rect_px, fit }, /* ... */]);
 compositor.composite_layers(&mut render_pass, &frame);   // 层序 = 输入序，不重排
 ```
 
-- `CompositeOp { texture, src_format, blend, opacity, rect_px }`；
+- `CompositeOp { texture, src_format, blend, opacity, rect_px, fit }`；
   `CompositeFrame` 提供 `len` / `is_empty` / `blend_at(i)` / `conversion_at(i)`。
+- `fit: Some((w, h))` ⇒ 按源纹理宽高比 **contain + 居中**（宽高比不一致时 letterbox，
+  不拉伸）；`fit: None` ⇒ 铺满（视口层，离屏尺寸 == 视口尺寸 ⇒ 恒等）。
+  `viewport` 与 `rect_px` 必须同单位（宿主侧是逻辑点）。S4-11 的修法。
 - `opacity` 走 uniform（x 分量乘进源色），不走 blend constant（部分后端受限）；
   `LayerDescriptor::clamped_opacity()` 是唯一取值口径。
 - **无动态 blend / 无动态入口点** ⇒ 管线**键空间**是 9 个组合

@@ -1535,6 +1535,7 @@ mod tests {
             blend: LayerBlend::Alpha,
             opacity: 1.0,
             rect_px: (left as f32, top as f32, vw as f32, vh as f32),
+            fit: None,
         };
         let ops = [op];
         // C3：管线惰性建 ⇒ 合成前先确保本帧用到的组合已就绪（1 = 首帧现场建一条）。
@@ -1548,7 +1549,7 @@ mod tests {
             0,
             "同组合第二帧应命中缓存（不重复建）"
         );
-        let composite = compositor.prepare(&ctx.device, &ops);
+        let composite = compositor.prepare(&ctx.device, (vw as f32, vh as f32), &ops);
         {
             let mut pass = enc
                 .begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -21,8 +21,15 @@
 
 @group(0) @binding(0) var r_tex: texture_2d<f32>;
 @group(0) @binding(1) var r_sampler: sampler;
-/// 每层 uniform：`x` = 该层不透明度 [0,1]（其余分量预留）。
-@group(0) @binding(2) var<uniform> r_layer: vec4<f32>;
+/// 每层 uniform（std140：2 × vec4 = 32 字节）：
+///   `rect` = 目标矩形的裁剪空间边界 `(x0, x1, y0, y1)`；
+///   `opacity.x` = 不透明度 [0,1]（其余分量预留）。
+/// `rect = (-1, 1, -1, 1)` 时四边形铺满视口（既有行为，逐位不变）。
+struct Layer {
+    rect: vec4<f32>,
+    opacity: vec4<f32>,
+};
+@group(0) @binding(2) var<uniform> r_layer: Layer;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -36,7 +43,12 @@ fn vs_main(
     @location(2) unused: f32,
 ) -> VsOut {
     var out: VsOut;
-    out.clip = vec4<f32>(clip, 0.0, 1.0);
+    // S4-11：四边形顶点是 `[-1,1]²` 的单位方块；按 `r_rect` 重映射到目标矩形
+    // ⇒ 宽高比不一致时**保比例适配**（letterbox），不再拉伸内容。
+    let unit = clip * vec2<f32>(0.5) + vec2<f32>(0.5);
+    let x = mix(r_layer.rect.x, r_layer.rect.y, unit.x);
+    let y = mix(r_layer.rect.z, r_layer.rect.w, unit.y);
+    out.clip = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = uv;
     return out;
 }
@@ -58,7 +70,7 @@ fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
 /// 预乘 alpha 的 opacity 缩放：rgb 与 a 同乘，保持"预乘"这一不变量
 /// （Alpha 混合的 `src: One` 才能直接成立）。opacity=1 时恒等。
 fn apply_opacity(c: vec4<f32>) -> vec4<f32> {
-    return c * r_layer.x;
+    return c * r_layer.opacity.x;
 }
 
 @fragment

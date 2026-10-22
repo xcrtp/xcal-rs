@@ -338,6 +338,9 @@ impl SceneCompositorCallback {
                     blend: layer.blend,
                     opacity: layer.opacity,
                     rect_px: (left, top, w_pt, h_pt),
+                    // S4-11：内容纹理按**自身宽高比**适配进视口（contain + 居中），
+                    // 宽高比不一致时留黑边而不是拉伸（圆不再是椭圆）。
+                    fit: Some((size_px[0], size_px[1])),
                 });
             }
         }
@@ -381,6 +384,8 @@ impl SceneCompositorCallback {
                         blend: layer.blend,
                         opacity: layer.opacity,
                         rect_px: (left, top, w_pt, h_pt),
+                        // 视口层的离屏纹理尺寸 == 视口尺寸 ⇒ 铺满即恒等。
+                        fit: None,
                     });
                 }
                 LayerKind::Viewport3D { camera } => {
@@ -415,6 +420,8 @@ impl SceneCompositorCallback {
                         blend: layer.blend,
                         opacity: layer.opacity,
                         rect_px: (left, top, w_pt, h_pt),
+                        // 3D 离屏按 `w_pt × ppp` 建 ⇒ 与视口同比例，铺满即恒等。
+                        fit: None,
                     });
                 }
                 // 内容纹理层已在趟 1 处理（除非 composite=true 已进 ops）——
@@ -438,7 +445,7 @@ impl SceneCompositorCallback {
         };
         // C3：管线惰性建 —— 先确保本帧需要的 (blend, 域转换) 组合就绪。
         let _ = compositor.ensure_for(device, &ops);
-        let frame = compositor.prepare(device, &ops);
+        let frame = compositor.prepare(device, (w_pt, h_pt), &ops);
 
         let post_blit = if self.filters.needs_post() {
             // 视口物理像素尺寸（与 3D 离屏同口径：逻辑点 × ppp）。

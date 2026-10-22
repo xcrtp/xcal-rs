@@ -30,8 +30,11 @@ pub const COMPOSITE_SHADER: &str = include_str!("../shaders/composite_2d.wgsl");
 /// 滤镜链着色器（C1 uber shader：4 固定槽位，按 `kind` 分支）。
 pub const POST_SHADER: &str = include_str!("../shaders/post_filter.wgsl");
 
-/// 每层 opacity uniform 的字节数（`vec4<f32>`）。
-pub const OPACITY_UNIFORM_SIZE: u64 = 16;
+/// 每层 uniform 的字节数（2 × `vec4<f32>`：`rect` + `opacity`；S4-11 起为 32）。
+///
+/// 名字沿用 `OPACITY_*`（历史），但它是**整个每层 uniform**：
+/// `min_binding_size` 必须等于 shader 侧的 `Layer` 结构体大小（32），否则建管线失败。
+pub const OPACITY_UNIFORM_SIZE: u64 = 32;
 
 /// 合成四边形（裁剪坐标 + UV；TriangleStrip：左上 → 右上 → 左下 → 右下）。
 ///
@@ -76,14 +79,59 @@ pub struct CompositeOp {
     pub blend: LayerBlend,
     /// 不透明度（[0,1]，越界由 `prepare` 钳制）。
     pub opacity: f32,
-    /// 该层在屏幕上的像素矩形 `(left, top, width, height)`。
+    /// 该层在屏幕上的矩形 `(left, top, width, height)`，单位与
+    /// [`Compositor::prepare`] 的 `viewport` 相同（宿主侧是**逻辑点**，headless 是像素）。
     ///
-    /// 仅作声明/诊断：四边形本身是全 NDC（egui-wgpu 已为该回调设好 viewport），
-    /// 因此合成器不消费此字段来做变换。**也没有 ppp 换算问题**：图层离屏纹理
+    /// `fit = None` 时：四边形仍是全 NDC（egui-wgpu 已为该回调设好 viewport），
+    /// 因此不消费此字段做变换。**也没有 ppp 换算问题**：图层离屏纹理
     /// 按物理像素建（2D 走 `Frame2DGeometry::viewport_px()`、3D 走 `w_pt × ppp`），
     /// 而 egui-wgpu 给回调设的 render pass viewport 也是同一套物理像素矩形，
     /// 于是「全 NDC 四边形 == 该视口」这一步自动对齐，无需再做任何换算。
     pub rect_px: (f32, f32, f32, f32),
+    /// `Some((宽, 高))` ⇒ **保比例适配**（contain + 居中）到 `rect_px`，源纹理像素尺寸
+    /// 由本字段给出；多余区域不画（letterbox），不会把内容拉伸。
+    ///
+    /// `None` ⇒ 铺满 `rect_px`（既有行为）。视口层用它：离屏纹理尺寸**就是**视口尺寸，
+    /// 铺满即恒等，像素逐位不变（S4-11 的默认等效保证）。
+    pub fit: Option<(u32, u32)>,
+}
+
+/// 保比例适配：把 `src`（源像素尺寸）按 contain 居中放进 `rect`（宽高比不一致时 letterbox）。
+///
+/// `fit = None`、尺寸为 0、或矩形非正 ⇒ 原样返回（铺满）。
+pub fn fit_rect(
+    rect: (f32, f32, f32, f32),
+    fit: Option<(u32, u32)>,
+) -> (f32, f32, f32, f32) {
+    let Some((sw, sh)) = fit else {
+        return rect;
+    };
+    let (left, top, width, height) = rect;
+    if sw == 0 || sh == 0 || width <= 0.0 || height <= 0.0 {
+        return rect;
+    }
+    let scale = (width / sw as f32).min(height / sh as f32);
+    let (dw, dh) = (sw as f32 * scale, sh as f32 * scale);
+    (
+        left + (width - dw) * 0.5,
+        top + (height - dh) * 0.5,
+        dw,
+        dh,
+    )
+}
+
+/// 屏幕矩形 → 裁剪空间 `[x0, x1, y0, y1]`（y 轴翻转：屏幕 y 向下、NDC y 向上）。
+///
+/// `rect` 与 `viewport` 必须同单位 —— 只有比值参与运算。
+pub fn rect_to_ndc(rect: (f32, f32, f32, f32), viewport: (f32, f32)) -> [f32; 4] {
+    let (left, top, width, height) = rect;
+    let (vw, vh) = (viewport.0.max(1.0), viewport.1.max(1.0));
+    [
+        left / vw * 2.0 - 1.0,
+        (left + width) / vw * 2.0 - 1.0,
+        1.0 - (top + height) / vh * 2.0,
+        1.0 - top / vh * 2.0,
+    ]
 }
 
 /// 源纹理域 → 主 pass 目标域的色彩转换（决定用哪个 fragment 入口）。
@@ -234,7 +282,8 @@ impl Compositor {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // S4-11：目标矩形在**顶点**阶段用（opacity 仍在 fragment 阶段用）。
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -528,17 +577,34 @@ impl Compositor {
         &self.post_target.as_ref().expect("刚建好").view
     }
 
-    /// 把声明式的 [`CompositeOp`] 列表准备成 GPU 资源（逐层一条 opacity uniform + 绑定组）。
+    /// 把声明式的 [`CompositeOp`] 列表准备成 GPU 资源（逐层一条 uniform + 绑定组）。
+    ///
+    /// `viewport`：画布尺寸，**与 `CompositeOp::rect_px` 同单位**（宿主侧是逻辑点）。
+    /// 只在 `fit = Some(..)` 的图层上参与"保比例适配"的换算；`fit = None` 的图层
+    /// 仍是全 NDC 四边形（与 `viewport` 无关 ⇒ 像素逐位不变）。
     ///
     /// 顺序**原样保留**（不排序、不去重）：索引 0 = 最下层。
-    pub fn prepare(&self, device: &wgpu::Device, ops: &[CompositeOp]) -> CompositeFrame {
+    pub fn prepare(
+        &self,
+        device: &wgpu::Device,
+        viewport: (f32, f32),
+        ops: &[CompositeOp],
+    ) -> CompositeFrame {
         let prepared = ops
             .iter()
             .map(|op| {
                 let opacity = op.opacity.clamp(0.0, 1.0);
+                // 全 NDC = 铺满回调视口；`fit` 层才按 rect 收窄（S4-11）。
+                let rect = match op.fit {
+                    None => [-1.0, 1.0, -1.0, 1.0],
+                    Some(_) => rect_to_ndc(fit_rect(op.rect_px, op.fit), viewport),
+                };
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("zela-compositor-opacity"),
-                    contents: bytes_of(&[opacity, 0.0, 0.0, 0.0]),
+                    // 2 × vec4（std140）：rect = (x0, x1, y0, y1)，opacity.x = 不透明度。
+                    contents: bytes_of(&[
+                        rect[0], rect[1], rect[2], rect[3], opacity, 0.0, 0.0, 0.0,
+                    ]),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -604,12 +670,14 @@ impl Compositor {
     ) {
         let frame = self.prepare(
             device,
+            (1.0, 1.0),
             &[CompositeOp {
                 texture,
                 src_format,
                 blend,
                 opacity,
                 rect_px: (0.0, 0.0, 0.0, 0.0),
+                fit: None,
             }],
         );
         self.composite_layers(pass, &frame);
@@ -781,8 +849,114 @@ mod tests {
         }
     }
 
-    // ── 纯 CPU：域转换选择（决定 fragment 入口） ────────────────────────────
+    // ── S4-11：保比例适配（letterbox） ─────────────────────────────────────
 
+    /// 4:3 的源贴进 16:9 的矩形 ⇒ 宽度占满、上下留黑边，且**居中**（不拉伸）。
+    #[test]
+    fn fit_rect_letterboxes_a_mismatched_aspect_ratio() {
+        // 16:9 矩形 160×90（逻辑点），源 4:3（40×30）。
+        let fitted = fit_rect((0.0, 0.0, 160.0, 90.0), Some((40, 30)));
+        // contain ⇒ 高度受限：90 高 → 宽 120。
+        assert!((fitted.2 - 120.0).abs() < 1e-4, "宽度应为 120：{fitted:?}");
+        assert!((fitted.3 - 90.0).abs() < 1e-4, "高度应为 90：{fitted:?}");
+        assert!((fitted.0 - 20.0).abs() < 1e-4, "水平居中 ⇒ left = 20：{fitted:?}");
+        assert!((fitted.1 - 0.0).abs() < 1e-4, "垂直无黑边 ⇒ top = 0：{fitted:?}");
+        // 比例不变（宽/高 == 源比例）。
+        assert!((fitted.2 / fitted.3 - 4.0 / 3.0).abs() < 1e-4);
+    }
+
+    /// `fit = None`（视口层）必须**原样**返回 ⇒ 全 NDC 四边形、像素逐位不变。
+    #[test]
+    fn fit_rect_is_identity_without_a_source_size() {
+        let rect = (10.0, 20.0, 160.0, 90.0);
+        assert_eq!(fit_rect(rect, None), rect);
+        // 退化尺寸同样原样返回（不产生 NaN / 除零）。
+        assert_eq!(fit_rect(rect, Some((0, 30))), rect);
+        assert_eq!(fit_rect(rect, Some((40, 0))), rect);
+    }
+
+    /// 屏幕矩形 → NDC：铺满视口 ⇔ `(-1, 1, -1, 1)`；y 轴翻转；偏移矩形落点正确。
+    #[test]
+    fn rect_to_ndc_covers_viewport_and_flips_y() {
+        let full = rect_to_ndc((0.0, 0.0, 100.0, 50.0), (100.0, 50.0));
+        assert_eq!(full, [-1.0, 1.0, -1.0, 1.0]);
+        // 左上角 10×10 的方块（屏幕 y 向下）⇒ NDC 的上半部分。
+        let top_left = rect_to_ndc((0.0, 0.0, 10.0, 10.0), (100.0, 50.0));
+        assert!((top_left[0] - -1.0).abs() < 1e-6);
+        assert!((top_left[1] - -0.8).abs() < 1e-6);
+        assert!((top_left[3] - 1.0).abs() < 1e-6, "屏幕顶边 = NDC +1");
+        assert!((top_left[2] - 0.6).abs() < 1e-6);
+    }
+
+    /// **S4-11 验收（真实设备）**：2:1 的源贴进 4×4 正方形视口 ⇒ 上下各留 1 行黑边，
+    /// 中间两行是源色 —— 而不是把源拉伸成正方形。
+    #[test]
+    fn gpu_fit_letterboxes_instead_of_stretching() {
+        let Some(ctx) = headless() else {
+            return;
+        };
+        let mut comp = Compositor::new(&ctx.device, TEST_FORMAT);
+        let tex = solid_texture(&ctx, [255, 0, 0, 255]);
+        let mut layer = op(tex, LayerBlend::Alpha, 1.0);
+        layer.fit = Some((2, 1));
+        let ops = [layer];
+        let _ = comp.ensure_for(&ctx.device, &ops);
+
+        let target = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("zela-compositor-letterbox"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TEST_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), &ops);
+        let mut enc = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("zela-compositor-letterbox-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            comp.composite_layers(&mut pass, &frame);
+        }
+        ctx.submit(enc.finish());
+
+        let pixels = ctx.read_texture(&target, (4, 4));
+        let at = |x: usize, y: usize| {
+            let i = (y * 4 + x) * 4;
+            [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+        };
+        for x in 0..4 {
+            assert!(at(x, 0)[0] < 16, "顶行必须是黑边：{:?}", at(x, 0));
+            assert!(at(x, 3)[0] < 16, "底行必须是黑边：{:?}", at(x, 3));
+            for y in 1..3 {
+                assert!(at(x, y)[0] > 200, "中间两行必须是源色：{:?}", at(x, y));
+            }
+        }
+    }
+
+    // ── 纯 CPU：域转换选择（决定 fragment 入口） ────────────────────────────
     /// 源/目标 sRGB 属性 → 域转换：同域 `Identity`、源 gamma→sRGB 目标 `GammaToLinear`、
     /// 源 sRGB→非 sRGB 目标 `LinearToGamma`。
     #[test]
@@ -891,6 +1065,7 @@ mod tests {
             blend,
             opacity,
             rect_px: (0.0, 0.0, 4.0, 4.0),
+            fit: None,
         }
     }
 
@@ -918,7 +1093,7 @@ mod tests {
             view_formats: &[],
         });
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let frame = comp.prepare(&ctx.device, ops);
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), ops);
 
         let mut enc = ctx
             .device
@@ -975,7 +1150,7 @@ mod tests {
             op(red, LayerBlend::Alpha, 1.0),
             op(blue, LayerBlend::Alpha, 0.5),
         ];
-        let frame = comp.prepare(&ctx.device, &ops);
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), &ops);
         // 顺序原样保留（不重排）。
         assert_eq!(frame.blend_at(0), Some(LayerBlend::Alpha));
         assert_eq!(frame.blend_at(1), Some(LayerBlend::Alpha));
@@ -1030,7 +1205,7 @@ mod tests {
                 1.0,
             ),
         ];
-        let frame = comp.prepare(&ctx.device, &ops);
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), &ops);
 
         assert_eq!(frame.len(), 2, "全部图层必须进同一个 CompositeFrame");
         // 顺序原样保留（先 = 下）。
@@ -1131,10 +1306,10 @@ mod tests {
             let comp = Compositor::new(&ctx.device, format);
             for blend in [LayerBlend::Opaque, LayerBlend::Alpha, LayerBlend::Additive] {
                 let ops = [op(solid_texture(&ctx, [255, 0, 0, 255]), blend, 1.0)];
-                let frame = comp.prepare(&ctx.device, &ops);
+                let frame = comp.prepare(&ctx.device, (4.0, 4.0), &ops);
                 assert_eq!(frame.blend_at(0), Some(blend));
                 // 空帧不画。
-                let empty = comp.prepare(&ctx.device, &[]);
+                let empty = comp.prepare(&ctx.device, (4.0, 4.0), &[]);
                 assert!(empty.is_empty());
             }
         }
@@ -1165,7 +1340,7 @@ mod tests {
                 1.0,
             ),
         ];
-        let frame = comp.prepare(&ctx.device, &ops);
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), &ops);
         assert_eq!(frame.len(), 3);
         assert_eq!(frame.blend_at(0), Some(LayerBlend::Opaque));
         assert_eq!(frame.blend_at(1), Some(LayerBlend::Alpha));
@@ -1312,7 +1487,7 @@ mod tests {
         size: u32,
     ) -> Vec<u8> {
         let _ = comp.ensure_for(&ctx.device, ops);
-        let frame = comp.prepare(&ctx.device, ops);
+        let frame = comp.prepare(&ctx.device, (4.0, 4.0), ops);
         let target = target_texture(ctx, size);
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut enc = ctx
