@@ -35,6 +35,8 @@ egui-wgpu = { workspace = true, optional = true }
 [dev-dependencies]
 # 仅测试：像素级用例要构造真实 ECS 场景（生产边不得依赖场景实现，见 S2 CI 规则）。
 zela-scene-ecs = { path = "../../scene/zela-scene-ecs" }
+# B4 Step 6：双后端回归（wgpu 三角化 vs 矢量解析 AA，按容差比较）。
+zela-render-vector = { path = "../zela-render-vector" }
 egui.workspace = true
 eframe.workspace = true
 egui-wgpu.workspace = true
