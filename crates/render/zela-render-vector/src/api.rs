@@ -169,6 +169,288 @@ pub struct StrokedPath {
     pub model: [[f32; 4]; 3],
 }
 
+/// 一盏灯（B6 Step 1.2）：编码移植自上游 `rendering/feed.py::lighting`，
+/// 每盏 16 float：`位置/方向 xyz`、`kind`、`线性色 rgb × 强度`、`reach`、
+/// `轴线 xyz`、`scale`、`offset`、`是否投影`、0、0。
+///
+/// `kind`：0 = 环境光、1 = 平行光、2 = 点光、3 = 聚光、4 = 环境图（与上游一致）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Light {
+    Ambient {
+        color: [f32; 3],
+        intensity: f32,
+    },
+    Sun {
+        /// 光来自的方向（世界坐标；上游会归一化）。
+        direction: [f32; 3],
+        color: [f32; 3],
+        intensity: f32,
+        shadows: bool,
+    },
+    Point {
+        at: [f32; 3],
+        color: [f32; 3],
+        intensity: f32,
+        /// 影响半径（0 = 无衰减）。
+        reach: f32,
+    },
+    Spot {
+        at: [f32; 3],
+        toward: [f32; 3],
+        color: [f32; 3],
+        intensity: f32,
+        /// 半角（弧度）与软化比例，与上游 `angle` / `softness` 同义。
+        angle: f32,
+        softness: f32,
+        shadows: bool,
+    },
+}
+
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9);
+    [v[0] / n, v[1] / n, v[2] / n]
+}
+
+/// sRGB 编码值 → 线性光（上游 `feed.py::linear`）。
+fn linear(rgb: [f32; 3]) -> [f32; 3] {
+    rgb.map(|c| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    })
+}
+
+impl Light {
+    fn slot(&self) -> [f32; 16] {
+        let mut out = [0.0f32; 16];
+        match *self {
+            Light::Ambient { color, intensity } => {
+                out[3] = 0.0;
+                let c = linear(color).map(|c| c * intensity);
+                out[4..7].copy_from_slice(&c);
+            }
+            Light::Sun {
+                direction,
+                color,
+                intensity,
+                shadows,
+            } => {
+                out[0..3].copy_from_slice(&normalize3(direction));
+                out[3] = 1.0;
+                let c = linear(color).map(|c| c * intensity);
+                out[4..7].copy_from_slice(&c);
+                out[13] = if shadows { 1.0 } else { 0.0 };
+            }
+            Light::Point {
+                at,
+                color,
+                intensity,
+                reach,
+            } => {
+                out[0..3].copy_from_slice(&at);
+                out[3] = 2.0;
+                let c = linear(color).map(|c| c * intensity);
+                out[4..7].copy_from_slice(&c);
+                out[7] = reach;
+            }
+            Light::Spot {
+                at,
+                toward,
+                color,
+                intensity,
+                angle,
+                softness,
+                shadows,
+            } => {
+                out[0..3].copy_from_slice(&at);
+                out[3] = 3.0;
+                let c = linear(color).map(|c| c * intensity);
+                out[4..7].copy_from_slice(&c);
+                let axis = normalize3([toward[0] - at[0], toward[1] - at[1], toward[2] - at[2]]);
+                out[8..11].copy_from_slice(&axis);
+                let outer = angle.cos();
+                let inner = (angle * (1.0 - softness)).cos();
+                let scale = 1.0 / (inner - outer).max(1e-4);
+                out[11] = scale;
+                out[12] = -outer * scale;
+                out[13] = if shadows { 1.0 } else { 0.0 };
+            }
+        }
+        out
+    }
+}
+
+/// 一台 3D 相机视图（B6 Step 1.2）：移植自上游 `feed.py::view` 的 3D 分支。
+///
+/// `axes` 是**世界 → 相机**的 3×3（行 = 相机右 / 上 / 朝外）。宿主已有 `Camera3D`，
+/// 由它算出三个轴即可；本 crate 不做轨道角（phi/theta/gamma）的约定。
+#[derive(Debug, Clone, PartialEq)]
+pub struct View3 {
+    /// 相机画幅（世界单位）。
+    pub frame: (f32, f32),
+    /// 画幅中心（世界坐标）。
+    pub center: [f32; 3],
+    /// 世界 → 相机轴（行主序）。
+    pub axes: [[f32; 3]; 3],
+    pub zoom: f32,
+    /// 焦距（眼到画幅的距离）。
+    pub focal: f32,
+    pub size: (u32, u32),
+    pub background: [f32; 4],
+    /// 默认光的方向（上游 `camera.light_source`；本入口只在 `lights` 为空时用于记录）。
+    pub light_source: [f32; 3],
+    pub exposure: f32,
+    pub tone: Option<ze_render_ir::ToneCurve>,
+    pub bloom: f32,
+    pub ao: Option<(f32, f32)>,
+    pub lights: Vec<Light>,
+}
+
+/// 上游常数：近平面（reversed Z 的基准）与"贴在表面上"的深度偏置。
+const NEAR: f32 = 0.05;
+const ON_3D: f32 = 1e-6;
+
+fn view_3d(v: &View3) -> Vec<f32> {
+    let (hw, hh) = (v.frame.0 * 0.5, v.frame.1 * 0.5);
+    let [rx, ry, rz] = v.axes;
+    let r = [rx, ry, rz];
+    let rc = [0, 1, 2].map(|k| rx[k] * v.center[0] + ry[k] * v.center[1] + rz[k] * v.center[2]);
+    let f = v.focal.max(1e-6);
+    let zoom = v.zoom;
+    // 上游的 projection（行主序，`feed.py:438`），再按 WGSL 需要转置写入。
+    let projection = [
+        [
+            zoom / hw * r[0][0],
+            zoom / hw * r[0][1],
+            zoom / hw * r[0][2],
+            -zoom / hw * rc[0],
+        ],
+        [
+            zoom / hh * r[1][0],
+            zoom / hh * r[1][1],
+            zoom / hh * r[1][2],
+            -zoom / hh * rc[1],
+        ],
+        [0.0, 0.0, 0.0, NEAR / f],
+        [-r[2][0] / f, -r[2][1] / f, -r[2][2] / f, (f + rc[2]) / f],
+    ];
+    let overlay = [
+        [1.0 / hw, 0.0, 0.0, 0.0],
+        [0.0, 1.0 / hh, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let mut out = vec![0.0f32; VIEW_LENGTH];
+    for c in 0..4 {
+        for row in 0..4 {
+            out[c * 4 + row] = projection[row][c];
+            out[16 + c * 4 + row] = overlay[row][c];
+        }
+    }
+    out[32] = v.size.0 as f32;
+    out[33] = v.size.1 as f32;
+    out[34] = v.size.1 as f32 / v.frame.1;
+    out[35] = zoom;
+    out[36..39].copy_from_slice(&v.light_source);
+    out[39] = 1.0; // three_d
+    // `toward` = 相机 z 轴（世界），bias = ON_3D。
+    out[40..43].copy_from_slice(&rz);
+    out[43] = ON_3D;
+    out[44..48].copy_from_slice(&v.background);
+    let eye = [
+        v.center[0] + f * rz[0],
+        v.center[1] + f * rz[1],
+        v.center[2] + f * rz[2],
+        1.0,
+    ];
+    out[VIEW_LIGHTING..VIEW_LIGHTING + 4].copy_from_slice(&eye);
+    let count = v.lights.len().min(8);
+    out[VIEW_LIGHTING + 4] = count as f32;
+    out[VIEW_LIGHTING + 5] = v.exposure;
+    out[VIEW_LIGHTING + 6] = match v.tone {
+        None | Some(ze_render_ir::ToneCurve::Clip) => 0.0,
+        Some(ze_render_ir::ToneCurve::AgX) => 1.0,
+    };
+    out[VIEW_LIGHTING + 7] = v.bloom.clamp(0.0, 1.0);
+    for (i, light) in v.lights.iter().take(8).enumerate() {
+        let at = VIEW_LIGHTING + 8 + 16 * i;
+        out[at..at + 16].copy_from_slice(&light.slot());
+    }
+    if let Some((intensity, radius)) = v.ao {
+        out[VIEW_OCCLUSION] = intensity.max(0.0);
+        out[VIEW_OCCLUSION + 1] = radius.max(0.0);
+    }
+    out
+}
+
+/// 用给定 view 渲染一帧（`view` 必须是 `VIEW_LENGTH` 个 float）。
+fn render_with_view(
+    view: Vec<f32>,
+    width: u32,
+    height: u32,
+    samples: u32,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 {
+        return Err(format!("canvas {width}x{height} is empty"));
+    }
+    let view_bytes: Vec<u8> = bytemuck::cast_slice(&view).to_vec();
+
+    let mut player = crate::render::Player::new(width, height, samples);
+    let mut built: Vec<Record> = Vec::with_capacity(records.len());
+    for (i, record) in records.iter().enumerate() {
+        let (points, ranges) = match record {
+            PathRecord::Fill(path) => (&path.points, &path.ranges),
+            PathRecord::Stroke(path) => (&path.points, &path.ranges),
+        };
+        if points.len() % 4 != 0 || points.is_empty() {
+            return Err(format!("record {i}: control points are not whole curves"));
+        }
+        let key = i as u64 + 1;
+        let point_bytes: &[u8] = bytemuck::cast_slice(points);
+        let range_bytes: &[u8] = bytemuck::cast_slice(ranges);
+        player.upload(Upload::path(
+            key,
+            point_bytes,
+            range_bytes,
+            centroid_area(points),
+        )?)?;
+        let curves = (points.len() / 4) as u32;
+        built.push(match record {
+            PathRecord::Fill(path) => Record::filled(key, curves, path.model, path.fill),
+            PathRecord::Stroke(path) => Record::stroked(
+                key,
+                curves,
+                path.model,
+                path.stroke,
+                path.width,
+                path.shape_bits,
+            ),
+        });
+    }
+    let record_bytes: Vec<u8> = bytemuck::cast_slice(&built).to_vec();
+
+    crate::render::with_gpu(|gpu| {
+        let frames = player.views(&view_bytes, &record_bytes, Vec::new())?;
+        let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+        player.pixels(gpu, &frames, &mut out)?;
+        Ok(out)
+    })?
+}
+
+/// **3D 路径渲染**（B6 Step 1.2）：`View3`（含灯 / tone / bloom / AO）+ 路径记录。
+pub fn render_3d(view: &View3, records: &[PathRecord]) -> Result<Vec<u8>, String> {
+    render_with_view(
+        view_3d(view),
+        view.size.0,
+        view.size.1,
+        1,
+        records,
+    )
+}
+
 /// 一条绘制记录（保持声明顺序 = 绘制顺序）。
 #[derive(Debug, Clone)]
 pub enum PathRecord {
@@ -222,49 +504,13 @@ pub fn render_2d_with(
     if width == 0 || height == 0 {
         return Err(format!("canvas {width}x{height} is empty"));
     }
-    let view = view_2d_with(width, height, background, options);
-    let view_bytes: Vec<u8> = bytemuck::cast_slice(&view).to_vec();
-
-    let mut player = crate::render::Player::new(width, height, samples);
-    let mut built: Vec<Record> = Vec::with_capacity(records.len());
-    for (i, record) in records.iter().enumerate() {
-        let (points, ranges) = match record {
-            PathRecord::Fill(path) => (&path.points, &path.ranges),
-            PathRecord::Stroke(path) => (&path.points, &path.ranges),
-        };
-        if points.len() % 4 != 0 || points.is_empty() {
-            return Err(format!("record {i}: control points are not whole curves"));
-        }
-        let key = i as u64 + 1;
-        let point_bytes: &[u8] = bytemuck::cast_slice(points);
-        let range_bytes: &[u8] = bytemuck::cast_slice(ranges);
-        player.upload(Upload::path(
-            key,
-            point_bytes,
-            range_bytes,
-            centroid_area(points),
-        )?)?;
-        let curves = (points.len() / 4) as u32;
-        built.push(match record {
-            PathRecord::Fill(path) => Record::filled(key, curves, path.model, path.fill),
-            PathRecord::Stroke(path) => Record::stroked(
-                key,
-                curves,
-                path.model,
-                path.stroke,
-                path.width,
-                path.shape_bits,
-            ),
-        });
-    }
-    let record_bytes: Vec<u8> = bytemuck::cast_slice(&built).to_vec();
-
-    crate::render::with_gpu(|gpu| {
-        let frames = player.views(&view_bytes, &record_bytes, Vec::new())?;
-        let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
-        player.pixels(gpu, &frames, &mut out)?;
-        Ok(out)
-    })?
+    render_with_view(
+        view_2d_with(width, height, background, options),
+        width,
+        height,
+        samples,
+        records,
+    )
 }
 
 #[cfg(test)]
@@ -300,6 +546,61 @@ mod tests {
         assert!(center[0] > 200, "中央应为红色：{center:?}");
         let corner = pixel(&frame, w, 2, 2);
         assert!(corner[0] < 32, "角落应为背景：{corner:?}");
+    }
+
+    /// **B6 Step 1.2**：3D view 的槽位布局与上游 `feed.py::view` 一致 ——
+    /// 投影矩阵（列主序）、`three_d`、`toward`/bias、eye、灯数、tone、bloom、AO、灯槽。
+    #[test]
+    fn view3_lays_out_the_same_slots_as_the_upstream_packer() {
+        let view = View3 {
+            frame: (8.0, 6.0),
+            center: [0.0, 0.0, 0.0],
+            axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            zoom: 1.0,
+            focal: 8.0,
+            size: (64, 48),
+            background: [0.0, 0.0, 0.0, 1.0],
+            light_source: [0.0, -1.0, 0.0],
+            exposure: 2.0,
+            tone: Some(ze_render_ir::ToneCurve::AgX),
+            bloom: 0.5,
+            ao: Some((0.7, 0.3)),
+            lights: vec![
+                Light::Sun {
+                    direction: [0.0, 0.0, -1.0],
+                    color: [1.0, 1.0, 1.0],
+                    intensity: 2.0,
+                    shadows: true,
+                },
+                Light::Ambient {
+                    color: [1.0, 1.0, 1.0],
+                    intensity: 0.1,
+                },
+            ],
+        };
+        let v = super::view_3d(&view);
+        assert_eq!(v.len(), crate::render::VIEW_LENGTH);
+        assert_eq!([v[32], v[33], v[34], v[35]], [64.0, 48.0, 8.0, 1.0]);
+        assert_eq!(v[39], 1.0, "three_d");
+        assert_eq!([v[40], v[41], v[42]], [0.0, 0.0, 1.0], "toward = 相机 z 轴");
+        assert_eq!(v[43], super::ON_3D, "3D 路径的深度偏置");
+        assert_eq!([v[48], v[49], v[50], v[51]], [0.0, 0.0, 8.0, 1.0], "eye = center + f·z");
+        assert_eq!(v[super::VIEW_LIGHTING + 4], 2.0, "灯数");
+        assert_eq!(v[super::VIEW_LIGHTING + 5], 2.0, "曝光");
+        assert_eq!(v[super::VIEW_LIGHTING + 6], 1.0, "tone = AgX");
+        assert_eq!(v[super::VIEW_LIGHTING + 7], 0.5, "bloom 强度");
+        assert_eq!(v[super::VIEW_OCCLUSION], 0.7, "AO 强度");
+        assert_eq!(v[super::VIEW_OCCLUSION + 1], 0.3, "AO 半径");
+        // 第一盏灯：方向 + kind=1 + 线性色 × 强度 + 投影位。
+        let sun = super::VIEW_LIGHTING + 8;
+        assert_eq!([v[sun], v[sun + 1], v[sun + 2]], [0.0, 0.0, -1.0]);
+        assert_eq!(v[sun + 3], 1.0);
+        assert!((v[sun + 4] - 2.0).abs() < 1e-6, "线性白 × 2");
+        assert_eq!(v[sun + 13], 1.0, "casts shadows");
+        // 第二盏：kind=0（环境光）。
+        let ambient = sun + 16;
+        assert_eq!(v[ambient + 3], 0.0);
+        assert!((v[ambient + 4] - 0.1).abs() < 1e-3);
     }
 
     /// **B6 Step 1.2 验收**：着色栈真的接上了 —— 同一帧在

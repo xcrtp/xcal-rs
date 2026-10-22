@@ -36,7 +36,10 @@ mod mesh;
 mod render;
 
 pub mod api;
-pub use api::{FilledPath, PathRecord, StrokedPath, ViewOptions, render_2d, render_2d_with};
+pub use api::{
+    FilledPath, Light, PathRecord, StrokedPath, View3, ViewOptions, render_2d, render_2d_with,
+    render_3d,
+};
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
 pub use scene::{SceneItem, SceneMapError, fill_paths, render_scene_2d, scene_records};
