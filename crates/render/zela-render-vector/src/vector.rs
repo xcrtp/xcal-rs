@@ -278,7 +278,7 @@ mod plane_precision {
             let shape = store.shapes.get(&1).unwrap();
             for offset in [0.0f32, 100.0, 100_000.0] {
                 let m = [[0.81, 0.24, 0.55, offset], [0.44, 0.93, -0.14, -offset], [0.37, -0.62, 0.89, offset]];
-                let record = Record::filled(1, 1, m, [1.0; 4]);
+                let record = Record::filled(1, 1, m, [1.0; 4], false, None);
                 let placed = world_plane(shape, None, &record);
                 let actual = fit_plane(&placed);
                 let m = m.map(|row| row.map(f64::from));
