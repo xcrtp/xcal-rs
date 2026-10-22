@@ -404,6 +404,7 @@ mod tests {
 
     fn style(fill: Color32) -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: Some(fill),
             stroke: None,
             stroke_width: 0.0,
@@ -533,6 +534,7 @@ mod tests {
             shape: &shape,
             transform: Transform2D::identity(),
             style: Style2D {
+                stroke_shape: Default::default(),
                 fill: None,
                 stroke: Some(Color32::RED),
                 stroke_width: 2.0,

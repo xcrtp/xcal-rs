@@ -14,16 +14,64 @@ use ze_notion::{Color32, MeasureSpace, resolve_width};
 
 use crate::shape::Style2D;
 
-/// 描边样式组件：颜色 + 宽度 + 宽度所属空间。
+/// 描边端点形态（**契约字段**，B5 V2-10）。
+///
+/// 默认 `Butt` —— 与 lyon `StrokeOptions::DEFAULT_LINE_CAP` 实测一致（默认等效，见 B5 §二）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum StrokeCap {
+    /// 平头：端点不超出路径终点。
+    #[default]
+    Butt,
+    /// 圆头：以半宽为半径的半圆。
+    Round,
+    /// 方头：超出半个线宽。
+    Square,
+}
+
+/// 描边拐角形态（**契约字段**，B5 V2-10）。默认 `Miter`（= lyon 默认）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum StrokeJoin {
+    /// 尖角（受 miter limit 约束，见 GAPS V2-11）。
+    #[default]
+    Miter,
+    /// 圆角。
+    Round,
+    /// 斜切。
+    Bevel,
+}
+
+/// 描边形态的组合（`Style2D` 上只有这一个字段，语义只定义一次）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct StrokeShape {
+    pub cap: StrokeCap,
+    pub join: StrokeJoin,
+}
+
+impl StrokeShape {
+    /// 默认形态：butt + miter（= B5 之前 lyon 的隐式默认）。
+    pub const DEFAULT: Self = Self {
+        cap: StrokeCap::Butt,
+        join: StrokeJoin::Miter,
+    };
+}
+
+/// 描边样式组件：颜色 + 宽度 + 宽度所属空间 + 形态。
 ///
 /// `space` 声明宽度的空间归属（默认 [`MeasureSpace::Screen`]）；
 /// **唯一换算点**是 [`ResolveStyle::resolve_style`]（由 `record_scene` 结合
 /// 相机 scale 调用）。
+///
+/// `cap` / `join` 带 `#[serde(default)]` ⇒ 旧 ZSB / 旧脚本反序列化后仍是
+/// butt + miter，画面逐位不变（B5 默认等效原则）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StrokeSolid {
     pub width: f32,
     pub color: Color32,
     pub space: MeasureSpace,
+    #[serde(default)]
+    pub cap: StrokeCap,
+    #[serde(default)]
+    pub join: StrokeJoin,
 }
 
 impl StrokeSolid {
@@ -33,6 +81,8 @@ impl StrokeSolid {
             width,
             color: color.into(),
             space: MeasureSpace::Screen,
+            cap: StrokeCap::Butt,
+            join: StrokeJoin::Miter,
         }
     }
 
@@ -42,6 +92,23 @@ impl StrokeSolid {
             width,
             color: color.into(),
             space,
+            cap: StrokeCap::Butt,
+            join: StrokeJoin::Miter,
+        }
+    }
+
+    /// 显式指定形态（链式；不改宽度 / 空间的既有语义）。
+    pub fn with_shape(mut self, cap: StrokeCap, join: StrokeJoin) -> Self {
+        self.cap = cap;
+        self.join = join;
+        self
+    }
+
+    /// 形态组合。
+    pub fn shape(&self) -> StrokeShape {
+        StrokeShape {
+            cap: self.cap,
+            join: self.join,
         }
     }
 }
@@ -145,6 +212,7 @@ pub trait ResolveStyle {
 impl ResolveStyle for StrokeSolid {
     fn resolve_style(&self, scale: f32) -> Style2D {
         Style2D {
+            stroke_shape: self.shape(),
             fill: None,
             stroke: Some(self.color),
             stroke_width: resolve_width(self.width, self.space, scale),
@@ -157,6 +225,7 @@ impl ResolveStyle for StrokeSolid {
 impl ResolveStyle for FillSolid {
     fn resolve_style(&self, _scale: f32) -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: Some(self.color),
             stroke: None,
             stroke_width: 0.0,
@@ -169,6 +238,7 @@ impl ResolveStyle for FillSolid {
 /// 与迁移前的队列行为一致；世界→屏幕换算只发生在 `record_scene`）。
 pub fn fill_style(fill: &FillSolid) -> Style2D {
     Style2D {
+        stroke_shape: Default::default(),
         fill: Some(fill.color),
         stroke: None,
         stroke_width: 0.0,
@@ -179,6 +249,7 @@ pub fn fill_style(fill: &FillSolid) -> Style2D {
 /// 同 [`fill_style`]，描边版：不高亮、不换算，原样进队列。
 pub fn stroke_style_raw(stroke: &StrokeSolid) -> Style2D {
     Style2D {
+        stroke_shape: stroke.shape(),
         fill: None,
         stroke: Some(stroke.color),
         stroke_width: stroke.width,

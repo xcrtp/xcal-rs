@@ -99,6 +99,7 @@ impl ProbeDraw {
             },
         };
         let style = Style2D {
+            stroke_shape: Default::default(),
             fill: self.fill.map(|[r, g, b, a]| Color32::from_rgba(r, g, b, a)),
             stroke: self.stroke.map(|[r, g, b, a]| Color32::from_rgba(r, g, b, a)),
             stroke_width: self.stroke_width,

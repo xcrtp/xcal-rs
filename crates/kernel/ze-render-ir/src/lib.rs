@@ -53,8 +53,8 @@ pub use pipeline::{
 };
 pub use shape::{CustomShapeData, CustomSpec, CustomSpecs, Shape2D, SpecId, Style2D};
 pub use style::{
-    FillSolid, FillStyle, Opacity, ResolveStyle, StrokeSolid, StrokeStyle, fill_style,
-    stroke_style_raw,
+    FillSolid, FillStyle, Opacity, ResolveStyle, StrokeCap, StrokeJoin, StrokeShape, StrokeSolid,
+    StrokeStyle, fill_style, stroke_style_raw,
 };
 pub use uniform::{
     UniformField, UniformLayout, UniformLayoutError, UniformType, cube_lights_layout,

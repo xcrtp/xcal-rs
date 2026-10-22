@@ -151,6 +151,7 @@ mod tests {
 
     fn style(color: Color32) -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: Some(color),
             ..Style2D::default()
         }

@@ -55,6 +55,7 @@ use lyon_tessellation::{
 };
 
 use ze_notion::{Path2D, Transform2D, Triangle2D, Vec2};
+use ze_render_ir::{StrokeCap, StrokeJoin};
 
 use crate::shape::{CustomShapeData, CustomSpecs, Shape2D, Style2D};
 use crate::vertex::{AaModel, CacheStrategy, VertexLayout};
@@ -442,7 +443,7 @@ pub fn tessellate_with(
                 }
             }
             if style.stroke.is_some() && style.stroke_width > 0.0 {
-                if let Some(t) = tessellate_stroke(&contours, style.stroke_width) {
+                if let Some(t) = tessellate_stroke(&contours, style) {
                     out.push(t);
                 }
             }
@@ -526,11 +527,37 @@ fn tessellate_fill(contours: &[Contour]) -> Option<Tessellation2D> {
     })
 }
 
-fn tessellate_stroke(contours: &[Contour], width: f32) -> Option<Tessellation2D> {
+/// B5 V2-10：描边的 cap / join **由契约字段显式驱动**（不再靠 lyon 的隐式默认）。
+///
+/// 默认值按实测钉住（`lyon_tessellation 1.0.22`）：
+/// `DEFAULT_LINE_CAP = Butt`、`DEFAULT_LINE_JOIN = Miter`、`DEFAULT_MITER_LIMIT = 4.0`。
+/// 我们的默认形态与之一致 ⇒ 未设 cap/join 的对象逐位不变（有回归用例）。
+fn stroke_options(style: &Style2D) -> StrokeOptions {
+    use lyon_tessellation::{LineCap, LineJoin};
+    let cap = match style.stroke_shape.cap {
+        StrokeCap::Butt => LineCap::Butt,
+        StrokeCap::Round => LineCap::Round,
+        StrokeCap::Square => LineCap::Square,
+    };
+    let join = match style.stroke_shape.join {
+        StrokeJoin::Miter => LineJoin::Miter,
+        StrokeJoin::Round => LineJoin::Round,
+        StrokeJoin::Bevel => LineJoin::Bevel,
+    };
+    StrokeOptions::default()
+        .with_line_width(style.stroke_width)
+        .with_line_cap(cap)
+        .with_line_join(join)
+        // miter limit 仍是 lyon 默认 4.0：与矢量后端的硬编码 10 不一致，
+        // 记账在 GAPS V2-11（改它要动上游 wgsl 语义）。
+        .with_miter_limit(StrokeOptions::DEFAULT_MITER_LIMIT)
+}
+
+fn tessellate_stroke(contours: &[Contour], style: &Style2D) -> Option<Tessellation2D> {
     let path = build_lyon_path(contours);
     let mut buffers: VertexBuffers<Vertex2D, u32> = VertexBuffers::new();
     let mut tessellator = StrokeTessellator::new();
-    let options = StrokeOptions::default().with_line_width(width);
+    let options = stroke_options(style);
     tessellator
         .tessellate_path(
             &path,
@@ -583,7 +610,7 @@ pub fn tessellate_reveal(
     if contours.is_empty() {
         return None;
     }
-    tessellate_stroke(&contours, style.stroke_width)
+    tessellate_stroke(&contours, style)
 }
 
 // ─── 测试辅助（也供集成测试/下游复用） ─────────────────────────────────────
@@ -633,6 +660,7 @@ mod tests {
 
     fn style_fill() -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: Some(Color32::WHITE),
             stroke: None,
             stroke_width: 0.0,
@@ -642,6 +670,7 @@ mod tests {
 
     fn style_stroke(width: f32) -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: None,
             stroke: Some(Color32::BLACK),
             stroke_width: width,
@@ -959,6 +988,40 @@ mod tests {
         }
     }
 
+    /// **B5 V2-10 验收**：默认形态 == lyon 的隐式默认（逐字段相等 ⇒ 画面逐位不变）；
+    /// 改 cap/join 必须真的改变几何（不是被静默忽略）。
+    #[test]
+    fn stroke_shape_drives_lyon_explicitly() {
+        let base = style_stroke(4.0);
+        // 默认形态：与 `StrokeOptions::default()` 完全一致（含 miter limit 4.0）。
+        assert_eq!(
+            stroke_options(&base),
+            StrokeOptions::default().with_line_width(4.0)
+        );
+
+        let mut shaped = base;
+        shaped.stroke_shape = ze_render_ir::StrokeShape {
+            cap: StrokeCap::Round,
+            join: StrokeJoin::Bevel,
+        };
+        assert_ne!(
+            stroke_options(&shaped),
+            StrokeOptions::default().with_line_width(4.0)
+        );
+
+        let shape = Shape2D::Line {
+            start: Vec2::ZERO,
+            end: Vec2::new(10.0, 0.0),
+        };
+        let butt = tessellate(&shape, &identity(), &base, 0.05);
+        let round = tessellate(&shape, &identity(), &shaped, 0.05);
+        assert_ne!(
+            butt[0].vertices.len(),
+            round[0].vertices.len(),
+            "圆头 + 斜切必须改变顶点数（否则字段没被消费）"
+        );
+    }
+
     /// 🔴 R3 的代码级证明（"与旧管线画面一致"）：shader 的偏移公式**逐顶点重建**
     /// R1 之前 lyon 直接给出的轮廓点。
     ///
@@ -1025,7 +1088,7 @@ mod tests {
             StrokeTessellator::new()
                 .tessellate_path(
                     &path,
-                    &StrokeOptions::default().with_line_width(*w),
+                    &stroke_options(&style_stroke(*w)),
                     &mut BuffersBuilder::new(&mut buffers, LegacyCtor),
                 )
                 .expect("legacy 三角化失败");
@@ -1181,6 +1244,7 @@ mod tests {
     fn fill_and_stroke_produce_two_items() {
         let shape = Shape2D::Rect(Rect2D::new(Vec2::ZERO, Vec2::new(10.0, 10.0)));
         let style = Style2D {
+            stroke_shape: Default::default(),
             fill: Some(Color32::WHITE),
             stroke: Some(Color32::BLACK),
             stroke_width: 2.0,

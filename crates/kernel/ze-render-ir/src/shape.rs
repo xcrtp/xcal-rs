@@ -191,6 +191,9 @@ pub struct Style2D {
     /// 由消费端把它转成 `StrokeSolid.space`，最终在 `record_scene`
     /// （**唯一换算点**）结合相机 scale 解析为屏幕像素。
     pub space: MeasureSpace,
+    /// 描边形态（cap / join）：**已解析**的载荷，后端唯一消费点（B5 V2-10）。
+    /// 默认 = butt + miter（= B5 之前 lyon 的隐式默认 ⇒ 逐位不变）。
+    pub stroke_shape: crate::style::StrokeShape,
 }
 
 impl Default for Style2D {
@@ -200,6 +203,7 @@ impl Default for Style2D {
             stroke: None,
             stroke_width: 1.0,
             space: MeasureSpace::Screen,
+            stroke_shape: crate::style::StrokeShape::DEFAULT,
         }
     }
 }

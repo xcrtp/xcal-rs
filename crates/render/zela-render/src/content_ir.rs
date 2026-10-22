@@ -72,6 +72,8 @@ fn styled_path_to_cmd(p: &StyledPath, transform: Transform2D, scale: f32) -> Con
         // pt（标称尺度）→ 世界单位：与几何共用同一系数，使描边随字形一同缩放。
         stroke_width: p.stroke.as_ref().map(|s| s.width * scale).unwrap_or(0.0),
         space: MeasureSpace::World,
+        // 内容 IR 目前不携带 cap / join（`Stroke2D` 只有宽度与颜色）⇒ 用默认形态。
+        stroke_shape: ze_render_ir::StrokeShape::DEFAULT,
     };
     ContentDrawCmd {
         shape,

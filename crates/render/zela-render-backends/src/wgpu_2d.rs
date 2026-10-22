@@ -1494,6 +1494,7 @@ mod tests {
             ZIndex::new(0),
             Shape2D::Rect(Rect2D::new(Vec2::new(150.0, 75.0), Vec2::new(250.0, 125.0))),
             Style2D {
+                stroke_shape: Default::default(),
                 fill: Some(Color32::new(255, 0, 0, 255)),
                 space: MeasureSpace::Screen,
                 ..Default::default()
@@ -1635,6 +1636,7 @@ mod tests {
             ZIndex::new(0),
             Shape2D::Rect(Rect2D::new(Vec2::new(150.0, 75.0), Vec2::new(250.0, 125.0))),
             Style2D {
+                stroke_shape: Default::default(),
                 fill: Some(Color32::new(255, 0, 0, 255)),
                 space: MeasureSpace::Screen,
                 ..Default::default()
@@ -1647,6 +1649,7 @@ mod tests {
                 radius: 10.0,
             },
             Style2D {
+                stroke_shape: Default::default(),
                 // `Style2D::default()` 的 fill 是白色，这里显式关掉以只留描边
                 // （让 draw_count 的断言能精确区分"填充/描边各一条几何"）。
                 fill: None,
@@ -1853,6 +1856,7 @@ mod tests {
 
     fn stroke_style(width: f32) -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: None,
             stroke: Some(Color32::new(0, 255, 0, 255)),
             stroke_width: width,
@@ -2275,6 +2279,7 @@ mod tests {
     /// 书写动画的描边样式（青色、宽 6 —— 足够宽，像素判据稳定）。
     fn reveal_style() -> Style2D {
         Style2D {
+            stroke_shape: Default::default(),
             fill: None,
             stroke: Some(Color32::new(0, 200, 200, 255)),
             stroke_width: 6.0,

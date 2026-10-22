@@ -297,8 +297,8 @@
 ## J. B3 批次记账（Surface 双路径，2026-10-21）
 
 > 计划《B3执行计划_Surface双路径》及后续 Step 4 / Step 5-6 计划。本段记录**实际落地**部分：
-> Step 0-4c 已全部落地；Step 5-6 落地为「两个脚本作品 + 对拍注册」，fourier / storyboard
-> 迁移（S5-01）仍未执行，单列说明。
+> Step 0-4c 已全部落地；Step 5-6 落地为「两个脚本作品 + 对拍注册」。fourier / storyboard
+> 迁移纹理路径（S5-01）已**否决**（决策留痕，不是待执行缺口）。
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
@@ -328,13 +328,13 @@
 | S4-11 | `composite = true` 把整张纹理**铺满视口**（无 letterbox / 无目标矩形）⇒ 纹素宽高比 ≠ 输出宽高比时画面被拉伸（圆变椭圆） | 渲染后端 | **已关闭（B4 验收）** | `CompositeOp.fit: Option<(u32,u32)>`：`Some` ⇒ 按源纹理宽高比 **contain + 居中**（`fit_rect` + `rect_to_ndc`，顶点阶段按 per-layer uniform 的 `rect` 重映射四边形）；`None` ⇒ 铺满（视口层，离屏尺寸 == 视口尺寸 ⇒ 恒等）。验收：`gpu_fit_letterboxes_instead_of_stretching`（2:1 源进 4×4 ⇒ 上下各 1 行黑边）+ 3 条纯函数用例；既有 5 条 native 基线**逐位不变**（作品 A/B 本就是 4:3 = 4:3，rect 换算为精确的 `(-1,1,-1,1)`） |
 | S4-12 | `Planar` 兜底 UV 的 V 轴方向反了：贴图在无 UV 几何上**上下倒转** | 渲染管线 | **已关闭（B3 Step 5 修正）** | `fallback_uvs` Planar 改为 `v = 1 - y`（纹理行首在模型 +y，与 `parametric_surface` 手写的 `1.0 - v` 同口径）；test `planar_fallback_uv_puts_image_top_at_positive_y` |
 | S4-13 | `solid_cube` 只有 8 个共享顶点、**无 UV / 无法线**：Planar 兜底在侧面（x=常量）退化成 0 面积 ⇒ PBR 法线 TBN 除以 `det≈0` 得 NaN（右脸随机噪点）；面法线恒 +Z ⇒ 三个面同亮度 | 渲染管线 | **已关闭（B3 Step 5 修正）** | 改 24 顶点（每面 4 个）：显式 UV（图像行首在 `+y`）+ 面法线；`cube.wgsl` 的 TBN 在 `abs(det) ≤ 1e-6` 时跳过法线贴图；tests `test_solid_cube_faces_have_non_degenerate_uv`；demo3d 重录 `dc8b1388… → ddd69b3e…`（噪点消失 + 面法线正确着色，逐条可解释） |
-| S5-01 | fourier / storyboard 迁移到纹理路径 + 重录 | 作品 | **未执行** | 本批 Step 5 只做**新作品的 fixture 注册 + 重录**，不含迁移；两者仍走默认 2D 直画路径。迁移会引入一次纹理采样 ⇒ 必须重录 |
+| S5-01 | 既有 2D 作品迁移纹理路径 | 作品 | **已否决（不改写）** | 既有 2D 作品**不迁**纹理路径：无 3D 消费者，强行 `composite` 会多一次全屏重采样且无收益。纹理路径的验证改由新增作品承担（`surface_matrix` / `atlas`）。本条不是"待执行的缺口"，是决策留痕 |
 | S6-01 | 脚本无法声明 Surface / 无法把内容纹理挂到材质 | 脚本 API | **已关闭（B3 Step 5-0）** | `scene.surface(zela.Surface)` + `Material3D.texture = Texture.Surface{..}`；`SurfaceTextureRef` 在 commit 解析；`zela.scene@7`（指纹 `15_573_081_187_359_822_637`） |
 | S6-02 | `zela.Material3D` 加 `texture` 字段而指纹不变（字段结构不进指纹） | 脚本 API | **仍成立（已知）** | 加**方法**会变指纹、加**字段**不会 —— 看守力度不一致；本轮靠版本递增 + 手工记账 |
 | S6-03 | Rust 版 `authored/demo3d.rs` 不进任何对拍 / 测试（验证盲区） | 作品 / 测试 | **仍成立（记账）** | `build_script_runtime` 用 `with_demo3d = false`，`--script` / `--bundle` 都不构建它；`tests/` 只覆盖能力 demo 与分镜 ⇒ 该模块的改动无人验（4c-4 的"零差异"对它是平凡真）。触发条件：给它加对拍入口，或显式降级为"仅 GUI 示例" |
 | S6-04 | 脚本可表达的图元是 9 组录制表的**真子集** | 脚本 API | **仍成立（已知）** | `ze-scene-api` 只有 `Circle` / `Polyline` / `Arrow` / `PathShape`（无 Rect / Line / Ellipse / Polygon）；作品 A 因此只能覆盖 Circle / Arrow / Path × {Fill, Stroke}，Rect / Line 组合**无法用脚本表达** |
 
-**J 段小计（B3，已执行部分）**：已关闭 20（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10/11/12/13、S6-01）· 仍成立/显式拒绝 7（S1-02/03、S2-03、S4-08、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 未执行 1（S5-01）。
+**J 段小计（B3，已执行部分）**：已关闭 20（S0-01/02/03、S1-01、S1-04、S2-01/02、S3-01、S4-01/02/03/04/05/06/07/09/10/11/12/13、S6-01）· 仍成立/显式拒绝 7（S1-02/03、S2-03、S4-08、S6-02/03/04）· 不成立未采纳 1（S0-04）· 未拍 1（S3-02）· 已否决 1（S5-01）。
 
 ---
 
@@ -351,7 +351,7 @@
 | V1-04 | 许可证基线未立：上游多数文件**自身没有 SPDX 头** | 依赖 / 合规 | **已关闭（B4 Step 3）** | 新 crate `zela-render-vector`：`LICENSES/{MIT,Apache-2.0}.txt` 逐字复制；`UPSTREAM.md` 记录 SHA + 逐文件许可（light/occlusion/tone/bloom + dfg.bin 为 Apache-2.0）；只开 `render` feature |
 | V1-05 | `RenderCapabilitySet::ALL` 把"只有一个后端"写进类型；无后端注册/选择点 | 渲染后端 | **已关闭（B4 Step 4）** | 删除 `ALL`，新增 `union()`；`BackendKind::{Wgpu, Vector}` 各自自述；`BackendRegistry` 注册 / 选择 / 协商（未实现或未注册 ⇒ 显式错误）；测试锁住"wgpu-only 协商 shapes 必须失败" |
 | V2-01 | 矢量后端本身尚未移植（`vector.*` / `render.rs` 公共类型 / 着色栈 / 光栅后端，约 9.9k 行） | 渲染后端 | **已关闭（B4 Step 5）** | `zela-render-vector` 收录上游源码（`vector.*` + `vector_buffers/compute` + `render.rs` 公共类型 + `blend*` / `depth` / `paint` / `mesh` / `shadow` / `bloom` / `occlusion` / `environment` + 着色栈 wgsl + `dfg.bin`）；逐个补 SPDX 头；宿主适配层 `api::FilledPath` / `render_2d`。验证：`cargo test -p zela-render-vector` 26 passed（含上游自带用例 + `filled_square_draws`） |
-| V2-02 | 双后端共存验证 + 矢量作品新基线 | 测试 / 对拍 | **已关闭（B4 Step 6，新基线拆到 V2-07）** | `zela-render-backends/tests/vector_vs_wgpu.rs`：同一进程内 wgpu 与矢量各渲一帧，判据 = 非空 + 覆盖率相对差 ≤ 10% + 逐像素 RGB MAE ≤ 24/255。实测：轴对齐矩形 4096/4096 像素、MAE 0.00；非 45° 斜边三角形 MAE 12.18/255、覆盖率相对差 0.005 |
+| V2-02 | 双后端共存验证 + 矢量作品新基线 | 测试 / 对拍 | **已关闭（B4 Step 6，新基线拆到 V2-07）** | `zela-render-backends/tests/vector_vs_wgpu.rs`：同一进程内 wgpu 与矢量各渲一帧，判据 = 非空 + 覆盖率相对差 ≤ 10% + 逐像素 RGB MAE ≤ 24/255。实测：轴对齐矩形 4096/4096 像素、MAE 0.00；非 45° 斜边三角形 MAE 12.18/255、覆盖率相对差 0.005。**⚠️ 本条 12.18 / 24 是夹具 bug 修正前（B4 验收 P1-1）的旧读数，已被 V2-09 取代（全图 0.09 / 阈值 8，内部区 ≤ 2）；此处仅作血缘留痕** |
 | V2-03 | 上游是 `m1/m2` 双变换 + **GPU 插值**；我们是 CPU 每帧烘单矩阵 | 渲染后端 | **记账（移植时已知非等价）** | 移植时令 `m1 = m2` 可跑通，但**丢掉"一次上传、GPU 插值"的性能模型**；确定性分镜不受影响（逐帧渲染） |
 | V2-04 | 三角化资产（`tessellate.rs` / `VertexBufferData` / `shape_to_mesh`）在矢量路线下不是唯一真源 | 文档 / 分层 | **记账（性质变更）** | 不删除、不破坏分层；在 ARCHITECTURE 写明"wgpu 后端专用路径"，避免后人误以为全局唯一 |
 | V2-05 | 旧 ZSB 没有 `render_params` 字段 | 装配产物 | **已按兼容策略关闭（V1-03）** | `#[serde(default)]` ⇒ 缺字段按 `RenderParams::default()`（= 当前行为）；不升容器版本（该字段不进 hash） |
@@ -360,7 +360,14 @@
 | V2-08 | 基线归因：`--record` 在**脏工作树**上把值标成 `@ <HEAD>`，但该提交并不包含这份状态（6 条值全标 `@ da9ea93`，实际由 `642b9d4` 携带）；slotA → slotB 的差异也无逐条说明 | 验收 / 基线 | **已关闭（B4 验收 P1-4，口径 D）** | `--record` 检测脏树 ⇒ 写 `@ <sha>+dirty`；新 `cargo verify --rebind`（要求干净树）把 `<sha>+dirty` **整段**换成携带录制的提交并自校验；`smoke` / `hashes` 在见到未归因 `+dirty` 时**直接失败**；`# delta:` 逐条留痕（slotA→slotB 前缀 + 原因指针）；存量 `baselines.txt` 已按真实血缘重写（demo3d `dc8b1388→ddd69b3e`、atlas `efe5bf39→93632049`，@ `642b9d4`）。文档：`FRAME_HASH_BASELINES.md` 口径 D；测试：`xtask/tests/parser_tests.rs` 5 条 |
 | V2-09 | 双后端对拍的**口径**问题（B4 验收 P1-1/2/3）：① MAE 12.18 无法区分"AA 方式不同"与"色彩管线不同"；② 矢量自测在起不来 GPU 时静默 `return`（仍然 passed）；③ 对拍注释声称"验证注册机制"，实际绕过 `BackendRegistry` | 测试 / 对拍 | **已关闭（B4 验收）** | ① MAE 拆「内部区 / 边缘带」并输出计数，内部区门禁 ≤ 2/255；**诊断出真 bug**：斜边夹具把屏幕坐标（y 向下）当成世界坐标（y 向上）⇒ 比的是镜像形状。修正后实测全图 MAE 0.09（内部区 0.00、边缘带 3.44），全局阈值由 24 收紧到 8。② `api.rs` 起不来即 `panic!`（与对拍同口径）。③ 注释改为"本对拍不经过 `BackendRegistry`，注册机制由 `registry.rs` 单测覆盖" |
 
-**K 段小计（B4）**：已关闭 9（V1-01..05、V2-01/02、V2-08/09）· 部分关闭 1（V2-06）· 记账 2（V2-03/04）· 未执行 1（V2-07）。
+| V2-10 | 描边 `cap` / `join` 曾是 **lyon 的隐默默认**（不在任何契约里）：换后端 / 换 lyon 版本都会静默改画面 | 渲染 IR | **已关闭（B5 Step 1）** | `StrokeCap` / `StrokeJoin` / `StrokeShape` 进 `ze-render-ir::style`；`StrokeSolid` 带 `#[serde(default)]`（默认 butt + miter ⇒ 旧 ZSB 逐位不变）；`Style2D.stroke_shape` 是**后端唯一消费点**；`tessellate.rs` 的 `stroke_options()` 显式驱动 lyon（`StrokeOptions::default()` 不再裸用）。实测钉住 `lyon_tessellation 1.0.22` 默认 `Butt / Miter / 4.0`，测试断言"默认选项逐字段相等 + 改 cap/join 真的改变顶点数" |
+| V2-11 | miter limit 两边不一致：lyon 默认 **4.0**，上游矢量**硬编码 10**（`vector.wgsl:497` / `render.rs:330`） | 渲染后端 | **记账（B5 §1.3）** | 即使两边都声明 `Miter`，极端尖角表现仍不同。改它要动上游 wgsl 语义 ⇒ 本批不改。**触发条件：矢量后端成为默认 2D 路径之前必须关闭** |
+| V2-12 | `zela.render.shapes` 签名只有 `capabilities` / `submit_shapes`：**没有** `create_target` / `upload`；且 `PathList` 表达不了 `Circle` / `Rect` / `Group` | 能力契约 / 装配 | **未执行（B5 Step 2 未做）** | 改签名必须同步 `PINNED_FINGERPRINTS`（`shapes = 1_097_982_529_554_556_752`）并写明。倾向把入参改成 `Shape2D` 列表（`PathList` 硬转会丢信息），但需先确认 target 生命周期，否则就是宿主侧隐式兜底 |
+| V2-13 | 渐变笔刷行 / 纹理图片 / dash 未映射（**缺概念**，不是缺映射） | 渲染后端 | **记账（B5 §七）** | 渐变需先定义色标 + 轴向与 `Style2D` 的关系；图片需给 `Shape2D` 加 `Image` 变体（R-04）；dash 需先有 dash 概念（上游是 `dash[3]` 周期/占空/相位）。触发：作品需要时 |
+| V2-14 | 矢量后端的**描边记录**未接：上游编码已核实（`Paint.brush2.w = cap | joint << 2`、`flags` 第 6 位 `STYLE`、`params[2]` = 宽度、`params[3]` = miter），但 `Curves.miter`（最尖拐角的 CPU 计算）我们绕过 `vector.rs` 后没有对应量 | 渲染后端 | **未执行（B5 Step 1.4）** | 本批只把 cap/join 固化进契约（V2-10）+ wgpu 侧显式驱动；矢量侧 `scene.rs` 仍对描边显式 `Unsupported`。填 `miter = 0` 会让 miter 拐角缺失 ⇒ 必须先移植 `Curves.miter` 计算，否则是"看起来能画但拐角不对"。随 V2-12 一起做 |
+| S4-14 | 孤儿 Surface：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用 ⇒ 内容既不在视口画（S4-10 起跳过）、也不参与合成、也没有代理平面 ⇒ **完全不可见且不报错** | 渲染管线 | **已关闭（B5 A-2）** | `content_texture_specs` 在同一趟里 `for_each::<Material3D>` 查引用；无人引用 ⇒ `SurfaceError::UnconsumedSurface`（报错文案给出修法：设 `composite=true` 或让 3D 材质引用）。测试 `unconsumed_content_surface_errors_explicitly`（无人引用报错 / 有引用通过 / composite=true 通过） |
+
+**K 段小计（B4 + B5）**：已关闭 11（V1-01..05、V2-01/02、V2-08/09、V2-10、S4-14）· 部分关闭 1（V2-06）· 记账 4（V2-03/04、V2-11、V2-13）· 未执行 3（V2-07、V2-12、V2-14）。
 
 ---
 

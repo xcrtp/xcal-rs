@@ -197,6 +197,12 @@ pub enum SurfaceError {
         scale_x: f32,
         scale_y: f32,
     },
+    #[error(
+        "Surface 对象 {surface:?} 的内容**不可见**：Renderer2D + composite=false，\
+         且没有任何 Material3D.texture 引用它的内容纹理 ⇒ 既不在视口画、也不参与合成、\
+         也没有代理平面消费。请设 composite=true 或让某个 3D 材质引用该纹理（S4-14）"
+    )]
+    UnconsumedSurface { surface: ObjectId },
 }
 
 /// 读取 Surface 的纹理契约（`Renderer2D` 必需）。
@@ -265,6 +271,8 @@ mod tests {
     #[derive(Default)]
     struct MockScene {
         nodes: HashMap<ObjectId, Node>,
+        /// S4-14：`Material3D` 消费者的模拟（`for_each` 只认这一种组件）。
+        materials: Vec<(ObjectId, crate::components::Material3D)>,
     }
 
     impl MockScene {
@@ -282,7 +290,28 @@ mod tests {
             self.nodes.len()
         }
 
-        fn for_each<T: 'static + Send + Sync>(&self, _f: impl FnMut(ObjectId, &T)) {}
+        fn for_each<T: 'static + Send + Sync>(&self, mut f: impl FnMut(ObjectId, &T)) {
+            for (id, node) in &self.nodes {
+                for candidate in [
+                    node.surface.as_ref().map(|v| v as &dyn Any),
+                    node.renderer.as_ref().map(|v| v as &dyn Any),
+                    node.texture.as_ref().map(|v| v as &dyn Any),
+                    node.parent.as_ref().map(|v| v as &dyn Any),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if let Some(value) = candidate.downcast_ref::<T>() {
+                        f(*id, value);
+                    }
+                }
+            }
+            for (id, material) in &self.materials {
+                if let Some(value) = (material as &dyn Any).downcast_ref::<T>() {
+                    f(*id, value);
+                }
+            }
+        }
 
         fn for_each_pair<A: 'static + Send + Sync, B: 'static + Send + Sync>(
             &self,
@@ -491,6 +520,39 @@ mod tests {
             stretched.camera_for(Rect2D::new(Vec2::ZERO, Vec2::new(100.0, 50.0))),
             Err(SurfaceError::AspectMismatch { .. })
         ));
+    }
+
+    /// S4-14（B5 A-2）：`Renderer2D + composite=false` 且无人消费纹理 ⇒ 显式错误。
+    #[test]
+    fn unconsumed_content_surface_errors_explicitly() {
+        use crate::components::Material3D;
+        use crate::domain::{content_texture_handle, content_texture_specs};
+
+        let mut scene = MockScene::default();
+        let s = id(1);
+        {
+            let node = scene.spawn(s);
+            node.surface = Some(Surface::new(bounds(), SurfaceMapping::World, Vec2::ZERO));
+            node.renderer = Some(SurfaceRenderer::Renderer2D);
+            node.texture = Some(SurfaceTexture::new([100, 100], TextureFilter::Linear, false));
+        }
+        // 没有任何 Material3D 引用 ⇒ 内容彻底不可见，必须报错。
+        assert_eq!(
+            content_texture_specs(&scene).unwrap_err(),
+            SurfaceError::UnconsumedSurface { surface: s }
+        );
+
+        // 有消费者（3D 材质引用该内容纹理）⇒ 合法。
+        let mut material = Material3D::default();
+        material.texture = Some(content_texture_handle(s));
+        scene.materials.push((id(2), material));
+        assert_eq!(content_texture_specs(&scene).unwrap().0.len(), 1);
+
+        // `composite=true` ⇒ 参与屏幕合成，即使无人引用也可见。
+        scene.materials.clear();
+        scene.nodes.get_mut(&s).unwrap().texture =
+            Some(SurfaceTexture::new([100, 100], TextureFilter::Linear, false).with_composite(true));
+        assert_eq!(content_texture_specs(&scene).unwrap().0.len(), 1);
     }
 
     /// `Renderer2D` 未声明 SurfaceTexture ⇒ 显式错误。

@@ -709,6 +709,15 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   提交后 `cargo verify --rebind` 把整段换成携带录制的提交；`smoke` / `hashes`
 >   见到未归因的 `+dirty` 直接失败；`# delta:` 逐条记录 slotA → slotB 的变化。
 >   （详见 `FRAME_HASH_BASELINES.md`；`GAPS.md` V2-08。）
+> - **B5（2026-10-22）：描边形态进契约 + 孤儿 Surface 报错**。
+>   `StrokeCap` / `StrokeJoin` / `StrokeShape` 进 `ze-render-ir`：`StrokeSolid` 带
+>   `#[serde(default)]`（默认 butt + miter = lyon 实测默认），`Style2D.stroke_shape`
+>   是后端唯一消费点；`tessellate.rs` 由 `stroke_options()` **显式**驱动 lyon
+>   （`StrokeOptions::default()` 不再裸用）⇒ 把一处静默默认变成契约字段，既有基线不变。
+>   同时关闭 S4-14：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用的
+>   孤儿 Surface 现在**显式报错**（S4-10 修掉重影后留下的"彻底沉默"）。
+>   仍缺：矢量侧描边记录（需先移植 `Curves.miter` 计算，V2-14）、`shapes` 签名
+>   （缺 target / `PathList` 表达力不足，V2-12）、渐变 / 纹理 / dash（V2-13）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）
