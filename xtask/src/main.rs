@@ -23,7 +23,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use xtask::{apply_record, load_baselines, Options, Step};
+use xtask::{apply_record, assert_attributed, load_baselines, rebind_dirty, Options, Step};
 
 /// wasm gate 的 kernel 组（与 CI 名单逐字一致）。
 const KERNEL_CRATES: &[&str] = &[
@@ -43,11 +43,15 @@ const KERNEL_CRATES: &[&str] = &[
 /// 门面 crate：必须与核心组一样保持 wasm32 可编译（不含 lua / py / UI）。
 const FACADE_CRATES: &[&str] = &["ze-pod", "ze-node", "zela"];
 
-/// **可选 wasm 能力**组：语言适配器里**能**编到 wasm32 的那些。
+/// 可选 wasm 能力**组**：语言适配器里**能**编到 wasm32 的那些。
 ///
 /// lua / py 不需要 wasm（mlua 的解释器不适合 wasm 内核路径；pyo3 根本编不到），
 /// 而 `ze-pod-js` 的存在理由正是"native 与 wasm 跑同一个 JS 引擎"（B3-P §一）——
 /// 不给它门禁，那条理由就没有回归保护（A1）。
+///
+/// ⚠️ **native-only（不进任何 wasm 名单）**：`zela-render-vector` 依赖 `pollster` + wgpu
+/// 的同步构造，编不到 wasm32；把它加进上面的 kernel / facade 名单会得到一条难懂的
+/// 编译错误。它的正确性由 native 侧的 `zela-render-backends` 对拍覆盖（B4）。
 const OPTIONAL_WASM_CRATES: &[&str] = &["ze-pod-js"];
 
 /// 结构性判据 1：`crates/ze/pod/` 的生产依赖边不得出现任何 `zela-*`。
@@ -215,6 +219,9 @@ fn main() {
 
 fn run(options: &Options) -> Result<(), String> {
     let root = repo_root()?;
+    if options.rebind {
+        return run_rebind(&root);
+    }
     if options.record {
         return run_record(&root, options);
     }
@@ -299,9 +306,20 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     let surface_matrix_hash = compare_script_vs_bundle(root, "surface_matrix", "640x480", None)?;
     let atlas_hash = compare_script_vs_bundle(root, "atlas", "640x480", None)?;
 
-    // 2) 回填 commit：当前 HEAD（重录发生在提交前，commit 待回填）。
+    // 2) 回填 commit：当前 HEAD（重录发生在提交前）。
     let head = git_short_head(root)?;
-    println!("[xtask] --record：回填候选 commit = {head}（旧槽位无 commit 或 pending 时回填）");
+    // 口径 D：重录前工作树必然是脏的（改代码 → 录值 → 一起提交）。
+    // 所以 `head` 并不包含这份状态 —— 标 `+dirty`，提交后用 `--rebind` 归因。
+    let dirty = worktree_dirty(root)?;
+    if dirty {
+        println!(
+            "[xtask] --record：工作树有未提交改动 ⇒ 值标注为 `{head}+dirty`；\
+             \n         录完必须：① 把 baselines.txt 与代码**一起提交**，② 立刻跑 `cargo verify --rebind`。\
+             \n         未归因的 `+dirty` 会被 smoke / hashes 步骤拒绝。"
+        );
+    } else {
+        println!("[xtask] --record：工作树干净 ⇒ 值直接归因到 {head}");
+    }
 
     // 3) 改写文件（纯函数，逻辑在 lib.rs，tests/ 覆盖）。
     let text = fs::read_to_string(&baseline_path)
@@ -322,23 +340,73 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
         ),
         ("native".to_string(), "atlas".to_string(), atlas_hash),
     ];
-    let next = apply_record(&text, &device, reason, &head, &records)?;
+    let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
     fs::write(&baseline_path, next)
         .map_err(|error| format!("写入 {} 失败：{error}", baseline_path.display()))?;
 
     // 4) 自校验：重录后的文件必须能重新解析。
     let baselines = load_baselines(&baseline_path)?;
     for (key, hash) in &baselines.native {
-        println!("[xtask] [native] {key} = {hash}（commit 待回填）");
+        println!("[xtask] [native] {key} = {hash}");
     }
     for (key, hash) in &baselines.smoke {
-        println!("[xtask] [smoke] {key} = {hash}（commit 待回填）");
+        println!("[xtask] [smoke] {key} = {hash}");
     }
     println!(
-        "[xtask] 已重录 {}：reason 已写入，commit 待回填",
-        baseline_path.display()
+        "[xtask] 已重录 {}：reason 已写入{}",
+        baseline_path.display(),
+        if dirty {
+            "；下一步 = 提交（含 baselines.txt）→ `cargo verify --rebind`"
+        } else {
+            ""
+        }
     );
     Ok(())
+}
+
+/// `--rebind`：把 `@ <sha>+dirty` 归因到当前 HEAD（提交之后立刻跑）。
+///
+/// 前置：工作树干净且 baselines.txt 无未提交改动 —— 否则"当前 HEAD"还不是
+/// 携带这份录制的提交，归因会再次失真（P1-4 的成因）。
+fn run_rebind(root: &Path) -> Result<(), String> {
+    if worktree_dirty(root)? {
+        return Err(
+            "--rebind 要求干净工作树：还有未提交改动时，当前 HEAD 不含这份录制，归因会失真。\n  \
+             先 `git add` + `git commit`（把 baselines.txt 一起提交），再重跑 `cargo verify --rebind`。"
+                .to_string(),
+        );
+    }
+    let baseline_path = scripts_dir(root).join("baselines.txt");
+    let text = fs::read_to_string(&baseline_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
+    let head = git_short_head(root)?;
+    let (next, rewritten) = rebind_dirty(&text, &head)?;
+    fs::write(&baseline_path, next)
+        .map_err(|error| format!("写入 {} 失败：{error}", baseline_path.display()))?;
+    println!("[xtask] --rebind：{rewritten} 行 `+dirty` 已归因到 {head}");
+    // 自校验：归因后不得再有未归因的录制。
+    let text = fs::read_to_string(&baseline_path)
+        .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
+    assert_attributed(&text)?;
+    load_baselines(&baseline_path)?;
+    println!("[xtask] --rebind 完成：baselines.txt 归因一致");
+    Ok(())
+}
+
+/// 工作树是否有未提交改动（含未跟踪文件；`git status --porcelain` 非空）。
+fn worktree_dirty(root: &Path) -> Result<bool, String> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("无法运行 git：{error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git status --porcelain 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
 fn git_short_head(root: &Path) -> Result<String, String> {
@@ -717,6 +785,10 @@ fn jq_filter(metadata: &str, program: &str) -> Result<String, String> {
 /// 必须在 main push / nightly 定期跑。
 fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let baseline_path = scripts_dir(root).join("baselines.txt");
+    // 口径 D 门禁：未归因的 `+dirty` 不得进入对拍（否则差异无法回溯到提交）。
+    assert_attributed(&fs::read_to_string(&baseline_path).map_err(|error| {
+        format!("读取 {} 失败：{error}", baseline_path.display())
+    })?)?;
     let baselines = load_baselines(&baseline_path)?;
     prepare_hashes_dir(root)?;
     announce_baselines(&baseline_path);
@@ -738,6 +810,10 @@ fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
 
 fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let baseline_path = scripts_dir(root).join("baselines.txt");
+    // 口径 D 门禁：未归因的 `+dirty` 不得进入对拍（否则差异无法回溯到提交）。
+    assert_attributed(&fs::read_to_string(&baseline_path).map_err(|error| {
+        format!("读取 {} 失败：{error}", baseline_path.display())
+    })?)?;
     let baselines = load_baselines(&baseline_path)?;
     prepare_hashes_dir(root)?;
     announce_baselines(&baseline_path);

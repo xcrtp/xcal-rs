@@ -7,7 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use xtask::{apply_record, load_baselines, Options, Step};
+use xtask::{
+    apply_record, assert_attributed, load_baselines, rebind_dirty, Options, Step,
+};
 
 const H1: &str = "b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759";
 const H2: &str = "6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974";
@@ -186,7 +188,7 @@ fn apply_record_rotates_slots_and_backfills() {
         rec("native", "fourier", H2),
         rec("native", "storyboard", H1),
     ];
-    let next = apply_record(SAMPLE, "windows / RTX 4060 Laptop", "测试重录", "abc1234", &records)
+    let next = apply_record(SAMPLE, "windows / RTX 4060 Laptop", "测试重录", "abc1234", false, &records)
         .unwrap();
 
     // 生效行 = 新值 @ 产生时 HEAD（口径 B；head = abc1234）
@@ -222,24 +224,27 @@ fn apply_record_rotates_slots_and_backfills() {
 fn apply_record_backfills_pending_or_missing_old_commit_with_head() {
     let text = format!("[native]\nfourier = {H1} @ pending\nstoryboard = {H2}\n");
     let records = [rec("native", "fourier", H2)];
-    let next = apply_record(&text, "d", "r", "deadbee", &records).unwrap();
+    let next = apply_record(&text, "d", "r", "deadbee", false, &records).unwrap();
     assert!(next.contains(&format!("# slotA: fourier = {H1} @ deadbee")));
     assert!(next.contains(&format!("# slotA: storyboard = {H2} @ deadbee")));
 }
 
 #[test]
-fn apply_record_rejects_missing_key() {
+fn apply_record_registers_a_new_key_without_slot_a() {
+    // 契约（lib.rs 文档 / FRAME_HASH_BASELINES.md §基线）：新增 fixture 没有旧值行 ⇒
+    // 直接登记为生效行，**不**产生 slotA（否则新作品第一次录制就报"缺 key"）。
     let text = format!("[native]\nfourier = {H1}\n");
     let records = [rec("native", "storyboard", H2)];
-    let err = apply_record(&text, "d", "r", "deadbee", &records).unwrap_err();
-    assert!(err.contains("storyboard"), "错误应点名缺失的 key：{err}");
+    let next = apply_record(&text, "d", "r", "deadbee", false, &records).unwrap();
+    assert!(next.contains(&format!("storyboard = {H2} @ deadbee")));
+    assert!(!next.contains("# slotA: storyboard"), "新 key 不应有 slotA：\n{next}");
 }
 
 #[test]
 fn apply_record_rejects_missing_section() {
     let text = format!("[native]\nfourier = {H1}\n");
     let records = [rec("smoke", "smoke", H2)];
-    let err = apply_record(&text, "d", "r", "deadbee", &records).unwrap_err();
+    let err = apply_record(&text, "d", "r", "deadbee", false, &records).unwrap_err();
     assert!(err.contains("[smoke]"), "错误应点名缺失的 section：{err}");
 }
 
@@ -247,13 +252,77 @@ fn apply_record_rejects_missing_section() {
 fn apply_record_rejects_empty_device_or_reason() {
     let text = format!("[native]\nfourier = {H1}\n");
     let records = [rec("native", "fourier", H2)];
-    assert!(apply_record(&text, "", "r", "deadbee", &records).is_err());
-    assert!(apply_record(&text, "d", "", "deadbee", &records).is_err());
+    assert!(apply_record(&text, "", "r", "deadbee", false, &records).is_err());
+    assert!(apply_record(&text, "d", "", "deadbee", false, &records).is_err());
 }
 
 #[test]
 fn apply_record_rejects_bad_new_hash() {
     let text = format!("[native]\nfourier = {H1}\n");
     let records = [rec("native", "fourier", "zzzz")];
-    assert!(apply_record(&text, "d", "r", "deadbee", &records).is_err());
+    assert!(apply_record(&text, "d", "r", "deadbee", false, &records).is_err());
+}
+
+// ─── 口径 D：脏工作树录制 + 归因 ──────────────────────────────────────────────
+
+#[test]
+fn apply_record_marks_dirty_head_so_the_value_is_not_attributed_to_it() {
+    let text = format!("[native]\nfourier = {H1} @ 55a1eda\n");
+    let records = [rec("native", "fourier", H2)];
+    let next = apply_record(&text, "d", "r", "abc1234", true, &records).unwrap();
+    // 值不属于 abc1234（它还没包含这次改动）⇒ 必须带后缀，而不是冒充 abc1234。
+    assert!(next.contains(&format!("fourier = {H2} @ abc1234+dirty")));
+    assert!(next.contains(&format!("# slotB: fourier = {H2} @ abc1234+dirty")));
+    // slotA 仍写**真实**的旧提交（没有后缀）。
+    assert!(next.contains(&format!("# slotA: fourier = {H1} @ 55a1eda")));
+    // 带后缀也必须能解析（不破坏门禁读取）。
+    assert!(load_baselines(&temp_file(&next)).is_ok());
+}
+
+#[test]
+fn assert_attributed_rejects_unrebound_dirty_markers() {
+    let text = format!("[native]\nfourier = {H1} @ abc1234+dirty\n");
+    let err = assert_attributed(&text).unwrap_err();
+    assert!(err.contains("+dirty"), "错误应点名 +dirty：{err}");
+    assert!(err.contains("rebind"), "错误应给出修法：{err}");
+    // 归因后必须通过。
+    assert!(assert_attributed(&format!("[native]\nfourier = {H1} @ abc1234\n")).is_ok());
+    // 其它段（[browser]）的裸值不受影响。
+    assert!(assert_attributed("[browser]\nfourier = 1234\n").is_ok());
+}
+
+#[test]
+fn rebind_rewrites_the_sha_not_just_the_suffix() {
+    let text = format!(
+        "[native]\n# reason: r @ abc1234+dirty\n# slotB: fourier = {H2} @ abc1234+dirty\nfourier = {H2} @ abc1234+dirty\n"
+    );
+    let (next, rewritten) = rebind_dirty(&text, "def5678").unwrap();
+    assert_eq!(rewritten, 3);
+    // 关键：sha 也换掉 —— 只删后缀会留在错误的 abc1234 上（P1-4 的形态）。
+    assert!(!next.contains("abc1234"));
+    assert!(next.contains(&format!("fourier = {H2} @ def5678")));
+    assert!(next.contains("# reason: r @ def5678"));
+    assert!(!next.contains("+dirty"));
+}
+
+#[test]
+fn rebind_is_loud_when_there_is_nothing_to_rebind() {
+    let text = format!("[native]\nfourier = {H1} @ abc1234\n");
+    let err = rebind_dirty(&text, "def5678").unwrap_err();
+    assert!(err.contains("+dirty"), "无事可做也必须响亮报错：{err}");
+}
+
+#[test]
+fn apply_record_explains_every_changed_slot() {
+    let text = format!(
+        "[native]\nfourier = {H1} @ 55a1eda\ndemo3d = {H1} @ 55a1eda\n"
+    );
+    let records = [rec("native", "fourier", H1), rec("native", "demo3d", H2)];
+    let next = apply_record(&text, "d", "r", "abc1234", false, &records).unwrap();
+    // 变了的 key 必须有 delta 行（含新旧前缀）；没变的不写噪音。
+    assert!(
+        next.contains(&format!("# delta: demo3d {} -> {}", &H1[..12], &H2[..12])),
+        "差异必须逐条留痕：\n{next}"
+    );
+    assert!(!next.contains("# delta: fourier"), "未变的 key 不写 delta：\n{next}");
 }

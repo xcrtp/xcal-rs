@@ -22,6 +22,7 @@ pub const USAGE: &str = "\
   cargo verify --record --reason <text>
                              # 录制设备重录基线（基线策略 §九）：强制 reason、自动回填
                              # 上一槽 commit、轮换 slotA/slotB、写 device 行
+  cargo verify --rebind      # 把 `@ <sha>+dirty` 归因到当前 HEAD（提交后立刻跑）
 
 对拍选项：
   --skip-baseline            # 只断言 --script == --bundle，不比对基线
@@ -75,6 +76,7 @@ pub struct Options {
     pub step: Option<Step>,
     pub skip_baseline: bool,
     pub record: bool,
+    pub rebind: bool,
     pub reason: Option<String>,
 }
 
@@ -84,6 +86,7 @@ impl Options {
         let mut step = None;
         let mut skip_baseline = false;
         let mut record = false;
+        let mut rebind = false;
         let mut reason = None;
         let mut index = 0;
         while index < raw.len() {
@@ -92,6 +95,7 @@ impl Options {
                 "--fast" => fast = true,
                 "--skip-baseline" => skip_baseline = true,
                 "--record" => record = true,
+                "--rebind" => rebind = true,
                 "--reason" => {
                     index += 1;
                     let value = raw
@@ -134,6 +138,15 @@ impl Options {
         if !record && reason.is_some() {
             return Err("--reason 仅与 --record 搭配使用".to_string());
         }
+        // `--rebind` 是录制流程的第二步（提交后归因），与其它模式全互斥。
+        if rebind {
+            if record {
+                return Err("--rebind 与 --record 不能同时使用（先录、再提交、最后归因）".to_string());
+            }
+            if fast || step.is_some() || skip_baseline {
+                return Err("--rebind 不能与 --fast / --step / --skip-baseline 同时使用".to_string());
+            }
+        }
         if fast && step.is_some() {
             return Err("--fast 与 --step 不能同时使用".to_string());
         }
@@ -142,6 +155,7 @@ impl Options {
             step,
             skip_baseline,
             record,
+            rebind,
             reason,
         })
     }
@@ -167,15 +181,17 @@ pub struct Baselines {
     pub smoke: BTreeMap<String, String>,
 }
 
-/// 校验 commit 槽位：`pending`（新录待回填）或 7–40 位十六进制（已定型）。
+/// 校验 commit 槽位：`pending`（新录待回填）、7–40 位十六进制（已定型）或
+/// `<sha>+dirty`（录于脏工作树，尚未归因 —— 见 [`rebind_dirty`]）。
 pub fn validate_commit(commit: &str) -> Result<(), String> {
     if commit == "pending" {
         return Ok(());
     }
-    let len = commit.len();
-    if !(7..=40).contains(&len) || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+    let sha = commit.strip_suffix("+dirty").unwrap_or(commit);
+    let len = sha.len();
+    if !(7..=40).contains(&len) || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!(
-            "commit 槽必须是 `pending` 或 7–40 位十六进制（收到 `{commit}`）"
+            "commit 槽必须是 `pending`、7–40 位十六进制或 `<sha>+dirty`（收到 `{commit}`）"
         ));
     }
     Ok(())
@@ -185,8 +201,8 @@ pub fn validate_commit(commit: &str) -> Result<(), String> {
 ///
 /// 值行格式：`key = <hash> [@ <commit>]`（基线策略 §九）：
 /// - `<hash>`：64 位十六进制（校验与原一致，不放松）；
-/// - `<commit>`：可省略（兼容旧文件）；`pending` 或 7–40 位十六进制；
-/// - `# slotA:` / `# slotB:` / `# reason:` / `# device =` 等托管注释行直接忽略；
+/// - `<commit>`：可省略（兼容旧文件）；`pending`、7–40 位十六进制或 `<sha>+dirty`；
+/// - `# slotA:` / `# slotB:` / `# reason:` / `# delta:` / `# device =` 等托管注释行直接忽略；
 /// - 未知 section 响亮失败。
 pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
     let text = fs::read_to_string(path)
@@ -260,17 +276,22 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
 /// `records`：`(section, key, new_hash)` 三元组，`new_hash` 必须是与该 state
 /// 相符的 `--script == --bundle` 实测值。
 ///
-/// 语义（基线策略 §9.2 / §9.5）：
+/// 语义（基线策略 §9.2 / §9.5，口径 D）：
 /// - 旧生效行 → `# slotA:` 注释；旧 commit 缺失或 `pending` 时按"最后已知有效提交"回填 `head`；
-/// - 新值 → `# slotB:` 注释 + 新生效行 `key = <hash> @ <产生时 HEAD>`（口径 B）；
-/// - 写入 `# device = …` 与 `# reason: … @ <产生时 HEAD>`；
+/// - 新值 → `# slotB:` 注释 + 新生效行 `key = <hash> @ <produced>`；
+///   `produced` = `head`，或 `head+dirty`（`dirty = true`：值产生于脏工作树，
+///   真正携带它的提交尚未存在 ⇒ 提交后必须 [`rebind_dirty`] 归因）；
+/// - 改变的 key 各写一条 `# delta:` —— slotA 与 slotB 的差异逐条留痕（同一批次共用 reason）；
+/// - 写入 `# device = …` 与 `# reason: … @ <produced>`；
 /// - 非托管注释（如“Vulkan headless…”）原样保留；`[browser]` 整段不动；
 /// - 新增 key（无旧值行）⇒ 直接登记为生效行，不产生 `# slotA:`；section 缺失 ⇒ 显式报错。
+#[allow(clippy::too_many_arguments)]
 pub fn apply_record(
     text: &str,
     device: &str,
     reason: &str,
     head: &str,
+    dirty: bool,
     records: &[(String, String, String)],
 ) -> Result<String, String> {
     if device.trim().is_empty() {
@@ -317,6 +338,7 @@ pub fn apply_record(
                 device,
                 reason,
                 head,
+                dirty,
                 &mut flushed,
             )?;
             section = name.trim().to_string();
@@ -332,6 +354,7 @@ pub fn apply_record(
                         rest.starts_with("slotA:")
                             || rest.starts_with("slotB:")
                             || rest.starts_with("reason:")
+                            || rest.starts_with("delta:")
                             || rest.starts_with("device")
                     })
                     .unwrap_or(false);
@@ -367,6 +390,7 @@ pub fn apply_record(
         device,
         reason,
         head,
+        dirty,
         &mut flushed,
     )?;
 
@@ -393,12 +417,19 @@ fn flush_section(
     device: &str,
     reason: &str,
     head: &str,
+    dirty: bool,
     flushed: &mut BTreeSet<String>,
 ) -> Result<(), String> {
     if let Some(new_values) = grouped.get(section) {
         // 新增 fixture 没有旧值行 ⇒ 直接登记（无 `# slotA:`）；旧 key 仍走轮换。
         out.extend(emit_record_block(
-            preserved, old_pairs, new_values, device, reason, head,
+            preserved,
+            old_pairs,
+            new_values,
+            device,
+            reason,
+            head,
+            dirty,
         ));
         flushed.insert(section.to_string());
     } else {
@@ -409,6 +440,7 @@ fn flush_section(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_record_block(
     preserved: &[String],
     old_pairs: &[(String, String, Option<String>)],
@@ -416,6 +448,7 @@ fn emit_record_block(
     device: &str,
     reason: &str,
     head: &str,
+    dirty: bool,
 ) -> Vec<String> {
     let mut block: Vec<String> = preserved
         .iter()
@@ -423,10 +456,16 @@ fn emit_record_block(
         .cloned()
         .collect();
     block.push(format!("# device = {device}"));
-    // B3-1 收尾（口径 B）：`# reason` / `slotB` / 生效行都写**产生时 HEAD**，
-    // 这样下一次轮换时 slotA 拿到的就是真实产生提交，而不是"下次重录的 HEAD"。
+    // 口径 D：值产生于**脏工作树**时，`head` 并不包含这份状态（携带它的提交还没存在）
+    // ⇒ 标 `+dirty`，由提交后的 `--rebind` 归因到真实提交。
     // `head` 为空（非 git 环境）⇒ 退回 `pending`（仅此情况下才出现）。
-    let produced = if head.is_empty() { "pending" } else { head };
+    let produced = if head.is_empty() {
+        "pending".to_string()
+    } else if dirty {
+        format!("{head}+dirty")
+    } else {
+        head.to_string()
+    };
     block.push(format!("# reason: {reason} @ {produced}"));
     for (key, hash, commit) in old_pairs {
         let slot_a_commit = match commit {
@@ -435,6 +474,20 @@ fn emit_record_block(
             _ => head.to_string(),
         };
         block.push(format!("# slotA: {key} = {hash} @ {slot_a_commit}"));
+    }
+    // 口径 D：slotA → slotB 的**每一条差异**都留痕（同一批次共用上面的 reason）。
+    // 没有这行时，`slotA demo3d = 9ad42d70 / slotB = ddd69b3e` 只能靠作者口述归因。
+    for (key, hash) in new_values {
+        let Some((_, old_hash, _)) = old_pairs.iter().find(|(k, _, _)| k == key) else {
+            continue;
+        };
+        if old_hash != hash {
+            block.push(format!(
+                "# delta: {key} {old_short} -> {new_short}（本次重录改变，原因见上一条 reason）",
+                old_short = short_hash(old_hash),
+                new_short = short_hash(hash),
+            ));
+        }
     }
     for (key, hash) in new_values {
         block.push(format!("# slotB: {key} = {hash} @ {produced}"));
@@ -445,6 +498,100 @@ fn emit_record_block(
     // 段尾空行，恢复 section 之间的分隔。
     block.push(String::new());
     block
+}
+
+/// 哈希的 12 字符前缀（与差分报告同一口径，便于人眼对照）。
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(12).collect()
+}
+
+/// 门禁：`[native]` / `[smoke]` 里不得残留 `<sha>+dirty`（录制后忘了归因）。
+///
+/// 为什么是门禁而不是提醒：`+dirty` 表示"这份值不属于任何提交"，一旦允许它随
+/// 提交进入历史，归因就永久失效（P1-4 的形态）。修法是提交后跑 `cargo verify --rebind`。
+pub fn assert_attributed(text: &str) -> Result<(), String> {
+    let mut section = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.trim().to_string();
+            continue;
+        }
+        if section != "native" && section != "smoke" {
+            continue;
+        }
+        if let Some(position) = line.find("+dirty") {
+            let prefix: String = line[..position].chars().rev().take(7).collect::<String>()
+                .chars().rev().collect();
+            return Err(format!(
+                "baselines.txt 的 [{section}] 段仍有未归因的录制（…{prefix}+dirty）：{line}\n  \
+                 先提交（把 baselines.txt 一起提交），再跑 `cargo verify --rebind` 归因到该提交。\
+                 \n  门禁拒绝 `+dirty`：它表示这份值不属于任何提交，放行等于放弃归因（P1-4）。"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 把一行里的 `<sha>+dirty` 整段（sha **和**后缀）替换为 `head`；无标记 ⇒ `None`。
+fn rebind_line(line: &str, head: &str) -> Result<Option<String>, String> {
+    let mut out = line.to_string();
+    let mut changed = false;
+    while let Some(position) = out.find("+dirty") {
+        let bytes = out.as_bytes();
+        let mut start = position;
+        while start > 0 && (bytes[start - 1] as char).is_ascii_hexdigit() {
+            start -= 1;
+        }
+        if start == position {
+            return Err(format!("`+dirty` 前没有 commit sha：{line}"));
+        }
+        out.replace_range(start..position + "+dirty".len(), head);
+        changed = true;
+    }
+    Ok(changed.then_some(out))
+}
+
+/// 把 `<sha>+dirty` 归因到 `head`（提交之后的第二步）。
+///
+/// 归因 = 把整个 `<sha>+dirty` 换成 `head`（携带这份录制的提交），而不是只删后缀 ——
+/// 只删后缀会把值留在录制前的 HEAD 上，正是 P1-4 的错误形态。
+///
+/// 返回（改写后的全文，改写行数）。没有 `+dirty` ⇒ 显式报错（不是 no-op）：
+/// 那说明调用者以为有未归因的录制，实际没有 —— 静默通过会掩盖流程错位。
+pub fn rebind_dirty(text: &str, head: &str) -> Result<(String, usize), String> {
+    validate_commit(head)?;
+    if head.ends_with("+dirty") {
+        return Err("rebind 的目标必须是干净提交（不能是 `<sha>+dirty`）".to_string());
+    }
+    let mut rewritten = 0usize;
+    let mut out: Vec<String> = Vec::with_capacity(text.lines().count() + 1);
+    let mut section = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name.trim().to_string();
+        }
+        if (section == "native" || section == "smoke") && line.contains("+dirty") {
+            let rebound = rebind_line(raw, head)?.ok_or_else(|| {
+                format!("未能归因（内部错误：检测到 +dirty 但改写失败）：{raw}")
+            })?;
+            out.push(rebound);
+            rewritten += 1;
+            continue;
+        }
+        out.push(raw.to_string());
+    }
+    if rewritten == 0 {
+        return Err(
+            "没有找到 `+dirty` 标记：rebind 无事可做（先跑 --record，提交，再 rebind）".to_string(),
+        );
+    }
+    let mut joined = out.join("\n");
+    if !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    Ok((joined, rewritten))
 }
 
 // ─── B2-6：双槽差分报告器（D6） ─────────────────────────────────────────────
