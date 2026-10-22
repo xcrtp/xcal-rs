@@ -326,3 +326,42 @@ fn apply_record_explains_every_changed_slot() {
     );
     assert!(!next.contains("# delta: fourier"), "未变的 key 不写 delta：\n{next}");
 }
+
+// ─── B6 V2-07：[vector] 段（矢量后端作品） ───────────────────────────────────
+
+#[test]
+fn load_baselines_reads_vector_section_separately() {
+    let text = format!("[native]\nfourier = {H1}\n[vector]\nvector_paths = {H2}\n");
+    let baselines = load_baselines(&temp_file(&text)).unwrap();
+    assert_eq!(
+        baselines.vector.get("vector_paths").map(String::as_str),
+        Some(H2)
+    );
+    // 不得串段：矢量作品不能落进 native / smoke。
+    assert!(baselines.native.get("vector_paths").is_none());
+    assert!(baselines.smoke.is_empty());
+}
+
+#[test]
+fn vector_section_is_managed_by_dirty_gate_and_rebind() {
+    let dirty = format!("[vector]\nvector_paths = {H2} @ abc1234+dirty\n");
+    let err = assert_attributed(&dirty).unwrap_err();
+    assert!(err.contains("[vector]"), "错误应点名 [vector]：{err}");
+    let (next, rewritten) = rebind_dirty(&dirty, "def5678").unwrap();
+    assert_eq!(rewritten, 1);
+    assert!(next.contains(&format!("vector_paths = {H2} @ def5678")));
+}
+
+#[test]
+fn apply_record_rotates_vector_slots() {
+    let text = format!("[vector]\nvector_paths = {H1} @ 55a1eda\n");
+    let records = [rec("vector", "vector_paths", H2)];
+    let next = apply_record(&text, "d", "r", "abc1234", false, &records).unwrap();
+    assert!(next.contains(&format!("# slotA: vector_paths = {H1} @ 55a1eda")));
+    assert!(next.contains(&format!("vector_paths = {H2} @ abc1234")));
+    let baselines = load_baselines(&temp_file(&next)).unwrap();
+    assert_eq!(
+        baselines.vector.get("vector_paths").map(String::as_str),
+        Some(H2)
+    );
+}

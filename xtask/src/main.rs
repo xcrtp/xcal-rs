@@ -305,6 +305,9 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     // B3 Step 5：Surface 作品（能力矩阵 + 复杂 Demo）。
     let surface_matrix_hash = compare_script_vs_bundle(root, "surface_matrix", "640x480", None)?;
     let atlas_hash = compare_script_vs_bundle(root, "atlas", "640x480", None)?;
+    // B6 V2-07：矢量后端作品（`--backend vector` 出帧）进基线体系。
+    let vector_hash =
+        compare_script_vs_bundle_with_backend(root, "vector_paths", "640x480", None, Some("vector"))?;
 
     // 2) 回填 commit：当前 HEAD（重录发生在提交前）。
     let head = git_short_head(root)?;
@@ -339,6 +342,7 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
             surface_matrix_hash,
         ),
         ("native".to_string(), "atlas".to_string(), atlas_hash),
+        ("vector".to_string(), "vector_paths".to_string(), vector_hash),
     ];
     let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
     fs::write(&baseline_path, next)
@@ -351,6 +355,9 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     }
     for (key, hash) in &baselines.smoke {
         println!("[xtask] [smoke] {key} = {hash}");
+    }
+    for (key, hash) in &baselines.vector {
+        println!("[xtask] [vector] {key} = {hash}");
     }
     println!(
         "[xtask] 已重录 {}：reason 已写入{}",
@@ -844,6 +851,22 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
             .iter()
             .map(|(work, hash)| ("native", work.as_str(), hash.as_str())),
     );
+
+    // B6 V2-07：矢量后端作品（同一脚本 + 同一 bundle，走 `--backend vector`）。
+    let vector_expected = if skip_baseline {
+        None
+    } else {
+        Some(
+            baselines
+                .vector
+                .get("vector_paths")
+                .ok_or_else(|| "baselines.txt 的 [vector] 段缺少 `vector_paths`".to_string())?
+                .as_str(),
+        )
+    };
+    let vector_hash =
+        compare_script_vs_bundle_with_backend(root, "vector_paths", "640x480", vector_expected, Some("vector"))?;
+    current.push(("vector", "vector_paths", vector_hash.as_str()));
     // smoke 的当前值在 `--step hashes` 里不重算（由 `--step smoke` 负责）；
     // 报告只呈现本次实测到的作品，未实测项不伪造。
     print!("{}", xtask::render_diff_report(&xtask::build_diff_rows(&baseline_text, &current)));
@@ -881,6 +904,20 @@ fn compare_script_vs_bundle(
     size: &str,
     expected: Option<&str>,
 ) -> Result<String, String> {
+    compare_script_vs_bundle_with_backend(root, work, size, expected, None)
+}
+
+/// 同 [`compare_script_vs_bundle`]，但可指定后端（`--backend wgpu|vector`）。
+///
+/// B6 V2-07：矢量后端作品与 wgpu 基线共用同一套"脚本 == bundle == 基线"门禁，
+/// 只是出帧后端不同 —— 两条路径都必须逐位一致。
+fn compare_script_vs_bundle_with_backend(
+    root: &Path,
+    work: &str,
+    size: &str,
+    expected: Option<&str>,
+    backend: Option<&str>,
+) -> Result<String, String> {
     let script_rel = format!("crates/app/zela-app/scripts/{work}.lua");
     let zsb_rel = format!("target/xtask/hashes/{work}.zsb");
     let script_path = root.join(&script_rel);
@@ -896,12 +933,14 @@ fn compare_script_vs_bundle(
         &["--script", &script_rel],
         &format!("target/xtask/hashes/{work}-script"),
         size,
+        backend,
     )?;
     let bundle_hash = render(
         root,
         &["--bundle", &zsb_rel],
         &format!("target/xtask/hashes/{work}-bundle"),
         size,
+        backend,
     )?;
 
     if script_hash != bundle_hash {
@@ -941,12 +980,21 @@ fn hashes_app_args() -> Vec<String> {
     strings(&["--no-default-features", "--features", "typst"])
 }
 
-fn render(root: &Path, source: &[&str], frames: &str, size: &str) -> Result<String, String> {
+fn render(
+    root: &Path,
+    source: &[&str],
+    frames: &str,
+    size: &str,
+    backend: Option<&str>,
+) -> Result<String, String> {
     let mut args = strings(&["run", "-q", "-p", "zela-app"]);
     args.extend(hashes_app_args());
     args.extend(strings(&["--bin", "zela-render", "--"]));
     args.extend(source.iter().map(|value| value.to_string()));
     args.extend(strings(&["--frames", frames, "--fps", "30", "--size", size]));
+    if let Some(backend) = backend {
+        args.extend(strings(&["--backend", backend]));
+    }
 
     // 清掉上一轮的帧，避免目录里残留过期 PNG。
     let frames_path = root.join(frames);

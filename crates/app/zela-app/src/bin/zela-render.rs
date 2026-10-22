@@ -43,6 +43,15 @@ struct Args {
     fps: f64,
     out: PathBuf,
     size: (u32, u32),
+    /// B6 Step 2.3：`--backend wgpu|vector`（默认 wgpu ⇒ 既有基线与行为不变）。
+    backend: Backend,
+}
+
+/// 渲染后端选择（B6 Step 2.3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Wgpu,
+    Vector,
 }
 
 impl Args {
@@ -62,6 +71,7 @@ impl Args {
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
         let mut size = (640u32, 480u32);
+        let mut backend = Backend::Wgpu;
 
         let mut i = 0;
         while i < raw.len() {
@@ -121,6 +131,19 @@ impl Args {
                         h.parse().map_err(|_| "--size 高度不是数字".to_string())?,
                     );
                 }
+                // B6 Step 2.3：后端选择（默认 wgpu）。
+                "--backend" => {
+                    i += 1;
+                    match raw.get(i).map(String::as_str) {
+                        Some("wgpu") => backend = Backend::Wgpu,
+                        Some("vector") => backend = Backend::Vector,
+                        other => {
+                            return Err(format!(
+                                "--backend 只接受 wgpu | vector（收到 {other:?}）"
+                            ));
+                        }
+                    }
+                }
                 other if other.starts_with("--") => {
                     return Err(format!("未知参数：{other}"));
                 }
@@ -149,6 +172,7 @@ impl Args {
             fps,
             out,
             size,
+            backend,
         })
     }
 }
@@ -223,21 +247,28 @@ fn run() -> Result<(), String> {
     let mut backends = StandardBackends::new(&ctx);
 
     // B4 Step 2：渲染参数（档 1 默认值 = 当前行为；档 2 命令行覆盖 `--size`）。
-    // 有效性 + 一致性都在开渲前拦住（§0.3：不静默降级）。
-    let params = zela_scene_bundle::RenderParams {
-        size: args.size,
-        ..Default::default()
+    // B6 §0.3：默认值**按后端能力**取（`default_for`）——wgpu 的 `PostCaps::none()` ⇒
+    // 与旧 `Default` 逐位相同（6 条基线不变）；显式请求不支持项仍由下面的一致性检查报错。
+    let caps = match ctx.adapter() {
+        Some(adapter) => Some(
+            backends
+                .backend_3d_mut()
+                .capabilities(adapter)
+                .map_err(|e| format!("查询后端能力失败：{e}"))?,
+        ),
+        None => None,
     };
+    let mut params = match &caps {
+        Some(caps) => zela_scene_bundle::RenderParams::default_for(caps),
+        None => zela_scene_bundle::RenderParams::default(),
+    };
+    params.size = args.size;
+    // 有效性 + 一致性都在开渲前拦住（§0.3：不静默降级）。
     params
         .validate()
         .map_err(|e| format!("渲染参数非法：{e}"))?;
-    if let Some(adapter) = ctx.adapter() {
-        let caps = backends
-            .backend_3d_mut()
-            .capabilities(adapter)
-            .map_err(|e| format!("查询后端能力失败：{e}"))?;
-        zela_playback::check_render_params_supported(&params, &caps)
-            .map_err(|e| e.to_string())?;
+    if let Some(caps) = &caps {
+        zela_playback::check_render_params_supported(&params, caps).map_err(|e| e.to_string())?;
     }
     // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
     // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
@@ -263,23 +294,75 @@ fn run() -> Result<(), String> {
         // **与 GUI 同一条命令**：固定 dt（导出比实时墙钟更确定）。
         runtime.driver.submit(DriverCommand::Advance { dt }).wait();
 
-        let callback = runtime
-            .driver
-            .with_scheduler(|scheduler| {
+        // B6 Step 2.3：矢量后端走"同一个场景 → 快照 → 记录"的路径；只支持纯 2D 帧
+        // （3D / 内容纹理图层没有对应的矢量记录，显式报错，不静默跳过）。
+        let rgba = if args.backend == Backend::Vector {
+            let (layers, draws) = runtime.driver.with_scheduler(|scheduler| {
                 let options = zela_render::FrameOptions::default();
                 let view = zela_render::frame::build_scene_view(
                     &WorldView::new(scheduler.world()),
                     scheduler.resources(),
                     options,
                 );
-                zela_render::frame::build_frame_inputs(&view, scheduler.resources(), options)
+                let layers = view.layers.clone();
+                let draws = scheduler
+                    .resources()
+                    .get::<zela_render::draw::DrawQueue>()
+                    .map(zela_render_backends::snapshot_queue)
+                    .unwrap_or_default();
+                (layers, draws)
+            });
+            if let Some(layer) = layers
+                .iter()
+                .find(|l| !matches!(l.kind, ze_scene_core::LayerKind::Viewport2D { .. }))
+            {
+                return Err(format!(
+                    "--backend vector 目前只支持纯 2D 帧；本帧含图层 {:?}（见 GAPS V2-12/V2-13）",
+                    layer.kind
+                ));
+            }
+            let items: Vec<zela_render_vector::SceneItem<'_>> = draws
+                .iter()
+                .map(|recorded| zela_render_vector::SceneItem {
+                    shape: &recorded.shape,
+                    transform: recorded.transform,
+                    style: recorded.style,
+                })
+                .collect();
+            // 背景与 wgpu 分支**同源**：都用本次 CLI 的 `clear`，不读 `SceneView::background`
+            // —— 否则同一个脚本换 `--backend` 就换了底色（两套 headless 语义，难解释）。
+            let background = [
+                clear.r as f32,
+                clear.g as f32,
+                clear.b as f32,
+                clear.a as f32,
+            ];
+            zela_render_vector::render_scene_2d(width, height, 4, background, &items)?
+        } else {
+            let callback = runtime
+                .driver
+                .with_scheduler(|scheduler| {
+                    let options = zela_render::FrameOptions::default();
+                    let view = zela_render::frame::build_scene_view(
+                        &WorldView::new(scheduler.world()),
+                        scheduler.resources(),
+                        options,
+                    );
+                    zela_render::frame::build_frame_inputs(
+                        &view,
+                        scheduler.resources(),
+                        options,
+                    )
                     .and_then(zela_render_backends::frame::build_scene_callback)
-            })
-            .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
+                })
+                .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
 
-        let pixels = render_frame_headless(&ctx, &mut backends, &callback, screen, clear);
-        // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
-        let rgba = to_rgba(&ctx, &pixels);
+            let pixels = render_frame_headless(&ctx, &mut backends, &callback, screen, clear);
+            // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
+            let rgba = to_rgba(&ctx, &pixels);
+            sink.write(&ctx, index, &pixels)?;
+            rgba
+        };
         // B2-6：旁路采样（只打印，不改序列哈希）。
         if digest_sample > 0 && index % digest_sample == 0 {
             let digest =
@@ -287,7 +370,10 @@ fn run() -> Result<(), String> {
             eprintln!("[frame-digest] frame = {index} digest = {digest}");
         }
         frame_hash.push_frame(&rgba);
-        sink.write(&ctx, index, &pixels)?;
+        if args.backend == Backend::Vector {
+            // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。
+            sink.write(&ctx, index, &rgba_to_target(&ctx, &rgba))?;
+        }
 
         runtime.driver.with_scheduler_mut(|scheduler| {
             zela_render::frame::end_frame(scheduler.resources_mut());
@@ -320,6 +406,21 @@ fn run() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// RGBA8 → 目标纹理格式字节序（默认 BGRA）；与 `to_rgba` 互逆。
+fn rgba_to_target(ctx: &RenderContext, rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    let format = ctx.target_format();
+    if matches!(
+        format,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for px in out.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+    }
+    out
 }
 
 enum Sink {

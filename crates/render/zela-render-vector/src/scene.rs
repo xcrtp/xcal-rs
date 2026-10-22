@@ -224,6 +224,9 @@ fn polygon_path(points: &[Vec2], m: &Transform2D, center: Vec2) -> FilledPath {
         ranges: vec![[0, n as u32, 1, 0]],
         fill: [0.0; 4],
         model: IDENTITY,
+        // 场景路径走 2D 视图：不参与 3D 光照（B6 Step 1.2 的字段只在 `render_3d` 下有意义）。
+        shade_in_3d: false,
+        material: None,
     }
 }
 
@@ -278,6 +281,8 @@ fn ellipse_path(at: Vec2, rx: f32, ry: f32, m: &Transform2D, center: Vec2) -> Fi
         ranges: vec![[0, 4, 1, 0]],
         fill: [0.0; 4],
         model: IDENTITY,
+        shade_in_3d: false,
+        material: None,
     }
 }
 
@@ -325,6 +330,8 @@ fn push_shape(
                     ranges,
                     fill: [0.0; 4],
                     model: IDENTITY,
+                    shade_in_3d: false,
+                    material: None,
                 });
             }
         }

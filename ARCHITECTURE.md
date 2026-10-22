@@ -716,8 +716,34 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （`StrokeOptions::default()` 不再裸用）⇒ 把一处静默默认变成契约字段，既有基线不变。
 >   同时关闭 S4-14：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用的
 >   孤儿 Surface 现在**显式报错**（S4-10 修掉重影后留下的"彻底沉默"）。
->   仍缺：矢量侧描边记录（需先移植 `Curves.miter` 计算，V2-14）、`shapes` 签名
+>   仍缺：矢量侧描边记录（B5 当时的理由是"需先移植 `Curves.miter` 计算"—— **B6 复核推翻**：
+>   `Store::add_path` 已自动算 miter，缺的只是 `Record` 的描边构造，见 V2-14）、`shapes` 签名
 >   （缺 target / `PathList` 表达力不足，V2-12）、渐变 / 纹理 / dash（V2-13）。
+>
+> **B6 批次（2026-10-23，Step 1 / 2.1 / 3 / 4 已落地）**：矢量后端从"能画一个填充三角形"
+> 推进到"能出带质感的作品，且进基线门禁"。
+> - **策略转变（B6 §0.1）**：基线是手段不是目的。新能力**默认开**，基线变化**允许**但须逐条
+>   可解释；主校验从"逐位不变"改为**每帧容差回归**（内部区 ≤ 2、边缘带 ≤ 8、时域无跳变）。
+> - **默认值绑定后端能力（§0.3）**：`RenderParams::default_for(caps)` ——
+>   wgpu `PostCaps::none()` ⇒ tone / bloom / ao 全关；矢量 `all()` ⇒ 全开。
+>   这不是静默降级：**显式**请求不支持项仍然 `is_supported_by` 报错。
+> - **`ToneCurve` 语义修正（V2-16）**：上游 `tone.wgsl:45` 只有 `0 = clip / 1 = AgX`，
+>   B4 建的 `Reinhard / Aces` 是猜的 ⇒ 改为 `ToneCurve { Clip, #[default] AgX }`。
+> - **描边记录（V2-14）**：`Record::stroked`（`params.z` = 描边**宽度**、`flags >> STYLE` =
+>   `cap | joint << 2`）+ `scene::scene_records`（逐对象先填充后描边）；
+>   `scene_mapping` / 双后端对拍覆盖描边三角形（MAE 0.20）。
+> - **3D 视图与着色栈入口（Step 1.2）**：`api::{View3, Light, render_3d}` 按上游
+>   `feed.py::view` / `lighting` 打包（reversed Z、`NEAR = 0.05`、灯 16 float × 8）；
+>   `FilledPath::{shade_in_3d, material}` 是上游 `shade_in_3d` 与材质编码，不是新发明。
+>   **验收 = 像素**：AgX ≠ clip（clip 死白、AgX 压回）、bloom 让亮区外溢、AO 让"墙+地板"内角
+>   变暗，且**只有方向光时 AO 无效**（上游 `occlusion_of()` 依赖环境光）。
+> - **`--backend vector` 作品进基线（V2-07）**：`zela-render --backend vector` 用**同一份**
+>   `DrawQueue` 快照喂矢量后端（只支持纯 2D 帧；含 3D / 内容图层即显式报错，不静默跳过）。
+>   `vector_paths.lua` 覆盖填充 + 描边 + 折线 + 文本路径；`baselines.txt` 新增 `[vector]` 段，
+>   `xtask` 的 `hashes` / `--record` / `--rebind` / `+dirty` 门禁都覆盖该段（`is_managed_section`）。
+> - **仍未做**：`zela.render.shapes` 签名（V2-12，`submit_shapes` **没有任何实现**，改签名只会
+>   得到一个无实现可校验的 ABI）、`BackendKind::Vector` 可注册（V2-18：它没有可自述的
+>   namespace）、渐变 / 纹理 / dash（V2-13）、"开着色栈的脚本作品"（V2-19）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

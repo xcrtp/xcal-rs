@@ -59,9 +59,14 @@ impl BackendKind {
 
     /// 本构建里是否真的可实例化（`Vector` 在移植前为 `false`）。
     ///
-    /// `Vector` 的渲染能力（填充 + 描边 + 着色栈槽位）已可用，但
-    /// `zela.render.shapes` 的**签名**还缺 target / 表达不了 `Shape2D`
-    /// （GAPS V2-12）⇒ 仍然不可注册；不得为凑"可注册"而先翻这个开关。
+    /// `Vector` 的渲染能力（填充 + 描边 + 着色栈 + 作品基线）都已可用，但它**没有可自述的
+    /// namespace**：`zela.render2d` / `render3d` 的 `upload(PodBytes)` 吃三角化顶点（矢量
+    /// 后端按路径解析渲染，不吃），`zela.render.shapes` 的签名还缺 target / 表达不了
+    /// `Shape2D`（GAPS V2-12）⇒ 注册它不会给系统能力加任何东西（V2-18），不得为凑
+    /// "可注册"而先翻这个开关。
+    ///
+    /// `zela-render --backend vector` 是**进程级开关**（同一份 `DrawQueue` 快照直接喂
+    /// `zela_render_vector::render_scene_2d`），不经过本注册表。
     pub fn is_available(self) -> bool {
         matches!(self, BackendKind::Wgpu)
     }

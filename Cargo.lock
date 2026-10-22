@@ -6726,6 +6726,7 @@ dependencies = [
  "zela-playback",
  "zela-render",
  "zela-render-backends",
+ "zela-render-vector",
  "zela-scene-bundle",
  "zela-scene-ecs",
  "zela-schedule",

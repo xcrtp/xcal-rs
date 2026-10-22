@@ -25,4 +25,5 @@ pendulum        钟摆动画            pendulum.lua    -
 orbit           公转行星            orbit.lua       - 
 spring          弹跳小球            spring.lua      - 
 surface_matrix  Surface能力矩阵      surface_matrix.lua  - 
-atlas           2D纹理进3D           atlas.lua       - 
+atlas           2D纹理进3D           atlas.lua       -
+vector_paths    矢量后端作品         vector_paths.lua - 

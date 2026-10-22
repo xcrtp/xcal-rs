@@ -179,6 +179,15 @@ pub struct Baselines {
     pub native: BTreeMap<String, String>,
     /// 短对拍（smoke），不符即 fail。
     pub smoke: BTreeMap<String, String>,
+    /// 矢量后端作品（B6 V2-07）：`--backend vector` 出帧，不符即 fail。
+    pub vector: BTreeMap<String, String>,
+}
+
+/// 受托管、参与自动比对的 section（重录 / 归因 / `+dirty` 门禁都按它判定）。
+///
+/// `[browser]` 不在此列：仅留档，**绝不**参与自动比对。
+pub fn is_managed_section(section: &str) -> bool {
+    matches!(section, "native" | "smoke" | "vector")
 }
 
 /// 校验 commit 槽位：`pending`（新录待回填）、7–40 位十六进制（已定型）或
@@ -211,6 +220,7 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
     let mut baselines = Baselines {
         native: BTreeMap::new(),
         smoke: BTreeMap::new(),
+        vector: BTreeMap::new(),
     };
 
     for (index, raw) in text.lines().enumerate() {
@@ -236,7 +246,7 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
         };
         match section.as_str() {
             // 新增可比对 section 必须在这里显式注册：未知 section 会响亮失败。
-            "native" | "smoke" => {
+            "native" | "smoke" | "vector" => {
                 if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Err(format!(
                         "{}:{}：`{key}` 不是 64 位十六进制哈希",
@@ -249,10 +259,10 @@ pub fn load_baselines(path: &Path) -> Result<Baselines, String> {
                         format!("{}:{}：`{key}` {msg}", path.display(), index + 1)
                     })?;
                 }
-                let map = if section == "native" {
-                    &mut baselines.native
-                } else {
-                    &mut baselines.smoke
+                let map = match section.as_str() {
+                    "native" => &mut baselines.native,
+                    "smoke" => &mut baselines.smoke,
+                    _ => &mut baselines.vector,
                 };
                 map.insert(key.to_string(), hash.to_ascii_lowercase());
             }
@@ -345,7 +355,7 @@ pub fn apply_record(
             out.push(line.to_string());
             continue;
         }
-        if section == "native" || section == "smoke" {
+        if is_managed_section(&section) {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 let managed = trimmed
                     .strip_prefix('#')
@@ -505,7 +515,7 @@ fn short_hash(hash: &str) -> String {
     hash.chars().take(12).collect()
 }
 
-/// 门禁：`[native]` / `[smoke]` 里不得残留 `<sha>+dirty`（录制后忘了归因）。
+/// 门禁：`[native]` / `[smoke]` / `[vector]` 里不得残留 `<sha>+dirty`（录制后忘了归因）。
 ///
 /// 为什么是门禁而不是提醒：`+dirty` 表示"这份值不属于任何提交"，一旦允许它随
 /// 提交进入历史，归因就永久失效（P1-4 的形态）。修法是提交后跑 `cargo verify --rebind`。
@@ -517,7 +527,7 @@ pub fn assert_attributed(text: &str) -> Result<(), String> {
             section = name.trim().to_string();
             continue;
         }
-        if section != "native" && section != "smoke" {
+        if !is_managed_section(&section) {
             continue;
         }
         if let Some(position) = line.find("+dirty") {
@@ -572,7 +582,7 @@ pub fn rebind_dirty(text: &str, head: &str) -> Result<(String, usize), String> {
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             section = name.trim().to_string();
         }
-        if (section == "native" || section == "smoke") && line.contains("+dirty") {
+        if is_managed_section(&section) && line.contains("+dirty") {
             let rebound = rebind_line(raw, head)?.ok_or_else(|| {
                 format!("未能归因（内部错误：检测到 +dirty 但改写失败）：{raw}")
             })?;

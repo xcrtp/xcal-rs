@@ -49,7 +49,7 @@ pub(crate) const RADIANCE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Floa
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32FloatStencil8;
 const NONE: u32 = u32::MAX;
 const OVERLAY: u64 = 1;
-const LIT: u64 = 4;
+pub(crate) const LIT: u64 = 4;
 const TEXTURED: u64 = 8;
 const NEAREST: u64 = 16; // an image's reconstruction from its pixels (neither: linear)
 const CUBIC: u64 = 32;
@@ -155,9 +155,41 @@ const _: () = assert!(size_of::<Record>() == 336);
 impl Record {
     /// Path `key` of `curves` curves, placed by `m`, filled with `fill` (straight RGBA): a record a
     /// host makes itself (the window's controls), as Python makes a filled mobject's.
-    pub(crate) fn filled(key: u64, curves: u32, m: Mat34, fill: [f32; 4]) -> Self {
+    ///
+    /// Modified by Zela (B6 Step 1.2): `shade_in_3d` / `material` are upstream's
+    /// `feed.py:1134` (`flags |= LIT`) and `feed.py:1150` (`material = (metallic, roughness,
+    /// reflectance, 1)`, `NO_MATERIAL` when it has none). `material[3] > 0` is what makes a
+    /// **planar** path lit per-fragment by the 3D view's lights (`vector.rs:952`); with `LIT`
+    /// alone it is lit as a whole, like CE. Both are upstream encodings — nothing invented.
+    pub(crate) fn filled(
+        key: u64,
+        curves: u32,
+        m: Mat34,
+        fill: [f32; 4],
+        shade_in_3d: bool,
+        material: Option<[f32; 3]>,
+    ) -> Self {
         let clear = [0.0; 4];
-        Record { key1: key, m1: m, fill, fill2: fill, stroke: clear, stroke2: clear, background: clear, background2: clear, params: [0.0, curves as f32, 0.0, 0.0], ..Zeroable::zeroed() }
+        Record {
+            key1: key,
+            m1: m,
+            fill,
+            fill2: fill,
+            stroke: clear,
+            stroke2: clear,
+            background: clear,
+            background2: clear,
+            params: [0.0, curves as f32, 0.0, 0.0],
+            material: match material {
+                Some([metallic, roughness, reflectance]) => [metallic, roughness, reflectance, 1.0],
+                // 没有材质：`material[3] = 0`。上游 Python 送 `NO_MATERIAL = (0.0, 0.5, 0.5, 0.0)`，
+                // 但 `material[3] = 0` 时前三个分量**从不被读**（`render.rs:2000` / `vector.rs:952`
+                // 都以 `material[3] > 0` 为门），这里用全零保持与 B4 起的记录逐位相同。
+                None => [0.0; 4],
+            },
+            flags: if shade_in_3d { LIT } else { 0 },
+            ..Zeroable::zeroed()
+        }
     }
 
     /// Modified by Zela (B6 Step 2.1): a **stroked** record — the shape upstream's Python would

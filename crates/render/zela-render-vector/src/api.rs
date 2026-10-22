@@ -25,6 +25,13 @@ pub struct FilledPath {
     pub fill: [f32; 4],
     /// 3×4 模型矩阵（行主序；2D 视图里这就是"对象 → 世界"）。
     pub model: [[f32; 4]; 3],
+    /// **B6 Step 1.2**：3D 视图里按光照着色 —— 上游 `feed.py:1134` 的 `shade_in_3d`
+    /// （`flags |= LIT`）。2D 视图里无意义（上游同样只在 `three_d` 时置位）。
+    pub shade_in_3d: bool,
+    /// **B6 Step 1.2**：材质 `[metallic, roughness, reflectance]` —— 上游 `feed.py:1150`
+    /// （`material = (m, r, f, 1)`）。`Some(_)` ⇒ 该平面路径按 PBR / 环境光受光；
+    /// `None` ⇒ 上游的 `NO_MATERIAL`（`material[3] = 0`）。
+    pub material: Option<[f32; 3]>,
 }
 
 impl FilledPath {
@@ -47,6 +54,8 @@ impl FilledPath {
                 [0.0, 1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
             ],
+            shade_in_3d: false,
+            material: None,
         }
     }
 }
@@ -304,6 +313,8 @@ pub struct View3 {
     pub exposure: f32,
     pub tone: Option<ze_render_ir::ToneCurve>,
     pub bloom: f32,
+    /// ⚠️ **AO 依赖环境光**（`B6 §2.4`）：上游 `occlusion_of()` 要求 `lights` 里存在
+    /// 环境光（类型 0）或环境图（类型 4）；只有方向光 / 点光 / 聚光时 **静默不生效**。
     pub ao: Option<(f32, f32)>,
     pub lights: Vec<Light>,
 }
@@ -419,7 +430,14 @@ fn render_with_view(
         )?)?;
         let curves = (points.len() / 4) as u32;
         built.push(match record {
-            PathRecord::Fill(path) => Record::filled(key, curves, path.model, path.fill),
+            PathRecord::Fill(path) => Record::filled(
+                key,
+                curves,
+                path.model,
+                path.fill,
+                path.shade_in_3d,
+                path.material,
+            ),
             PathRecord::Stroke(path) => Record::stroked(
                 key,
                 curves,
@@ -679,6 +697,177 @@ mod tests {
             pixel(&toned, w, 32, 32),
             pixel(&clipped, w, 32, 32),
             "2D-only 帧上 tone 应无消费者（上游结构）；若这里开始不同，说明 2D 路径结构变了，请更新 V2-15"
+        );
+    }
+
+    // ─── B6 Step 1 验收：3D 视图上的着色栈（tone / bloom / AO）真的有像素效果 ────
+
+    /// 固定场景：一盏强方向光 + 环境光 + 一块 ±1 世界单位的**受光**平面路径。
+    ///
+    /// 为什么必须带 `material`：`plan.lit` 由 `vector.rs:1058` 按 `material[3] > 0` 判定，
+    /// 而 bloom / tone 的合成 pass 的入场券 `glow` 要求 `light || plan.lit`
+    /// （`render.rs:2182`）—— 没有材质就没有那条 pass，tone 与 bloom 都不会生效。
+    fn lit_square() -> FilledPath {
+        let mut path = FilledPath::polygon(
+            &[
+                [-1.0, -1.0, 0.0],
+                [1.0, -1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [-1.0, 1.0, 0.0],
+            ],
+            [0.8, 0.8, 0.8, 1.0],
+        );
+        path.shade_in_3d = true;
+        path.material = Some([0.0, 0.15, 1.0]); // 低粗糙、全反射
+        path
+    }
+
+    fn lit_view(
+        tone: Option<ze_render_ir::ToneCurve>,
+        bloom: f32,
+        ao: Option<(f32, f32)>,
+        ambient: bool,
+    ) -> View3 {
+        let mut lights = vec![Light::Sun {
+            direction: [0.0, 0.0, -1.0],
+            color: [1.0, 1.0, 1.0],
+            intensity: 4.0,
+            shadows: false,
+        }];
+        if ambient {
+            lights.push(Light::Ambient {
+                color: [1.0, 1.0, 1.0],
+                intensity: 1.0,
+            });
+        }
+        View3 {
+            frame: (4.0, 4.0),
+            center: [0.0, 0.0, 0.0],
+            axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            zoom: 1.0,
+            focal: 8.0,
+            size: (64, 64),
+            background: [0.0, 0.0, 0.0, 1.0],
+            light_source: [0.0, -1.0, 0.0],
+            exposure: 2.0,
+            tone,
+            bloom,
+            ao,
+            lights,
+        }
+    }
+
+    fn lit_frame(
+        tone: Option<ze_render_ir::ToneCurve>,
+        bloom: f32,
+        ao: Option<(f32, f32)>,
+        ambient: bool,
+    ) -> Vec<u8> {
+        let records = [PathRecord::from(lit_square())];
+        match render_3d(&lit_view(tone, bloom, ao, ambient), &records) {
+            Ok(frame) => frame,
+            Err(error) => panic!("矢量 3D 后端起不来：{error}"),
+        }
+    }
+
+    /// **B6 Step 1 验收（tone）**：有 3D 计划时 `AgX ≠ clip`，且 clip 下高光死白、
+    /// AgX 下被压回可分辨区间 —— 这正是 V2-15 记的"2D-only 帧无消费者"的补证。
+    #[test]
+    fn tone_mapping_changes_a_lit_3d_frame() {
+        let clip = lit_frame(Some(ze_render_ir::ToneCurve::Clip), 1.0, None, true);
+        let agx = lit_frame(Some(ze_render_ir::ToneCurve::AgX), 1.0, None, true);
+        let at = pixel(&clip, 64, 32, 32);
+        let bt = pixel(&agx, 64, 32, 32);
+        assert_ne!(at, bt, "有 3D 计划时 AgX 必须与 clip 不同：{at:?} vs {bt:?}");
+        assert!(
+            at[..3].iter().all(|c| *c >= 250),
+            "clip 下高光应死白：{at:?}"
+        );
+        assert!(
+            bt[..3].iter().any(|c| *c < 250),
+            "AgX 下高光应被压回：{bt:?}"
+        );
+    }
+
+    /// **B6 Step 1 验收（bloom）**：亮区外溢 —— 方块外 3 像素处的亮度必须上升。
+    ///
+    /// 方块占 ±1 世界单位、画幅 4 ⇒ 每单位 16 px，边缘在 y = 16（上）/ 48（下）；
+    /// 采样点 `(32, 13)` 在方块外 3 px。
+    #[test]
+    fn bloom_spreads_bright_pixels_outward() {
+        let off = lit_frame(Some(ze_render_ir::ToneCurve::AgX), 0.0, None, true);
+        let on = lit_frame(Some(ze_render_ir::ToneCurve::AgX), 1.0, None, true);
+        let luma = |p: [u8; 4]| p[0] as i32 + p[1] as i32 + p[2] as i32;
+        let outside_off = luma(pixel(&off, 64, 32, 13));
+        let outside_on = luma(pixel(&on, 64, 32, 13));
+        assert!(
+            outside_on > outside_off,
+            "bloom 应让亮区外溢：off = {outside_off}，on = {outside_on}"
+        );
+    }
+
+    /// **B6 Step 1 验收（AO）**：AO 是屏幕空间的深度遮挡，**单块平面没有凹陷 ⇒ 不会变暗**
+    /// （这是正确行为，不是没接上）。所以用"墙 + 地板"的内角来验：有环境光时内角变暗；
+    /// 只有方向光时 AO **无效**（上游 `occlusion_of()` 的结构）。
+    #[test]
+    fn ambient_occlusion_requires_ambient_light() {
+        // 墙（z = −1）与地板（y = −1）在 y = −1, z = −1 处形成内角。
+        let corner = || {
+            let mut wall = FilledPath::polygon(
+                &[
+                    [-1.0, -1.0, -1.0],
+                    [1.0, -1.0, -1.0],
+                    [1.0, 1.0, -1.0],
+                    [-1.0, 1.0, -1.0],
+                ],
+                [0.8, 0.8, 0.8, 1.0],
+            );
+            let mut floor = FilledPath::polygon(
+                &[
+                    [-1.0, -1.0, -1.0],
+                    [1.0, -1.0, -1.0],
+                    [1.0, -1.0, 0.0],
+                    [-1.0, -1.0, 0.0],
+                ],
+                [0.8, 0.8, 0.8, 1.0],
+            );
+            for path in [&mut wall, &mut floor] {
+                path.shade_in_3d = true;
+                path.material = Some([0.0, 0.9, 0.0]); // 漫反射为主
+            }
+            vec![PathRecord::from(wall), PathRecord::from(floor)]
+        };
+        let frame = |ao: Option<(f32, f32)>, ambient: bool| {
+            let mut view = lit_view(Some(ze_render_ir::ToneCurve::AgX), 0.0, ao, ambient);
+            // 只看环境光：AO 乘的正是环境光项（方向光不受 AO 影响）。
+            view.lights.retain(|light| {
+                if ambient {
+                    true
+                } else {
+                    matches!(light, Light::Sun { .. })
+                }
+            });
+            match render_3d(&view, &corner()) {
+                Ok(frame) => frame,
+                Err(error) => panic!("矢量 3D 后端起不来：{error}"),
+            }
+        };
+        let luma_sum = |frame: &[u8]| frame.chunks_exact(4).map(|p| p[0] as i64 + p[1] as i64 + p[2] as i64).sum::<i64>();
+
+        let plain = frame(None, true);
+        let occluded = frame(Some((1.0, 0.3)), true);
+        assert_ne!(plain, occluded, "有环境光时 AO 必须改变像素");
+        let (before, after) = (luma_sum(&plain), luma_sum(&occluded));
+        assert!(
+            after < before,
+            "内角应被 AO 压暗：before = {before}，after = {after}"
+        );
+
+        let sun_only = frame(None, false);
+        let sun_only_occluded = frame(Some((1.0, 0.3)), false);
+        assert_eq!(
+            sun_only, sun_only_occluded,
+            "只有方向光时 AO 不生效（上游 `occlusion_of` 依赖环境光）；若这里开始不同，请更新 V2-15"
         );
     }
 }
