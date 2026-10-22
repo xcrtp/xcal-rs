@@ -20,7 +20,7 @@
 use ze_notion::{Color32, Path2D, PathCommand, Transform2D, Vec2};
 use ze_render_ir::{Shape2D, Style2D};
 
-use crate::api::{render_2d, FilledPath};
+use crate::api::{FilledPath, PathRecord, StrokedPath, render_2d};
 
 /// 一条待映射的图元（与后端的 `DrawItem` 同构，但不依赖 `zela-render`）。
 #[derive(Debug, Clone)]
@@ -383,7 +383,69 @@ pub fn fill_paths(
     Ok(out)
 }
 
-/// 离屏渲染一帧 zela 的 2D 图元（`fill_paths` + [`render_2d`]）。
+/// 把一批图元的**几何**映射成填充路径（不含颜色；颜色由调用方按样式填）。
+fn item_geometry(item: &SceneItem<'_>, center: Vec2) -> Result<Vec<FilledPath>, SceneMapError> {
+    let mut out = Vec::new();
+    push_shape(item.shape, &item.transform, [0.0; 4], center, &mut out)?;
+    Ok(out)
+}
+
+/// `cap | joint << 2`（上游 `Paint.brush2.w`）：butt/miter 都是 0。
+fn shape_bits(shape: ze_render_ir::StrokeShape) -> u32 {
+    use ze_render_ir::{StrokeCap, StrokeJoin};
+    let cap = match shape.cap {
+        StrokeCap::Butt => 0,
+        StrokeCap::Round => 1,
+        StrokeCap::Square => 2,
+    };
+    let join = match shape.join {
+        StrokeJoin::Miter => 0,
+        StrokeJoin::Round => 1,
+        StrokeJoin::Bevel => 2,
+    };
+    cap | (join << 2)
+}
+
+/// 把一批图元映射成**有序**绘制记录（填充与描边都支持，B6 Step 2.1）。
+///
+/// 顺序规则：逐 item；同一 item 内**先填充后描边**（与 wgpu 侧 Tessellation 的产出顺序一致）。
+/// 显式 `Unsupported`：`Custom` 图元、零/负描边宽度之外的不可表达项（渐变 / dash 本批无概念）。
+pub fn scene_records(
+    items: &[SceneItem<'_>],
+    canvas: (u32, u32),
+) -> Result<Vec<PathRecord>, SceneMapError> {
+    let center = Vec2::new(canvas.0 as f32 * 0.5, canvas.1 as f32 * 0.5);
+    let mut out = Vec::new();
+    for item in items {
+        if item.style.fill.is_none() && item.style.stroke.is_none() {
+            continue;
+        }
+        let geometry = item_geometry(item, center)?;
+        if let Some(fill) = item.style.fill {
+            for mut path in geometry.iter().cloned() {
+                path.fill = rgba(fill);
+                out.push(PathRecord::Fill(path));
+            }
+        }
+        if let Some(stroke) = item.style.stroke {
+            if item.style.stroke_width > 0.0 {
+                for path in &geometry {
+                    out.push(PathRecord::Stroke(StrokedPath {
+                        points: path.points.clone(),
+                        ranges: path.ranges.clone(),
+                        stroke: rgba(stroke),
+                        width: item.style.stroke_width,
+                        shape_bits: shape_bits(item.style.stroke_shape),
+                        model: IDENTITY,
+                    }));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 离屏渲染一帧 zela 的 2D 图元（`scene_records` + [`render_2d`]）。
 pub fn render_scene_2d(
     width: u32,
     height: u32,
@@ -391,8 +453,8 @@ pub fn render_scene_2d(
     background: [f32; 4],
     items: &[SceneItem<'_>],
 ) -> Result<Vec<u8>, String> {
-    let paths = fill_paths(items, (width, height)).map_err(|error| error.to_string())?;
-    render_2d(width, height, samples, background, &paths)
+    let records = scene_records(items, (width, height)).map_err(|error| error.to_string())?;
+    render_2d(width, height, samples, background, &records)
 }
 
 #[cfg(test)]
@@ -559,6 +621,56 @@ mod tests {
         };
         let error = fill_paths(&[item], CANVAS).unwrap_err();
         assert!(error.to_string().contains("Custom"), "{error}");
+    }
+
+    #[test]
+    fn scene_records_emit_fill_then_stroke_and_carry_shape_bits() {
+        // 圆：fill + stroke 各一条，顺序 = 先填充后描边（与 wgpu 侧一致）。
+        let shape = Shape2D::Circle {
+            center: Vec2::new(64.0, 64.0),
+            radius: 10.0,
+        };
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: Style2D {
+                stroke_shape: ze_render_ir::StrokeShape {
+                    cap: ze_render_ir::StrokeCap::Round,
+                    join: ze_render_ir::StrokeJoin::Bevel,
+                },
+                fill: Some(Color32::RED),
+                stroke: Some(Color32::WHITE),
+                stroke_width: 3.0,
+                space: ze_notion::MeasureSpace::Screen,
+            },
+        };
+        let records = scene_records(&[item], CANVAS).unwrap();
+        assert_eq!(records.len(), 2, "填充 + 描边各一条");
+        assert!(matches!(records[0], PathRecord::Fill(_)));
+        let PathRecord::Stroke(stroke) = &records[1] else {
+            panic!("第二条应是描边：{records:?}");
+        };
+        assert_eq!(stroke.width, 3.0);
+        // cap = Round(1) | join = Bevel(2) << 2 = 1 | 8 = 9。
+        assert_eq!(stroke.shape_bits, 9);
+        assert_eq!(stroke.stroke, [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn zero_width_stroke_emits_nothing() {
+        let shape = Shape2D::Rect(ze_notion::Rect2D::new(Vec2::ZERO, Vec2::new(4.0, 4.0)));
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: Style2D {
+                stroke_shape: Default::default(),
+                fill: None,
+                stroke: Some(Color32::RED),
+                stroke_width: 0.0,
+                space: ze_notion::MeasureSpace::Screen,
+            },
+        };
+        assert!(scene_records(&[item], CANVAS).unwrap().is_empty());
     }
 
     #[test]

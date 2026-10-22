@@ -61,9 +61,9 @@ const PLACE: u32 = 8; // an instance's flags from this bit: its record's place i
 pub(crate) const VIEW_FLOATS: usize = 44; // projection, overlay (column-major), pixels, light, toward; then background
 /// A view's lighting, after its background: where it sees from (3D: w = 1); how many lights, the exposure, the tone
 /// mapping (1: AgX), its bloom (`bloom`); then `LIGHTS` lights of 16 floats (see `blend.wgsl`'s `Light`).
-const VIEW_LIGHTING: usize = VIEW_FLOATS + 4;
+pub(crate) const VIEW_LIGHTING: usize = VIEW_FLOATS + 4;
 const LIGHTS: usize = 8;
-const VIEW_OCCLUSION: usize = VIEW_LIGHTING + 8 + 16 * LIGHTS; // its ambient occlusion: how much (0: none), how far
+pub(crate) const VIEW_OCCLUSION: usize = VIEW_LIGHTING + 8 + 16 * LIGHTS; // its ambient occlusion: how much (0: none), how far
 pub(crate) const VIEW_LENGTH: usize = VIEW_OCCLUSION + 4;
 
 type Mat4 = [[f32; 4]; 4]; // rows
@@ -158,6 +158,18 @@ impl Record {
     pub(crate) fn filled(key: u64, curves: u32, m: Mat34, fill: [f32; 4]) -> Self {
         let clear = [0.0; 4];
         Record { key1: key, m1: m, fill, fill2: fill, stroke: clear, stroke2: clear, background: clear, background2: clear, params: [0.0, curves as f32, 0.0, 0.0], ..Zeroable::zeroed() }
+    }
+
+    /// Modified by Zela (B6 Step 2.1): a **stroked** record — the shape upstream's Python would
+    /// send for a stroked mobject. `width` is the stroke's **full width** in scene units
+    /// (`vector.wgsl` treats `params.z` as the width: an empirical A/B in
+    /// `stroke_matches_wgpu_on_a_closed_polyline` pins it — passing a half width halves the
+    /// stroke). `shape_bits` is `cap | joint << 2` (`STYLE` bits, `:57` / `:459`), `0` being a
+    /// butt cap and miter joint. `params.w` stays 0: it is the *background* stroke's width,
+    /// which we don't use.
+    pub(crate) fn stroked(key: u64, curves: u32, m: Mat34, stroke: [f32; 4], width: f32, shape_bits: u32) -> Self {
+        let clear = [0.0; 4];
+        Record { key1: key, m1: m, fill: clear, fill2: clear, stroke, stroke2: stroke, background: clear, background2: clear, params: [0.0, curves as f32, width, 0.0], flags: (shape_bits as u64) << STYLE, ..Zeroable::zeroed() }
     }
 }
 

@@ -49,12 +49,18 @@ impl Msaa {
     }
 }
 
-/// 色调映射曲线（`tone.wgsl` 的两种形态）。
+/// 色调映射曲线 —— **只有上游 `tone.wgsl` 真正实现的两种**（B6 §2.3 契约修正）。
+///
+/// ⚠️ B4 Step 1 曾写成 `Reinhard` / `Aces`：那是按常见命名猜的，从未与着色器核对。
+/// `tone.wgsl:45` 的实际分支是 `tone == 1 ⇒ agx(c)`，否则 `clamp(c, 0, 1)`（clip）。
+/// 契约与实现不符 ⇒ 本批改为 `Clip` / `AgX`，默认 `AgX`（着色器里的 1 分支）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ToneCurve {
-    Reinhard,
+    /// 直接钳制到 [0,1]（`tone = 0`）：高光会死白。
+    Clip,
+    /// AgX（`tone = 1`，上游默认形态）。
     #[default]
-    Aces,
+    AgX,
 }
 
 /// 色调映射参数（默认关闭：`RenderParams::tone = None`）。
@@ -69,7 +75,7 @@ impl Default for ToneMapping {
     fn default() -> Self {
         Self {
             exposure: 1.0,
-            curve: ToneCurve::Aces,
+            curve: ToneCurve::AgX,
         }
     }
 }
@@ -278,6 +284,31 @@ impl RenderParams {
         Ok(())
     }
 
+    /// **默认值绑定后端能力**（B6 §0.3）。
+    ///
+    /// 后端自述支持哪几项后处理，就把哪几项的默认值打开；不支持的后端沿用
+    /// legacy 默认（全关）。这样"矢量后端默认带着色栈"与"wgpu 后端不挂"同时成立。
+    ///
+    /// ⚠️ **这不是静默降级**：
+    /// - 静默降级 = 调用方**请求了**不支持的参数，后端却画出来；
+    /// - 本机制 = 调用方**没有请求**，按该后端能力的默认值取。
+    /// 显式请求仍然走 [`Self::is_supported_by`]，不支持即报错（严格性不变）。
+    ///
+    /// `env` 不参与默认：它需要一个具体的环境图句柄，不能凭空造。
+    pub fn default_for(caps: &Capabilities) -> Self {
+        let mut params = Self::default();
+        if caps.post.tone {
+            params.tone = Some(ToneMapping::default());
+        }
+        if caps.post.bloom {
+            params.bloom = Some(Bloom::default());
+        }
+        if caps.post.ao {
+            params.ao = Some(AmbientOcclusion::default());
+        }
+        params
+    }
+
     /// 下游投影：target 描述（**唯一入口是 `RenderParams`**，§2.3）。
     ///
     /// 尺寸取 `target_size()`（已含 `supersample`）：超采样意味着先渲到大 target 再缩。
@@ -407,12 +438,41 @@ mod tests {
         let mut p = RenderParams::default();
         p.tone = Some(ToneMapping {
             exposure: 1.4,
-            curve: ToneCurve::Reinhard,
+            curve: ToneCurve::Clip,
         });
         p.bloom = Some(Bloom::default());
         p.env = Some(TextureHandle::new(3));
         let json = serde_json::to_string(&p).unwrap();
         let back: RenderParams = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
+    }
+
+    /// **B6 §0.3**：默认值绑定后端能力 —— 支持后处理的后端默认开 tone/bloom/ao，
+    /// 不支持的后端沿用 legacy（全关）。这不是静默降级：显式请求不支持项仍报错。
+    #[test]
+    fn default_for_follows_backend_capabilities() {
+        let legacy = RenderParams::default_for(&caps(4, PostCaps::none()));
+        assert!(legacy.tone.is_none() && legacy.bloom.is_none() && legacy.ao.is_none());
+
+        let full = PostCaps {
+            tone: true,
+            bloom: true,
+            ao: true,
+            env: true,
+        };
+        let modern = RenderParams::default_for(&caps(8, full));
+        assert_eq!(modern.tone.map(|t| t.curve), Some(ToneCurve::AgX));
+        assert!(modern.bloom.is_some() && modern.ao.is_some());
+        assert!(modern.env.is_none(), "env 需要具体纹理句柄，不默认开");
+        modern.validate().unwrap();
+        modern.is_supported_by(&caps(8, full)).unwrap();
+
+        // 严格性保留：legacy 后端 + 显式请求 tone ⇒ 仍然报错。
+        let mut explicit = legacy;
+        explicit.tone = Some(ToneMapping::default());
+        assert!(matches!(
+            explicit.is_supported_by(&caps(4, PostCaps::none())),
+            Err(RenderParamError::Unsupported { param: "tone" })
+        ));
     }
 }

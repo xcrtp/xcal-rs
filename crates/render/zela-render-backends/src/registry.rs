@@ -43,7 +43,25 @@ impl BackendKind {
         RenderCapabilitySet::from_names(self.namespaces())
     }
 
+    /// 本后端的**后处理能力**（B6 Step 1.3）：着色栈是矢量路径的固有部分。
+    ///
+    /// 与 [`Self::capabilities`] 分开：前者是 4 个 namespace 指纹（`zela.render*`），
+    /// 后者是 `Capabilities::post` 的四维开关。`RenderParams::default_for(&caps)`
+    /// 按它决定"默认开着色栈还是全关"（B6 §0.3）。
+    pub fn post_caps(self) -> ze_render_ir::PostCaps {
+        match self {
+            // wgpu 三角化路径没有后处理 pass（B6 §0.4：本批不给它新写）。
+            BackendKind::Wgpu => ze_render_ir::PostCaps::none(),
+            // 矢量路径：tone / bloom / ao / env 都由上游着色栈实现。
+            BackendKind::Vector => ze_render_ir::PostCaps::all(),
+        }
+    }
+
     /// 本构建里是否真的可实例化（`Vector` 在移植前为 `false`）。
+    ///
+    /// `Vector` 的渲染能力（填充 + 描边 + 着色栈槽位）已可用，但
+    /// `zela.render.shapes` 的**签名**还缺 target / 表达不了 `Shape2D`
+    /// （GAPS V2-12）⇒ 仍然不可注册；不得为凑"可注册"而先翻这个开关。
     pub fn is_available(self) -> bool {
         matches!(self, BackendKind::Wgpu)
     }
@@ -188,5 +206,28 @@ mod tests {
             BackendRegistryError::NotRegistered { .. }
         ));
         assert!(registry.select(BackendKind::Wgpu).is_ok());
+    }
+
+    /// B6 Step 1.3：后处理能力各自自述 —— wgpu 全关、矢量全开。
+    /// `RenderParams::default_for(&caps)` 靠它决定默认值（B6 §0.3）。
+    #[test]
+    fn post_caps_are_self_described_per_backend() {
+        let none = BackendKind::Wgpu.post_caps();
+        assert!(!none.tone && !none.bloom && !none.ao && !none.env);
+
+        let all = BackendKind::Vector.post_caps();
+        assert!(all.tone && all.bloom && all.ao && all.env);
+
+        // 默认参数按能力取：wgpu 保持全关，矢量默认带着色栈。
+        let caps = |post| ze_render_ir::Capabilities {
+            max_sample_count: 4,
+            color_format: ze_render_ir::ColorFormat::Bgra8UnormSrgb,
+            depth_format: ze_render_ir::DepthFormat::Depth32Float,
+            post,
+        };
+        let wgpu = ze_render_ir::RenderParams::default_for(&caps(BackendKind::Wgpu.post_caps()));
+        assert!(wgpu.tone.is_none() && wgpu.bloom.is_none() && wgpu.ao.is_none());
+        let vector = ze_render_ir::RenderParams::default_for(&caps(BackendKind::Vector.post_caps()));
+        assert!(vector.tone.is_some() && vector.bloom.is_some() && vector.ao.is_some());
     }
 }

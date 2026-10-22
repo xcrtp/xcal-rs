@@ -364,10 +364,12 @@
 | V2-11 | miter limit 两边不一致：lyon 默认 **4.0**，上游矢量**硬编码 10**（`vector.wgsl:497` / `render.rs:330`） | 渲染后端 | **记账（B5 §1.3）** | 即使两边都声明 `Miter`，极端尖角表现仍不同。改它要动上游 wgsl 语义 ⇒ 本批不改。**触发条件：矢量后端成为默认 2D 路径之前必须关闭** |
 | V2-12 | `zela.render.shapes` 签名只有 `capabilities` / `submit_shapes`：**没有** `create_target` / `upload`；且 `PathList` 表达不了 `Circle` / `Rect` / `Group` | 能力契约 / 装配 | **未执行（B5 Step 2 未做）** | 改签名必须同步 `PINNED_FINGERPRINTS`（`shapes = 1_097_982_529_554_556_752`）并写明。倾向把入参改成 `Shape2D` 列表（`PathList` 硬转会丢信息），但需先确认 target 生命周期，否则就是宿主侧隐式兜底 |
 | V2-13 | 渐变笔刷行 / 纹理图片 / dash 未映射（**缺概念**，不是缺映射） | 渲染后端 | **记账（B5 §七）** | 渐变需先定义色标 + 轴向与 `Style2D` 的关系；图片需给 `Shape2D` 加 `Image` 变体（R-04）；dash 需先有 dash 概念（上游是 `dash[3]` 周期/占空/相位）。触发：作品需要时 |
-| V2-14 | 矢量后端的**描边记录**未接：上游编码已核实（`Paint.brush2.w = cap | joint << 2`、`flags` 第 6 位 `STYLE`、`params[2]` = 宽度、`params[3]` = miter），但 `Curves.miter`（最尖拐角的 CPU 计算）我们绕过 `vector.rs` 后没有对应量 | 渲染后端 | **未执行（B5 Step 1.4）** | 本批只把 cap/join 固化进契约（V2-10）+ wgpu 侧显式驱动；矢量侧 `scene.rs` 仍对描边显式 `Unsupported`。填 `miter = 0` 会让 miter 拐角缺失 ⇒ 必须先移植 `Curves.miter` 计算，否则是"看起来能画但拐角不对"。随 V2-12 一起做 |
+| V2-14 | 矢量后端的**描边记录**未接 | 渲染后端 | **已关闭（B6 Step 2.1）** | ⚠️ B5 的阻塞理由**不成立**：`Curves.miter` 由 `render.rs:476 Store::add_path` 自动计算，与 `vector.rs` 无关；真正缺的只是 `Record` 的描边构造。现在 `Record::stroked`（`stroke` + `params.z` = **宽度** + `flags >> STYLE` = `cap \| joint << 2`）已落地，`scene::scene_records` 按"先填充后描边"产出。**事实更正**：`params.w` 是背景描边的宽度，不是 miter；miter limit 硬编码在 wgsl（见 V2-11）。宽度语义由实测钉住（传半宽会画出一半宽）。对拍：描边三角形 934 vs 954 像素、MAE 0.20/255、内部区 0.29 |
+| V2-15 | 着色栈的**结构事实**：`tone` 由 bloom 的合成 pass 应用，而那条 pass 只在**存在 3D layered 计划**时运行（`render.rs:2419`）；`occlusion_of()` 还要求存在环境光（类型 4）或全向光（类型 0），否则 AO 静默不生效 | 渲染后端 | **记账（B6 §2.4/2.5 修正）** | 结论：B6 §2.5 说 "bloom/tone 独立于光照" **不成立**。本批已把 `ViewOptions` 的槽位填进 view（`api::render_2d_with`，默认与 `render_2d` 逐位相同），但 2D-only 帧上它们**没有消费者**（用例 `tone_mapping_changes_pixels_and_defaults_are_identical` 钉住这一点）。触发：接 3D 视图 / 环境图时补"有 3D 时 AgX ≠ clip、AO 凹陷变暗"的用例 |
+| V2-16 | `ToneCurve` 语义错配（B4 建契约时按常见命名猜的）：`Reinhard` / `Aces`，而 `tone.wgsl` 只有 `0 = clip` / `1 = AgX` | 渲染 IR | **已关闭（B6 Step 1.1）** | 改为 `ToneCurve { Clip, #[default] AgX }`；`default_for(caps)` 按后端能力取默认（wgpu 全关 / 矢量全开），显式请求不支持项仍报错 —— 与"静默降级"的区别写进 `RenderParams::default_for` 文档 |
 | S4-14 | 孤儿 Surface：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用 ⇒ 内容既不在视口画（S4-10 起跳过）、也不参与合成、也没有代理平面 ⇒ **完全不可见且不报错** | 渲染管线 | **已关闭（B5 A-2）** | `content_texture_specs` 在同一趟里 `for_each::<Material3D>` 查引用；无人引用 ⇒ `SurfaceError::UnconsumedSurface`（报错文案给出修法：设 `composite=true` 或让 3D 材质引用）。测试 `unconsumed_content_surface_errors_explicitly`（无人引用报错 / 有引用通过 / composite=true 通过） |
 
-**K 段小计（B4 + B5）**：已关闭 11（V1-01..05、V2-01/02、V2-08/09、V2-10、S4-14）· 部分关闭 1（V2-06）· 记账 4（V2-03/04、V2-11、V2-13）· 未执行 3（V2-07、V2-12、V2-14）。
+**K 段小计（B4 + B5 + B6）**：已关闭 13（V1-01..05、V2-01/02、V2-08/09、V2-10、V2-14、V2-16、S4-14）· 部分关闭 1（V2-06）· 记账 5（V2-03/04、V2-11、V2-13、V2-15）· 未执行 2（V2-07、V2-12）。
 
 ---
 

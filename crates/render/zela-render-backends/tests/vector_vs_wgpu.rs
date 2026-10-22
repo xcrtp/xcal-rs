@@ -88,8 +88,18 @@ fn render_both(
         wgpu::Color::BLACK,
     ));
 
-    let vector = zela_render_vector::render_2d(SIZE, SIZE, 1, [0.0, 0.0, 0.0, 1.0], vector_paths)
-        .expect("矢量后端渲染失败");
+    let vector = zela_render_vector::render_2d(
+        SIZE,
+        SIZE,
+        1,
+        [0.0, 0.0, 0.0, 1.0],
+        &vector_paths
+            .iter()
+            .cloned()
+            .map(zela_render_vector::PathRecord::from)
+            .collect::<Vec<_>>(),
+    )
+    .expect("矢量后端渲染失败");
     (wgpu, vector)
 }
 
@@ -252,6 +262,78 @@ fn scene_mapping_matches_wgpu_on_a_filled_frame() {
     let (relative, mae) = assert_within_tolerance(&wgpu, &vector);
     assert!(relative < 0.02, "覆盖率相对差应很小：{relative:.4}");
     assert!(mae < 2.0, "整帧 MAE 应很小：{mae:.2}/255");
+}
+
+/// **描边容差回归（B6 Step 2.1 / 4）**：同一闭合路径两侧都只描边（宽 4px，
+/// butt + miter），按内部区 / 边缘带 / 覆盖率判定。两侧描边的细分方式不同
+/// （lyon 三角化 vs 解析覆盖率），差异必须存在但很小。
+#[test]
+fn stroke_matches_wgpu_on_a_closed_polyline() {
+    // 非对称、非轴对齐（P1-1 教训：对称形状会掩盖方向 / AA 差异）。
+    let points = [
+        Vec2::new(40.0, 30.0),
+        Vec2::new(96.0, 70.0),
+        Vec2::new(36.0, 96.0),
+    ];
+    let mut queue = DrawQueue::new();
+    queue.path_stroke(
+        ZIndex::new(0),
+        Path::new(Path2D::from_polyline(&points, true)),
+        ze_render_ir::StrokeSolid::new(4.0, Color32::RED),
+    );
+    let snapshot = zela_render_backends::snapshot_queue(&queue);
+    let items: Vec<zela_render_vector::SceneItem<'_>> = snapshot
+        .iter()
+        .map(|recorded| zela_render_vector::SceneItem {
+            shape: &recorded.shape,
+            transform: recorded.transform,
+            style: recorded.style,
+        })
+        .collect();
+
+    let Some((_gpu, ctx)) = zela_render_backends::gpu_test::require_gpu() else {
+        panic!("本机起不来 GPU（对拍需要真实设备）");
+    };
+    let layers = vec![SceneLayer {
+        id: LayerId(0),
+        kind: LayerKind::Viewport2D {
+            camera: Camera2D::new(
+                Vec2::new(64.0, 64.0),
+                1.0,
+                Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
+            ),
+        },
+        blend: LayerBlend::Alpha,
+        opacity: 1.0,
+    }];
+    let callback = SceneCompositorCallback::new(
+        Rect2D::from_min_size(Vec2::ZERO, Vec2::splat(SIZE as f32)),
+        layers,
+        &queue,
+        &DrawQueue3D::new(),
+        &LightQueue::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        PostFilterChain::default(),
+    );
+    let mut backends = StandardBackends::new(&ctx);
+    let wgpu = bgra_to_rgba(&render_frame_headless(
+        &ctx,
+        &mut backends,
+        &callback,
+        ScreenParams::new([SIZE, SIZE], 1.0),
+        wgpu::Color::BLACK,
+    ));
+    let vector = zela_render_vector::render_scene_2d(SIZE, SIZE, 1, [0.0, 0.0, 0.0, 1.0], &items)
+        .expect("描边映射 / 矢量渲染失败");
+
+    let (relative, mae) = assert_within_tolerance(&wgpu, &vector);
+    // 差异必须存在（两侧不是同一实现），但必须在容差内。
+    assert!(
+        relative > 0.0 || mae > 0.0,
+        "描边两侧不应逐位相同（否则测不出 AA 差异）"
+    );
 }
 
 /// 斜边三角形：边缘以非 45° 斜率穿过像素内部 ⇒ 解析 AA 与 MSAA 必然不同，
