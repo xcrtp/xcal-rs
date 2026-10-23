@@ -78,7 +78,9 @@
 
     function setBusy(busy) {
       playing = busy;
-      select.disabled = busy || demos.length === 0;
+      // **播放中也能切作品**：切换只改 `?zsb=` 并整页重载（旧帧循环随页面一起丢弃），
+      // 因此不需要等播放结束。只有"清单为空"时才禁用下拉。
+      select.disabled = demos.length === 0;
       fileInput.disabled = busy;
       replayButton.disabled = busy;
     }
@@ -128,7 +130,8 @@
     }
 
     select.addEventListener('change', () => {
-      if (!playing) reloadWith(select.value);
+      // 播放中切换：直接重载到新作品（旧的 wasm 帧循环由导航终止，无需先 stop）。
+      reloadWith(select.value);
     });
 
     fileInput.addEventListener('change', async () => {
