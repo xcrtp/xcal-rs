@@ -19,9 +19,13 @@ use ze_pod_core::Handle;
 use ze_pod_macro::capability;
 
 /// 宿主暴露给脚本的场景装配接口。
+///
+/// `@7 → @8`（B7 Step 1）：删除 `Target.TransformValue`（按值类型猜写哪一列的静默兜底）
+/// 与 `TransformChannel.Auto`。删一个零使用方法**不改变任何像素**，但改变能力表面
+/// ⇒ 必须升版本，让"脚本引用了不存在的目标"在装配期显式失败。
 #[capability(
     namespace = "zela.scene",
-    version = "7",
+    version = "8",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -94,8 +98,8 @@ pub struct SceneApi<'a> {
 
     /// 构造 **Transform 通道**动作（S3：Position / Rotation / Scale）。
     ///
-    /// 与 `clip(Target.TransformValue, ...)` 的区别：显式指定写哪一列，
-    /// 因此 `Position` 与 `Rotation` 可以在 `parallel` 里并存。
+    /// 显式指定写哪一列，因此 `Position` 与 `Rotation` 可以在 `parallel` 里并存。
+    /// B7 起这是写 `Transform` 的**唯一**入口（`Target.TransformValue` 已删除）。
     pub clip_transform: fn(&'a dyn Pod, channel: TransformChannel, curve: Curve) -> Handle,
 
     /// 顺序播放一段动画（动作 + 时长，秒）。
@@ -136,7 +140,7 @@ pub struct ContentApi<'a> {
 // 指纹算法是固定 FNV-1a（跨 Rust 版本稳定），见 `ze_pod_core::capability_fingerprint`。
 
 /// `zela.scene` 的当前自述版本（必须与 `#[capability(version = ...)]` 逐字一致）。
-pub const SCENE_API_VERSION: &str = "7";
+pub const SCENE_API_VERSION: &str = "8";
 /// `zela.scene` 的 `hash(signatures())` 基线。
 pub const SCENE_API_FINGERPRINT: u64 = 15_573_081_187_359_822_637;
 /// `zela.content` 的当前自述版本。

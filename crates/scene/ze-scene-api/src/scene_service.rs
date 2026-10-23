@@ -61,22 +61,21 @@ struct Clip {
 /// 脚本侧动作目标的两种来源。
 #[derive(Clone, Copy)]
 enum ClipTarget {
-    /// 既有集中枚举（CircleRadius / Phase / … / TransformValue(Auto)）。
+    /// 既有集中枚举（CircleRadius / Phase / CameraEye / MorphT / Camera2DFraming /
+    /// RevealRange / OpacityValue）。
     Kind(TargetKind),
-    /// S3：显式 Transform 通道。
+    /// S3：显式 Transform 通道（B7 起没有 `Auto`）。
     Transform(TransformChannel),
 }
 
 impl ClipTarget {
     fn make(self) -> fn(ze_scene_contract::ObjectId) -> std::sync::Arc<dyn ze_scene_core::animation::Target> {
         use ze_scene_core::animation::target::{
-            make_transform_auto, make_transform_position, make_transform_rotation,
-            make_transform_scale,
+            make_transform_position, make_transform_rotation, make_transform_scale,
         };
         match self {
             ClipTarget::Kind(kind) => kind.ctor(),
             ClipTarget::Transform(channel) => match channel {
-                TransformChannel::Auto => make_transform_auto,
                 TransformChannel::Position => make_transform_position,
                 TransformChannel::Rotation => make_transform_rotation,
                 TransformChannel::Scale => make_transform_scale,

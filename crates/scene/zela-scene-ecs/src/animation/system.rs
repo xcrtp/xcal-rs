@@ -308,10 +308,10 @@ mod tests {
         assert_eq!(sched.world().get::<&Framing2D>(entity).unwrap().scale, 20.0);
     }
 
-    /// **T1 验收 5**：`Timeline` 驱动 `TransformValue` —— 段内插值、段外冻结（`Hold`）。
+    /// **T1 验收 5**：`Timeline` 驱动 `TransformChannelValue`（Position）—— 段内插值、段外冻结（`Hold`）。
     #[test]
-    fn timeline_drives_transform_value_with_hold() {
-        use crate::animation::target::TransformValue;
+    fn timeline_drives_transform_channel_with_hold() {
+        use crate::animation::target::{TransformChannel, TransformChannelValue};
         use crate::animation::timeline::Timeline;
         use ze_scene_core::Transform;
         use ze_time::{AnimValue, Curve, Interp};
@@ -328,7 +328,7 @@ mod tests {
             interpolation: Interp::Linear,
         };
         let mut tl = Timeline::new();
-        tl.play(curve, TransformValue::auto(id), 2.0);
+        tl.play(curve, TransformChannelValue { id, channel: TransformChannel::Position }, 2.0);
 
         let mut forest = XcClockForest::new();
         let mut table = BindingTable::new();
@@ -369,7 +369,7 @@ mod tests {
     fn all_eight_targets_write_expected_values_in_one_frame() {
         use crate::animation::target::{
             Camera2DFraming, CameraEye, MorphT, OpacityValue, Phase as PhaseTarget, RevealRange,
-            TransformValue,
+            TransformChannel, TransformChannelValue,
         };
         use crate::scene::components::{MorphShape, PhaseAnim, Reveal};
         use std::sync::Arc;
@@ -483,9 +483,10 @@ mod tests {
                 AnimValue::Vec2(vec2(0.0, 0.0)),
                 AnimValue::Vec2(vec2(2.0, 4.0)),
             ),
-            Arc::new(TransformValue::auto(
-                crate::contract::object_id_of(transform),
-            )),
+            Arc::new(TransformChannelValue {
+                channel: TransformChannel::Position,
+                id: crate::contract::object_id_of(transform),
+            }),
         );
 
         let mut resources = Resources::new();

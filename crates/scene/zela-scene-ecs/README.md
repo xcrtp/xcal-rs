@@ -154,7 +154,7 @@ egui 原生输入的读取与翻译只发生在 `zela-egui` 的 host。
 |------|----------|
 | [`scene`] | `Scene`(hecs World + ResourceMap), `components`(= `comp`: `Camera3D`, `Projection`, `MeshGeometry`, `Material3D`, `Circle`, `Path`, `MorphShape`, `Line`, `PhaseAnim`, …), `primitives`(`wireframe_cube` / `solid_cube` / `parametric_surface`) |
 | [`contract`] | 契约层 hecs 实现：`WorldView` / `WorldScene` / `object_id_of` / `entity_of` + `SceneRead` 转发 |
-| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming` / **`RevealRange`** / **`OpacityValue`** / **`TransformValue`**；T0-② 后 target 自报 `name()` / `target_id()`，分类清单已删除）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
+| [`animation`] | `Binding` / `BindingTable` / `SeekKind` / `Target`（P0 trait 化：`CircleRadius` / `Phase` / `CameraEye` / `MorphT` / `Camera2DFraming` / **`RevealRange`** / **`OpacityValue`** / 通道化的 `TransformChannelValue`；T0-② 后 target 自报 `name()` / `target_id()`，分类清单已删除）/ `Timeline`（P3 顺序编排）+ `BindingApplySystem` / `MorphApplySystem` |
 | [`camera_input`] | `CameraInputSystem`（P1：相机状态归场景对象；K0：**按 `CameraMode` 分派**）+ 控制器纯函数 `apply_pan_zoom` / `apply_orbit` / `apply_fps` |
 | [`director_state`] | `DirectorState`(包装 `ze_time::Director`), `DirectorAdvanceSystem` |
 | [`domain`] | `CameraCommand` / `CameraMode`；`SceneEvent` / `InputEvents` / `WidgetId`；`SceneView` / `LayerDescriptor` / `LayerKind` / `LayerId` / `LayerBlend` / `ContentHandle` |

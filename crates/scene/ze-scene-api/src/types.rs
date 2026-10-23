@@ -253,11 +253,10 @@ pub struct Opacity {
     pub value: f32,
 }
 
-/// Transform 的写入通道（S3）。
+/// Transform 的写入通道（S3；B7 起只有三条显式通道 —— `Auto` 已删除）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
 #[pod_type(name = "zela.TransformChannel")]
 pub enum TransformChannel {
-    Auto,
     Position,
     Rotation,
     Scale,
@@ -266,7 +265,6 @@ pub enum TransformChannel {
 impl TransformChannel {
     pub fn to_native(self) -> NativeTransformChannel {
         match self {
-            Self::Auto => NativeTransformChannel::Auto,
             Self::Position => NativeTransformChannel::Position,
             Self::Rotation => NativeTransformChannel::Rotation,
             Self::Scale => NativeTransformChannel::Scale,

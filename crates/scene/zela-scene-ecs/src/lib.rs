@@ -35,7 +35,8 @@ pub use ze_scene_core::{Color32, Rect2D, Vec2, Vec3, Vec4};
 pub use ze_scene_core::{TimeState, Transform2D, Transform2DInto};
 
 pub use animation::{
-    Binding, BindingTable, SeekKind, Target, TargetKind, Timeline, TransformValue,
+    Binding, BindingTable, SeekKind, Target, TargetKind, Timeline, TransformChannel,
+    TransformChannelValue,
 };
 pub use camera_input::{
     CameraInputSystem, apply_command_2d, apply_command_3d, apply_fps, apply_orbit, apply_pan_zoom,

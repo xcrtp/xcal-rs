@@ -163,20 +163,51 @@ mod tests {
         assert_eq!(Camera2DFraming { id }.name(), "Camera2DFraming");
         assert_eq!(RevealRange { id }.name(), "RevealRange");
         assert_eq!(OpacityValue { id }.name(), "OpacityValue");
-        assert_eq!(TransformValue::auto(id).name(), "TransformValue");
+        assert_eq!(
+            TransformChannelValue {
+                id,
+                channel: TransformChannel::Rotation
+            }
+            .name(),
+            "TransformRotation"
+        );
         // 全部 target 都如实报告自己的对象句柄（筛选的唯一依据）。
         assert_eq!(CircleRadius { id }.target_id(), id);
-        assert_eq!(TransformValue::auto(id).target_id(), id);
+        assert_eq!(
+            TransformChannelValue {
+                id,
+                channel: TransformChannel::Position
+            }
+            .target_id(),
+            id
+        );
         assert_eq!(OpacityValue { id }.target_id(), id);
     }
 
-    /// `TransformValue`：按 `AnimValue` 变体分派 —— `Vec2` → `position.xy`（z 不动）、
-    /// `Vec3` → 整个 `position`、`Scalar` → 统一缩放。
+    /// **B7**：`Target.TransformValue` 已删除 ⇒ 按名字反查构造器必须返回 `None`
+    /// （脚本 / 旧 ZSB 引用它时在装配期显式失败，不是静默跳过）。
     #[test]
-    fn transform_value_dispatches_by_variant() {
+    fn transform_value_is_no_longer_a_target() {
+        assert!(
+            target_ctor_by_name("TransformValue").is_none(),
+            "TransformValue 已删除，不得还能按名字构造"
+        );
+        assert!(TargetKind::from_name("TransformValue").is_none());
+        // 三条显式通道仍然可用。
+        for name in ["TransformPosition", "TransformRotation", "TransformScale"] {
+            assert!(target_ctor_by_name(name).is_some(), "{name} 应仍然可用");
+        }
+    }
+
+    /// `TransformPosition`：`Vec2` → `position.xy`（z 不动）、`Vec3` → 整个 `position`。
+    #[test]
+    fn transform_position_channel_writes_vec2_and_vec3() {
         let mut scene = SceneStruct::new();
         let id = spawn_one(&mut scene, Transform::default());
-        let t = TransformValue::auto(id);
+        let t = TransformChannelValue {
+            id,
+            channel: TransformChannel::Position,
+        };
         let read_tr =
             |scene: &SceneStruct| read::<Transform, _>(scene, id, |tr| (tr.position, tr.scale));
 
@@ -188,11 +219,7 @@ mod tests {
         // 整体写位置。
         apply_once(&t, &mut scene, AnimValue::Vec3(Vec3::new(1.0, 2.0, 3.0)));
         assert_eq!(read_tr(&scene).0, Vec3::new(1.0, 2.0, 3.0));
-
-        // 统一缩放。
-        apply_once(&t, &mut scene, AnimValue::Scalar(2.5));
-        assert_eq!(read_tr(&scene).1, Vec3::splat(2.5));
-        assert_eq!(read_tr(&scene).0, Vec3::new(1.0, 2.0, 3.0), "缩放不改位置");
+        assert_eq!(read_tr(&scene).1, Vec3::ONE, "Position 通道不得改缩放");
     }
 
     /// **S3**：`Rotation` 通道把 `Scalar` 写成绕 Z 的 `Quat`，且不改位置 / 缩放。
@@ -200,7 +227,7 @@ mod tests {
     fn transform_rotation_channel_rotates_about_z() {
         let mut scene = SceneStruct::new();
         let id = spawn_one(&mut scene, Transform::default());
-        let t = TransformValue {
+        let t = TransformChannelValue {
             id,
             channel: TransformChannel::Rotation,
         };
@@ -230,7 +257,7 @@ mod tests {
         let id = spawn_one(&mut scene, Transform::default());
 
         apply_once(
-            &TransformValue {
+            &TransformChannelValue {
                 id,
                 channel: TransformChannel::Position,
             },
@@ -238,7 +265,7 @@ mod tests {
             AnimValue::Vec2(Vec2::new(2.0, 3.0)),
         );
         apply_once(
-            &TransformValue {
+            &TransformChannelValue {
                 id,
                 channel: TransformChannel::Rotation,
             },
@@ -246,7 +273,7 @@ mod tests {
             AnimValue::Scalar(std::f32::consts::FRAC_PI_2),
         );
         apply_once(
-            &TransformValue {
+            &TransformChannelValue {
                 id,
                 channel: TransformChannel::Scale,
             },

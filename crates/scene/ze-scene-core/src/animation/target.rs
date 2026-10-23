@@ -130,12 +130,6 @@ impl TargetCtor for OpacityValue {
     }
 }
 
-impl TargetCtor for TransformValue {
-    fn make(id: ObjectId) -> Arc<dyn Target> {
-        Arc::new(Self::auto(id))
-    }
-}
-
 /// **动画目标的稳定枚举**（持久化 + 脚本绑定的**唯一真源**）。
 ///
 /// 变体名即持久化名字；[`Self::ctor`] 是唯一的 variant → 构造器映射。
@@ -153,7 +147,6 @@ pub enum TargetKind {
     Camera2DFraming,
     RevealRange,
     OpacityValue,
-    TransformValue,
 }
 
 impl TargetKind {
@@ -166,7 +159,6 @@ impl TargetKind {
         Self::Camera2DFraming,
         Self::RevealRange,
         Self::OpacityValue,
-        Self::TransformValue,
     ];
 
     /// 稳定语义名（= 变体名；持久化只写它）。
@@ -179,7 +171,6 @@ impl TargetKind {
             Self::Camera2DFraming => "Camera2DFraming",
             Self::RevealRange => "RevealRange",
             Self::OpacityValue => "OpacityValue",
-            Self::TransformValue => "TransformValue",
         }
     }
 
@@ -193,7 +184,6 @@ impl TargetKind {
             Self::Camera2DFraming => Camera2DFraming::make,
             Self::RevealRange => RevealRange::make,
             Self::OpacityValue => OpacityValue::make,
-            Self::TransformValue => TransformValue::make,
         }
     }
 
@@ -213,7 +203,6 @@ pub fn target_ctor_by_name(name: &str) -> Option<(fn(ObjectId) -> Arc<dyn Target
         "TransformPosition" => return Some((make_transform_position, "TransformPosition")),
         "TransformRotation" => return Some((make_transform_rotation, "TransformRotation")),
         "TransformScale" => return Some((make_transform_scale, "TransformScale")),
-        "TransformValue" => return Some((make_transform_auto, "TransformValue")),
         _ => {}
     }
     TargetKind::from_name(name).map(|kind| (kind.ctor(), kind.name()))
@@ -372,14 +361,11 @@ impl Target for RevealRange {
 
 /// `Transform` 的**写入通道**（S3：统一 Transform 动画）。
 ///
-/// 默认 [`TransformChannel::Auto`] 保持既有"按 `AnimValue` 类型猜"的语义：
-/// `Vec2/Vec3 → position`、`Scalar → 统一缩放`。显式通道只写自己那一列，
-/// 其余字段一概不碰 —— 多条绑定（如 `Position` + `Rotation`）可并行而不互相覆盖。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// B7：`Auto`（按 `AnimValue` 类型猜写哪一列、猜不中静默跳过、且没有 Rotation 分支）
+/// 已删除 —— 作者必须显式声明写哪一列。三条显式通道只写自己那一列，其余字段一概
+/// 不碰 ⇒ 多条绑定（如 `Position` + `Rotation`）可并行而不互相覆盖。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformChannel {
-    /// 兼容语义：按值的类型猜（`storyboard` 依赖 Scalar→scale）。
-    #[default]
-    Auto,
     /// 只写 `position`（`Vec2` 写 xy，`Vec3` 整体）。
     Position,
     /// 只写 `rotation`（`Scalar` = 绕 Z 的弧度）。
@@ -388,11 +374,9 @@ pub enum TransformChannel {
     Scale,
 }
 
-/// 写 [`Transform`]（T1 的逐对象摆放通道）。
+/// 写 [`Transform`] 的某一列（T1 的逐对象摆放通道）。
 ///
 /// 按 [`TransformChannel`] 决定写哪一列：
-/// - `Auto`：`Vec2(v)` → `position.xy`；`Vec3(v)` → `position`；`Scalar(v)` → **统一缩放**
-///   （既有行为，保持 storyboard 不变）；
 /// - `Position`：`Vec2` / `Vec3` → `position`；
 /// - `Rotation`：`Scalar` → `Quat::from_rotation_z(rad)`（绕 Z）；
 /// - `Scale`：`Scalar` → `Vec3::splat(v)`。
@@ -400,36 +384,14 @@ pub enum TransformChannel {
 /// 其它组合静默跳过（与全部既有 target 同口径）。组合顺序仍是 `scale → rotation →
 /// translation`（见 [`Transform::to_affine2d`]），本 target 只写字段，不决定顺序。
 #[derive(Debug, Clone, Copy)]
-pub struct TransformValue {
+pub struct TransformChannelValue {
     pub id: ObjectId,
     pub channel: TransformChannel,
 }
 
-impl TransformValue {
-    /// 兼容构造：`Auto` 通道（既有 `TargetKind::TransformValue` 的落点）。
-    pub const fn auto(id: ObjectId) -> Self {
-        Self {
-            id,
-            channel: TransformChannel::Auto,
-        }
-    }
-}
-
-impl Target for TransformValue {
+impl Target for TransformChannelValue {
     fn apply(&self, scene: &mut dyn SceneWrite, v: &AnimValue) {
         match self.channel {
-            TransformChannel::Auto => {
-                if let Some(p) = v.try_vec2() {
-                    with_component::<Transform, _>(scene, self.id, |t| {
-                        t.position.x = p.x;
-                        t.position.y = p.y;
-                    });
-                } else if let Some(p) = v.try_vec3() {
-                    with_component::<Transform, _>(scene, self.id, |t| t.position = p);
-                } else if let Some(s) = v.try_scalar() {
-                    with_component::<Transform, _>(scene, self.id, |t| t.scale = Vec3::splat(s));
-                }
-            }
             TransformChannel::Position => {
                 if let Some(p) = v.try_vec2() {
                     with_component::<Transform, _>(scene, self.id, |t| {
@@ -457,7 +419,6 @@ impl Target for TransformValue {
 
     fn name(&self) -> &'static str {
         match self.channel {
-            TransformChannel::Auto => "TransformValue",
             TransformChannel::Position => "TransformPosition",
             TransformChannel::Rotation => "TransformRotation",
             TransformChannel::Scale => "TransformScale",
@@ -470,26 +431,22 @@ impl Target for TransformValue {
 }
 
 /// 通道化的 target 构造器（`target_ctor_by_name` 与脚本 `clip_transform` 共用）。
-pub fn make_transform_auto(id: ObjectId) -> Arc<dyn Target> {
-    Arc::new(TransformValue::auto(id))
-}
-
 pub fn make_transform_position(id: ObjectId) -> Arc<dyn Target> {
-    Arc::new(TransformValue {
+    Arc::new(TransformChannelValue {
         id,
         channel: TransformChannel::Position,
     })
 }
 
 pub fn make_transform_rotation(id: ObjectId) -> Arc<dyn Target> {
-    Arc::new(TransformValue {
+    Arc::new(TransformChannelValue {
         id,
         channel: TransformChannel::Rotation,
     })
 }
 
 pub fn make_transform_scale(id: ObjectId) -> Arc<dyn Target> {
-    Arc::new(TransformValue {
+    Arc::new(TransformChannelValue {
         id,
         channel: TransformChannel::Scale,
     })

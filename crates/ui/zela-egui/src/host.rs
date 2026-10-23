@@ -643,7 +643,11 @@ fn target_label(name: &str) -> &str {
         "Camera2DFraming" => "2D 相机取景",
         "RevealRange" => "书写动画",
         "OpacityValue" => "不透明度",
-        "TransformValue" => "摆放（位移/缩放）",
+        "MorphT" => "形变插值",
+        // B7：`TransformValue`（按值类型猜通道）已删除，只剩三条显式通道。
+        "TransformPosition" => "摆放 · 位移",
+        "TransformRotation" => "摆放 · 旋转",
+        "TransformScale" => "摆放 · 缩放",
         _ => name,
     }
 }
