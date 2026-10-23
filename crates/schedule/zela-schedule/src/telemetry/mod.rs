@@ -18,7 +18,7 @@ mod snapshot;
 
 pub use clock::{FrameClock, InstantClock, ZeroClock};
 pub use frame_report::{FrameReport, SystemTelemetry};
-pub use log::init_tracing;
+pub use log::{init_tracing, init_tracing_headless};
 pub use snapshot::{
     ComponentInfo, EntitySnapshot, ResourceSnapshot, SnapshotRegistry, WorldSnapshot,
     write_snapshot_json,

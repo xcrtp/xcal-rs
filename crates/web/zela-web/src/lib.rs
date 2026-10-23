@@ -332,6 +332,9 @@ async fn run_with(
         *slot = Some(bytes.clone());
     }
 
+    // B12 Step 1.1：浏览器入口也接上订阅器（默认 warn，不淹没控制台）。
+    zela_playback::init_tracing();
+
     // 体积上限必须在解析之前校验（坏长度字段可能诱导巨量分配）。
     if bytes.len() > MAX_BUNDLE_BYTES {
         return Err(js_err(format!(

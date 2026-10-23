@@ -739,6 +739,159 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// GAPS **语义锚点**校验（B12 Step 0.3）：`crate::mod::Item` 形式的引用必须有定义。
+///
+/// - 只查**存在性**，不查语义（"常量还在但缺口已关闭"是 `verified` 字段的事，不归这里）；
+/// - 只校验首段是**本仓 crate**（`crates/**/Cargo.toml` 的 name，`-`/`_` 等价）的锚点；
+///   首段像 crate（`ze_*` / `zela_*`）但找不到 ⇒ **crate 改名 / 已删除**；
+/// - 末段在本 crate 的 `src/**` 里搜不到 ⇒ **符号改名 / 已删除**。
+///
+/// 为什么用符号名而不是行号：行号腐烂是**静默**的（永远指向某一行，只是不是你要的那行），
+/// 符号名腐烂是**响亮**的（grep 0 命中）。
+fn check_gaps_anchors(root: &Path) -> Result<(), String> {
+    let mut crates: Vec<(String, PathBuf)> = Vec::new();
+    collect_crates(&root.join("crates"), &mut crates)?;
+
+    let text = fs::read_to_string(root.join("GAPS.md"))
+        .map_err(|error| format!("读取 GAPS.md 失败：{error}"))?;
+    let mut checked = 0usize;
+    for token in backticked_anchor_tokens(&text) {
+        let mut segments = token.split("::");
+        let head = segments.next().unwrap_or_default();
+        let normalized = head.replace('_', "-");
+        let Some((_, dir)) = crates.iter().find(|(name, _)| *name == normalized) else {
+            if head.starts_with("ze_") || head.starts_with("zela_") {
+                return Err(format!(
+                    "GAPS 锚点 `{token}`：crate `{head}` 不在本仓（改名或已删除？）"
+                ));
+            }
+            continue;
+        };
+        let last = token
+            .rsplit("::")
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches("()");
+        if !ident_exists_in(&dir.join("src"), last)? {
+            return Err(format!(
+                "GAPS 锚点 `{token}`：在 {} 的 src/ 里找不到符号 `{last}`（改名或已删除？）",
+                dir.display()
+            ));
+        }
+        checked += 1;
+    }
+    println!("[xtask] GAPS 锚点：{checked} 条 crate 限定引用全部有定义");
+    Ok(())
+}
+
+/// 递归收集 `crates/**/Cargo.toml` 的 `name` → crate 目录。
+fn collect_crates(dir: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|error| format!("读取 {} 失败：{error}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("遍历 {} 失败：{error}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_crates(&path, out)?;
+            continue;
+        }
+        if path.file_name().and_then(|n| n.to_str()) != Some("Cargo.toml") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+        let name = text
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("name")
+                    .and_then(|rest| rest.trim_start().strip_prefix('='))
+                    .map(|rest| rest.trim().trim_matches('"').to_string())
+            })
+            .ok_or_else(|| format!("{} 里没有 name 字段", path.display()))?;
+        if let Some(parent) = path.parent() {
+            out.push((name, parent.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
+/// GAPS 里的反引号 token → 只保留 `a::b::c` 形态（纯标识符段）。
+fn backticked_anchor_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else { break };
+        let token = &after[..close];
+        rest = &after[close + 1..];
+        if !token.contains("::") {
+            continue;
+        }
+        let clean = token.ends_with("()");
+        let body = token.trim_end_matches("()");
+        let ok = body.split("::").all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if ok {
+            out.push(if clean { format!("{body}()") } else { body.to_string() });
+        }
+    }
+    out
+}
+
+/// 在 `dir` 下的所有 `.rs` 里找独立标识符 `ident`（ASCII 单词边界）。
+fn ident_exists_in(dir: &Path, ident: &str) -> Result<bool, String> {
+    if ident.is_empty() {
+        return Ok(false);
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(false),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("遍历 {} 失败：{error}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            if ident_exists_in(&path, ident)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+        if has_ident(&text, ident) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn has_ident(text: &str, ident: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut offset = 0usize;
+    while let Some(pos) = text[offset..].find(ident) {
+        let start = offset + pos;
+        let end = start + ident.len();
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        offset = end;
+    }
+    false
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 /// 取 `prefix` 开头的一节（直到下一个 `## `）。
 fn gaps_section<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     let start = text.find(prefix)?;
@@ -843,6 +996,8 @@ fn step_coverage(root: &Path) -> Result<(), String> {
 fn step_structure(root: &Path) -> Result<(), String> {
     // B7 Step 0.2：GAPS 的小计必须与条目状态一致（不依赖 jq，先跑）。
     check_gaps_subtotals(root)?;
+    // B12 Step 0.3：GAPS 里的 crate 限定语义锚点必须能在源码里找到定义。
+    check_gaps_anchors(root)?;
     let jq_available = Command::new("jq")
         .arg("--version")
         .stdout(Stdio::null())

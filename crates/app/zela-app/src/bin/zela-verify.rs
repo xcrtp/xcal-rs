@@ -26,7 +26,9 @@
 
 use std::path::{Path, PathBuf};
 
-use zela_app::frame_loop::{FrameLoopOptions, LoopBackend, frames_for, run_frames};
+use zela_app::frame_loop::{
+    FrameLoopOptions, FrameStats, FrameTiming, LoopBackend, frames_for, run_frames, timing_json,
+};
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, compile_script, language_from_path,
 };
@@ -129,6 +131,8 @@ fn parse_work(spec: &str) -> Result<Work, String> {
 }
 
 fn main() {
+    // B12 Step 1.1：门禁路径也接上订阅器（此前默认采集、默认丢弃）。
+    zela_schedule::telemetry::init_tracing_headless();
     if let Err(message) = run() {
         eprintln!("zela-verify: {message}");
         std::process::exit(1);
@@ -295,6 +299,26 @@ fn run_sink_bypass(ctx: &RenderContext, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// B12 Step 1.2：`zela-verify` 是**唯一默认门禁路径**，必须与 `zela-render` 同字段计时。
+///
+/// 默认不打印（门禁输出要保持可读）；`ZELA_FRAME_TIMING=1` 时逐帧 `[timing]` + 每遍
+/// `[timing-summary]`，字段名与 `zela-render` 完全一致。
+fn report_timings(work: &str, pass: &str, timings: &[FrameTiming]) {
+    if !std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0") {
+        return;
+    }
+    let mut stats = FrameStats::new();
+    for (index, timing) in timings.iter().enumerate() {
+        eprintln!("{}", timing_json(timing, index as u32));
+        stats.record(index as u32, timing);
+    }
+    eprintln!("[timing-work] {work} · {pass}");
+    if let Err(error) = stats.report() {
+        // 量级门禁在 Step 6 才接入退出码；这里只呈报。
+        eprintln!("[timing] {error}");
+    }
+}
+
 /// 渲一个作品并把 PNG 写进 `dir`；`hash` 决定是否同时累积序列哈希。
 fn render_png(
     ctx: &RenderContext,
@@ -320,7 +344,7 @@ fn render_png(
         backend: work.backend,
         vector_params: None,
     };
-    run_frames(
+    let timings = run_frames(
         ctx,
         &mut runtime,
         &mut backends,
@@ -342,6 +366,7 @@ fn render_png(
         },
     )
     .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
+    report_timings(&work.name, "png", &timings);
     Ok(first)
 }
 
@@ -366,7 +391,7 @@ fn render_hash(
         backend: work.backend,
         vector_params: None,
     };
-    run_frames(
+    let timings = run_frames(
         ctx,
         runtime,
         &mut backends,
@@ -380,5 +405,6 @@ fn render_hash(
         },
     )
     .map_err(|e| format!("[{}] {path} 渲染失败：{e}", work.name))?;
+    report_timings(&work.name, path, &timings);
     Ok(hash.hex())
 }

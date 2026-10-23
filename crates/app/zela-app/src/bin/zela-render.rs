@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use zela_app::export::{ExportError, target_pix_fmt, write_png};
 use zela_app::frame_loop::{
     FrameLoopOptions, FrameTiming, FrameView, LoopBackend, frames_for, run_frames,
+    timing_json,
 };
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, language_from_path,
@@ -183,6 +184,8 @@ impl Args {
 }
 
 fn main() {
+    // B12 Step 1.1：headless 入口接上订阅器（默认 warn；ZELA_LOG / ZELA_LOG_FILE 可调）。
+    zela_schedule::telemetry::init_tracing_headless();
     if let Err(message) = run() {
         eprintln!("zela-render: {message}");
         std::process::exit(1);
@@ -300,7 +303,7 @@ fn run() -> Result<(), String> {
 
     // B8 Step 1：逐帧分段计时（默认只在窗口汇总 / 门禁上用；逐帧 JSON 由环境变量开启）。
     let timing_lines = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
-    let mut stats = FrameStats::new();
+    let mut stats = zela_app::frame_loop::FrameStats::new();
 
     // B9 Step 3：帧循环唯一实现在 `zela_app::frame_loop`（与 `zela-verify` 共用）。
     let timings = run_frames(
@@ -332,7 +335,7 @@ fn run() -> Result<(), String> {
 
     for (index, timing) in timings.iter().enumerate() {
         if timing_lines {
-            eprintln!("{}", frame_json(timing, index as u32));
+            eprintln!("{}", timing_json(timing, index as u32));
         }
         stats.record(index as u32, timing);
     }
@@ -353,150 +356,6 @@ fn run() -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-/// 一帧的 JSON 行（B8 Step 1；字段定义在 `zela_app::frame_loop::FrameTiming`）。
-///
-/// 段边界：`prepare` 含三角化与 `write_buffer`（计划里的 `t_tess` 与"构帧体"不可分）；
-/// `read` 含 GPU 等待；`sink` 含目标格式 ↔ RGBA 的通道转换；`verify` 是 GPU 校验 pass 的占位。
-fn frame_json(t: &FrameTiming, frame: u32) -> String {
-    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-    format!(
-        "[timing] {{\"frame\":{frame},\"advance_ms\":{:.3},\"build_ms\":{:.3},\
-         \"prepare_ms\":{:.3},\"paint_ms\":{:.3},\"submit_ms\":{:.3},\
-         \"read_ms\":{:.3},\"sink_ms\":{:.3},\"hash_ms\":{:.3},\"verify_ms\":{:.3},\
-         \"end_ms\":{:.3},\"total_ms\":{:.3}}}",
-        ms(t.advance),
-        ms(t.build),
-        ms(t.prepare),
-        ms(t.paint),
-        ms(t.submit),
-        ms(t.read),
-        ms(t.sink),
-        ms(t.hash),
-        ms(t.verify),
-        ms(t.end),
-        ms(t.total()),
-    )
-}
-
-/// 窗口汇总（JSON）：各段平均值与占比（占比按 `total` 算）。
-fn summary_json(t: &FrameTiming, window: &str, frames: usize) -> String {
-    let n = frames.max(1) as f64;
-    let avg_ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
-    let total = avg_ms(t.total()).max(f64::MIN_POSITIVE);
-    let share = |d: Duration| avg_ms(d) / total * 100.0;
-    format!(
-        "[timing-summary] {{\"window\":\"{window}\",\"frames\":{frames},\
-         \"avg_total_ms\":{:.3},\
-         \"avg\":{{\"advance\":{:.3},\"build\":{:.3},\"prepare\":{:.3},\"paint\":{:.3},\
-         \"submit\":{:.3},\"read\":{:.3},\"sink\":{:.3},\"hash\":{:.3},\"verify\":{:.3},\
-         \"end\":{:.3}}},\
-         \"share_pct\":{{\"advance\":{:.1},\"build\":{:.1},\"prepare\":{:.1},\"paint\":{:.1},\
-         \"submit\":{:.1},\"read\":{:.1},\"sink\":{:.1},\"hash\":{:.1},\"verify\":{:.1},\
-         \"end\":{:.1}}}}}",
-        avg_ms(t.total()),
-        avg_ms(t.advance),
-        avg_ms(t.build),
-        avg_ms(t.prepare),
-        avg_ms(t.paint),
-        avg_ms(t.submit),
-        avg_ms(t.read),
-        avg_ms(t.sink),
-        avg_ms(t.hash),
-        avg_ms(t.verify),
-        avg_ms(t.end),
-        share(t.advance),
-        share(t.build),
-        share(t.prepare),
-        share(t.paint),
-        share(t.submit),
-        share(t.read),
-        share(t.sink),
-        share(t.hash),
-        share(t.verify),
-        share(t.end),
-    )
-}
-
-fn add_timing(acc: &mut FrameTiming, other: &FrameTiming) {
-    acc.advance += other.advance;
-    acc.build += other.build;
-    acc.prepare += other.prepare;
-    acc.paint += other.paint;
-    acc.submit += other.submit;
-    acc.read += other.read;
-    acc.sink += other.sink;
-    acc.hash += other.hash;
-    acc.verify += other.verify;
-    acc.end += other.end;
-}
-
-/// 性能**量级门禁**（B8 §3.3）：只拦灾难性退化，不卡正常波动。
-///
-/// 首帧包含管线 / 着色器创建，不计入；阈值取实测均值的约 4 倍。
-const SLOW_FRAME_MS: f64 = 500.0;
-/// 汇总窗口：实测数据按"前 30 帧"回报（B8 §3.4），另给全程汇总。
-const TIMING_WINDOW: usize = 30;
-
-/// 逐帧计时累加器。
-struct FrameStats {
-    totals: FrameTiming,
-    seen: usize,
-    window: FrameTiming,
-    window_frames: usize,
-    slow: Vec<(u32, f64)>,
-}
-
-impl FrameStats {
-    fn new() -> Self {
-        Self {
-            totals: FrameTiming::default(),
-            seen: 0,
-            window: FrameTiming::default(),
-            window_frames: 0,
-            slow: Vec::new(),
-        }
-    }
-
-    /// `index` = 帧号；首帧（0）不计入窗口与门禁（含管线创建）。
-    fn record(&mut self, index: u32, timing: &FrameTiming) {
-        add_timing(&mut self.totals, timing);
-        self.seen += 1;
-        if index > 0 {
-            if self.window_frames < TIMING_WINDOW {
-                add_timing(&mut self.window, timing);
-                self.window_frames += 1;
-            }
-            let total_ms = timing.total().as_secs_f64() * 1000.0;
-            if total_ms > SLOW_FRAME_MS {
-                self.slow.push((index, total_ms));
-            }
-        }
-    }
-
-    fn report(&self) -> Result<(), String> {
-        // 单帧作品没有"1..30"窗口，跳过该行（否则打印一列 0，易误读）。
-        if self.window_frames > 0 {
-            eprintln!(
-                "{}",
-                summary_json(
-                    &self.window,
-                    &format!("1..{}", self.window_frames),
-                    self.window_frames
-                )
-            );
-        }
-        eprintln!("{}", summary_json(&self.totals, "all", self.seen));
-        if let Some((frame, ms)) = self.slow.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
-            return Err(format!(
-                "性能量级门禁失败：第 {frame} 帧耗时 {ms:.1}ms > {SLOW_FRAME_MS}ms（B8 §3.3；\
-                 共 {} 帧超限）",
-                self.slow.len()
-            ));
-        }
-        Ok(())
-    }
 }
 
 /// 逐帧输出 / 校验的挂载点（B8 Step 2 / 补充更正 §3.4）。

@@ -23,6 +23,14 @@ use std::sync::Arc;
 pub mod vector3d;
 pub mod vector_frame;
 
+/// B12 Step 1.1：headless / 浏览器入口的 tracing 订阅器。
+///
+/// 转发 `zela_schedule::telemetry::init_tracing_headless`（默认 `warn`、
+/// `ZELA_LOG` 控等级、`ZELA_LOG_FILE` 控目标）；重复调用安全。
+pub fn init_tracing() {
+    zela_schedule::telemetry::init_tracing_headless();
+}
+
 use ze_notion::Vec3;
 use zela_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect,

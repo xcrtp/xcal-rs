@@ -41,3 +41,35 @@ pub fn init_tracing() {
         // subscriber 已由其他初始化路径设置；忽略。
     }
 }
+
+/// **headless 入口**的订阅器（B12 Step 1.1）：默认 `warn`，目标可选 stderr / 文件。
+///
+/// 为什么单独一个函数：
+/// - 默认等级改为 `warn` —— 门禁 / 导出路径的 stdout/stderr 要可读，不能被 debug 淹没；
+/// - `ZELA_LOG_FILE=<path>` 时写文件（`ZELA_LOG` 仍控制等级）；
+/// - **默认既不是"丢弃"也不是"淹没"**：`warn` 级始终可见。
+///
+/// 重复初始化安全（`try_init`）。
+pub fn init_tracing_headless() {
+    let filter = std::env::var("ZELA_LOG").unwrap_or_else(|_| "warn".to_string());
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_target(false);
+
+    let result = match std::env::var("ZELA_LOG_FILE") {
+        Ok(path) => match std::fs::File::create(&path) {
+            Ok(file) => builder
+                .with_writer(std::sync::Mutex::new(file))
+                .try_init(),
+            Err(error) => {
+                eprintln!("[telemetry] 无法打开 ZELA_LOG_FILE={path}（{error}）；改写到 stderr");
+                builder.try_init()
+            }
+        },
+        Err(_) => builder.try_init(),
+    };
+    let _ = result;
+}

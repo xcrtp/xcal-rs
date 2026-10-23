@@ -490,3 +490,21 @@ D 段（B1 批次记账）6 条：已关闭 4 · 新增能力 2 —— 不计入
 - 新增缺口必须先落到本文件，再在 crate README 留一行指针；不得只写 README。
 - 「可清」必须附代码位置；无法给出证据的标「待定」，不得为了清而清。
 - 每次清理后同步更新 `WASM_PORT_SURVEY.md` 的状态列与本文件统计。
+
+### 语义锚点（B12 Step 0.2）
+
+代码引用一律用**符号名**定位，不用行号：
+
+```
+<kind> <crate>::<mod>::<Item>[::<member>]
+例：struct ze_render_ir::style::StrokeCap
+    fn     zela_render::frame::end_frame
+    const  zela_render_backends::wgpu_3d::DEFAULT_MSAA_SAMPLES
+```
+
+行号可以写，但必须标 `≈` 且**不参与定位**：行号腐烂是静默的（永远指向某一行，只是不是你要的那行），
+符号名腐烂是响亮的（grep 0 命中）。
+
+`cargo verify --step structure` 会扫本文件里所有 `crate::…` 形式的反引号引用：
+crate 找不到 ⇒ 改名 / 已删除；符号找不到 ⇒ 改名 / 已删除。**只查存在性，不查语义**
+（"常量还在但缺口已关闭"是 `verified` 字段的事，不归锚点检查——一个机制不包打天下）。
