@@ -11,20 +11,32 @@
 //! - 快照只读**当前帧**（调用方已 `step_frame` 推进）；
 //! - 3D 网格记录在渲染时再取（`mesh_records` 对线框会显式报错，必须在路由**之后**）。
 
+use ze_notion::{Path2D, Vec2};
 use ze_scene_core::domain::LayerDescriptor;
 use ze_scene_core::LayerKind;
 use zela_render::draw::DrawQueue;
 use zela_render_backends::routing::FrameContent;
 use zela_render_backends::Recorded2D;
-use zela_render_vector::Light;
 
 use crate::Runtime;
+
+/// 书写动画项（B14）：`path` 已由录制层换算到**屏幕空间**，`style` 的宽度也已是像素。
+///
+/// 矢量后端没有 reveal 管线 ⇒ 这里按**归一化弧长**把 `[start, end]` 裁成开放折线再描边。
+/// 与 wgpu 的差别只有"按弧长预细分 + 着色器丢弃" vs "CPU 裁剪"，可见部分是同一段几何。
+struct RevealSnapshot {
+    path: Path2D,
+    start: f32,
+    end: f32,
+    style: ze_render_ir::Style2D,
+}
 
 /// 一帧的内容快照：路由读它的特征，矢量渲染复用同一份数据。
 pub struct VectorFrame {
     layers: Vec<LayerDescriptor>,
     draws: Vec<Recorded2D>,
-    lights: Vec<Light>,
+    reveals: Vec<RevealSnapshot>,
+    morph_count: usize,
     mesh_count: usize,
     has_line_meshes: bool,
 }
@@ -46,8 +58,31 @@ impl VectorFrame {
                 let draws = queue
                     .map(zela_render_backends::snapshot_queue)
                     .unwrap_or_default();
-                let lights =
-                    crate::vector3d::lights(scheduler.resources().get::<zela_render::LightQueue>());
+                // B14：reveal 与 morph 是**独立队列**（不在 `DrawQueue` 里）。
+                // 只取 DrawQueue ⇒ 网格线 / 摆杆 / 轨迹弧整片消失（X4-01 的真实宽度）。
+                let reveals: Vec<RevealSnapshot> = scheduler
+                    .resources()
+                    .get::<zela_render::RevealQueue>()
+                    .map(|queue| {
+                        queue
+                            .0
+                            .iter()
+                            .map(|item| RevealSnapshot {
+                                path: item.path.clone(),
+                                start: item.start,
+                                end: item.end,
+                                style: item.style,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let morph_count = scheduler
+                    .resources()
+                    .get::<zela_render::MorphQueue>()
+                    .map_or(0, |queue| queue.0.len());
+                // ⚠️ B14：**不要在这里取灯**。`take()` 早于 3D 录制阶段运行，
+                // 此时 `LightQueue` 资源还不存在（实测 `None`）⇒ 会静默退回默认灯。
+                // 灯与网格一样，必须在 `render()`（渲染时）再取。
                 let (mesh_count, has_line_meshes) = match queue {
                     Some(queue) => {
                         let mut count = 0usize;
@@ -67,7 +102,8 @@ impl VectorFrame {
                 Ok(Self {
                     layers,
                     draws,
-                    lights,
+                    reveals,
+                    morph_count,
                     mesh_count,
                     has_line_meshes,
                 })
@@ -88,10 +124,12 @@ impl VectorFrame {
         });
         FrameContent {
             has_3d_camera,
-            has_2d_primitives: self.draws.len(),
+            // B14：reveal 也是 2D 图元（独立队列，但同样占画面）。
+            has_2d_primitives: self.draws.len() + self.reveals.len(),
             has_meshes: self.mesh_count,
             has_line_meshes: self.has_line_meshes,
             has_content_texture,
+            has_morphs: self.morph_count > 0,
         }
     }
 
@@ -113,22 +151,27 @@ impl VectorFrame {
         });
         match camera3d {
             Some(camera) => {
-                let records = runtime
+                // B14 / X4-02：网格与灯**都必须在渲染时取**（`take()` 太早，`LightQueue`
+                // 那时还不存在 ⇒ 以前一直静默用默认灯，画面系统性偏暗）。
+                let (records, lights) = runtime
                     .driver
                     .with_scheduler(|scheduler| -> Result<_, String> {
-                        let queue = scheduler.resources().get::<DrawQueue>();
-                        match queue {
-                            Some(queue) => crate::vector3d::mesh_records(queue),
-                            None => Ok(Vec::new()),
-                        }
+                        let lights = crate::vector3d::lights(
+                            scheduler.resources().get::<zela_render::LightQueue>(),
+                        );
+                        let records = match scheduler.resources().get::<DrawQueue>() {
+                            Some(queue) => crate::vector3d::mesh_records(queue)?,
+                            None => Vec::new(),
+                        };
+                        Ok((records, lights))
                     })?;
                 let mut view =
                     crate::vector3d::view3(&camera, (width, height), background, params)?;
-                view.lights = self.lights.clone();
+                view.lights = lights;
                 zela_render_vector::render_3d_with(width, height, 4, &view, &records)
             }
             None => {
-                let items: Vec<zela_render_vector::SceneItem<'_>> = self
+                let mut items: Vec<zela_render_vector::SceneItem<'_>> = self
                     .draws
                     .iter()
                     .map(|recorded| zela_render_vector::SceneItem {
@@ -137,8 +180,93 @@ impl VectorFrame {
                         style: recorded.style,
                     })
                     .collect();
+                // B14：wgpu 把 reveal 排在 DrawQueue 全部几何**之后**（同一 z 的稳定序）
+                // ⇒ 这里也追加在末尾。样式宽度已是像素、路径已是屏幕空间（录制层换算过）。
+                let reveal_items: Vec<(ze_render_ir::Shape2D, ze_render_ir::Style2D)> =
+                    self.reveals
+                        .iter()
+                        .filter_map(|reveal| {
+                            clip_reveal(&reveal.path, reveal.start, reveal.end)
+                                .map(|shape| (shape, reveal.style))
+                        })
+                        .collect();
+                items.extend(reveal_items.iter().map(|(shape, style)| {
+                    zela_render_vector::SceneItem {
+                        shape,
+                        transform: ze_notion::Transform2D::identity(),
+                        style: *style,
+                    }
+                }));
                 zela_render_vector::render_scene_2d(width, height, 4, background, &items)
             }
         }
+    }
+}
+
+/// 把 reveal 的 `[start, end]`（归一化弧长）裁成一条**开放折线**（B14 / X4-01）。
+///
+/// 与 wgpu 的 reveal 管线同语义：几何按弧长参数化、区间外不可见；区别只是
+/// wgpu 在着色器里丢弃，这里在 CPU 裁剪。`None` = 本帧没有可见段。
+fn clip_reveal(path: &Path2D, start: f32, end: f32) -> Option<ze_render_ir::Shape2D> {
+    let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+    if end <= start {
+        return None;
+    }
+    let flat = path.flatten(0.25);
+    if flat.len() < 2 {
+        return None;
+    }
+    let mut cumulative = Vec::with_capacity(flat.len());
+    let mut total = 0.0f32;
+    cumulative.push(0.0);
+    for pair in flat.windows(2) {
+        total += (pair[1] - pair[0]).length();
+        cumulative.push(total);
+    }
+    if total <= f32::EPSILON {
+        return None;
+    }
+    let mut out: Vec<Vec2> = Vec::new();
+    for i in 0..flat.len() - 1 {
+        let (s0, s1) = (cumulative[i] / total, cumulative[i + 1] / total);
+        if s1 <= start || s0 >= end {
+            continue;
+        }
+        let span = (s1 - s0).max(f32::EPSILON);
+        let t0 = ((start - s0) / span).clamp(0.0, 1.0);
+        let t1 = ((end - s0) / span).clamp(0.0, 1.0);
+        if out.is_empty() {
+            out.push(flat[i] + (flat[i + 1] - flat[i]) * t0);
+        }
+        out.push(flat[i] + (flat[i + 1] - flat[i]) * t1);
+    }
+    if out.len() < 2 {
+        return None;
+    }
+    Some(ze_render_ir::Shape2D::Path(Path2D::from_polyline(&out, false)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn last_x(shape: &ze_render_ir::Shape2D) -> f32 {
+        let ze_render_ir::Shape2D::Path(path) = shape else {
+            panic!("reveal 裁剪结果应是 Path");
+        };
+        path.flatten(0.25).last().expect("至少一个点").x
+    }
+
+    /// 半程 reveal 的终点应落在路径中点（按弧长参数化，不是按顶点序号）。
+    #[test]
+    fn reveal_clip_keeps_the_parameterized_span() {
+        let path = Path2D::from_polyline(&[Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0)], false);
+        let full = clip_reveal(&path, 0.0, 1.0).expect("整段可见");
+        assert!((last_x(&full) - 10.0).abs() < 1e-3, "整段终点应为 10");
+        let half = clip_reveal(&path, 0.0, 0.5).expect("半段可见");
+        assert!((last_x(&half) - 5.0).abs() < 1e-3, "半段终点应为 5，实测 {half:?}");
+        // 区间倒置 / 空区间 ⇒ 不可见（不是"整段"）。
+        assert!(clip_reveal(&path, 0.5, 0.5).is_none());
+        assert!(clip_reveal(&path, 0.8, 0.2).is_none());
     }
 }

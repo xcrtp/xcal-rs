@@ -10,10 +10,11 @@
 //! # 口径（全部来自代码事实，不猜）
 //! - 相机：右手系，`focal = |eye − target|`，`frame = 2·focal·tan(fov_y/2)`；
 //!   矢量 `View3` 只有这种 **focal 透视**形式 ⇒ 正交相机**显式报错**，不近似。
-//! - 灯：`LightQueue.direction` 是**传播方向**，矢量 `Light::Sun.direction` 是
-//!   "指向光源" ⇒ **取反**。环境项与 wgpu 兜底同值（`DEFAULT_AMBIENT = 0.2`）。
-//! - 空灯队列 ⇒ 与 wgpu 的 `default_light_bytes` 同参：方向 `+Z` 传播（=> toward
-//!   `−Z`）+ 环境 0.2。
+//! - 灯：`LightQueue.direction` **就是"指向光源"**（wgpu 的 `fs_pbr` 直接
+//!   `dot(n, dirs[i].xyz)`；B14 实测：旧注释说的"传播方向"是错的，桥里多做了一次取反
+//!   ⇒ 矢量侧所有正面都收不到方向光）。矢量 `Light::Sun.direction` 同为"指向光源"
+//!   ⇒ **原样透传**。环境项与 wgpu 兜底同值（`DEFAULT_AMBIENT = 0.2`）。
+//! - 空灯队列 ⇒ 与 wgpu 的 `default_light_bytes` 同参：方向 `+Z`（指向光源）+ 环境 0.2。
 //! - 网格：`Material3D` 没有 reflectance 字段 ⇒ 取 `0.5`（电介质常用值），
 //!   该取舍记在 GAPS X1-03。
 
@@ -28,8 +29,19 @@ use zela_render_vector::{Light, MeshRecord, PathRecord, View3};
 /// 与 wgpu 兜底一致的环境项（`wgpu_3d.rs` 的 `DEFAULT_AMBIENT`）。
 const DEFAULT_AMBIENT: f32 = 0.2;
 
-/// `Material3D` 没有 reflectance 字段时取的常数（电介质 F0 ≈ 0.04）。
-const DEFAULT_REFLECTANCE: f32 = 0.5;
+/// 方向光 / 点光的强度换算（B14 Step 2，X4-02）。
+///
+/// 两边的直接光项**不是同一个归一化**（都以"白色哑面正对光"为参照）：
+/// - wgpu（`cube.wgsl::fs_pbr`）：`(1 − ambient) · I · NdotL · (kd · albedo / π + spec)`；
+/// - 矢量（`light.wgsl` 头注）：`I · NdotL` 即"强度 1 = 正对光的白面显示为白"。
+/// ⇒ 桥里乘 `(1 − ambient) / π` 才能让漫反射项一致（高光项仍是两套实现，不在此对齐）。
+const LIGHT_GAIN: f32 = (1.0 - DEFAULT_AMBIENT) / std::f32::consts::PI;
+
+/// `Material3D` 没有 reflectance 字段时取的常数。
+///
+/// B14 Step 2：wgpu 的 PBR 用 `f0 = mix(0.04, albedo, metallic)`（电介质 F0 = 0.04），
+/// 旧值 0.5（"电介质常用值"）让矢量侧高光强了一个量级 ⇒ 与 wgpu 对拍永远偏亮。
+const DEFAULT_REFLECTANCE: f32 = 0.04;
 
 /// 把 `Camera3D` 分解成矢量后端的 `View3`（透视）。
 ///
@@ -105,25 +117,25 @@ pub fn lights(queue: Option<&LightQueue>) -> Vec<Light> {
     let mut out = Vec::new();
     if let Some(queue) = queue {
         out.extend(queue.directional.iter().map(|light| Light::Sun {
-            // `direction` 是传播方向；矢量 Sun 要"指向光源" ⇒ 取反。
-            direction: [-light.direction.x, -light.direction.y, -light.direction.z],
+            // B14：两边的 `direction` 都是"指向光源" ⇒ **不取反**（取反会让正面全黑）。
+            direction: [light.direction.x, light.direction.y, light.direction.z],
             color: [light.color[0], light.color[1], light.color[2]],
-            intensity: light.intensity,
+            intensity: light.intensity * LIGHT_GAIN,
             shadows: false,
         }));
         out.extend(queue.points.iter().map(|light| Light::Point {
             at: [light.position.x, light.position.y, light.position.z],
             color: [light.color[0], light.color[1], light.color[2]],
-            intensity: light.intensity,
+            intensity: light.intensity * LIGHT_GAIN,
             reach: light.range,
         }));
     }
     if out.is_empty() {
-        // 与 wgpu 的 `default_light_bytes` 同参：传播 +Z（⇒ 指向光源 −Z）。
+        // 与 wgpu 的 `default_light_bytes` 同参：方向 `+Z`（**指向光源**）。
         out.push(Light::Sun {
-            direction: [0.0, 0.0, -1.0],
+            direction: [0.0, 0.0, 1.0],
             color: [1.0, 1.0, 1.0],
-            intensity: 1.0,
+            intensity: LIGHT_GAIN,
             shadows: false,
         });
     }
@@ -308,9 +320,10 @@ mod tests {
         assert!(error.contains("平行"), "{error}");
     }
 
-    /// 灯：方向取反（传播 → 指向光源），并恒定带 0.2 环境项；空队列给 wgpu 同款兜底。
+    /// 灯（B14）：方向**原样透传**（两边都是"指向光源"），强度按 `(1−ambient)/π` 换算；
+    /// 恒定带 0.2 环境项；空队列给 wgpu 同款兜底。
     #[test]
-    fn lights_negate_direction_and_keep_ambient() {
+    fn lights_pass_direction_through_and_scale_intensity() {
         let mut queue = LightQueue::new();
         queue.directional.push(
             zela_render::light_queue::DirectionalLightRecord::new(
@@ -329,8 +342,8 @@ mod tests {
         assert_eq!(mapped.len(), 3, "方向光 + 点光 + 环境项");
         match mapped[0] {
             Light::Sun { direction, intensity, .. } => {
-                assert_eq!(direction, [0.0, 0.0, -1.0], "传播 +Z ⇒ 指向光源 −Z");
-                assert_eq!(intensity, 2.0);
+                assert_eq!(direction, [0.0, 0.0, 1.0], "方向是\"指向光源\"⇒ 原样透传");
+                assert!((intensity - 2.0 * LIGHT_GAIN).abs() < 1e-6);
             }
             other => panic!("第一盏应是 Sun：{other:?}"),
         }
@@ -342,7 +355,9 @@ mod tests {
         let empty = lights(None);
         assert_eq!(empty.len(), 2, "空队列 = 默认方向光 + 环境项");
         match empty[0] {
-            Light::Sun { direction, .. } => assert_eq!(direction, [0.0, 0.0, -1.0]),
+            Light::Sun { direction, .. } => {
+                assert_eq!(direction, [0.0, 0.0, 1.0], "与 wgpu default_light_bytes 同参")
+            }
             other => panic!("{other:?}"),
         }
     }

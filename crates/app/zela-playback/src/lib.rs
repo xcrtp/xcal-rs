@@ -33,7 +33,7 @@ pub fn init_tracing() {
 
 use ze_notion::Vec3;
 use zela_render::{
-    ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect,
+    ContentTextureQueue, DrawQueue, DrawQueue3D, LightQueue, MorphQueue, RevealQueue, ViewRect,
 };
 use zela_render_backends::{
     RenderContext, SceneCompositorCallback, ScreenParams, StandardBackends,
@@ -239,6 +239,10 @@ pub fn assemble_runtime(render_ctx: RenderContext, assembly: SceneAssembly) -> R
     resources.insert(InputEvents::default());
     resources.insert(DrawQueue::new());
     resources.insert(DrawQueue3D::new());
+    // B14（X5-01）：`LightQueue` 此前**从未注入** ⇒ `SceneRecord3DSystem` 的
+    // `with_world_and_resource_mut::<LightQueue>` 静默不生效，两个后端都只用默认灯、
+    // 脚本里的 `Light` 组件被无声忽略。注入后灯才真正进入渲染（native 基线随之重录）。
+    resources.insert(LightQueue::new());
     if let Some(specs) = content_textures {
         resources.insert(specs);
         resources.insert(ContentTextureQueue::default());

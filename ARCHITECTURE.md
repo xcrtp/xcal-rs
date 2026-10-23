@@ -889,6 +889,34 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   ⚠️ 这批矢量基线锁的是**当前行为**，X4-01 / X4-02 修好后必须重录。
 > - **被拒的 5 件**（不强行对拍，属既有能力边界）：`demo3d`（线框）、
 >   `surface_matrix` / `_js` / `atlas`（内容纹理）、`capability_gaps`（2D+3D 混排）。
+>
+> **B14 批次（2026-10-23）：矢量 2D 开放折线与 3D 亮度口径**。
+> 目标：把 B13 对拍暴露的两类差异修到"可解释、且大部分收敛"，门限不放宽。
+> - **2D（X4-01）**：差异有**两层**。① `shape_to_scene` 的 `push_shape` 把 `Line` 直接丢弃、
+>   把 `Polyline` 当闭合多边形（<3 点不产出）⇒ 网格线 / 地面线 / 2 点摆杆消失；修为
+>   `Line`/`Polyline` 走**开放子路径**（`ranges` 闭合位 0）、`Polygon` 仍闭合，填充的隐式闭合
+>   与描边的"不回连"各有一条 GPU 用例钉住。② 更宽的一层：**`RevealQueue` / `MorphQueue`
+>   根本不在 `DrawQueue` 里**，而矢量快照只取了 DrawQueue ⇒ 所有 `content.polyline` /
+>   `Reveal` 的曲线整片缺失。`zela_playback::vector_frame` 现按**归一化弧长**把 reveal 裁成
+>   开放折线（与 wgpu 的"预细分 + 着色器丢弃"同语义），morph 则**显式拒绝**（不静默丢）。
+>   实测 `--post match`：fourier 覆盖率 0.7239 → 0.0195、MAE 4.45 → 0.54；storyboard
+>   0.6394 → 0.0039 / 7.25 → 0.62；pendulum 0.3614 → 0.0258 / 0.35 → 0.06；orbit、spring 全绿。
+> - **3D（X4-02）**：Step 0 用"关 tone（A）/ 换 albedo / 探针场景"把候选逐个排除——
+>   **不是 tone**（关掉差异仍在）、**不是 sRGB**（白与灰两种 albedo 下比值恒为 2.26）。
+>   真因是**光照口径**：① 桥把光源方向**多取反了一次**（旧注释称 `LightQueue.direction`
+>   是"传播方向"，而 wgpu 的 `fs_pbr` 直接 `dot(n, dirs)` 当"指向光源"）；② 强度归一化
+>   不同（wgpu `(1−ambient)·I·NdotL·(kd·albedo/π+spec)` vs 矢量 `I·NdotL`）⇒ 桥里乘
+>   `(1−ambient)/π`；③ 电介质反射率 0.5 → 0.04。修后 pbr_scene 内部区 26.11 → 7.63
+>   （MAE 0.73）、pbr_lights 24.22 → 4.59（0.54）。
+> - **顺带挖出的第四层（X5-01）**：`LightQueue` **从未注入 Resources** ⇒ 两个后端一直只用
+>   默认灯，脚本里的 `Light` 组件被**一起静默忽略**。已补注入；含灯的 7 件 `[native]` 与
+>   5 件 `[vector]` 基线随之重录（用户明确豁免"native 不动"）。
+> - **仍未收敛（记账，不在本批假装解决）**：3D 取景（矢量大约 8%、偏移 ≈35px，X5-02）、
+>   点光衰减与高光实现（X5-03）、`fusion` 的透明面板合成（X5-05）、2D 细笔画内部区
+>   （fourier 3.01 / storyboard 6.96，X5-04）。⇒ "后端融合还是分立"的判断更新为：
+>   **亮度项已对齐，剩下的都是可点名的具体口径**，不再是"算法完全不同"。
+> - **两条"注释宣称与另一侧一致"的错误在本批清除**（`LightQueue.direction` 的"传播方向"、
+>   `scene.rs` 的"与 wgpu 三角化一致"）。规则：此类断言必须指向**可执行的用例**。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

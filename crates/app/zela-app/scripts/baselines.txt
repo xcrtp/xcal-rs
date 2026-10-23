@@ -24,59 +24,65 @@
 # pbr_lights / pbr_scene / pendulum / orbit / spring）—— 它们此前只有像素好看，没有任何
 # 门禁证明；尤其 pbr_* 三件曾被 cube 的 NaN 噪点影响，"修好了"一直没有证据。
 # device = windows / RTX 4060 Laptop
-# reason: B13 Step 3：[vector] 段扩容到 11 条（9 件矢量可渲作品补基线）；这批值锁的是当前行为，X4-01/X4-02 修复后必须重录 @ 164f6e3
-# slotA: fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 15c4e6d
-# slotA: storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 15c4e6d
-# slotA: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 15c4e6d
-# slotA: surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 15c4e6d
-# slotA: surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 15c4e6d
-# slotA: atlas = d180e51f4b72284048ce8d70005755bda3cd9b46aeba347aa0e7ec53ea7a256b @ 15c4e6d
-# slotA: fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 15c4e6d
-# slotA: pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 15c4e6d
-# slotA: pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 15c4e6d
-# slotA: pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 15c4e6d
-# slotA: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 15c4e6d
-# slotA: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 15c4e6d
-# slotA: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 15c4e6d
-# slotA: capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 15c4e6d
-# slotB: fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 164f6e3
-# slotB: storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 164f6e3
-# slotB: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 164f6e3
-# slotB: surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
-# slotB: surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
-# slotB: atlas = d180e51f4b72284048ce8d70005755bda3cd9b46aeba347aa0e7ec53ea7a256b @ 164f6e3
-# slotB: fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 164f6e3
-# slotB: pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 164f6e3
-# slotB: pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 164f6e3
-# slotB: pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 164f6e3
-# slotB: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 164f6e3
-# slotB: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 164f6e3
-# slotB: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 164f6e3
-# slotB: capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 164f6e3
-fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 164f6e3
-storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 164f6e3
-demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 164f6e3
-surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
-surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
-atlas = d180e51f4b72284048ce8d70005755bda3cd9b46aeba347aa0e7ec53ea7a256b @ 164f6e3
-fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 164f6e3
-pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 164f6e3
-pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 164f6e3
-pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 164f6e3
-pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 164f6e3
-orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 164f6e3
-spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 164f6e3
-capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 164f6e3
+# reason: B14：2D 开放折线/reveal 桥接 + 3D 灯方向与强度归一化 + LightQueue 注入（X4-01/X4-02/X5-01）；含 Light 的 7 件 native 与 5 件 vector 基线与 6 件 2D vector 基线同步重录 @ 60635fa+dirty
+# slotA: fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 164f6e3
+# slotA: storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 164f6e3
+# slotA: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 164f6e3
+# slotA: surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
+# slotA: surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 164f6e3
+# slotA: atlas = d180e51f4b72284048ce8d70005755bda3cd9b46aeba347aa0e7ec53ea7a256b @ 164f6e3
+# slotA: fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 164f6e3
+# slotA: pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 164f6e3
+# slotA: pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 164f6e3
+# slotA: pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 164f6e3
+# slotA: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 164f6e3
+# slotA: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 164f6e3
+# slotA: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 164f6e3
+# slotA: capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 164f6e3
+# delta: demo3d ddd69b3eaf65 -> 983c0d88980d（本次重录改变，原因见上一条 reason）
+# delta: atlas d180e51f4b72 -> e330bbc09561（本次重录改变，原因见上一条 reason）
+# delta: fusion 1a015d3d9a84 -> dc61e7cf128b（本次重录改变，原因见上一条 reason）
+# delta: pbr_materials a9edead53f8b -> 834ad967c62e（本次重录改变，原因见上一条 reason）
+# delta: pbr_lights dd561ffa07d3 -> 1d1ea6b4f44c（本次重录改变，原因见上一条 reason）
+# delta: pbr_scene 3e18146ee264 -> ff2ae135dbf3（本次重录改变，原因见上一条 reason）
+# slotB: fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 60635fa+dirty
+# slotB: storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 60635fa+dirty
+# slotB: demo3d = 983c0d88980d22d6bc222e64f7904ecaa2af9bf8a6c39200a72328e529ab00ec @ 60635fa+dirty
+# slotB: surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 60635fa+dirty
+# slotB: surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 60635fa+dirty
+# slotB: atlas = e330bbc095613e0da7ca196b9ead7c1ebcb0dd00761d7d4184c3e57a072e95b5 @ 60635fa+dirty
+# slotB: fusion = dc61e7cf128bf078548b35131288125b324cddfd5ff433d1add1d940d6436919 @ 60635fa+dirty
+# slotB: pbr_materials = 834ad967c62e60f39e46eafaee764a8dd5ba2ae624ed2dfa016ceeed7d57b22c @ 60635fa+dirty
+# slotB: pbr_lights = 1d1ea6b4f44c7d4bc5c360a82d3ca7cc7208179cdc9178607df41377a2becf1f @ 60635fa+dirty
+# slotB: pbr_scene = ff2ae135dbf3c10154ef6c1a6dece39dbd6a77e3a7d88528bacf4164c999d2c9 @ 60635fa+dirty
+# slotB: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 60635fa+dirty
+# slotB: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 60635fa+dirty
+# slotB: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 60635fa+dirty
+# slotB: capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 60635fa+dirty
+fourier = 0cb8b4a19232aa90723f68a28d87af8537220adf3cbde82f99677a0497a0edc1 @ 60635fa+dirty
+storyboard = be286560cf4930dd40ab3da5d30385776d32bd448abafc5b2c8c6ac216957607 @ 60635fa+dirty
+demo3d = 983c0d88980d22d6bc222e64f7904ecaa2af9bf8a6c39200a72328e529ab00ec @ 60635fa+dirty
+surface_matrix = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 60635fa+dirty
+surface_matrix.js = a6e4394c9ebe11e390398039fc08483bd87f4fd927a8a226aadf2af320d05224 @ 60635fa+dirty
+atlas = e330bbc095613e0da7ca196b9ead7c1ebcb0dd00761d7d4184c3e57a072e95b5 @ 60635fa+dirty
+fusion = dc61e7cf128bf078548b35131288125b324cddfd5ff433d1add1d940d6436919 @ 60635fa+dirty
+pbr_materials = 834ad967c62e60f39e46eafaee764a8dd5ba2ae624ed2dfa016ceeed7d57b22c @ 60635fa+dirty
+pbr_lights = 1d1ea6b4f44c7d4bc5c360a82d3ca7cc7208179cdc9178607df41377a2becf1f @ 60635fa+dirty
+pbr_scene = ff2ae135dbf3c10154ef6c1a6dece39dbd6a77e3a7d88528bacf4164c999d2c9 @ 60635fa+dirty
+pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 60635fa+dirty
+orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 60635fa+dirty
+spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 60635fa+dirty
+capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65b4 @ 60635fa+dirty
 
 [smoke]
 # 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
 # device = windows / RTX 4060 Laptop
-# reason: B13 Step 3：[vector] 段扩容到 11 条（9 件矢量可渲作品补基线）；这批值锁的是当前行为，X4-01/X4-02 修复后必须重录 @ 164f6e3
-# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 15c4e6d
-# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 164f6e3
-smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 164f6e3
+# reason: B14：2D 开放折线/reveal 桥接 + 3D 灯方向与强度归一化 + LightQueue 注入（X4-01/X4-02/X5-01）；含 Light 的 7 件 native 与 5 件 vector 基线与 6 件 2D vector 基线同步重录 @ 60635fa+dirty
+# slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 164f6e3
+# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 60635fa+dirty
+smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 60635fa+dirty
 
 [vector]
 # 640×480，同一脚本 / 同一 bundle 走 `--backend vector`（不支持则显式报错，不静默降级）。
@@ -87,31 +93,50 @@ smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 164f6
 # 口径与 [native] 相同：不符即 fail；`--script` 与 `--bundle` 两条路径逐位相同。
 # （slotA 是同批次脏树里的探针值，从未进入提交 ⇒ 标 pending，不冒充任何 commit。）
 # device = windows / RTX 4060 Laptop
-# reason: B13 Step 3：[vector] 段扩容到 11 条（9 件矢量可渲作品补基线）；这批值锁的是当前行为，X4-01/X4-02 修复后必须重录 @ 164f6e3
-# slotA: vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 15c4e6d
-# slotA: shaded_meshes = 58ab1f0e13037a16e625539ec6cbac38dd9d2af85b57b211ead8ea2764ca177e @ 15c4e6d
-# slotB: vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 164f6e3
-# slotB: shaded_meshes = 58ab1f0e13037a16e625539ec6cbac38dd9d2af85b57b211ead8ea2764ca177e @ 164f6e3
-# slotB: fourier = f59fdddffd77d6e4c5800ddc2aec50eda3109fc67831c0834bc711f797929644 @ 164f6e3
-# slotB: storyboard = 6256b1936e1c86ee4b9ddab20426fc67d423a417e806dea4a4a64f09084faf3a @ 164f6e3
-# slotB: fusion = 64abc41da0ff3440bc9ec78e9828fcf3b5af07f3884a5b0e939c5ca5bbfcc9a7 @ 164f6e3
-# slotB: pbr_materials = ec720c80d371723cb0fe917b798456c367bfdd45c7825c12b02a16ae9fcb5e8c @ 164f6e3
-# slotB: pbr_lights = d1e268a576ff6f674d790082464ed53fa1afab46ddf8a3aa083e2bc2467110da @ 164f6e3
-# slotB: pbr_scene = c68e2b863910cd5312c30114ef7a8b69a3fa333fbbe47587bddcd733a3c664d0 @ 164f6e3
-# slotB: pendulum = d4fd814c08d451596bff24e4ce81bf8bcb9f94a45631d9e17bb425ddadf72cc5 @ 164f6e3
-# slotB: orbit = bb6e4b33ce491425b76912fe30348a4176815c3080fd5b7e9dc28b4a0286ad83 @ 164f6e3
-# slotB: spring = 15e21d7e7241b4dc81fdc9a72f5e0327536284bd5e957d0c68da04c7d9a3e1cf @ 164f6e3
-vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 164f6e3
-shaded_meshes = 58ab1f0e13037a16e625539ec6cbac38dd9d2af85b57b211ead8ea2764ca177e @ 164f6e3
-fourier = f59fdddffd77d6e4c5800ddc2aec50eda3109fc67831c0834bc711f797929644 @ 164f6e3
-storyboard = 6256b1936e1c86ee4b9ddab20426fc67d423a417e806dea4a4a64f09084faf3a @ 164f6e3
-fusion = 64abc41da0ff3440bc9ec78e9828fcf3b5af07f3884a5b0e939c5ca5bbfcc9a7 @ 164f6e3
-pbr_materials = ec720c80d371723cb0fe917b798456c367bfdd45c7825c12b02a16ae9fcb5e8c @ 164f6e3
-pbr_lights = d1e268a576ff6f674d790082464ed53fa1afab46ddf8a3aa083e2bc2467110da @ 164f6e3
-pbr_scene = c68e2b863910cd5312c30114ef7a8b69a3fa333fbbe47587bddcd733a3c664d0 @ 164f6e3
-pendulum = d4fd814c08d451596bff24e4ce81bf8bcb9f94a45631d9e17bb425ddadf72cc5 @ 164f6e3
-orbit = bb6e4b33ce491425b76912fe30348a4176815c3080fd5b7e9dc28b4a0286ad83 @ 164f6e3
-spring = 15e21d7e7241b4dc81fdc9a72f5e0327536284bd5e957d0c68da04c7d9a3e1cf @ 164f6e3
+# reason: B14：2D 开放折线/reveal 桥接 + 3D 灯方向与强度归一化 + LightQueue 注入（X4-01/X4-02/X5-01）；含 Light 的 7 件 native 与 5 件 vector 基线与 6 件 2D vector 基线同步重录 @ 60635fa+dirty
+# slotA: vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 164f6e3
+# slotA: shaded_meshes = 58ab1f0e13037a16e625539ec6cbac38dd9d2af85b57b211ead8ea2764ca177e @ 164f6e3
+# slotA: fourier = f59fdddffd77d6e4c5800ddc2aec50eda3109fc67831c0834bc711f797929644 @ 164f6e3
+# slotA: storyboard = 6256b1936e1c86ee4b9ddab20426fc67d423a417e806dea4a4a64f09084faf3a @ 164f6e3
+# slotA: fusion = 64abc41da0ff3440bc9ec78e9828fcf3b5af07f3884a5b0e939c5ca5bbfcc9a7 @ 164f6e3
+# slotA: pbr_materials = ec720c80d371723cb0fe917b798456c367bfdd45c7825c12b02a16ae9fcb5e8c @ 164f6e3
+# slotA: pbr_lights = d1e268a576ff6f674d790082464ed53fa1afab46ddf8a3aa083e2bc2467110da @ 164f6e3
+# slotA: pbr_scene = c68e2b863910cd5312c30114ef7a8b69a3fa333fbbe47587bddcd733a3c664d0 @ 164f6e3
+# slotA: pendulum = d4fd814c08d451596bff24e4ce81bf8bcb9f94a45631d9e17bb425ddadf72cc5 @ 164f6e3
+# slotA: orbit = bb6e4b33ce491425b76912fe30348a4176815c3080fd5b7e9dc28b4a0286ad83 @ 164f6e3
+# slotA: spring = 15e21d7e7241b4dc81fdc9a72f5e0327536284bd5e957d0c68da04c7d9a3e1cf @ 164f6e3
+# delta: shaded_meshes 58ab1f0e1303 -> 1e9f05bd0258（本次重录改变，原因见上一条 reason）
+# delta: fourier f59fdddffd77 -> 88690b24379b（本次重录改变，原因见上一条 reason）
+# delta: storyboard 6256b1936e1c -> 5565794a32a6（本次重录改变，原因见上一条 reason）
+# delta: fusion 64abc41da0ff -> 81bdec4716d5（本次重录改变，原因见上一条 reason）
+# delta: pbr_materials ec720c80d371 -> 105618a85c46（本次重录改变，原因见上一条 reason）
+# delta: pbr_lights d1e268a576ff -> d8b01952a7ca（本次重录改变，原因见上一条 reason）
+# delta: pbr_scene c68e2b863910 -> 49d702deffa3（本次重录改变，原因见上一条 reason）
+# delta: pendulum d4fd814c08d4 -> 7bf7b7ff6849（本次重录改变，原因见上一条 reason）
+# delta: orbit bb6e4b33ce49 -> ddc7cf3a32aa（本次重录改变，原因见上一条 reason）
+# delta: spring 15e21d7e7241 -> d521e7dadfff（本次重录改变，原因见上一条 reason）
+# slotB: vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 60635fa+dirty
+# slotB: shaded_meshes = 1e9f05bd025865eaea3d3b039afe9200c823038af8f972f5a7d284b3d7e3dfdc @ 60635fa+dirty
+# slotB: fourier = 88690b24379bafc23c4359116855eee75b5a74cce273c994e77be16203627433 @ 60635fa+dirty
+# slotB: storyboard = 5565794a32a67e0f5762db751a0d70e0af241a70f05f9c8e76845107043da566 @ 60635fa+dirty
+# slotB: fusion = 81bdec4716d5a4e970c60acbb156203e273d2a9c6f83aa0ff54cc2fd5c70ab32 @ 60635fa+dirty
+# slotB: pbr_materials = 105618a85c467edb8fdc75f93eb3955679e59432b8f1604fef5f44dff61abd95 @ 60635fa+dirty
+# slotB: pbr_lights = d8b01952a7ca3c57b913e78836d1a5b004b48f19e032e26fe550a0f211ddb54c @ 60635fa+dirty
+# slotB: pbr_scene = 49d702deffa3edfe7e309beb1a70be4765267b8286df985e4d689a68fa803dd1 @ 60635fa+dirty
+# slotB: pendulum = 7bf7b7ff68498d4e3da00d1f53fef92dbeaa8ecb8611e456c67c668c4d9633d4 @ 60635fa+dirty
+# slotB: orbit = ddc7cf3a32aa4303b77fedd2192e80dd314d4e7fac0a7587116f81d54aba471c @ 60635fa+dirty
+# slotB: spring = d521e7dadfffb30dd9b358d902c8e613a0a759f0ebb31a282a7c45c2ba7846b4 @ 60635fa+dirty
+vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 60635fa+dirty
+shaded_meshes = 1e9f05bd025865eaea3d3b039afe9200c823038af8f972f5a7d284b3d7e3dfdc @ 60635fa+dirty
+fourier = 88690b24379bafc23c4359116855eee75b5a74cce273c994e77be16203627433 @ 60635fa+dirty
+storyboard = 5565794a32a67e0f5762db751a0d70e0af241a70f05f9c8e76845107043da566 @ 60635fa+dirty
+fusion = 81bdec4716d5a4e970c60acbb156203e273d2a9c6f83aa0ff54cc2fd5c70ab32 @ 60635fa+dirty
+pbr_materials = 105618a85c467edb8fdc75f93eb3955679e59432b8f1604fef5f44dff61abd95 @ 60635fa+dirty
+pbr_lights = d8b01952a7ca3c57b913e78836d1a5b004b48f19e032e26fe550a0f211ddb54c @ 60635fa+dirty
+pbr_scene = 49d702deffa3edfe7e309beb1a70be4765267b8286df985e4d689a68fa803dd1 @ 60635fa+dirty
+pendulum = 7bf7b7ff68498d4e3da00d1f53fef92dbeaa8ecb8611e456c67c668c4d9633d4 @ 60635fa+dirty
+orbit = ddc7cf3a32aa4303b77fedd2192e80dd314d4e7fac0a7587116f81d54aba471c @ 60635fa+dirty
+spring = d521e7dadfffb30dd9b358d902c8e613a0a759f0ebb31a282a7c45c2ba7846b4 @ 60635fa+dirty
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档

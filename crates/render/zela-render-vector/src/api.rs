@@ -732,6 +732,84 @@ mod tests {
         );
     }
 
+    /// 开放子路径（`ranges` 闭合位 = 0）的两条语义，**用像素钉住**（B14 §3.4①）：
+    ///
+    /// 1. 填充：按**隐式闭合**处理（缺一条边的方形，中央仍被填满）；
+    /// 2. 描边：**不回连**（缺的那条边必须是背景）。
+    ///
+    /// 这两条同时成立，`Polyline` 从"闭合多边形"改成"开放折线"才不会引入新回归。
+    #[test]
+    fn open_subpath_fills_implicitly_and_strokes_without_closing() {
+        let (w, h) = (128u32, 128u32);
+        let corners = [
+            (-30.0f64, -30.0f64),
+            (30.0, -30.0),
+            (30.0, 30.0),
+            (-30.0, 30.0),
+        ];
+        let lerp = |a: (f64, f64), b: (f64, f64), t: f64| {
+            [a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, 0.0]
+        };
+        let mut points = Vec::new();
+        for pair in corners.windows(2) {
+            points.push(lerp(pair[0], pair[1], 0.0));
+            points.push(lerp(pair[0], pair[1], 1.0 / 3.0));
+            points.push(lerp(pair[0], pair[1], 2.0 / 3.0));
+            points.push(lerp(pair[0], pair[1], 1.0));
+        }
+        let ranges = vec![[0, 3, 0, 0]];
+
+        // ① 填充：缺一条边也应被隐式闭合填满。
+        let fill = FilledPath {
+            points: points.clone(),
+            ranges: ranges.clone(),
+            fill: [1.0, 0.0, 0.0, 1.0],
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            shade_in_3d: false,
+            material: None,
+        };
+        let frame = match render_2d(w, h, 1, [0.0, 0.0, 0.0, 1.0], &[fill.into()]) {
+            Ok(frame) => frame,
+            Err(error) => panic!("矢量后端起不来：{error}"),
+        };
+        assert!(
+            pixel(&frame, w, w / 2, h / 2)[0] > 200,
+            "开放子路径的填充应按隐式闭合（中央应为填充色），实测 {:?}",
+            pixel(&frame, w, w / 2, h / 2)
+        );
+
+        // ② 描边：缺的那条边（世界 x = -30 ⇒ 屏幕 x = 34）不得出现线。
+        let stroke = StrokedPath {
+            points,
+            ranges,
+            stroke: [1.0, 0.0, 0.0, 1.0],
+            width: 4.0,
+            shape_bits: 0,
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+        };
+        let frame = match render_2d(w, h, 1, [0.0, 0.0, 0.0, 1.0], &[stroke.into()]) {
+            Ok(frame) => frame,
+            Err(error) => panic!("矢量后端起不来：{error}"),
+        };
+        assert!(
+            pixel(&frame, w, w / 2, 34)[0] > 200,
+            "上边（世界 y = -30 ⇒ 屏幕 y = 34）应被描边"
+        );
+        assert!(
+            pixel(&frame, w, 34, h / 2)[0] < 40,
+            "缺失的左边缘（屏幕 x = 34）不得被回连描边，实测 {:?}",
+            pixel(&frame, w, 34, h / 2)
+        );
+    }
+
     /// 矢量路径真的能画出来：中央是填充色，四角是背景色。
     #[test]
     fn filled_square_draws() {

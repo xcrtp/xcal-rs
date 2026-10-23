@@ -58,6 +58,8 @@ pub struct FrameContent {
     pub has_line_meshes: bool,
     /// 是否含内容纹理 / Surface 图层。
     pub has_content_texture: bool,
+    /// 是否含形变（Morph）项（B14）：矢量后端尚未映射 ⇒ 显式拒绝，不静默丢。
+    pub has_morphs: bool,
 }
 
 /// 路由决定（可观测面；下一批"可观测性专题"接成结构化输出）。
@@ -216,6 +218,12 @@ fn reject_reason(
             if content.has_line_meshes {
                 return Some("网格含线框（矢量后端只接受三角形面，MeshForm::Tri）".to_string());
             }
+            // B14：reveal 已映射（按弧长裁剪），morph 还没有 ⇒ 显式拒绝，不静默丢画面。
+            if content.has_morphs {
+                return Some(
+                    "本帧含形变（Morph）项，矢量后端尚未映射（B14 记账）".to_string(),
+                );
+            }
             None
         }
     }
@@ -342,6 +350,20 @@ mod tests {
         let decision = route(LoopBackend::Vector, plain_2d(), None).unwrap();
         assert_eq!(decision.backend, BackendKind::Wgpu);
         assert!(decision.rejected[0].1.contains("adapter"));
+    }
+
+    /// B14：形变项尚未映射 ⇒ 矢量**显式拒绝**（不是静默丢图层），回退 wgpu 并带理由。
+    #[test]
+    fn morph_items_reject_the_vector_backend() {
+        let content = FrameContent {
+            has_2d_primitives: 2,
+            has_morphs: true,
+            ..Default::default()
+        };
+        let decision = route(LoopBackend::Vector, content, capable()).unwrap();
+        assert_eq!(decision.backend, BackendKind::Wgpu);
+        assert_eq!(decision.rejected[0].0, BackendKind::Vector);
+        assert!(decision.rejected[0].1.contains("Morph"), "{:?}", decision.rejected);
     }
 
     /// 显式 wgpu 不做回退：顺序里只有 wgpu。

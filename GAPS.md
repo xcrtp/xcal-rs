@@ -503,18 +503,43 @@
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| X4-01 | 矢量后端**丢 2D 开放折线与坐标轴网格**：`fn zela_render_vector::scene::push_shape` 把 `Shape2D::Polyline` 一律当**闭合多边形**（`points.len() < 3` 直接不产出），`Shape2D::Line` 直接返回空；`Axes2D` 生成的网格线因此整片消失 | 渲染后端 / 2D 映射 | **记账（B13 Step 1 对拍暴露）** | 判据沿用 `vector_vs_wgpu.rs`（覆盖率相对差 ≤ 10% / 全图 MAE ≤ 8 / 内部区 MAE ≤ 2，**未放宽**）。实测 `--post match`：fourier 覆盖率相对差 **0.7239**、内部区 MAE 100.78；pendulum 0.3614 / 61.91；spring 0.1602（边带 114.43）；storyboard 0.6394 / 101.76。落档图（最差帧，`target/xtask/parity-dump/`）：`fourier-f00210-*` 的 wgpu 有网格 + 方波曲线、矢量两者皆无；`pendulum-f00240-*` 缺摆杆与轨迹弧；`spring-f00150-*` 缺地面线。圆 / 填充 / 文字两侧都在 ⇒ 问题局限于开放子路径与线段。触发：要矢量后端出**完整** 2D 画面时，先让开放折线走 `ranges` 闭合位 = 0 的子路径、并让 2 点折线 / `Line` 仍产出描边几何，再重录 `[vector]` |
-| X4-02 | 矢量 3D 输出**系统性偏暗**：同一份 `RenderParams` 下，fusion / shaded_meshes / pbr_* 的整体亮度显著低于 wgpu | 渲染后端 / 3D 光照 | **记账（B13 Step 1）** | `--post match`：fusion 内部区 MAE 149.04、有符号偏差 **+140 / +158 / +146**（wgpu − vector）；shaded_meshes 全图 MAE 24.94 / 内部区 30.53；pbr_scene 内部区 26.11；pbr_materials 35.60。落档图 `fusion-f00060-*`、`shaded_meshes-f00000-*`：**几何与构图一致，只有亮度/饱和度不同** ⇒ 系统性偏移（B13 §6.2 要求的解释项），不是几何错位，也不是抗锯齿。候选原因（未定，本批不猜）：3D 光照强度 / 环境项口径、sRGB 编码落点。触发：定"后端融合还是分立"之前必须解释本条数值来源 |
+| X4-01 | 矢量后端**丢 2D 开放折线与坐标轴网格**：`fn zela_render_vector::scene::push_shape` 把 `Shape2D::Polyline` 一律当**闭合多边形**（`points.len() < 3` 直接不产出），`Shape2D::Line` 直接返回空；`Axes2D` 生成的网格线因此整片消失。另有更宽的一层：`RevealQueue` / `MorphQueue` **不在 `DrawQueue` 里**，而矢量快照只取了 `DrawQueue` | 渲染后端 / 2D 映射 | **已关闭（B14 Step 1）** | 两处修法：① `push_shape` 拆成 `Line` / `Polyline`（开放，`ranges` 闭合位 0）/ `Polygon`（闭合）三支，新增 `open_path`；单测 4 条（开放位为 0、2 点折线、`Line` 产出几何、`Polygon` 仍闭合）＋ GPU 用例 `open_subpath_fills_implicitly_and_strokes_without_closing`（填充隐式闭合、描边不回连）。② `zela_playback::vector_frame` 把 `RevealQueue` 按**归一化弧长**裁成开放折线（`clip_reveal`，单测 `reveal_clip_keeps_the_parameterized_span`）并追加在 DrawQueue 之后；`MorphQueue` 非空 ⇒ 路由**显式拒绝**（新增 `FrameContent::has_morphs` + 单测）。实测 `--post match`：fourier 覆盖率 0.7239 → **0.0195**、MAE 4.45 → **0.54**、内部区 100.78 → 3.01；storyboard 0.6394 → 0.0039 / 7.25 → 0.62 / 101.76 → 6.96；pendulum 0.3614 → 0.0258 / 0.35 → 0.06 / 61.91 → **2.00**；orbit 0.0131 / MAE 0.09（全绿）、spring 0.0144 / 0.04（全绿）。剩余细差见 X5-04 |
+| X4-02 | 矢量 3D 输出**系统性偏暗**：同一份 `RenderParams` 下，fusion / shaded_meshes / pbr_* 的整体亮度显著低于 wgpu | 渲染后端 / 3D 光照 | **部分关闭（B14 Step 0/2：亮度项已对齐；剩余差异归因到取景与高光/点光衰减）** | 归因（Step 0，只测量）：H1 tone 排除（`--post match` 已关 tone，差异仍在）；H3 sRGB 排除（白/灰两种 albedo 下比值恒定 2.26 ⇒ 不是传递曲线）；**H2 光照口径成立**。真因两条：① 桥里把光源方向**多取反了一次**（旧注释称 `LightQueue.direction` 是"传播方向"，而 wgpu `fs_pbr` 直接 `dot(n, dirs[i].xyz)` 当"指向光源"）⇒ 矢量侧所有正面收不到方向光，只剩 ambient（实测 white=124/灰=60，正好 = 0.2·albedo）；② 强度归一化不同：wgpu `(1−ambient)·I·NdotL·(kd·albedo/π+spec)`，矢量 `I·NdotL` ⇒ 桥里乘 `(1−ambient)/π`；③ `DEFAULT_REFLECTANCE` 0.5 → **0.04**（与 wgpu 电介质 F0 对齐）。修后（`--post match`）：pbr_scene 内部区 26.11 → **7.63**、MAE 0.73；pbr_lights 24.22 → **4.59**、MAE 0.54；shaded_meshes 30.53 → 23.83、MAE 19.48；pbr_materials 35.60 → 24.33、MAE 4.56；fusion 149 → 136.25。未达门限的部分见 X5-02 / X5-03 / X5-05（取景、点光衰减与高光、透明合成），**门限未放宽** |
 | X4-03 | **后处理政策差异**混进差异里：矢量按自身能力默认开 tone/bloom/ao，wgpu headless 默认全关 | 渲染后端 / 口径 | **记账（B13 Step 1）** | 同一批作品两种口径各跑一次：2D 作品（fourier / storyboard / pendulum / orbit / spring / vector_paths）**逐项完全相同**（2D 分支不读 params，见 X1-07）；3D 作品数值变化：fusion 全图 MAE 14.15→15.09、pbr_materials 9.18→6.61、pbr_lights 4.27→2.22、pbr_scene 3.34→2.47、shaded_meshes 23.08→24.94。⇒ 差异里有一块是**政策**不是算法。两份落档：`target/xtask/parity/`（backend-default）与 `target/xtask/parity-match/`（match） |
 | X4-04 | 浏览器侧无法做同一套对拍 | 验证 | **记账（B13 Step 1，依赖 X2-03）** | `zela-parity` 只在 native 可用（wasm 上矢量不能出帧，理由同 X2-03）。触发：异步回读落地后，把采样循环搬进页面 |
 | X4-05 | **字体口径分裂**（X1-11 的病因）：payload 断言用 `ZELA_TYPST_FONT_DIR`，帧基线用系统字体 | 验证 / 可复现性 | **已关闭（B13 Step 0）** | `tools/typst-fonts.txt` = 唯一真源（版本 + 文件名 + SHA-256），`build.ps1` 与 xtask 共读；xtask 给所有对拍子进程注入 `ZELA_TYPST_FONT_DIR`，缺失即报错。验证：连续两次录制 16 条逐位相同；含文本 6 条基线重录（fourier `0cb8b4a1…`、storyboard `be286560…`、surface_matrix(_js) `a6e4394c…`、atlas `d180e51f…`、vector_paths `c34f7a3d…`） |
-| X4-06 | `[vector]` 段只有 2 条（`vector_paths` 2D + `shaded_meshes` 3D），9 件矢量可渲作品零门禁 | 基线 / 门禁 | **已关闭（B13 Step 3）** | `HASHES_WORKS` 扩到 25 条（同一作品在 `[native]` 与 `[vector]` 各一条，靠 `--work` 顺序配对、标签 `name#vector` 区分）；`[vector]` 11 条。`cargo verify --step hashes` 全绿。⚠️ 这批矢量基线是在 X4-01 / X4-02 **已知存在的前提下**录的 ⇒ 它们锁的是"当前行为"，不是"正确画面"；X4-01/02 修好后必须重录 |
+| X4-06 | `[vector]` 段只有 2 条（`vector_paths` 2D + `shaded_meshes` 3D），9 件矢量可渲作品零门禁 | 基线 / 门禁 | **已关闭（B13 Step 3；B14 已按修复重录）** | `HASHES_WORKS` 扩到 25 条（同一作品在 `[native]` 与 `[vector]` 各一条，靠 `--work` 顺序配对、标签 `name#vector` 区分）；`[vector]` 11 条。B13 首录锁定的是"当时行为"；**B14 在 X4-01 / X4-02 / X5-01 修完后一次性重录**（6 条 2D + 5 条 3D），现在锁的是修复后的画面（剩余已知差异见 X5-02/03/05） |
 
-**Q 段小计（B13）**：已关闭 2（X4-05、X4-06）· 记账 4（X4-01、X4-02、X4-03、X4-04）。
+**Q 段小计（B13）**：已关闭 3（X4-01、X4-05、X4-06）· 部分关闭 1（X4-02）· 记账 2（X4-03、X4-04）。
+
+---
+
+## R. B14 批次记账（矢量 2D 开放折线与 3D 亮度口径，2026-10-23）
+
+> 计划《B14执行计划_矢量2D开放折线与3D亮度口径》。一句话：把 B13 对拍暴露的两类差异
+> 修到"可解释、且大部分收敛"，并把过程中挖出的第四层原因（灯从未生效）一并关掉。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X5-01 | **`LightQueue` 资源从未注入**：`SceneRecord3DSystem` 的 `with_world_and_resource_mut::<LightQueue>` 在资源缺席时静默不生效 ⇒ 脚本里的 `Light` 组件被两个后端**一起忽略**，一直只用默认灯（`default_light_bytes` / 桥的默认 Sun） | 装配 / 3D 光照 | **已关闭（B14 Step 2）** | 实测证据：`zela-parity` 在两处 dump `resources().get::<LightQueue>()` 都是 `None`（wgpu 输入侧与矢量 `VectorFrame::take`/`render` 侧）；`fn zela_playback::assemble_runtime` 的资源注入只插了 DrawQueue/DrawQueue3D/MorphQueue/RevealQueue，**漏了 LightQueue**。修法：该函数补 `LightQueue::new()`。影响（用户明确豁免 §1.1）：含 `Light` 的 **7 件 `[native]`**（demo3d / atlas / fusion / pbr_materials / pbr_lights / pbr_scene / …）与 **5 件 `[vector]`** 基线一并重录；不含灯的作品逐位不变 |
+| X5-02 | **3D 取景不一致**：同一相机（eye/target/up/fov）下，矢量侧的物体比 wgpu 大约 8%、并整体偏移（≈35px） | 渲染后端 / 相机映射 | **记账（B14 Step 2 残差）** | `shaded_meshes` 最差帧：亮立方体 bbox wgpu x 204..337（133 px）vs 矢量 236..380（144 px），中心 270 vs 308；墙面左缘 y=60 行 102 vs 122。亮度已对齐（中位 Δ=0.33、有符号偏差≈0）⇒ 残差来自**几何位置**，不是颜色。候选（未定）：`vector3d::view3` 的 frame/center 与 `Camera3D::view_projection(aspect)` 的差异。触发：要让 3D 作品进 MAE ≤2 门限时 |
+| X5-03 | **点光衰减与高光实现不同**：wgpu 点光 `att = clamp(1−d²/r²,0,1)` 再乘 `(1−ambient)`；矢量是 `window²/max(d²,1e-4)`；高光虽同为 GGX 但 `spec` 归一化、能量补偿不同 | 渲染后端 / 3D 光照 | **记账（B14 Step 2 残差）** | 含点光/低粗糙度的作品残差明显大于只有方向光的作品：pbr_scene 内部区 7.63、pbr_lights 4.59（近门限）vs pbr_materials 24.33、shaded_meshes 23.83（低粗糙亮立方体/金属材质）。方向光部分已对齐（pbr_scene MAE 0.73） |
+| X5-04 | 2D 细笔画 / 字形边缘的内部区残差 | 渲染后端 / 2D AA | **记账（B14 Step 1 残差）** | fourier 内部区 3.01、storyboard 6.96（门限 2；全图 MAE 0.54 / 0.62 已达标），pendulum 2.00 卡线。覆盖率已全部 ≤0.026。原因：reveal 曲线按弧长裁剪 vs wgpu 预细分 + 着色器丢弃、以及解析 AA vs MSAA 在 1–2px 笔画上的差异 |
+| X5-05 | `fusion` 的**透明面板合成**差异（内部区 MAE ≈136，全图 13.8） | 渲染后端 / 2D-3D 合成 | **记账（B14 Step 2 残差）** | 落档图 `fusion-*`：几何/构图一致，半透明色块的颜色与叠加强度明显不同——与"灯"和"取景"都无关（其它 3D 作品同帧已收敛），属 see-through 合成口径 |
+| X5-06 | `LightQueue.direction` 的**注释口径错误**：文档写"传播方向"，而代码（wgpu `dot(n, dirs)`）按"指向光源"消费；桥据此多做一次取反 | 文档 / 光照 | **已关闭（B14 Step 2）** | 与 B10 的 `params.z` 半宽、B14 的 `scene.rs` 注释是同一型（"注释宣称与另一侧一致"）。改法：`vector3d` 头注与 `lights()` 改为"指向光源、原样透传"，并加单测 `lights_pass_direction_through_and_scale_intensity` 钉住方向与 `(1−ambient)/π` 强度换算 |
+| X5-07 | `scene.rs` 里"线段没有面积：填充语义为空（**与 wgpu 侧三角化一致**）"是错误注释 | 文档 / 2D 映射 | **已关闭（B14 Step 1）** | wgpu 的 `contour_of(pts, false)` 对 `Line`/`Polyline` **有开放轮廓几何**（描边用），只是填充面积为 0。注释改为指向可执行证据（`open_path` + 4 条单测 + 1 条 GPU 用例），不再写"与 X 侧一致" |
+| X5-08 | GAPS「统计与维护约定」的总表只统计 A/B/C 段，未纳入 D–Q | 文档 | **已关闭（B14 §7.2）** | 在总表前明确标注"总表只统计 A/B/C；D 及之后见各段自己的汇总"，不再假装覆盖全文件 |
+| X5-09 | `cargo_command` 的约束写得太宽（"不得在别处直接 `Command::new`"），而 `cargo_capture`（只跑 `cargo metadata`）并不需要字体注入 | 工具 / 文档 | **已关闭（B14 §7.3）** | 收窄为"**涉及对拍 / 渲染的子进程**不得直接 `Command::new`；只读工具不受此限" |
+| X5-10 | 诊断脚本会随 `cargo clean` 消失（B12 Step 0 的治理项） | 工具 | **已关闭（确认）** | 本批复用前确认 `tools/diag/{README.txt,export-vector.ps1,encode-vector.ps1,holes.py,diff.py}` 均已在版本控制中（B12 Step 0 纳管） |
+
+**R 段小计（B14）**：已关闭 6（X5-01、X5-06、X5-07、X5-08、X5-09、X5-10）· 记账 4（X5-02、X5-03、X5-04、X5-05）。
 
 ---
 
 ## 统计与维护约定
+
+> **口径（B14 §7.2）**：下表只统计 A / B / C 三段（最初 44 条）。D 段及之后（D–R，按批次追加）
+> **不并入本表**，见各段自己的小计（由 `check_gaps_subtotals` 自动核对，含"部分关闭"）。
 
 | 类别 | 数量 |
 |---|---|

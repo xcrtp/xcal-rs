@@ -212,6 +212,32 @@ fn path_subpaths(
     (points, ranges)
 }
 
+/// 开放折线 → 一条**不闭合**子路径（`ranges` 闭合位 = 0）。
+///
+/// 为什么需要它（B14 Step 1 / GAPS X4-01）：2D 的 `Line` / `Polyline` 在 wgpu 侧是
+/// **开放轮廓**（`crates/render/zela-render/src/tessellate.rs` 的 `contour_of(pts, false)`，
+/// 由该模块自己的用例钉住）；矢量侧此前把它们当闭合多边形，2 点折线更是直接不产出
+/// ⇒ 网格线 / 摆杆 / 地面线整片消失。
+///
+/// 语义由本模块的两条用例钉住（不靠注释承诺）：
+/// `open_polyline_keeps_its_range_open` / `line_maps_to_a_two_point_open_path`。
+fn open_path(points: &[Vec2], m: &Transform2D, center: Vec2) -> FilledPath {
+    let n = points.len();
+    let mut curves = Vec::with_capacity(n.saturating_sub(1) * 4);
+    for i in 0..n.saturating_sub(1) {
+        curves.extend_from_slice(&line_curve(points[i], points[i + 1], m, center));
+    }
+    FilledPath {
+        points: curves,
+        // 闭合位 = 0：描边不回连；填充由渲染器按隐式闭合处理（与 `polygon_path` 的填充结果一致）。
+        ranges: vec![[0, n.saturating_sub(1) as u32, 0, 0]],
+        fill: [0.0; 4],
+        model: IDENTITY,
+        shade_in_3d: false,
+        material: None,
+    }
+}
+
 /// 闭多边形 → 一条闭合子路径。
 fn polygon_path(points: &[Vec2], m: &Transform2D, center: Vec2) -> FilledPath {
     let n = points.len();
@@ -304,8 +330,11 @@ fn push_shape(
 ) -> Result<(), SceneMapError> {
     match shape {
         Shape2D::Empty => {}
-        // 线段没有面积：填充语义为空（与 wgpu 侧三角化一致），不是降级。
-        Shape2D::Line { .. } => {}
+        // B14 Step 1（X4-01）：`Line` / `Polyline` 是**开放轮廓**——几何必须存在
+        // （描边要用它），只有"填充面积"是 0。此前这里返回空 ⇒ 描边一起消失。
+        Shape2D::Line { start, end } => {
+            out.push(open_path(&[*start, *end], transform, center));
+        }
         Shape2D::Circle { center: at, radius } => {
             out.push(ellipse_path(*at, *radius, *radius, transform, center));
         }
@@ -317,7 +346,12 @@ fn push_shape(
             let corners = [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)];
             out.push(polygon_path(&corners, transform, center));
         }
-        Shape2D::Polygon { points } | Shape2D::Polyline { points } => {
+        Shape2D::Polyline { points } => {
+            if points.len() >= 2 {
+                out.push(open_path(points, transform, center));
+            }
+        }
+        Shape2D::Polygon { points } => {
             if points.len() >= 3 {
                 out.push(polygon_path(points, transform, center));
             }
@@ -591,6 +625,113 @@ mod tests {
         assert!((curve[1][0] - 20.0 / 3.0).abs() < 1e-3, "{curve:?}");
         assert!((curve[1][1] - -20.0 / 3.0).abs() < 1e-3, "y 已翻转为负");
         assert!((curve[2][0] - 40.0 / 3.0).abs() < 1e-3);
+    }
+
+    /// B14 Step 1（X4-01）：开放折线必须保留**不闭合**的 range。
+    ///
+    /// 闭合位从 1 改成 0 是修复的核心——描边不再多画一段回连线。
+    #[test]
+    fn open_polyline_keeps_its_range_open() {
+        let shape = Shape2D::Polyline {
+            points: vec![
+                Vec2::new(10.0, 10.0),
+                Vec2::new(30.0, 10.0),
+                Vec2::new(30.0, 30.0),
+                Vec2::new(10.0, 30.0),
+            ],
+        };
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: style(Color32::RED),
+        };
+        let paths = fill_paths(&[item], CANVAS).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].ranges.len(), 1);
+        assert_eq!(paths[0].ranges[0][2], 0, "开放折线的闭合位必须是 0");
+        assert_eq!(paths[0].ranges[0][1], 3, "4 点 = 3 段（不回连）");
+        assert_eq!(paths[0].points.len(), 12, "3 段 × 4 控制点");
+    }
+
+    /// 2 点折线（此前 `points.len() < 3` ⇒ **整条消失**）。
+    #[test]
+    fn two_point_polyline_produces_a_path() {
+        let shape = Shape2D::Polyline {
+            points: vec![Vec2::new(0.0, 0.0), Vec2::new(40.0, 0.0)],
+        };
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: style(Color32::RED),
+        };
+        let paths = fill_paths(&[item], CANVAS).unwrap();
+        assert_eq!(paths.len(), 1, "2 点折线必须产出几何");
+        assert_eq!(paths[0].ranges, vec![[0, 1, 0, 0]]);
+    }
+
+    /// `Line` 同样必须产出几何（此前直接返回空 ⇒ 描边丢失）。
+    #[test]
+    fn line_maps_to_a_two_point_open_path() {
+        let shape = Shape2D::Line {
+            start: Vec2::new(0.0, 0.0),
+            end: Vec2::new(50.0, 0.0),
+        };
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: style(Color32::RED),
+        };
+        let paths = fill_paths(&[item], CANVAS).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].ranges, vec![[0, 1, 0, 0]]);
+        assert_eq!(paths[0].points.len(), 4);
+    }
+
+    /// 开放 `Path` 的描边必须**画到像素上**（B14 回归：摆杆 / 轨迹弧 / 曲线都走这条）。
+    #[test]
+    fn open_path_stroke_reaches_pixels() {
+        let shape = Shape2D::Path(Path2D::from_polyline(
+            &[Vec2::new(10.0, 64.0), Vec2::new(118.0, 64.0)],
+            false,
+        ));
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: Style2D {
+                stroke_shape: Default::default(),
+                fill: None,
+                stroke: Some(Color32::WHITE),
+                stroke_width: 4.0,
+                space: ze_notion::MeasureSpace::Screen,
+            },
+        };
+        let frame = render_scene_2d(128, 128, 1, [0.0, 0.0, 0.0, 1.0], &[item])
+            .expect("矢量后端起不来");
+        let at = ((64 * 128 + 64) * 4) as usize;
+        assert!(
+            frame[at] > 200,
+            "开放 Path 的描边应画到中央像素，实测 {:?}",
+            &frame[at..at + 4]
+        );
+    }
+
+    /// `Polygon` 仍是闭合子路径（本次改动不得波及它）。
+    #[test]
+    fn polygon_stays_closed() {
+        let shape = Shape2D::Polygon {
+            points: vec![
+                Vec2::new(10.0, 10.0),
+                Vec2::new(30.0, 10.0),
+                Vec2::new(20.0, 30.0),
+            ],
+        };
+        let item = SceneItem {
+            shape: &shape,
+            transform: Transform2D::identity(),
+            style: style(Color32::RED),
+        };
+        let paths = fill_paths(&[item], CANVAS).unwrap();
+        assert_eq!(paths[0].ranges, vec![[0, 3, 1, 0]], "闭合位保持 1");
     }
 
     #[test]

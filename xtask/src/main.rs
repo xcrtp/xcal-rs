@@ -665,8 +665,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
     // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）、N 段（B10）、O 段（B11）、
-    // P 段（B12）与 Q 段（B13）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q."] {
+    // P 段（B12）、Q 段（B13）与 R 段（B14）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q.", "## R."] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
@@ -685,7 +685,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
                     || id.starts_with("X1-")
                     || id.starts_with("X2-")
                     || id.starts_with("X3-")
-                    || id.starts_with("X4-"));
+                    || id.starts_with("X4-")
+                    || id.starts_with("X5-"));
             if !is_item {
                 continue;
             }
@@ -1719,8 +1720,9 @@ fn font_dir(root: &Path) -> Result<PathBuf, String> {
 
 /// 所有对拍子进程的统一起点：`current_dir` + `ZELA_TYPST_FONT_DIR`。
 ///
-/// **不得**在别处直接 `Command::new(cargo_program())` 跑对拍 —— 会漏掉字体注入，
-/// 让含文本作品回到"随机器字体漂移"的状态。
+/// **涉及对拍 / 渲染的子进程**不得直接 `Command::new(cargo_program())` —— 会漏掉字体注入，
+/// 让含文本作品回到"随机器字体漂移"的状态。只读工具（如 `cargo metadata`，走
+/// [`cargo_capture`]）不渲染任何像素，不受此限。
 fn cargo_command(root: &Path) -> Result<Command, String> {
     let mut command = Command::new(cargo_program());
     command.current_dir(root).env(FONT_DIR_ENV, font_dir(root)?);
