@@ -21,6 +21,10 @@ ze-resource = { path = "../../kernel/ze-resource" }
 
 thiserror.workspace = true
 pollster = { workspace = true, optional = true }
+# 跨平台墙钟：`std::time::Instant::now()` 在 wasm32-unknown-unknown 上是
+# `panic!("time not implemented on this platform")` —— 网页首次出帧就会炸（黑屏）。
+# `web-time` 在 wasm 用 `performance.now()`，native 直接转发 `std::time::Instant`。
+web-time = "1"
 # GPU 测试汇报：直接写 fd 2，绕过 libtest 的线程输出捕获。
 # S4：仅 native blocking 构建需要（wasm 构建不编译 gpu_test）。
 libc = { workspace = true, optional = true }

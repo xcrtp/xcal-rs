@@ -442,8 +442,10 @@
 | X1-05 | 着色栈的**作品级证据**（V2-15 的收尾）：此前只有单元测试，没有一件作品在着色栈下出帧 | 作品 / 基线 | **已关闭（B10 Step 4）** | 新作品 `shaded_meshes.lua`（墙 + 地板 + 中央亮立方体，全部是真网格）+ `--backend vector`：帧哈希 **`58ab1f0e…`** 进 `[vector]` 基线。判据（`tests/vector3d_shading.rs`，同一份 ZSB 只切 `vector_params`）：tone AgX≠clip（差 >2000 像素）、bloom 关掉更暗、AO 关掉更亮。`frame_loop` 的 3D 分支：`Camera3D → View3`、`LightQueue → Light`（方向取反 + 环境 0.2）、`DrawQueue::meshes → MeshRecord` |
 | X1-06 | 2D 图元与 3D 网格**混排帧**仍不支持：有 3D 相机时若队列里还有 2D 图元 ⇒ 显式报错 | 渲染后端 / 装配 | **记账（B10 Step 4）** | 混排需要 overlay 记录（屏幕空间与 3D 同帧合成），上游有 `OVERLAY` 位但宿主没有"2D 图元进 3D 视图"的语义（世界坐标 vs 屏幕坐标）。触发：作品需要 3D 里贴文字/箭头时 |
 | X1-07 | 矢量后端的 2D 入口**不吃** `RenderParams`（`render_scene_2d` 仍用 `ViewOptions::default()`）⇒ 同一份 `params` 在 2D/3D 两条路径上的含义不一致 | 渲染后端 / 宿主 | **记账（B10 Step 4）** | 实测：`vector_paths` 的帧哈希在 B10 前后**逐位不变**（`98d61c1a…`）—— 2D 分支不读 params，所以"着色栈默认开"只影响 3D 帧。触发：2D 也要 tone/bloom 时，把 `ViewOptions` 从 `RenderParams` 投影过去（会改 2D 基线） |
+| X1-08 | **网页黑屏**：B8 给逐帧计时加了 `std::time::Instant::now()`，而它在 `wasm32-unknown-unknown` 上是 `panic!("time not implemented on this platform")` ⇒ 页面加载完产物、第一次出帧即 abort（`select` 停在 `disabled`，canvas 全黑） | 渲染后端 / wasm | **已关闭（B10 修复）** | `zela-render-backends` 引入 `web-time`，四处计时起点改走 `clock()`（wasm 用 `performance.now()`，native 转发 `std::time::Instant`）。实测（Chrome，`python -m http.server` 起的地产）：fourier `播放完成：216 帧`、`select.disabled = false`、canvas `toDataURL` 28.5 KB（非黑）；切到 `shaded_meshes` 正常播放 1 帧。**教训**：`--step wasm` 只编译不运行，抓不到这类运行期 panic（WASM_PORT_SURVEY 的 P0-2 曾被"telemetry 换 ZeroClock"判为已解，B8 又引入一处） |
+| X1-09 | `zela-compile` 在 **dev profile** 下编译 JS 脚本会栈溢出（`0xC00000FD`）：boa 的解析 / 编译在未优化构建里递归很深，`build.ps1` 因此卡在 `surface_matrix.js` | 装配 / 构建脚本 | **已关闭（B10 修复）** | `zela_app::compile_script` 把"装配 + 执行"整体放到 **64 MiB 栈**的专用线程（`boa::Context` 是 `!Send`，只能整根线程内建；只把纯数据 `CompiledScript` join 回来）。修复后 dev profile 编 `surface_matrix.js` 成功，payload 与优化构建一致；`build.ps1` 全量通过、16 件 payload 全部与 manifest 相符 |
 
-**N 段小计（B10）**：已关闭 3（X1-01、X1-02、X1-05）· 记账 4（X1-03、X1-04、X1-06、X1-07）。
+**N 段小计（B10）**：已关闭 5（X1-01、X1-02、X1-05、X1-08、X1-09）· 记账 4（X1-03、X1-04、X1-06、X1-07）。
 
 ---
 

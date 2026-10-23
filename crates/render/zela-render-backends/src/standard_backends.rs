@@ -27,6 +27,16 @@ use crate::scene_callback::SceneCompositorCallback;
 use crate::wgpu_2d::{Frame2DGeometry, WgpuBackend2D};
 use crate::wgpu_3d::WgpuBackend3D;
 
+/// 跨平台墙钟（逐帧计时的起点）。
+///
+/// **为什么不用 `std::time::Instant::now()`**：在 `wasm32-unknown-unknown` 上它直接
+/// `panic!("time not implemented on this platform")` —— B8 引入逐帧计时后，网页第一次
+/// 出帧就崩（页面黑屏、作品按钮停在禁用态）。`web-time` 在 wasm 用 `performance.now()`，
+/// native 直接转发 `std::time::Instant` ⇒ 两条路径同一份代码。
+fn clock() -> web_time::Instant {
+    web_time::Instant::now()
+}
+
 /// 一帧的屏幕参数（`ScreenDescriptor` 的**去 egui 化**形态）。
 ///
 /// 帧体只需要这两样：目标尺寸（物理像素）与 `pixels_per_point`。
@@ -266,7 +276,7 @@ pub fn render_frame_to_view_timed(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("zela-frame-encoder"),
         });
-    let prepare = std::time::Instant::now();
+    let prepare = clock();
     let composed = frame.prepare_frame(
         ctx.device(),
         ctx.queue(),
@@ -276,7 +286,7 @@ pub fn render_frame_to_view_timed(
     );
     timing.prepare = prepare.elapsed();
 
-    let paint = std::time::Instant::now();
+    let paint = clock();
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zela-frame-main-pass"),
@@ -303,7 +313,7 @@ pub fn render_frame_to_view_timed(
     }
     timing.paint = paint.elapsed();
 
-    let submit = std::time::Instant::now();
+    let submit = clock();
     ctx.submit(encoder.finish());
     timing.submit = submit.elapsed();
     timing
@@ -447,7 +457,7 @@ pub fn render_frame_headless_cached_timed(
 
     let (texture, view) = target.ensure(ctx, [width, height]);
     let render = render_frame_to_view_timed(ctx, backends, frame, screen, clear, view);
-    let read = std::time::Instant::now();
+    let read = clock();
     let pixels = ctx.read_texture(texture, (width, height));
     (
         pixels,
@@ -547,3 +557,4 @@ mod tests {
         assert_eq!(s.pixels_per_point, 2.0);
     }
 }
+

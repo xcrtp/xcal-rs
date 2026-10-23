@@ -147,7 +147,37 @@ pub struct CompiledScript {
 ///
 /// 与 `--script` / GUI 走**同一条装配路径**（`assembly::assemble` → `run_script`），
 /// 差别只在"拿到 SceneScript 后写盘"而不是立刻 commit。
+///
+/// # 为什么整个装配 + 执行跑在一根**大栈线程**上
+///
+/// JS 适配器（boa）的解析 / 编译在 **unoptimized** 构建里递归很深：dev profile 下
+/// `surface_matrix.js` 会打穿默认栈，`zela-compile` 直接以 `0xC00000FD`
+/// （`STATUS_STACK_OVERFLOW`）退出 —— build.ps1 就是走 dev profile，所以必须在这里兜住。
+/// `boa::Context` 是 `!Send`，只能**整根线程内部**创建与销毁；交回来的 `CompiledScript`
+/// 是纯数据，所以用 `join` 取值是安全的。栈大小 64 MiB：比实测需求高一个量级，
+/// 换来"任何脚本都不因构建 profile 而崩"。
 pub fn compile_script(source: &str, language: ScriptLanguage) -> Result<CompiledScript> {
+    let source = source.to_string();
+    std::thread::Builder::new()
+        .name("zela-compile".to_string())
+        .stack_size(COMPILE_STACK_BYTES)
+        .spawn(move || compile_script_on_this_thread(&source, language))
+        .map_err(|e| Error::InitializationError(format!("无法创建编译线程：{e}")))?
+        .join()
+        .map_err(|_| {
+            Error::InitializationError(
+                "编译线程 panic（脚本装配 / 执行崩溃，原因见上方日志）".to_string(),
+            )
+        })?
+}
+
+/// 编译线程的栈大小（见 [`compile_script`] 的说明）。
+const COMPILE_STACK_BYTES: usize = 64 * 1024 * 1024;
+
+fn compile_script_on_this_thread(
+    source: &str,
+    language: ScriptLanguage,
+) -> Result<CompiledScript> {
     let engine = Arc::new(formula::build_engine());
     let assembly = assembly::assemble(engine)
         .map_err(|e| Error::InitializationError(format!("脚本 Pod 装配失败：{e}")))?;
