@@ -1096,10 +1096,46 @@ pub(crate) fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> T) -> Result<T, String> {
     Ok(f(&mut guard))
 }
 
-// In the browser a GPU comes up asynchronously, once, before anything draws (`web::init`).
+// In the browser a GPU comes up asynchronously, once, before anything draws (`init_gpu`).
 #[cfg(target_arch = "wasm32")]
 thread_local! {
     pub(crate) static GPU: std::cell::RefCell<Option<Gpu>> = const { std::cell::RefCell::new(None) };
+}
+
+/// **B11 Step 3**：注入 device / queue / adapter（native）。
+///
+/// 注入后矢量后端**不再**自行 `request_device`；必须在**首次渲染前**调用
+/// （`OnceLock` 只能初始化一次 ⇒ 已初始化后再注入会显式报错，不静默替换）。
+/// adapter 必须一起传：`max_samples` 由它查询，缺了就是"能力校验静默消失"。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_gpu(
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: &wgpu::Adapter,
+) -> Result<(), String> {
+    let gpu = Gpu::from_parts(device, queue, adapter).map(std::sync::Mutex::new)?;
+    GPU.set(Ok(gpu))
+        .map_err(|_| "矢量后端的 GPU 已初始化：注入必须在首次渲染前".to_string())
+}
+
+/// **B11 Step 3**：注入 device / queue / adapter（wasm）。
+///
+/// 与 native 的差别只有存储形态（`thread_local` 而非 `OnceLock`）；同样绕开
+/// `Gpu::new()`（它用 `pollster::block_on` + `Instance::new`，wasm 上都不合法）。
+#[cfg(target_arch = "wasm32")]
+pub fn init_gpu(
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter: &wgpu::Adapter,
+) -> Result<(), String> {
+    let gpu = Gpu::from_parts(device, queue, adapter)?;
+    GPU.with_borrow_mut(|slot| {
+        if slot.is_some() {
+            return Err("矢量后端的 GPU 已初始化：注入必须在首次渲染前".to_string());
+        }
+        *slot = Some(gpu);
+        Ok(())
+    })
 }
 
 /// Run `f` with the GPU (in the browser: brought up by `web::init`).
@@ -1186,8 +1222,31 @@ impl Gpu {
             })
             .await
             .map_err(|e| format!("no GPU device: {e}"))?;
+        #[allow(unused_mut)]
+        let mut gpu = Self::from_parts(device, queue, &adapter)?;
+        #[cfg(feature = "player")]
+        {
+            gpu.instance = instance;
+            gpu.adapter = adapter;
+        }
+        Ok(gpu)
+    }
+
+    /// **B11 Step 3**：从**注入的** device / queue / adapter 装配。
+    ///
+    /// 与 [`Self::new`] 的唯一差别是不再 `request_device`（也不建 `Instance`）——
+    /// 那两处在 wasm 上都不合法。adapter 必须一起传：`max_samples` 取决于
+    /// `get_texture_format_features`，而它只有 `Adapter` 有（漏传 = 能力校验静默消失）。
+    pub(crate) fn from_parts(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter: &wgpu::Adapter,
+    ) -> Result<Self, String> {
+        let specific = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        // 已启用的 features（不是"adapter 有"）—— 注入的 device 可能只申请了并集。
+        let enabled = device.features();
         let both = adapter.get_texture_format_features(COLOR).flags & adapter.get_texture_format_features(DEPTH).flags;
-        let max_samples = if !required_features.contains(specific) {
+        let max_samples = if !enabled.contains(specific) {
             4
         } else {
             [(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8, 8), (wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4, 4)]
@@ -1250,10 +1309,11 @@ impl Gpu {
             .create_texture(&wgpu::TextureDescriptor { label: Some("no occlusion"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R32Float, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
             .create_view(&Default::default());
         Ok(Self {
+            // 注入路径不建 `Instance`（wasm 上不合法）；player 构建由 `new()` 覆盖成真值。
             #[cfg(feature = "player")]
-            instance,
+            instance: wgpu::Instance::default(),
             #[cfg(feature = "player")]
-            adapter,
+            adapter: adapter.clone(),
             device, queue, raster, image_layout, sampler, pipelines: HashMap::new(), max_samples, vector, shadow_compare, dfg, linear, no_environment, prefilter: None, occlusion: None, no_occlusion, bloom: None, blend: [None, None], shadow_passes: HashMap::new() })
     }
 

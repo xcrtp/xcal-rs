@@ -47,15 +47,12 @@ struct Args {
     fps: f64,
     out: PathBuf,
     size: (u32, u32),
-    /// B6 Step 2.3：`--backend wgpu|vector`（默认 wgpu ⇒ 既有基线与行为不变）。
-    backend: Backend,
-}
-
-/// 渲染后端选择（B6 Step 2.3）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Backend {
-    Wgpu,
-    Vector,
+    /// B11 Step 4：`--backend auto|auto-frame|wgpu|vector`。
+    ///
+    /// **默认仍是 `wgpu`**（不是 `auto`）：默认路径必须与 16 条基线逐位相同（C3/A1），
+    /// 而 `auto` 会把矢量注册进 features 并集、并多取一份帧快照。
+    /// 需要"按能力路由"时显式 `--backend auto`（页面默认就是 auto，见 §7.2）。
+    backend: LoopBackend,
 }
 
 impl Args {
@@ -76,7 +73,7 @@ impl Args {
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
         let mut size = (640u32, 480u32);
-        let mut backend = Backend::Wgpu;
+        let mut backend = LoopBackend::Wgpu;
 
         let mut i = 0;
         while i < raw.len() {
@@ -138,18 +135,18 @@ impl Args {
                         h.parse().map_err(|_| "--size 高度不是数字".to_string())?,
                     );
                 }
-                // B6 Step 2.3：后端选择（默认 wgpu）。
+                // B11 Step 4：后端选择 / 路由偏好（默认 auto）。
                 "--backend" => {
                     i += 1;
-                    match raw.get(i).map(String::as_str) {
-                        Some("wgpu") => backend = Backend::Wgpu,
-                        Some("vector") => backend = Backend::Vector,
-                        other => {
-                            return Err(format!(
-                                "--backend 只接受 wgpu | vector（收到 {other:?}）"
-                            ));
-                        }
-                    }
+                    backend = raw
+                        .get(i)
+                        .and_then(|value| LoopBackend::parse(value))
+                        .ok_or_else(|| {
+                            format!(
+                                "--backend 只接受 auto | auto-frame | wgpu | vector（收到 {:?}）",
+                                raw.get(i)
+                            )
+                        })?;
                 }
                 other if other.starts_with("--") => {
                     return Err(format!("未知参数：{other}"));
@@ -195,8 +192,42 @@ fn main() {
 fn run() -> Result<(), String> {
     let args = Args::parse()?;
 
-    let ctx =
-        RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
+    // ── B11：注册表 → device features 并集 →（矢量可用时）注入同一块 device ──
+    //
+    // 显式 `--backend wgpu` 与改动前**逐位相同**：注册表只有 wgpu ⇒ features 为空集。
+    let mut registry = zela_render_backends::BackendRegistry::with_standard();
+    if args.backend != LoopBackend::Wgpu {
+        registry
+            .register(zela_render_backends::BackendKind::Vector)
+            .map_err(|e| e.to_string())?;
+    }
+    let ctx = if args.backend == LoopBackend::Wgpu {
+        RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?
+    } else {
+        RenderContext::headless_with_registry(
+            zela_render_backends::DEFAULT_TARGET_FORMAT,
+            &registry,
+        )
+        .map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?
+    };
+    if args.backend != LoopBackend::Wgpu {
+        let adapter = ctx
+            .adapter()
+            .ok_or_else(|| "上下文没有 adapter：无法判定后端可用性".to_string())?;
+        for entry in registry.availability(adapter) {
+            match entry.reason {
+                Some(reason) => eprintln!("[backend] {:?} 不可用：{reason}", entry.kind),
+                None => eprintln!("[backend] {:?} 可用", entry.kind),
+            }
+        }
+        // 矢量可用 ⇒ 注入同一块 device（此后它**不再**自行 request_device）。
+        if registry
+            .select_on(zela_render_backends::BackendKind::Vector, adapter)
+            .is_ok()
+        {
+            zela_render_vector::init_gpu(ctx.device.clone(), ctx.queue.clone(), adapter)?;
+        }
+    }
 
     let mut runtime = if let Some(script_path) = &args.script {
         let source = std::fs::read_to_string(script_path)
@@ -281,11 +312,7 @@ fn run() -> Result<(), String> {
             width,
             height,
             fps: args.fps,
-            backend: if args.backend == Backend::Vector {
-                LoopBackend::Vector
-            } else {
-                LoopBackend::Wgpu
-            },
+            backend: args.backend,
             vector_params: None,
         },
         need_rgba,

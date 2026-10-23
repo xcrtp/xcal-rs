@@ -19,6 +19,10 @@
 
 use std::sync::Arc;
 
+// B11 Step 4/5：3D → 矢量后端的桥（native 与浏览器共用）与按帧渲染。
+pub mod vector3d;
+pub mod vector_frame;
+
 use ze_notion::Vec3;
 use zela_render::{
     ContentTextureQueue, DrawQueue, DrawQueue3D, MorphQueue, RevealQueue, ViewRect,
@@ -390,6 +394,22 @@ pub fn to_rgba(ctx: &RenderContext, pixels: &[u8]) -> Vec<u8> {
             }
         }
         _ => {}
+    }
+    out
+}
+
+/// 把 **RGBA8** 转换成目标纹理格式的字节序（[`to_rgba`] 的逆）。
+///
+/// 矢量后端在 CPU 侧产出 RGBA8，而显示 / sink 的口径是目标格式 ⇒ 需要这一趟交换。
+pub fn rgba_to_target(ctx: &RenderContext, rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    if matches!(
+        ctx.target_format(),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for px in out.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
     }
     out
 }

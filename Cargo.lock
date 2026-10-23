@@ -6907,6 +6907,7 @@ dependencies = [
  "ze-scene-core",
  "zela-render",
  "zela-render-backends",
+ "zela-render-vector",
  "zela-scene-bundle",
  "zela-scene-ecs",
  "zela-schedule",
@@ -7038,8 +7039,10 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+ "ze-render-ir",
  "zela-playback",
  "zela-render-backends",
+ "zela-render-vector",
  "zela-scene-bundle",
 ]
 

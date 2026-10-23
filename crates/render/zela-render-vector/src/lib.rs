@@ -40,6 +40,8 @@ pub use api::{
     FilledPath, Light, MeshRecord, PathRecord, StrokedPath, View3, ViewOptions, render_2d,
     render_2d_with, render_3d, render_3d_with,
 };
+// B11 Step 3：device 注入入口（native / wasm 同签名，内部绕开 `Gpu::new()`）。
+pub use render::init_gpu;
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
 pub use scene::{SceneItem, SceneMapError, fill_paths, render_scene_2d, scene_records};

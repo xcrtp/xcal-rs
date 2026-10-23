@@ -46,6 +46,10 @@ pub mod render_target;
 // B4 Step 4：后端注册与选择（补完 B3-0.5 未竟的装配点）。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod registry;
+// B11 Step 4：后端路由（帧内容 × 后端自述能力 ⇒ 选后端 + 拒绝理由）。
+// 放在本 crate 而不是宿主：native 与浏览器必须用**同一份**决策。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod routing;
 pub mod resource_cache;
 
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
@@ -56,7 +60,12 @@ pub use render_backend::{
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_layer::RenderLayer;
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
-pub use registry::{BackendKind, BackendRegistry, BackendRegistryError};
+pub use registry::{
+    AdapterFacts, BackendAvailability, BackendFeatures, BackendKind, BackendRegistry,
+    BackendRegistryError,
+};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use routing::{FrameContent, LoopBackend, RoutingDecision};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_target::RenderTarget;
 pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};

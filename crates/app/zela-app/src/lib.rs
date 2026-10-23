@@ -48,7 +48,8 @@ mod formula;
 // B9 Step 3：`zela-render` 与 `zela-verify` 共用的**唯一**帧循环。
 pub mod frame_loop;
 // B10 Step 2/4：3D 场景 → 矢量后端（`View3` + `MeshRecord`）的桥。
-pub mod vector3d;
+// B11 Step 5：桥移到 `zela-playback`（浏览器与 native 共用一份），这里只重导出。
+pub use zela_playback::vector3d;
 
 /// **2D 场景选择**（启动参数切换，见 `main.rs`）。
 ///

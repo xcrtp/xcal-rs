@@ -14,6 +14,8 @@ zela-schedule = { path = "../../schedule/zela-schedule" }
 zela-render = { path = "../../render/zela-render" }
 # 只吃 wgpu 后端；egui/eframe 链默认关闭。
 zela-render-backends = { path = "../../render/zela-render-backends", default-features = false, features = ["wgpu"] }
+# B11 Step 4/5：矢量后端的帧渲染与 bridge（native frame_loop 与浏览器共用一份）。
+zela-render-vector = { path = "../../render/zela-render-vector" }
 # 场景能力版本（Meta 的 capability 口径唯一真源）。
 ze-pod-core = { path = "../../ze/pod/ze-pod-core" }
 # 对象层：相机句柄与内容纹理默认配置。

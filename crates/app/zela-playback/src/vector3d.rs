@@ -1,10 +1,11 @@
 //! B10 **3D 场景 → 矢量后端**的桥：`Camera3D` → [`View3`]、`LightQueue` → 灯、
 //! `DrawQueue::meshes` → [`MeshRecord`]。
 //!
-//! # 为什么桥在本 crate
+//! # 为什么桥在本 crate（B11 Step 5 从 `zela-app` 移入）
 //! `zela-render-vector` 是**移植层**，只依赖 kernel（`ze-notion` / `ze-render-ir`），
 //! 不认识 `zela-render` 的队列与场景组件（见它的 Cargo.toml 与 B4 验收 §1.3）。
-//! 桥接需要两边同时在场 ⇒ 放在宿主侧（本 crate）。
+//! 桥接需要两边同时在场；而 native（`zela-app::frame_loop`）与浏览器（`zela-web`）
+//! 都要用它 ⇒ 放在两边唯一的公共层 `zela-playback`，避免两份实现漂移。
 //!
 //! # 口径（全部来自代码事实，不猜）
 //! - 相机：右手系，`focal = |eye − target|`，`frame = 2·focal·tan(fov_y/2)`；

@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use ze_notion::{Rect2D, Vec2};
 use zela_playback::Runtime;
 use zela_render::ViewRect;
+use zela_render_backends::registry::{AdapterFacts, BackendKind};
 use zela_render_backends::{
     HeadlessTarget, RenderContext, ScreenParams, StandardBackends,
     render_frame_headless_cached_timed,
@@ -27,12 +28,9 @@ use zela_render_backends::{
 use zela_scene_ecs::DriverCommand;
 use zela_scene_ecs::contract::WorldView;
 
-/// 出帧后端（与 `zela-render --backend` 同义）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoopBackend {
-    Wgpu,
-    Vector,
-}
+use zela_render_backends::routing as backend_router;
+pub use zela_render_backends::routing::LoopBackend;
+use zela_render_backends::RoutingDecision;
 
 /// 一次渲染作业的画幅 / 帧率 / 后端。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -102,8 +100,8 @@ pub fn frames_for(runtime: &Runtime, fps: f64) -> u32 {
     .max(1)
 }
 
+
 /// 矢量后端自述的能力（B10 Step 4）：后处理四项全开，采样数取 4（与 2D 路径同口径）。
-///
 /// 只用于 [`zela_scene_bundle::RenderParams::default_for`]：**默认值绑后端能力**的机制
 /// 需要一份 `Capabilities`，而矢量后端不走 `StandardBackends`（进程级开关）。
 fn vector_capabilities() -> ze_render_ir::Capabilities {
@@ -150,31 +148,8 @@ pub fn run_frames(
         ),
         None => None,
     };
-    let mut params = match options.vector_params {
-        Some(params) => params,
-        None => match options.backend {
-            LoopBackend::Wgpu => match &caps {
-                Some(caps) => zela_scene_bundle::RenderParams::default_for(caps),
-                None => zela_scene_bundle::RenderParams::default(),
-            },
-            // **B10 Step 4**：矢量后端自述 `PostCaps::all()` ⇒ `default_for` 打开
-            // tone / bloom / ao。这不是静默降级：调用方**没有请求**，按该后端能力的默认值取
-            // （与 `default_for` 的既有语义逐字一致）。着色栈因此第一次出现在作品画面上。
-            LoopBackend::Vector => {
-                zela_scene_bundle::RenderParams::default_for(&vector_capabilities())
-            }
-        },
-    };
-    params.size = (width, height);
-    params
-        .validate()
-        .map_err(|e| format!("渲染参数非法：{e}"))?;
-    if options.backend == LoopBackend::Wgpu {
-        if let Some(caps) = &caps {
-            zela_playback::check_render_params_supported(&params, caps)
-                .map_err(|e| e.to_string())?;
-        }
-    }
+    // B11 Step 4：作品级路由 —— 第一帧决定后固定（`AutoFrame` 每帧重算，诊断用）。
+    let mut pinned: Option<RoutingDecision> = None;
 
     let screen = ScreenParams::new([width, height], 1.0);
     // 背景与 wgpu 分支**同源**：都用同一个 clear（不读 `SceneView::background`，
@@ -200,91 +175,83 @@ pub fn run_frames(
             .wait();
         timing.advance = mark.elapsed();
 
-        let convert: Duration;
-        let (raw, rgba): (Vec<u8>, Vec<u8>) = if options.backend == LoopBackend::Vector {
-            let mark = Instant::now();
-            let (layers, draws, lights, records) = runtime
-                .driver
-                .with_scheduler(|scheduler| -> Result<_, String> {
-                    let view_options = zela_render::FrameOptions::default();
-                    let view = zela_render::frame::build_scene_view(
-                        &WorldView::new(scheduler.world()),
-                        scheduler.resources(),
-                        view_options,
-                    );
-                    let layers = view.layers.clone();
-                    let queue = scheduler.resources().get::<zela_render::draw::DrawQueue>();
-                    let draws = queue.map(zela_render_backends::snapshot_queue).unwrap_or_default();
-                    let lights = super::vector3d::lights(
-                        scheduler.resources().get::<zela_render::LightQueue>(),
-                    );
-                    // 3D 网格记录必须在借用期内取完（`DrawQueue` 不是 `Clone`）。
-                    let records = match queue {
-                        Some(queue) => super::vector3d::mesh_records(queue)?,
-                        None => Vec::new(),
-                    };
-                    Ok((layers, draws, lights, records))
-                })?;
-            let background = [
-                clear.r as f32,
-                clear.g as f32,
-                clear.b as f32,
-                clear.a as f32,
-            ];
-
-            // 图层分支（B10 Step 4）：纯 2D 帧走原路径；含 3D 相机 ⇒ 走网格 + 着色栈。
-            let camera3d = layers.iter().find_map(|layer| match &layer.kind {
-                ze_scene_core::LayerKind::Viewport3D { camera } => Some(*camera),
-                _ => None,
-            });
-            let unsupported = layers.iter().find(|layer| {
-                !matches!(
-                    layer.kind,
-                    ze_scene_core::LayerKind::Viewport2D { .. }
-                        | ze_scene_core::LayerKind::Viewport3D { .. }
-                )
-            });
-            if let Some(layer) = unsupported {
-                return Err(format!(
-                    "--backend vector 不支持该图层 {:?}（内容纹理 / Surface 仍缺映射，见 GAPS V2-12/V2-13）",
-                    layer.kind
-                ));
-            }
-            timing.build = mark.elapsed();
-
-            let mark = Instant::now();
-            let rgba = if let Some(camera) = camera3d {
-                // 3D 帧：2D 图元与 3D 网格混排本批不承诺（显式报错，不静默丢）。
-                if !draws.is_empty() {
-                    return Err(format!(
-                        "--backend vector 暂不支持 2D/3D 混排帧：本帧同时有 {} 条 2D 图元与 3D 相机",
-                        draws.len()
-                    ));
-                }
-                // 契约自述：矢量后端只接受三角形面（B10 Step 1）。
-                zela_render_backends::BackendKind::Vector
-                    .capabilities()
-                    .require_mesh(ze_render_ir::MeshForm::Tri)
-                    .map_err(|e| e.to_string())?;
-                if records.is_empty() {
-                    return Err(
-                        "--backend vector：本帧有 3D 相机但没有任何网格（空 3D 队列）".to_string(),
-                    );
-                }
-                let mut view = super::vector3d::view3(&camera, (width, height), background, &params)?;
-                view.lights = lights;
-                zela_render_vector::render_3d_with(width, height, 4, &view, &records)?
+        // ── B11 Step 4：先选后端（作品级：第一帧决定后固定） ──────────────────
+        let build_mark = Instant::now();
+        let mut snapshot: Option<zela_playback::vector_frame::VectorFrame> =
+            if options.backend == LoopBackend::Wgpu {
+                None
             } else {
-                let items: Vec<zela_render_vector::SceneItem<'_>> = draws
-                    .iter()
-                    .map(|recorded| zela_render_vector::SceneItem {
-                        shape: &recorded.shape,
-                        transform: recorded.transform,
-                        style: recorded.style,
-                    })
-                    .collect();
-                zela_render_vector::render_scene_2d(width, height, 4, background, &items)?
+                Some(zela_playback::vector_frame::VectorFrame::take(&runtime)?)
             };
+        let snapshot_time = build_mark.elapsed();
+        let wanted = if options.backend == LoopBackend::Wgpu {
+            // 显式 wgpu：与改动前逐位相同，不付快照代价。
+            BackendKind::Wgpu
+        } else {
+            let snap = snapshot.as_ref().expect("非 wgpu 路径已取快照");
+            let decision = match (&pinned, options.backend) {
+                (Some(pinned), LoopBackend::Auto) | (Some(pinned), LoopBackend::Vector) => {
+                    pinned.clone()
+                }
+                _ => backend_router::route(
+                    options.backend,
+                    snap.content(),
+                    ctx.adapter().map(AdapterFacts::of),
+                )?,
+            };
+            if pinned.as_ref() != Some(&decision) {
+                eprintln!("[backend] {}", decision.report());
+            }
+            if options.backend != LoopBackend::AutoFrame {
+                pinned = Some(decision.clone());
+            }
+            decision.backend
+        };
+
+        // 渲染参数：默认值按**实际**后端能力取（wgpu 仍走 `default_for(caps)` ⇒ 逐位相同）。
+        let mut params = match options.vector_params {
+            Some(params) => params,
+            None => match wanted {
+                BackendKind::Wgpu => match &caps {
+                    Some(caps) => zela_scene_bundle::RenderParams::default_for(caps),
+                    None => zela_scene_bundle::RenderParams::default(),
+                },
+                // **B10 Step 4**：矢量后端自述 `PostCaps::all()` ⇒ `default_for` 打开
+                // tone / bloom / ao。这不是静默降级：调用方**没有请求**，按该后端能力的默认值取。
+                BackendKind::Vector => {
+                    zela_scene_bundle::RenderParams::default_for(&vector_capabilities())
+                }
+            },
+        };
+        params.size = (width, height);
+        params
+            .validate()
+            .map_err(|e| format!("渲染参数非法：{e}"))?;
+        if wanted == BackendKind::Wgpu {
+            if let Some(caps) = &caps {
+                zela_playback::check_render_params_supported(&params, caps)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        let convert: Duration;
+        let (raw, rgba): (Vec<u8>, Vec<u8>) = if wanted == BackendKind::Vector {
+            // 不支持的内容（纹理图层 / 混排 / 线框）已在路由层被拒 ⇒ 这里不再重复判断。
+            let snap = snapshot.take().expect("矢量路径已有快照");
+            timing.build = snapshot_time;
+            let mark = Instant::now();
+            let rgba = snap.render(
+                &runtime,
+                width,
+                height,
+                &params,
+                [
+                    clear.r as f32,
+                    clear.g as f32,
+                    clear.b as f32,
+                    clear.a as f32,
+                ],
+            )?;
             timing.prepare = mark.elapsed();
 
             // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。

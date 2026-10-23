@@ -81,16 +81,81 @@ impl RenderContext {
         instance: &wgpu::Instance,
         options: wgpu::RequestAdapterOptions<'_, '_>,
     ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
+        Self::request_adapter_and_device_with_features(
+            instance,
+            options,
+            wgpu::Features::empty(),
+        )
+        .await
+    }
+
+    /// 同 [`Self::request_adapter_and_device`]，但**显式**给出 device 需要的 features
+    /// （B11 Step 1：宿主按"已注册且可用后端"的并集请求，见
+    /// `BackendRegistry::required_device_features`）。
+    pub async fn request_adapter_and_device_with_features(
+        instance: &wgpu::Instance,
+        options: wgpu::RequestAdapterOptions<'_, '_>,
+        features: wgpu::Features,
+    ) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> {
         let adapter = instance.request_adapter(&options).await.map_err(|e| {
             RenderContextError::Initialization(format!("No suitable GPU adapter: {e}"))
         })?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: features,
+                ..Default::default()
+            })
             .await
             .map_err(|e| {
                 RenderContextError::Initialization(format!("Request device failed: {e}"))
             })?;
         Ok((adapter, device, queue))
+    }
+
+    /// 按注册表在**已选定的 adapter** 上请求 device / queue（B11 Step 1）。
+    ///
+    /// 与 [`Self::request_context_with_registry`] 分开，供"先要 adapter 查 surface 格式"
+    /// 的宿主（浏览器）使用：adapter 只请求一次，features 仍按并集。
+    pub async fn request_device_with_registry(
+        adapter: &wgpu::Adapter,
+        registry: &crate::registry::BackendRegistry,
+    ) -> Result<(wgpu::Device, wgpu::Queue)> {
+        let features = registry
+            .required_device_features(adapter)
+            .map_err(RenderContextError::Initialization)?;
+        let limits = registry.required_device_limits(adapter);
+        adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: features,
+                required_limits: limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                RenderContextError::Initialization(format!("Request device failed: {e}"))
+            })
+    }
+
+    /// **异步：按后端注册表请求 adapter + device + 上下文**（B11 Step 1 / §5.3）。
+    ///
+    /// features = 已注册且可用后端的 required 之并；limits 在"有后端要求 adapter 上限"
+    /// 时取 `adapter.limits()`。adapter 一并塞进上下文 —— 少了它就是"能力校验静默消失"。
+    pub async fn request_context_with_registry(
+        instance: &wgpu::Instance,
+        options: wgpu::RequestAdapterOptions<'_, '_>,
+        registry: &crate::registry::BackendRegistry,
+        target_format: wgpu::TextureFormat,
+    ) -> Result<Self> {
+        let adapter = instance.request_adapter(&options).await.map_err(|e| {
+            RenderContextError::Initialization(format!("No suitable GPU adapter: {e}"))
+        })?;
+        let (device, queue) = Self::request_device_with_registry(&adapter, registry).await?;
+        Ok(Self {
+            device,
+            queue,
+            target_format,
+            adapter: Some(adapter),
+        })
     }
 
     /// 创建无 surface 的 headless 上下文（默认格式 [`DEFAULT_TARGET_FORMAT`]）。
@@ -104,6 +169,17 @@ impl RenderContext {
     /// 仅 native `blocking` 构建可用（内部 `pollster::block_on`）。
     #[cfg(feature = "blocking")]
     pub fn headless_with_format(target_format: wgpu::TextureFormat) -> Result<Self> {
+        Self::headless_with_format_and_features(target_format, wgpu::Features::empty())
+    }
+
+    /// 同 [`Self::headless_with_format`]，但显式请求 device features（B11 Step 1）。
+    ///
+    /// 默认路径（`features = Features::empty()`）与改动前逐位相同（C2）。
+    #[cfg(feature = "blocking")]
+    pub fn headless_with_format_and_features(
+        target_format: wgpu::TextureFormat,
+        features: wgpu::Features,
+    ) -> Result<Self> {
         pollster::block_on(async {
             let instance = wgpu::Instance::default();
             let adapter = instance
@@ -119,7 +195,59 @@ impl RenderContext {
                 })?;
 
             let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_features: features,
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| {
+                    RenderContextError::Initialization(format!("Request device failed: {e}"))
+                })?;
+
+            Ok(Self {
+                device,
+                queue,
+                target_format,
+                adapter: Some(adapter),
+            })
+        })
+    }
+
+    /// **按后端注册表请求 device**（B11 Step 1）：
+    /// features = 已注册且可用后端的 required 之并；limits 在"有后端要求 adapter 上限"
+    /// 时取 `adapter.limits()`（矢量后端的存储缓冲按场景尺寸走）。
+    ///
+    /// 仅 `wgpu` 注册时并集为空 ⇒ 与 [`Self::headless_with_format`] 逐位相同（C2）。
+    /// 一个可用后端都没有 ⇒ 显式错误，列出每个后端的拒绝理由。
+    #[cfg(feature = "blocking")]
+    pub fn headless_with_registry(
+        target_format: wgpu::TextureFormat,
+        registry: &crate::registry::BackendRegistry,
+    ) -> Result<Self> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::default();
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::None,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| {
+                    RenderContextError::Initialization(format!("No suitable GPU adapter: {e}"))
+                })?;
+
+            let features = registry
+                .required_device_features(&adapter)
+                .map_err(RenderContextError::Initialization)?;
+            let limits = registry.required_device_limits(&adapter);
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_features: features,
+                    required_limits: limits,
+                    ..Default::default()
+                })
                 .await
                 .map_err(|e| {
                     RenderContextError::Initialization(format!("Request device failed: {e}"))
