@@ -219,9 +219,25 @@ fn compile_and_write(
 
 /// 按 `.lua` / `.py` / `.js` 顺序探测作品脚本（B7 Step 0.1：不再硬编码扩展名）。
 ///
+/// B7 Step 3：作品名**自带扩展名**时按显式文件名取（`surface_matrix.js` 与
+/// `surface_matrix.lua` 并存，探测顺序选不出后者）。
+///
 /// 语义不变：**找不到 ⇒ 显式报错并列出试过的扩展名**（不静默跳过）。
 /// 语言判断复用 [`language_from_path`]，不另写一套。
 fn locate_script(dir: &Path, name: &str) -> Result<(PathBuf, ScriptLanguage), String> {
+    if let Some(extension) = Path::new(name).extension().and_then(|ext| ext.to_str()) {
+        if matches!(extension, "lua" | "py" | "js") {
+            let path = dir.join(name);
+            if path.is_file() {
+                let language = language_from_path(&path).map_err(|e| e.to_string())?;
+                return Ok((path, language));
+            }
+            return Err(format!(
+                "[{name}] 显式指定了扩展名，但 {} 不存在",
+                path.display()
+            ));
+        }
+    }
     let mut tried = Vec::new();
     for ext in ["lua", "py", "js"] {
         let path = dir.join(format!("{name}.{ext}"));

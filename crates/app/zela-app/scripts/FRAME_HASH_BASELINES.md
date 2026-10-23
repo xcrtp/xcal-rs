@@ -60,18 +60,21 @@
 ## 复现命令
 
 ```bash
+# features 与 xtask 对拍一致（`typst,js`）：`js`（boa）是纯 Rust，不会让对拍依赖本机
+# Python 运行时；`surface_matrix.js` 这件 JS 作品（B7 Step 3）必须开它才编译得出来。
+
 # 1) 编译 ZSB（可选：--script 与 --bundle 两条路径都要跑一遍）
-cargo run -q -p zela-compile --no-default-features --features typst -- \
+cargo run -q -p zela-compile --no-default-features --features typst,js -- \
   crates/app/zela-app/scripts/fourier.lua --out /tmp/fourier.zsb
 
 # 2) 渲染并输出序列哈希（--frames 表示不依赖 ffmpeg）
 #    B8 Step 2：哈希是**可选 sink** —— `--hash` 打印、`--hash-out FILE` 打印并写文件；
 #    不传就完全不哈希（主流程默认不付这份代价）。xtask 对拍显式传 `--hash`。
-cargo run -q -p zela-app --no-default-features --features typst --bin zela-render -- \
+cargo run -q -p zela-app --no-default-features --features typst,js --bin zela-render -- \
   --script crates/app/zela-app/scripts/fourier.lua \
   --frames /tmp/f_s --fps 30 --size 640x480 --hash-out /tmp/f_s.hash
 
-cargo run -q -p zela-app --no-default-features --features typst --bin zela-render -- \
+cargo run -q -p zela-app --no-default-features --features typst,js --bin zela-render -- \
   --bundle /tmp/fourier.zsb \
   --frames /tmp/f_b --fps 30 --size 640x480 --hash-out /tmp/f_b.hash
 ```

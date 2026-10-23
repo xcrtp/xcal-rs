@@ -1047,6 +1047,8 @@ const HASHES_WORKS: &[(&str, Option<&str>)] = &[
     ("demo3d", None),
     // B3 Step 5：Surface 作品（能力矩阵 + 复杂 Demo）。
     ("surface_matrix", None),
+    // B7 Step 3：同一场景的 JS 翻译（像素必须与上面那件逐位相同）。
+    ("surface_matrix.js", None),
     ("atlas", None),
     // B6 V2-07：矢量后端作品。
     ("vector_paths", Some("vector")),
@@ -1276,7 +1278,12 @@ fn compile_bundle(root: &Path, script: &str, out: &str) -> Result<(), String> {
 /// 对拍路径固定关闭默认 features（含 pyo3）：本机基线就是在该组合下录的，
 /// 且不依赖本机 Python 运行时（`PYTHONHOME` 等）。
 fn hashes_app_args() -> Vec<String> {
-    strings(&["--no-default-features", "--features", "typst"])
+    // B7 Step 3：`js`（boa，纯 Rust，无外部运行时）进对拍 —— 不进 CI 就会腐烂。
+    strings(&[
+        "--no-default-features",
+        "--features",
+        "typst,js",
+    ])
 }
 
 /// `cargo run` 的公共前缀（B9 Step 1）：**统一**走 `[profile.verify]`。

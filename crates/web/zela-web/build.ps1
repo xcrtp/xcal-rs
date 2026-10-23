@@ -149,7 +149,9 @@ try {
         # 调用期间临时放宽 ErrorActionPreference（Windows PowerShell 把原生 stderr 当错误）。
         $previous = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        $compileLog = & cargo run -q -p zela-compile --no-default-features --features typst -- $scriptPath --out $outZsb 2>&1 | ForEach-Object { "$_" }
+        # `js` 只为编译 `surface_matrix.js`（B7 Step 3）：boa 是纯 Rust，**不进 wasm** ——
+        # 网页侧只回放 ZSB，没有任何脚本引擎。
+        $compileLog = & cargo run -q -p zela-compile --no-default-features --features typst,js -- $scriptPath --out $outZsb 2>&1 | ForEach-Object { "$_" }
         $compileCode = $LASTEXITCODE
         $ErrorActionPreference = $previous
         if ($compileCode -ne 0) {

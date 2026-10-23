@@ -412,7 +412,10 @@
 | W1-01 | `MeshGeometry.id` 取自**进程内**全局计数器（`ze-scene-core/components/3d.rs` 的 `next_geometry_id`），且随 serde 序列化进 ZSB payload ⇒ 同一脚本的 payload hash 取决于"本进程此前造过多少几何体"，ZSB 不是源码的纯函数 | 装配产物 / 可复现性 | **记账（B7 Step 2 发现，本批不改）** | `zela-compile`（一进程一作品，build.ps1 的路径）与 `zela-verify`（一批作品共用进程）对 fusion / pbr_materials / pbr_lights / pbr_scene / atlas 算出不同 payload（如 fusion `5db2aecb…` vs `64c00b63…`）；解包对比：**唯一差异**是 `creates/*/*/data/id`（1,2,3 vs 7,8,9），其余字节相同。因此 `demo/manifest.txt` 断言的是"一进程一作品"的值（build.ps1 的真实路径）。触发：需要编译产物可复现（构建缓存 / 跨机比对 / 内容寻址）时，把 id 排除出 payload（serde skip，解码时重分配） |
 | W1-02 | manifest 的 payload 断言长期空转：13 件里 12 件写 `-`（等于没断言），唯一有值的 fourier 也已不可复现 | 装配产物 / 门禁 | **已关闭（B7 Step 2）** | fourier 的 `f8ed3eae…` 停在 45b0f85（改名 + ZSB 容器 v3）；当前代码下**任一字体配置都复现不出**（系统字体 `dad48069…`、`ZELA_TYPST_FONT_DIR` 确定字体 `a5bdfbe7…`）⇒ 该断言今日必然失败（不断言它从哪次提交开始坏）。Step 2 用 build.ps1 的同一命令逐件重算 13 条并逐条断言通过；含文本的 5 件（fourier / storyboard / surface_matrix / atlas / vector_paths）必须带确定字体才可复现，已写进 manifest 表头 |
 
-**M 段小计（B7）**：已关闭 1（W1-02）· 记账 1（W1-01）。
+| W1-03 | JS 适配器（boa）实现完整但**零作品**：没有一件脚本走 JS，等于没有兑现证据 | 脚本 / Pod 装配 | **已关闭（B7 Step 3）** | `surface_matrix.js` 是 `surface_matrix.lua` 的逐语句翻译（同组件、同字段、同枚举、同顺序）。判据与实测：① 分镜 JSON **逐字节相同** ⇒ `payload hash` 两件都是 `e0951fd4…`（带确定字体）；② 帧序列哈希两件都是 `928cd5f9…`（640×480，1 帧，`script == bundle`）⇒「同一场景、两种语言、同一像素」成立。落地配套：`js` 进 xtask 对拍 features（`typst,js`，纯 Rust，不让对拍依赖本机 Python）、`build.ps1` 的编译命令同开 `js`（不进 wasm —— 网页只回放 ZSB）、`zela-verify` 支持"作品名自带扩展名"（同名 `.lua` / `.js` 并存时探测顺序选不出来） |
+| W1-04 | `[browser]` 段定位待改：JS 是唯一能进 wasm 的脚本语言，但真值仍未录制 | 基线 / 浏览器 | **记账（B7 Step 3 探测）** | `surface_matrix.js` 的 ZSB 与其它作品**同一容器格式**（回放端只解释分镜，不关心源语言）⇒ 浏览器侧第一次具备"可比对"的前提；`build.ps1` 已带 `?compare=1` 对拍入口。本机跑不出浏览器产物（需要 `wasm-pack` + Chrome WebGPU）⇒ 本批不录值，`[browser]` 段维持"仅存档、不参与自动比对"。触发：在 Chrome WebGPU 打开 `index.html?compare=1` 跑一次即可补录（`[browser]` 只增不改语义） |
+
+**M 段小计（B7）**：已关闭 2（W1-02、W1-03）· 记账 2（W1-01、W1-04）。
 
 ---
 
