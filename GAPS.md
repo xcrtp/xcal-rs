@@ -451,6 +451,25 @@
 
 ---
 
+## O. B11 批次记账（Device 注入与动态后端路由，2026-10-23）
+
+> 计划《B11执行计划_Device注入与动态后端路由》。一句话：后端不再由启动参数静态决定，
+> 而由「帧内容 × 后端自述能力」在运行时决定；两个后端共享一块 device。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X2-01 | device features 曾由每个后端各自 request（wgpu 空集、矢量要 `FLOAT32_BLENDABLE` + `DEPTH32FLOAT_STENCIL8`）⇒ 同一块 device 无法共享 | 渲染后端 / 装配 | **已关闭（B11 Step 0/1）** | `BackendKind::required_features(adapter)` 自述 `BackendFeatures { required, preferred }`；`BackendRegistry::required_device_features` 只对**已注册且可用**后端取并集（C2）。守护测试 `union_is_empty_when_only_wgpu_is_registered`：仅 wgpu 注册 ⇒ `Features::empty()`，与改动前逐位相同。实测：`zela-render --backend vector` 注入后 `vector_paths` 仍为 `07bd4301…` |
+| X2-02 | `required` / `preferred` 混为一谈会把"有则更好"的 feature 变成硬门槛 | 渲染后端 | **已关闭（Step 0）** | 矢量 required = `DEPTH32FLOAT_STENCIL8` + adapter 自述的 `FLOAT32_BLENDABLE`；preferred = `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`（只影响 MSAA 档位）。单测覆盖：wgpu 显式空集、缺 float32 混合、缺深度模板、required ⊆ adapter |
+| X2-03 | 矢量后端在浏览器上**能编译但不能出帧**：`Player::pixels` 用 `map_async` + `getMappedRange` 同步回读，浏览器里 map 完成前就取 ⇒ `OperationError: getMappedRange failed` | 渲染后端 / wasm | **记账（B11 Step 5）** | `cargo check -p zela-render-vector --target wasm32-unknown-unknown` 通过；注入入口 `init_gpu(device, queue, adapter)` 已绕开 `Gpu::new()`（两处 wasm 不合法调用）。运行期缺的是**异步回读**（`map_async().await` 后再 `getMappedRange`），本批不做 ⇒ 路由在 wasm 上显式拒绝矢量（`is_available_on` = false，理由即本条），页面"矢量"回退 wgpu。触发：需要浏览器里逐帧对比两种后端时，把 `Player::pixels` 改成 async（native 侧用 `pollster` 包） |
+| X2-04 | 路由粒度：帧级切换会让同一作品中途换画风 | 路由 | **记账（Step 4）** | 默认**作品级**（第一帧决定后固定）；帧级留了 `--backend auto-frame`，默认关闭。触发：需要逐帧比对两种后端时 |
+| X2-05 | 并排分屏对比未做 | Demo 页 | **记账（Step 5）** | 单 canvas；本批只做"切换 + 状态栏给决策理由"（页面 `?compare=1` 仍输出序列哈希）。触发：需要同帧并排比像素差时 |
+| X2-06 | 3D 归属未定（矢量做 2D+3D / 分立协作） | 架构 | **记账（B11 §9）** | Device 注入对两条路都是前置，本批不预设立场；等"矢量 3D 在 WebGPU 上跑"的探测结果再定 |
+| X2-07 | `--step wasm` 只 `cargo check` 不运行，抓不到运行期 panic（X1-08 的教训） | 验证 | **记账（B11 §8）** | 本批 Step 5 用**浏览器实测**收口（Chrome + 本地 `http.server`）：① 工具栏新增"后端：自动 / wgpu / 矢量"，切到"矢量"触发重播（同一块 device、不重新 fetch、不整页重载），`fourier` 重播 **216 帧**；② `vector_paths` 画面非黑（`canvas.toDataURL` 29 214 B）；③ 状态栏常驻决策行：`后端：选择 Wgpu（自动路由：Wgpu 能力覆盖本帧）`、`后端：选择 Wgpu（首选 Vector 被拒 ⇒ 回退到 Wgpu）；Vector 被拒：浏览器侧矢量后端还没有异步回读…`。矢量在浏览器**不能出帧**（X2-03）⇒ 本批止步于"接口就绪 + 记账"（计划 §7.1 的退路）。headless Chrome + WebGPU 的 smoke 未进 CI（GPU 依赖会 flaky），触发：CI 有稳定 GPU 时补 |
+
+**O 段小计（B11）**：已关闭 2（X2-01、X2-02）· 记账 5（X2-03、X2-04、X2-05、X2-06、X2-07）。
+
+---
+
 ## 统计与维护约定
 
 | 类别 | 数量 |

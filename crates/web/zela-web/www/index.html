@@ -44,6 +44,13 @@
         <option value="4">4×</option>
       </select>
     </label>
+    <label>后端
+      <select id="zela-backend">
+        <option value="auto" selected>自动（按能力）</option>
+        <option value="wgpu">wgpu</option>
+        <option value="vector">矢量</option>
+      </select>
+    </label>
     <button id="zela-replay" type="button" disabled>重播</button>
     <a id="zela-commit" href="https://github.com/xcrtp/zela" target="_blank" rel="noreferrer" hidden>commit …</a>
     <a id="zela-repo" href="https://github.com/xcrtp/zela" target="_blank" rel="noreferrer">GitHub 仓库</a>
@@ -52,14 +59,22 @@
   <div id="zela-status">初始化…</div>
 
   <script type="module">
-    import init, { start, start_with_bytes, set_speed } from './pkg/zela_web.js';
+    import init, { start, start_with_bytes, set_speed, set_backend } from './pkg/zela_web.js';
 
     const status = document.getElementById('zela-status');
     const select = document.getElementById('zela-demo');
     const fileInput = document.getElementById('zela-file');
     const speedSelect = document.getElementById('zela-speed');
     const replayButton = document.getElementById('zela-replay');
+    const backendSelect = document.getElementById('zela-backend');
     const commitLink = document.getElementById('zela-commit');
+
+    // B11：后端偏好（auto / wgpu / vector）。切换 = Rust 侧重播，不整页重载。
+    const BACKEND_KEY = 'zela-backend';
+    const savedBackend = localStorage.getItem(BACKEND_KEY);
+    if (savedBackend && ['auto', 'wgpu', 'vector'].includes(savedBackend)) {
+      backendSelect.value = savedBackend;
+    }
 
     const REPO_URL = 'https://github.com/xcrtp/zela';
 
@@ -179,6 +194,17 @@
 
     replayButton.addEventListener('click', restartPlayback);
 
+    // 切后端：Rust 侧重播当前作品（同一块 device，不重新 fetch、不整页重载）。
+    backendSelect.addEventListener('change', () => {
+      localStorage.setItem(BACKEND_KEY, backendSelect.value);
+      if (!wasmReady) return;
+      try {
+        set_backend(backendSelect.value);
+      } catch (error) {
+        fail(error);
+      }
+    });
+
     // 播放中：帧循环每个 rAF 读取速度，即时生效；已结束：按新速度重播。
     speedSelect.addEventListener('change', async () => {
       if (!wasmReady) return;
@@ -210,6 +236,8 @@
       await init();
       wasmReady = true;
       set_speed(Number(speedSelect.value));
+      // 把 localStorage 里的后端偏好交给 Rust（尚未加载产物 ⇒ 只记偏好，不重播）。
+      set_backend(backendSelect.value);
       // 没有 `?zsb=` 时与列表选择保持一致：默认播放清单第一项。
       const url = new URL(location.href);
       if (!url.searchParams.get('zsb') && demos.length > 0) {

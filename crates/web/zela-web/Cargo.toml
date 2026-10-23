@@ -13,7 +13,11 @@ crate-type = ["cdylib", "rlib"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 zela-playback = { path = "../../app/zela-playback", default-features = false }
 zela-render-backends = { path = "../../render/zela-render-backends", default-features = false, features = ["wgpu"] }
+# B11 Step 5：浏览器也能选矢量后端（device 由 WebGPU 注入，不自行 request_device）。
+zela-render-vector = { path = "../../render/zela-render-vector" }
 zela-scene-bundle = { path = "../../scene/zela-scene-bundle" }
+# B11：按后端能力取渲染参数默认值（`PostCaps`）。
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
 
 wgpu.workspace = true
 # 版本由 Cargo 解析；构建用 `wasm-pack`（自动下载与锁文件匹配的 wasm-bindgen CLI）。

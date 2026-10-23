@@ -822,7 +822,29 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `--backend vector`，帧哈希进 `[vector]` 基线；同一份 ZSB 只切 `vector_params`，
 >   tone（AgX≠clip）/ bloom（开更亮）/ AO（开更暗）逐项可判读。
 >   `Camera3D → View3`、`LightQueue → Light`（方向取反 + 环境 0.2）的桥在
->   `zela-app/src/vector3d.rs`（`zela-render-vector` 只依赖 kernel，不认识场景队列）。
+>   `zela-playback/src/vector3d.rs`（`zela-render-vector` 只依赖 kernel，不认识场景队列）。
+>
+> **B11 批次（2026-10-23）：Device 注入与动态后端路由**。
+> - **后端自述 device features（Step 0）**：`BackendKind::required_features(adapter)`
+>   返回 `BackendFeatures { required, preferred }`。wgpu **显式空集**；矢量 required =
+>   `DEPTH32FLOAT_STENCIL8` + adapter 自述的 `FLOAT32_BLENDABLE`，preferred =
+>   `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`（只影响 MSAA 档位）。
+> - **features 并集（Step 1）**：`BackendRegistry::required_device_features` 只对
+>   **已注册且可用**的后端取并（不可用的后端不请求它的 feature —— 否则"以前能起 device
+>   的机器现在起不来"）。仅 wgpu 注册 ⇒ `Features::empty()`，与改动前逐位相同（有断言）。
+> - **注入（Step 3）**：`zela_render_vector::init_gpu(device, queue, adapter)` —— 绕开
+>   `Gpu::new()`（wasm 上 `pollster::block_on` / `Instance::new` 不合法）；**adapter 必须
+>   一起传**，否则 `max_samples` 无从查询 = 能力校验静默消失。`RenderContext` 也补了
+>   `with_adapter`，web 的 compare 路径同样带 adapter。
+> - **路由（Step 4）**：`zela-render-backends/src/routing.rs`（native 与浏览器共用一份）：
+>   「帧内容 × 后端自述能力」⇒ 选后端，并给出**拒绝理由**。默认自动路径**优先 wgpu**
+>   （16 条基线逐位不变）；`--backend vector` 是"偏好"，被拒则回退 wgpu 并打印理由
+>   （消除"`--backend vector` + 内容纹理必失败"的假失败）；`BackendKind` 不再用于
+>   可用性判断（`is_available_on(adapter)` 取而代之）。
+> - **浏览器（Step 5）**：device/surface 全页面只建一次，切后端 = 重播（不整页重载、
+>   不重新 request_device）；状态栏常驻"选了谁 / 为什么 / 谁被拒、理由"。
+>   **矢量后端在浏览器能编译但不能出帧**：`Player::pixels` 的同步回读在 map 完成前取
+>   `getMappedRange` ⇒ `OperationError`（GAPS X2-03）⇒ 路由在 wasm 上显式拒绝矢量。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）
