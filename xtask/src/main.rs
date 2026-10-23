@@ -1339,9 +1339,8 @@ fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
     }
 
     println!("[xtask] $ cargo {}", args.join(" "));
-    let output = Command::new(cargo_program())
+    let output = cargo_command(root)?
         .args(&args)
-        .current_dir(root)
         .output()
         .map_err(|error| format!("启动 cargo 失败：{error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1353,6 +1352,11 @@ fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
 
     let mut hashes: Vec<(String, String)> = Vec::new();
     for line in stdout.lines() {
+        // B12 Step 2 / B13：决策日志原样转出（每作品每遍一条，含拒绝理由）。
+        if let Some(rest) = line.strip_prefix("[decision] ") {
+            println!("[xtask] [decision] {rest}");
+            continue;
+        }
         let Some(rest) = line.strip_prefix("[verify] ") else {
             continue;
         };
@@ -1400,9 +1404,8 @@ fn assert_sink_bypass(root: &Path) -> Result<(), String> {
         "--sink-bypass",
     ]));
     println!("[xtask] $ cargo {}", args.join(" "));
-    let output = Command::new(cargo_program())
+    let output = cargo_command(root)?
         .args(&args)
-        .current_dir(root)
         .output()
         .map_err(|error| format!("启动 cargo 失败：{error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1551,9 +1554,8 @@ fn render(
     }
 
     println!("[xtask] $ cargo {}", args.join(" "));
-    let output = Command::new(cargo_program())
+    let output = cargo_command(root)?
         .args(&args)
-        .current_dir(root)
         .output()
         .map_err(|error| format!("启动 cargo 失败：{error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1565,7 +1567,10 @@ fn render(
     }
 
     for line in stderr.lines().chain(stdout.lines()) {
-        if line.starts_with("[zsb]") || line.starts_with("[frame-hash]") {
+        if line.starts_with("[zsb]")
+            || line.starts_with("[frame-hash]")
+            || line.starts_with("[decision]")
+        {
             println!("[xtask] {line}");
         }
     }
@@ -1601,15 +1606,98 @@ fn cargo_program() -> String {
     env::var("CARGO").unwrap_or_else(|_| "cargo".to_string())
 }
 
+// ─── 确定字体（B13 Step 0 / GAPS X1-11） ────────────────────────────────────
+
+/// 确定字体的唯一真源：`build.ps1`（下载 + 校验）与本文件（对拍环境）都读它。
+const FONT_MANIFEST: &str = "tools/typst-fonts.txt";
+/// 与 `ze_prerender::typst::FONT_DIR_ENV` 同名。xtask 是独立 workspace（零依赖），
+/// 不能依赖 `ze-prerender` ⇒ 这里重复的是**环境变量名**，不是路径 / 版本 / 哈希。
+const FONT_DIR_ENV: &str = "ZELA_TYPST_FONT_DIR";
+
+/// 解析 `tools/typst-fonts.txt` ⇒ `(版本, [(文件名, sha256)])`。
+fn load_font_manifest(root: &Path) -> Result<(String, Vec<(String, String)>), String> {
+    let path = root.join(FONT_MANIFEST);
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+    let mut version: Option<String> = None;
+    let mut assets: Vec<(String, String)> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let name = parts.next().unwrap_or_default();
+        let rest: Vec<&str> = parts.collect();
+        if name == "version" {
+            if rest.len() != 1 {
+                return Err(format!("{} 的 version 行非法：{line}", path.display()));
+            }
+            version = Some(rest[0].to_string());
+            continue;
+        }
+        if rest.len() != 1
+            || rest[0].len() != 64
+            || !rest[0].chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(format!(
+                "{} 的条目非法（期望 `<文件名> <64 位 sha256>`）：{line}",
+                path.display()
+            ));
+        }
+        assets.push((name.to_string(), rest[0].to_ascii_lowercase()));
+    }
+    let version = version.ok_or_else(|| format!("{} 缺少 version 行", path.display()))?;
+    if assets.is_empty() {
+        return Err(format!("{} 没有任何字体条目", path.display()));
+    }
+    Ok((version, assets))
+}
+
+/// 对拍子进程必须用的字体目录（缺失 ⇒ **显式报错**，不静默退回系统字体）。
+///
+/// 静默退回系统字体正是 X1-11 的成因：payload 用确定字体、帧哈希用系统字体，
+/// 于是基线"看起来存在"却谁也复现不出来。
+fn font_dir(root: &Path) -> Result<PathBuf, String> {
+    let (version, assets) = load_font_manifest(root)?;
+    let dir = root
+        .join("target")
+        .join("fonts")
+        .join(format!("typst-assets-v{version}"));
+    let missing: Vec<String> = assets
+        .iter()
+        .filter(|(name, _)| !dir.join(name).is_file())
+        .map(|(name, _)| name.clone())
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "确定字体缺失（{}）：{}\n  ⇒ 先运行 `pwsh crates/web/zela-web/build.ps1`\
+             （它按 {FONT_MANIFEST} 下载并校验 SHA-256）",
+            dir.display(),
+            missing.join(" / "),
+        ));
+    }
+    Ok(dir)
+}
+
+/// 所有对拍子进程的统一起点：`current_dir` + `ZELA_TYPST_FONT_DIR`。
+///
+/// **不得**在别处直接 `Command::new(cargo_program())` 跑对拍 —— 会漏掉字体注入，
+/// 让含文本作品回到"随机器字体漂移"的状态。
+fn cargo_command(root: &Path) -> Result<Command, String> {
+    let mut command = Command::new(cargo_program());
+    command.current_dir(root).env(FONT_DIR_ENV, font_dir(root)?);
+    Ok(command)
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()
 }
 
 fn cargo(root: &Path, args: &[String]) -> Result<(), String> {
     println!("[xtask] $ cargo {}", args.join(" "));
-    let status = Command::new(cargo_program())
+    let status = cargo_command(root)?
         .args(args)
-        .current_dir(root)
         .status()
         .map_err(|error| format!("启动 cargo 失败：{error}"))?;
     if !status.success() {

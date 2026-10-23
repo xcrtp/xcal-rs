@@ -1,0 +1,12 @@
+# 确定字体清单（唯一真源，B13 Step 0）：crates/web/zela-web/build.ps1（下载 + SHA-256 校验）
+# 与 xtask（对拍子进程的 ZELA_TYPST_FONT_DIR）都从本文件读，**不得各写一份路径 / 版本 / 哈希**。
+#
+# 目录固定为 target/fonts/typst-assets-v<version>（build.ps1 创建，不入库）。
+# 改版本 = 只改本文件；两个消费者自动跟随。
+#
+# 为什么需要：content.text 在编译期把字形轮廓烘焙进 payload（ze-prerender::typst）。
+# 不钉住字体 ⇒ payload / 帧哈希随机器上装了什么字体漂移（GAPS X1-11）。
+version 0.14.2
+LibertinusSerif-Regular.otf fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733
+NewCMMath-Regular.otf ad746f5307fed53d8e5d7d201f5054abe73f1f47c51040767d898e3481c6e648
+DejaVuSansMono.ttf b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582

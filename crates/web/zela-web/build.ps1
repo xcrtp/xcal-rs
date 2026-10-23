@@ -24,13 +24,30 @@ $manifest = Join-Path $scripts "demo/manifest.txt"
 # 确定字体：与 Cargo.toml 的 `typst = "0.14"` 对应（typst-assets 的 tag）。
 # 这三个字体正是 Typst 默认的 text / math / mono 字体族，加载后 payload 的字形轮廓
 # 不再依赖系统字体 ⇒ Windows / Linux 的 payload hash 一致。
-$fontAssetsVersion = "0.14.2"
+#
+# B13 Step 0：清单从 `tools/typst-fonts.txt` 读（唯一真源，xtask 对拍也从这里读）。
+# 本脚本只负责下载 + 校验；**不得**在此另写一份版本 / 文件名 / 哈希。
+$fontManifest = Join-Path $repo "tools/typst-fonts.txt"
+if (-not (Test-Path -LiteralPath $fontManifest)) {
+    throw "缺少字体清单：$fontManifest"
+}
+$fontAssetsVersion = $null
+$fontAssets = @()
+foreach ($raw in Get-Content -LiteralPath $fontManifest -Encoding UTF8) {
+    $line = $raw.Trim()
+    if ($line.Length -eq 0 -or $line.StartsWith("#")) { continue }
+    $parts = $line.Split(' ', 2, [System.StringSplitOptions]::RemoveEmptyEntries)
+    if ($parts[0] -eq "version") {
+        if ($parts.Count -ne 2) { throw "字体清单 version 行非法：$line" }
+        $fontAssetsVersion = $parts[1].Trim()
+        continue
+    }
+    if ($parts.Count -ne 2) { throw "字体清单条目非法（期望 `<文件名> <sha256>`）：$line" }
+    $fontAssets += @{ Name = $parts[0]; Sha256 = $parts[1].Trim().ToLowerInvariant() }
+}
+if (-not $fontAssetsVersion) { throw "字体清单缺少 version 行：$fontManifest" }
+if ($fontAssets.Count -eq 0) { throw "字体清单没有条目：$fontManifest" }
 $fontDir = Join-Path $repo "target/fonts/typst-assets-v$fontAssetsVersion"
-$fontAssets = @(
-    @{ Name = "LibertinusSerif-Regular.otf"; Sha256 = "fcf06307a77367394fcb0ccb241e59eea70dba3d732be309647611224679c733" },
-    @{ Name = "NewCMMath-Regular.otf"; Sha256 = "ad746f5307fed53d8e5d7d201f5054abe73f1f47c51040767d898e3481c6e648" },
-    @{ Name = "DejaVuSansMono.ttf"; Sha256 = "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582" }
-)
 
 function ConvertTo-JsonString([string] $value) {
     $escaped = $value.Replace('\', '\\').Replace('"', '\"')
