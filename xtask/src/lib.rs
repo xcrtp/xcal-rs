@@ -27,6 +27,7 @@ pub const USAGE: &str = "\
 对拍选项：
   --skip-baseline            # 只断言 --script == --bundle，不比对基线
                              # （用于无匹配 GPU 的 CI；会显式打印，不静默）
+  --independent              # 走**独立进程**对拍（B9 批量模式的对照组，诊断用）
 
 录制选项（仅录制设备可执行）：
   --record                   # 重录 baselines.txt（需设 ZELA_RECORD_DEVICE，见报错提示）
@@ -77,6 +78,8 @@ pub struct Options {
     pub skip_baseline: bool,
     pub record: bool,
     pub rebind: bool,
+    /// B9 Step 3：对拍走**独立进程**路径（批量模式的对照组，长期保留用于诊断）。
+    pub independent: bool,
     pub reason: Option<String>,
 }
 
@@ -87,6 +90,7 @@ impl Options {
         let mut skip_baseline = false;
         let mut record = false;
         let mut rebind = false;
+        let mut independent = false;
         let mut reason = None;
         let mut index = 0;
         while index < raw.len() {
@@ -96,6 +100,7 @@ impl Options {
                 "--skip-baseline" => skip_baseline = true,
                 "--record" => record = true,
                 "--rebind" => rebind = true,
+                "--independent" => independent = true,
                 "--reason" => {
                     index += 1;
                     let value = raw
@@ -156,6 +161,7 @@ impl Options {
             skip_baseline,
             record,
             rebind,
+            independent,
             reason,
         })
     }

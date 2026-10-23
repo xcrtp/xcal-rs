@@ -200,6 +200,22 @@ pub fn to_rgba(ctx: &RenderContext, pixels: &[u8]) -> Vec<u8> {
     zela_playback::to_rgba(ctx, pixels)
 }
 
+/// RGBA8 → 目标纹理格式字节序（默认 BGRA）；与 [`to_rgba`] 互逆。
+///
+/// 矢量后端在 CPU 侧产出 RGBA8，而 sink 的写入口径是目标格式 ⇒ 需要这一趟交换。
+pub fn rgba_to_target(ctx: &RenderContext, rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    if matches!(
+        ctx.target_format(),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for px in out.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+    }
+    out
+}
+
 /// 写一张 RGBA8 PNG。
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), ExportError> {
     let file = std::fs::File::create(path).map_err(|e| ExportError::Io {

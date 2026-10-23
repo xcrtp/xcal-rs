@@ -23,7 +23,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use xtask::{apply_record, assert_attributed, load_baselines, rebind_dirty, Options, Step};
+use xtask::{
+    Baselines, Options, Step, apply_record, assert_attributed, load_baselines, rebind_dirty,
+};
 
 /// wasm gate 的 kernel 组（与 CI 名单逐字一致）。
 const KERNEL_CRATES: &[&str] = &[
@@ -253,7 +255,7 @@ fn run(options: &Options) -> Result<(), String> {
             Step::Wasm => step_wasm(&root)?,
             Step::Structure => step_structure(&root)?,
             Step::Smoke => step_smoke(&root, options.skip_baseline)?,
-            Step::Hashes => step_hashes(&root, options.skip_baseline)?,
+            Step::Hashes => step_hashes(&root, options.skip_baseline, options.independent)?,
         }
     }
 
@@ -298,16 +300,27 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
 
     // 1) 硬门禁：同一跑次 script == bundle 必须绿（smoke + hashes 全量）。
     let smoke_hash = compare_script_vs_bundle(root, "smoke", "320x240", None)?;
-    let fourier_hash = compare_script_vs_bundle(root, "fourier", "640x480", None)?;
-    let storyboard_hash = compare_script_vs_bundle(root, "storyboard", "640x480", None)?;
-    // B2-8（Q4 决议）：`demo3d` 升级为对拍 fixture —— 3D 进 frame hash 对拍网。
-    let demo3d_hash = compare_script_vs_bundle(root, "demo3d", "640x480", None)?;
-    // B3 Step 5：Surface 作品（能力矩阵 + 复杂 Demo）。
-    let surface_matrix_hash = compare_script_vs_bundle(root, "surface_matrix", "640x480", None)?;
-    let atlas_hash = compare_script_vs_bundle(root, "atlas", "640x480", None)?;
-    // B6 V2-07：矢量后端作品（`--backend vector` 出帧）进基线体系。
-    let vector_hash =
-        compare_script_vs_bundle_with_backend(root, "vector_paths", "640x480", None, Some("vector"))?;
+    // B9 Step 3：完整对拍走批量模式（`--independent` 可切回独立进程做对照）。
+    let hashes: std::collections::BTreeMap<String, String> = if options.independent {
+        println!("[xtask] 对拍模式：独立进程（--independent 诊断路径）");
+        let mut map = std::collections::BTreeMap::new();
+        for (work, backend) in HASHES_WORKS {
+            map.insert(
+                (*work).to_string(),
+                compare_script_vs_bundle_with_backend(root, work, "640x480", None, *backend)?,
+            );
+        }
+        map
+    } else {
+        println!("[xtask] 对拍模式：批量（一次 GPU 初始化）");
+        batch_hashes(root)?.into_iter().collect()
+    };
+    let recorded = |work: &str| -> Result<String, String> {
+        hashes
+            .get(work)
+            .cloned()
+            .ok_or_else(|| format!("对拍结果缺少 `{work}`（批量模式未产出该作品）"))
+    };
 
     // 2) 回填 commit：当前 HEAD（重录发生在提交前）。
     let head = git_short_head(root)?;
@@ -329,20 +342,24 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
         .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
     let records = [
         ("smoke".to_string(), "smoke".to_string(), smoke_hash),
-        ("native".to_string(), "fourier".to_string(), fourier_hash),
+        ("native".to_string(), "fourier".to_string(), recorded("fourier")?),
         (
             "native".to_string(),
             "storyboard".to_string(),
-            storyboard_hash,
+            recorded("storyboard")?,
         ),
-        ("native".to_string(), "demo3d".to_string(), demo3d_hash),
+        ("native".to_string(), "demo3d".to_string(), recorded("demo3d")?),
         (
             "native".to_string(),
             "surface_matrix".to_string(),
-            surface_matrix_hash,
+            recorded("surface_matrix")?,
         ),
-        ("native".to_string(), "atlas".to_string(), atlas_hash),
-        ("vector".to_string(), "vector_paths".to_string(), vector_hash),
+        ("native".to_string(), "atlas".to_string(), recorded("atlas")?),
+        (
+            "vector".to_string(),
+            "vector_paths".to_string(),
+            recorded("vector_paths")?,
+        ),
     ];
     let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
     fs::write(&baseline_path, next)
@@ -815,7 +832,7 @@ fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
+fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<(), String> {
     let baseline_path = scripts_dir(root).join("baselines.txt");
     // 口径 D 门禁：未归因的 `+dirty` 不得进入对拍（否则差异无法回溯到提交）。
     assert_attributed(&fs::read_to_string(&baseline_path).map_err(|error| {
@@ -829,44 +846,50 @@ fn step_hashes(root: &Path, skip_baseline: bool) -> Result<(), String> {
     let baseline_text = fs::read_to_string(&baseline_path)
         .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
     let mut current: Vec<(&str, &str, &str)> = Vec::new();
-    let mut hashes: Vec<(String, String)> = Vec::new();
 
-    for work in ["fourier", "storyboard", "demo3d", "surface_matrix", "atlas"] {
-        let expected = if skip_baseline {
-            None
-        } else {
-            Some(
-                baselines
-                    .native
-                    .get(work)
-                    .ok_or_else(|| format!("baselines.txt 的 [native] 段缺少 `{work}`"))?
-                    .as_str(),
-            )
-        };
-        let hash = compare_script_vs_bundle(root, work, "640x480", expected)?;
-        hashes.push((work.to_string(), hash));
-    }
-    current.extend(
-        hashes
-            .iter()
-            .map(|(work, hash)| ("native", work.as_str(), hash.as_str())),
-    );
-
-    // B6 V2-07：矢量后端作品（同一脚本 + 同一 bundle，走 `--backend vector`）。
-    let vector_expected = if skip_baseline {
-        None
+    let hashes = if independent {
+        println!("[xtask] 对拍模式：独立进程（--independent 诊断路径）");
+        let mut out = Vec::new();
+        for (work, backend) in HASHES_WORKS {
+            let expected = if skip_baseline {
+                None
+            } else {
+                Some(baseline_for(&baselines, work)?)
+            };
+            let hash = compare_script_vs_bundle_with_backend(
+                root,
+                work,
+                "640x480",
+                expected.as_deref(),
+                *backend,
+            )?;
+            out.push(((*work).to_string(), hash));
+        }
+        out
     } else {
-        Some(
-            baselines
-                .vector
-                .get("vector_paths")
-                .ok_or_else(|| "baselines.txt 的 [vector] 段缺少 `vector_paths`".to_string())?
-                .as_str(),
-        )
+        println!("[xtask] 对拍模式：批量（一次 GPU 初始化；--independent 可切回独立进程）");
+        let hashes = batch_hashes(root)?;
+        if !skip_baseline {
+            for (work, hash) in &hashes {
+                let expected = baseline_for(&baselines, work)?;
+                if *hash != expected {
+                    return Err(format!(
+                        "{work}: 序列哈希与基线不符（批量）\n  实测 = {hash}\n  基线 = {expected}"
+                    ));
+                }
+                println!("[xtask] {work}: 基线（{hash}）");
+            }
+        }
+        hashes
     };
-    let vector_hash =
-        compare_script_vs_bundle_with_backend(root, "vector_paths", "640x480", vector_expected, Some("vector"))?;
-    current.push(("vector", "vector_paths", vector_hash.as_str()));
+
+    // B9 Step 5：V3-12 自动化（挂/不挂 HashSink 的像素产出逐位相同）。
+    assert_sink_bypass(root)?;
+
+    for (work, hash) in &hashes {
+        let section = if work == "vector_paths" { "vector" } else { "native" };
+        current.push((section, work.as_str(), hash.as_str()));
+    }
     // smoke 的当前值在 `--step hashes` 里不重算（由 `--step smoke` 负责）；
     // 报告只呈现本次实测到的作品，未实测项不伪造。
     print!("{}", xtask::render_diff_report(&xtask::build_diff_rows(&baseline_text, &current)));
@@ -891,6 +914,141 @@ fn announce_baselines(path: &Path) {
     println!(
         "[xtask] 对拍固定使用 --no-default-features --features typst（与 FRAME_HASH_BASELINES.md 的复现命令一致，绕开 pyo3 运行时）"
     );
+}
+
+/// 完整对拍的作品表（顺序 = 报告顺序；`None` = wgpu，`Some` = `--backend`）。
+///
+/// B9 Step 3：批量与独立两条路径**共用**这张表，避免两处清单漂移。
+const HASHES_WORKS: &[(&str, Option<&str>)] = &[
+    // B2-8（Q4 决议）：`demo3d` 让 3D 进对拍网。
+    ("fourier", None),
+    ("storyboard", None),
+    ("demo3d", None),
+    // B3 Step 5：Surface 作品（能力矩阵 + 复杂 Demo）。
+    ("surface_matrix", None),
+    ("atlas", None),
+    // B6 V2-07：矢量后端作品。
+    ("vector_paths", Some("vector")),
+];
+
+/// 取某作品的基线值（`vector_paths` 在 `[vector]`，其余在 `[native]`）。
+fn baseline_for(baselines: &Baselines, work: &str) -> Result<String, String> {
+    let (name, section) = if work == "vector_paths" {
+        ("vector", &baselines.vector)
+    } else {
+        ("native", &baselines.native)
+    };
+    section
+        .get(work)
+        .cloned()
+        .ok_or_else(|| format!("baselines.txt 的 [{name}] 段缺少 `{work}`"))
+}
+
+/// 从 `[verify] {...}` 的 JSON 行里取一个字符串字段（只含本仓自产的扁平 JSON）。
+fn json_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+    let key = format!("\"{name}\":\"");
+    let start = line.find(&key)? + key.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// **批量对拍**（B9 Step 3）：一次进程跑完全部作品（脚本 + bundle 两条路径）。
+///
+/// 渲染循环与 `zela-render` **共用**（`zela_app::frame_loop`），这里只负责拼参数、
+/// 解析结果、以及"script == bundle"的断言（§4.4：失败要点名作品与路径）。
+fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
+    prepare_hashes_dir(root)?;
+    let scripts = scripts_dir(root);
+    let tmp = root.join("target").join("xtask").join("hashes");
+    let mut args = strings(&["run", "-q", "--profile", "verify", "-p", "zela-app"]);
+    args.extend(hashes_app_args());
+    args.extend(strings(&["--bin", "zela-verify", "--"]));
+    args.extend(strings(&[
+        "--scripts",
+        &scripts.display().to_string(),
+        "--tmp",
+        &tmp.display().to_string(),
+        "--fps",
+        "30",
+    ]));
+    for (work, backend) in HASHES_WORKS {
+        let spec = match backend {
+            Some(backend) => format!("{work}=640x480:{backend}"),
+            None => format!("{work}=640x480"),
+        };
+        args.extend(strings(&["--work", &spec]));
+    }
+
+    println!("[xtask] $ cargo {}", args.join(" "));
+    let output = Command::new(cargo_program())
+        .args(&args)
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("启动 cargo 失败：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        eprint!("{stdout}{stderr}");
+        return Err("批量对拍失败（zela-verify 退出码非 0；上面的错误点明了作品与路径）".to_string());
+    }
+
+    let mut hashes: Vec<(String, String)> = Vec::new();
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("[verify] ") else {
+            continue;
+        };
+        let work = json_field(rest, "work").ok_or_else(|| format!("无法解析 work：{line}"))?;
+        let script = json_field(rest, "script").ok_or_else(|| format!("无法解析 script：{line}"))?;
+        let bundle = json_field(rest, "bundle").ok_or_else(|| format!("无法解析 bundle：{line}"))?;
+        if script != bundle {
+            return Err(format!(
+                "{work}: --script 与 --bundle 哈希不一致（批量）\n  script = {script}\n  bundle = {bundle}"
+            ));
+        }
+        println!("[xtask] {work}: script == bundle（{script}）");
+        hashes.push((work.to_string(), script.to_string()));
+    }
+    for (work, _) in HASHES_WORKS {
+        if !hashes.iter().any(|(name, _)| name == work) {
+            return Err(format!(
+                "批量对拍缺少 `{work}` 的结果（zela-verify 未产出该作品的 [verify] 行）"
+            ));
+        }
+    }
+    Ok(hashes)
+}
+
+/// **V3-12 自动化**（B9 Step 5）：挂 / 不挂 `HashSink` 时，输出 PNG 的**字节**必须相同。
+///
+/// 为什么比 PNG 字节而不是序列哈希：不挂哈希时本来就没有哈希值可拿，比哈希是自证。
+/// 用最便宜的 1 帧作品（`vector_paths`），两次渲染约 3s。
+fn assert_sink_bypass(root: &Path) -> Result<(), String> {
+    let with_hash = "target/xtask/sink-bypass/with-hash";
+    let no_hash = "target/xtask/sink-bypass/no-hash";
+    let source = ["--script", "crates/app/zela-app/scripts/vector_paths.lua"];
+    render_with(root, &source, with_hash, "640x480", Some("vector"), true)?;
+    render_with(root, &source, no_hash, "640x480", Some("vector"), false)?;
+
+    let frame = "frame_00000.png";
+    let read = |rel: &str| -> Result<Vec<u8>, String> {
+        let path = root.join(rel).join(frame);
+        fs::read(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))
+    };
+    let (a, b) = (read(with_hash)?, read(no_hash)?);
+    if a != b {
+        return Err(format!(
+            "V3-12 失败：挂 / 不挂 HashSink 的 PNG 字节不同（{} B vs {} B）。\
+             说明哈希 sink 不是真旁路",
+            a.len(),
+            b.len()
+        ));
+    }
+    println!(
+        "[xtask] V3-12：挂 / 不挂 HashSink 的 PNG 字节相同（{} B，vector_paths 1 帧）",
+        a.len()
+    );
+    Ok(())
 }
 
 /// 渲染 `--script` 与 `--bundle` 两条路径，断言：
@@ -965,12 +1123,7 @@ fn compare_script_vs_bundle_with_backend(
 }
 
 fn compile_bundle(root: &Path, script: &str, out: &str) -> Result<(), String> {
-    let args = [
-        strings(&["run", "-q", "-p", "zela-compile"]),
-        hashes_app_args(),
-        strings(&["--", script, "--out", out]),
-    ]
-    .concat();
+    let args = [run_args("zela-compile", None), strings(&[script, "--out", out])].concat();
     cargo(root, &args)
 }
 
@@ -980,6 +1133,20 @@ fn hashes_app_args() -> Vec<String> {
     strings(&["--no-default-features", "--features", "typst"])
 }
 
+/// `cargo run` 的公共前缀（B9 Step 1）：**统一**走 `[profile.verify]`。
+///
+/// 抽出来是为了避免 `compile_bundle` / `render` 两处各自拼参数漂移
+/// （与之前"两份 view 布局漂移"同类）。注意 `--profile` 与 `--release` 不能同用。
+fn run_args(package: &str, bin: Option<&str>) -> Vec<String> {
+    let mut args = strings(&["run", "-q", "--profile", "verify", "-p", package]);
+    args.extend(hashes_app_args());
+    if let Some(bin) = bin {
+        args.extend(strings(&["--bin", bin]));
+    }
+    args.extend(strings(&["--"]));
+    args
+}
+
 fn render(
     root: &Path,
     source: &[&str],
@@ -987,13 +1154,25 @@ fn render(
     size: &str,
     backend: Option<&str>,
 ) -> Result<String, String> {
-    let mut args = strings(&["run", "-q", "-p", "zela-app"]);
-    args.extend(hashes_app_args());
-    args.extend(strings(&["--bin", "zela-render", "--"]));
+    render_with(root, source, frames, size, backend, true)
+}
+
+/// 同 [`render`]，但可**不挂** `HashSink`（`hash = false`）—— V3-12 的对照实验用。
+fn render_with(
+    root: &Path,
+    source: &[&str],
+    frames: &str,
+    size: &str,
+    backend: Option<&str>,
+    hash: bool,
+) -> Result<String, String> {
+    let mut args = run_args("zela-app", Some("zela-render"));
     args.extend(source.iter().map(|value| value.to_string()));
     args.extend(strings(&["--frames", frames, "--fps", "30", "--size", size]));
     // B8 Step 2：哈希是可选的 sink，对拍必须显式挂上（主流程默认不挂）。
-    args.extend(strings(&["--hash"]));
+    if hash {
+        args.extend(strings(&["--hash"]));
+    }
     if let Some(backend) = backend {
         args.extend(strings(&["--backend", backend]));
     }
@@ -1025,9 +1204,14 @@ fn render(
         }
     }
 
-    parse_frame_hash(&stderr)
-        .or_else(|| parse_frame_hash(&stdout))
-        .ok_or_else(|| "输出中没有找到 `[frame-hash] sequence = …`".to_string())
+    if hash {
+        parse_frame_hash(&stderr)
+            .or_else(|| parse_frame_hash(&stdout))
+            .ok_or_else(|| "输出中没有找到 `[frame-hash] sequence = …`".to_string())
+    } else {
+        // 没挂 HashSink ⇒ 本来就没有哈希行（不是失败）。
+        Ok(String::new())
+    }
 }
 
 fn parse_frame_hash(text: &str) -> Option<String> {

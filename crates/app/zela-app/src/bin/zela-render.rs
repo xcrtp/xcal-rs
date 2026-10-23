@@ -24,17 +24,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use ze_notion::{Rect2D, Vec2};
-use zela_app::export::{ExportError, target_pix_fmt, to_rgba, write_png};
+use zela_app::export::{ExportError, target_pix_fmt, write_png};
+use zela_app::frame_loop::{
+    FrameLoopOptions, FrameTiming, FrameView, LoopBackend, frames_for, run_frames,
+};
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, language_from_path,
 };
-use zela_render::ViewRect;
-use zela_render_backends::{
-    RenderContext, ScreenParams, StandardBackends, render_frame_headless_cached_timed,
-};
-use zela_scene_ecs::DriverCommand;
-use zela_scene_ecs::contract::WorldView;
+use zela_render_backends::{HeadlessTarget, RenderContext, StandardBackends};
 use zela_scene_bundle::Bundle;
 use zela_scene_bundle::frame_hash::FrameSequenceHash;
 
@@ -201,7 +198,7 @@ fn run() -> Result<(), String> {
     let ctx =
         RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
 
-    let runtime = if let Some(script_path) = &args.script {
+    let mut runtime = if let Some(script_path) = &args.script {
         let source = std::fs::read_to_string(script_path)
             .map_err(|e| format!("读取脚本 {} 失败：{e}", script_path.display()))?;
         let language = language_from_path(script_path).map_err(|e| e.to_string())?;
@@ -229,62 +226,12 @@ fn run() -> Result<(), String> {
     };
 
     let (width, height) = args.size;
-    // headless 没有 egui 布局：视口 = 整幅画面（GUI 里由 `update_view_rect` 写入）。
-    runtime.driver.with_scheduler_mut(|scheduler| {
-        scheduler.resources_mut().insert(ViewRect {
-            rect: Rect2D::new(Vec2::ZERO, Vec2::new(width as f32, height as f32)),
-        });
-    });
-
-    let dt = 1.0 / args.fps as f32;
-    let frames = if runtime.duration > 0.0 {
-        (runtime.duration * args.fps).ceil() as u32
-    } else {
-        1
-    }
-    .max(1);
+    let frames = frames_for(&runtime, args.fps);
     eprintln!(
         "渲染 {frames} 帧（{}×{} @ {} fps，时长 {:.3}s）…",
         width, height, args.fps, runtime.duration
     );
 
-    let screen = ScreenParams::new([width, height], 1.0);
-    let clear = wgpu::Color {
-        r: 0.0,
-        g: 0.0,
-        b: 0.0,
-        a: 1.0,
-    };
-    let mut backends = StandardBackends::new(&ctx);
-    // B8 Step 0：目标纹理跨帧复用（原先每帧 create_texture）。
-    let mut target = zela_render_backends::HeadlessTarget::new();
-
-    // B4 Step 2：渲染参数（档 1 默认值 = 当前行为；档 2 命令行覆盖 `--size`）。
-    // B6 §0.3：默认值**按后端能力**取（`default_for`）——wgpu 的 `PostCaps::none()` ⇒
-    // 与旧 `Default` 逐位相同（6 条基线不变）；显式请求不支持项仍由下面的一致性检查报错。
-    let caps = match ctx.adapter() {
-        Some(adapter) => Some(
-            backends
-                .backend_3d_mut()
-                .capabilities(adapter)
-                .map_err(|e| format!("查询后端能力失败：{e}"))?,
-        ),
-        None => None,
-    };
-    let mut params = match &caps {
-        Some(caps) => zela_scene_bundle::RenderParams::default_for(caps),
-        None => zela_scene_bundle::RenderParams::default(),
-    };
-    params.size = args.size;
-    // 有效性 + 一致性都在开渲前拦住（§0.3：不静默降级）。
-    params
-        .validate()
-        .map_err(|e| format!("渲染参数非法：{e}"))?;
-    if let Some(caps) = &caps {
-        zela_playback::check_render_params_supported(&params, caps).map_err(|e| e.to_string())?;
-    }
-    // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
-    // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
     // B2-6（D7）：**分层标签旁路** —— `ZELA_FRAME_DIGEST_SAMPLE=N` 时每 N 帧打印
     // 该帧的独立 digest。旁路不进入 `frame_hash`（判定与诊断分离）。
     let digest_sample: u32 = std::env::var("ZELA_FRAME_DIGEST_SAMPLE")
@@ -316,144 +263,50 @@ fn run() -> Result<(), String> {
     // 只有某个 sink 需要 RGBA8 时才做通道规范化（省一次全帧拷贝）。
     let need_rgba = sinks.iter().any(|sink| sink.wants_rgba());
 
+    let mut backends = StandardBackends::new(&ctx);
+    // B8 Step 0：目标纹理跨帧复用（原先每帧 create_texture）。
+    let mut target = HeadlessTarget::new();
+
     // B8 Step 1：逐帧分段计时（默认只在窗口汇总 / 门禁上用；逐帧 JSON 由环境变量开启）。
     let timing_lines = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
     let mut stats = FrameStats::new();
 
-    for index in 0..frames {
-        let mut timing = FrameTiming::default();
-
-        // **与 GUI 同一条命令**：固定 dt（导出比实时墙钟更确定）。
-        let mark = Instant::now();
-        runtime.driver.submit(DriverCommand::Advance { dt }).wait();
-        timing.advance = mark.elapsed();
-
-        // 本帧的目标格式字节与（按需的）RGBA8。渲染核心只产出这两样，不感知 sink。
-        let convert: Duration;
-        let (raw, rgba): (Vec<u8>, Vec<u8>) = if args.backend == Backend::Vector {
-            let mark = Instant::now();
-            let (layers, draws) = runtime.driver.with_scheduler(|scheduler| {
-                let options = zela_render::FrameOptions::default();
-                let view = zela_render::frame::build_scene_view(
-                    &WorldView::new(scheduler.world()),
-                    scheduler.resources(),
-                    options,
-                );
-                let layers = view.layers.clone();
-                let draws = scheduler
-                    .resources()
-                    .get::<zela_render::draw::DrawQueue>()
-                    .map(zela_render_backends::snapshot_queue)
-                    .unwrap_or_default();
-                (layers, draws)
-            });
-            if let Some(layer) = layers
-                .iter()
-                .find(|l| !matches!(l.kind, ze_scene_core::LayerKind::Viewport2D { .. }))
-            {
-                return Err(format!(
-                    "--backend vector 目前只支持纯 2D 帧；本帧含图层 {:?}（见 GAPS V2-12/V2-13）",
-                    layer.kind
-                ));
-            }
-            let items: Vec<zela_render_vector::SceneItem<'_>> = draws
-                .iter()
-                .map(|recorded| zela_render_vector::SceneItem {
-                    shape: &recorded.shape,
-                    transform: recorded.transform,
-                    style: recorded.style,
-                })
-                .collect();
-            // 背景与 wgpu 分支**同源**：都用本次 CLI 的 `clear`，不读 `SceneView::background`
-            // —— 否则同一个脚本换 `--backend` 就换了底色（两套 headless 语义，难解释）。
-            let background = [
-                clear.r as f32,
-                clear.g as f32,
-                clear.b as f32,
-                clear.a as f32,
-            ];
-            timing.build = mark.elapsed();
-
-            let mark = Instant::now();
-            let rgba = zela_render_vector::render_scene_2d(width, height, 4, background, &items)?;
-            timing.prepare = mark.elapsed();
-
-            // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。
-            let mark = Instant::now();
-            let raw = rgba_to_target(&ctx, &rgba);
-            convert = mark.elapsed();
-            (raw, rgba)
-        } else {
-            let mark = Instant::now();
-            let callback = runtime
-                .driver
-                .with_scheduler(|scheduler| {
-                    let options = zela_render::FrameOptions::default();
-                    let view = zela_render::frame::build_scene_view(
-                        &WorldView::new(scheduler.world()),
-                        scheduler.resources(),
-                        options,
-                    );
-                    zela_render::frame::build_frame_inputs(
-                        &view,
-                        scheduler.resources(),
-                        options,
-                    )
-                    .and_then(zela_render_backends::frame::build_scene_callback)
-                })
-                .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
-            timing.build = mark.elapsed();
-
-            let (pixels, headless) = render_frame_headless_cached_timed(
-                &ctx,
-                &mut backends,
-                &callback,
-                screen,
-                clear,
-                &mut target,
-            );
-            timing.prepare = headless.render.prepare;
-            timing.paint = headless.render.paint;
-            timing.submit = headless.render.submit;
-            timing.read = headless.read;
-
-            // 只有需要 RGBA 的 sink 在场时才做通道规范化。
-            let mark = Instant::now();
-            let rgba = if need_rgba {
-                to_rgba(&ctx, &pixels)
+    // B9 Step 3：帧循环唯一实现在 `zela_app::frame_loop`（与 `zela-verify` 共用）。
+    let timings = run_frames(
+        &ctx,
+        &mut runtime,
+        &mut backends,
+        &mut target,
+        FrameLoopOptions {
+            width,
+            height,
+            fps: args.fps,
+            backend: if args.backend == Backend::Vector {
+                LoopBackend::Vector
             } else {
-                Vec::new()
-            };
-            convert = mark.elapsed();
-            (pixels, rgba)
-        };
-
-        // B8 Step 2：所有 sink 吃同一份帧像素（hash 只是其中一个 sink）。
-        let mark = Instant::now();
-        {
-            let frame = FramePixels {
-                raw: &raw,
-                rgba: &rgba,
-                size: (width, height),
-            };
+                LoopBackend::Wgpu
+            },
+        },
+        need_rgba,
+        &mut |index, frame| {
+            // B2-6：旁路采样（只打印，不改序列哈希）。
+            if digest_sample > 0 && index % digest_sample == 0 {
+                let digest =
+                    zela_scene_bundle::sha256::hex(&zela_scene_bundle::sha256::sha256(frame.rgba));
+                eprintln!("[frame-digest] frame = {index} digest = {digest}");
+            }
             for sink in &mut sinks {
                 sink.on_frame(index, &frame)?;
             }
-        }
-        let sink_all = mark.elapsed() + convert;
-        timing.hash = sinks.iter().map(|sink| sink.last_hash_time()).sum();
-        timing.sink = sink_all.saturating_sub(timing.hash);
+            Ok(sinks.iter().map(|sink| sink.last_hash_time()).sum())
+        },
+    )?;
 
-        let mark = Instant::now();
-        runtime.driver.with_scheduler_mut(|scheduler| {
-            zela_render::frame::end_frame(scheduler.resources_mut());
-        });
-        timing.end = mark.elapsed();
-
+    for (index, timing) in timings.iter().enumerate() {
         if timing_lines {
-            eprintln!("{}", timing.json(index));
+            eprintln!("{}", frame_json(timing, index as u32));
         }
-        stats.record(index, &timing);
+        stats.record(index as u32, timing);
     }
 
     // B8 Step 2：收尾交给 sink（`HashSink` 在这里打印 `[frame-hash]` 并写 `--hash-out`）。
@@ -474,123 +327,81 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// 一帧的分段耗时（B8 Step 1）。
+/// 一帧的 JSON 行（B8 Step 1；字段定义在 `zela_app::frame_loop::FrameTiming`）。
 ///
-/// 段的边界严格对应代码里能独立计时的位置：
-/// - `advance`：`DriverCommand::Advance`（含场景系统推进）；
-/// - `build`：`build_scene_view` + `build_frame_inputs` + `build_scene_callback`
-///   （矢量后端：view 构造 + 快照，不含绘制）；
-/// - `prepare`：`prepare_frame` —— **含三角化与 `write_buffer`**（B8 计划里的 `t_tess`，
-///   在本代码结构里与"构帧体"不可分：都在 `WgpuBackend2D::finish_frame` 内）；
-///   矢量后端这一格是整帧 `render_scene_2d` 的 CPU 侧耗时；
-/// - `paint`：主 pass 录制；
-/// - `submit`：`queue.submit`（**不含** GPU 执行）；
-/// - `read`：回读，**包含 GPU 等待**（`poll(wait)`）⇒ 这是唯一能看到 GPU 时间的段；
-/// - `sink`：PNG / mp4 编码（含目标格式 ↔ RGBA 的通道转换）；
-/// - `hash`：`FrameSequenceHash::push_frame`；
-/// - `verify`：**GPU 校验 pass**（B8 补充更正 §二.2）—— 当前恒为 0，Step 3′ 后填真实值；
-/// - `end`：`end_frame`（帧末清理）。
-#[derive(Debug, Clone, Copy, Default)]
-struct FrameTiming {
-    advance: Duration,
-    build: Duration,
-    prepare: Duration,
-    paint: Duration,
-    submit: Duration,
-    read: Duration,
-    sink: Duration,
-    hash: Duration,
-    /// GPU 校验 pass（占位：字段先定死，Step 3′ 前后是同一套字段）。
-    verify: Duration,
-    end: Duration,
+/// 段边界：`prepare` 含三角化与 `write_buffer`（计划里的 `t_tess` 与"构帧体"不可分）；
+/// `read` 含 GPU 等待；`sink` 含目标格式 ↔ RGBA 的通道转换；`verify` 是 GPU 校验 pass 的占位。
+fn frame_json(t: &FrameTiming, frame: u32) -> String {
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    format!(
+        "[timing] {{\"frame\":{frame},\"advance_ms\":{:.3},\"build_ms\":{:.3},\
+         \"prepare_ms\":{:.3},\"paint_ms\":{:.3},\"submit_ms\":{:.3},\
+         \"read_ms\":{:.3},\"sink_ms\":{:.3},\"hash_ms\":{:.3},\"verify_ms\":{:.3},\
+         \"end_ms\":{:.3},\"total_ms\":{:.3}}}",
+        ms(t.advance),
+        ms(t.build),
+        ms(t.prepare),
+        ms(t.paint),
+        ms(t.submit),
+        ms(t.read),
+        ms(t.sink),
+        ms(t.hash),
+        ms(t.verify),
+        ms(t.end),
+        ms(t.total()),
+    )
 }
 
-impl FrameTiming {
-    fn total(&self) -> Duration {
-        self.advance
-            + self.build
-            + self.prepare
-            + self.paint
-            + self.submit
-            + self.read
-            + self.sink
-            + self.hash
-            + self.verify
-            + self.end
-    }
+/// 窗口汇总（JSON）：各段平均值与占比（占比按 `total` 算）。
+fn summary_json(t: &FrameTiming, window: &str, frames: usize) -> String {
+    let n = frames.max(1) as f64;
+    let avg_ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
+    let total = avg_ms(t.total()).max(f64::MIN_POSITIVE);
+    let share = |d: Duration| avg_ms(d) / total * 100.0;
+    format!(
+        "[timing-summary] {{\"window\":\"{window}\",\"frames\":{frames},\
+         \"avg_total_ms\":{:.3},\
+         \"avg\":{{\"advance\":{:.3},\"build\":{:.3},\"prepare\":{:.3},\"paint\":{:.3},\
+         \"submit\":{:.3},\"read\":{:.3},\"sink\":{:.3},\"hash\":{:.3},\"verify\":{:.3},\
+         \"end\":{:.3}}},\
+         \"share_pct\":{{\"advance\":{:.1},\"build\":{:.1},\"prepare\":{:.1},\"paint\":{:.1},\
+         \"submit\":{:.1},\"read\":{:.1},\"sink\":{:.1},\"hash\":{:.1},\"verify\":{:.1},\
+         \"end\":{:.1}}}}}",
+        avg_ms(t.total()),
+        avg_ms(t.advance),
+        avg_ms(t.build),
+        avg_ms(t.prepare),
+        avg_ms(t.paint),
+        avg_ms(t.submit),
+        avg_ms(t.read),
+        avg_ms(t.sink),
+        avg_ms(t.hash),
+        avg_ms(t.verify),
+        avg_ms(t.end),
+        share(t.advance),
+        share(t.build),
+        share(t.prepare),
+        share(t.paint),
+        share(t.submit),
+        share(t.read),
+        share(t.sink),
+        share(t.hash),
+        share(t.verify),
+        share(t.end),
+    )
+}
 
-    fn add(&mut self, other: &Self) {
-        self.advance += other.advance;
-        self.build += other.build;
-        self.prepare += other.prepare;
-        self.paint += other.paint;
-        self.submit += other.submit;
-        self.read += other.read;
-        self.sink += other.sink;
-        self.hash += other.hash;
-        self.verify += other.verify;
-        self.end += other.end;
-    }
-
-    fn json(&self, frame: u32) -> String {
-        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-        format!(
-            "[timing] {{\"frame\":{frame},\"advance_ms\":{:.3},\"build_ms\":{:.3},\
-             \"prepare_ms\":{:.3},\"paint_ms\":{:.3},\"submit_ms\":{:.3},\
-             \"read_ms\":{:.3},\"sink_ms\":{:.3},\"hash_ms\":{:.3},\"verify_ms\":{:.3},\
-             \"end_ms\":{:.3},\"total_ms\":{:.3}}}",
-            ms(self.advance),
-            ms(self.build),
-            ms(self.prepare),
-            ms(self.paint),
-            ms(self.submit),
-            ms(self.read),
-            ms(self.sink),
-            ms(self.hash),
-            ms(self.verify),
-            ms(self.end),
-            ms(self.total()),
-        )
-    }
-
-    /// 窗口汇总（JSON）：各段平均值与占比（占比按 `total` 算）。
-    fn summary_json(&self, window: &str, frames: usize) -> String {
-        let n = frames.max(1) as f64;
-        let avg_ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
-        let total = avg_ms(self.total()).max(f64::MIN_POSITIVE);
-        let share = |d: Duration| avg_ms(d) / total * 100.0;
-        format!(
-            "[timing-summary] {{\"window\":\"{window}\",\"frames\":{frames},\
-             \"avg_total_ms\":{:.3},\
-             \"avg\":{{\"advance\":{:.3},\"build\":{:.3},\"prepare\":{:.3},\"paint\":{:.3},\
-             \"submit\":{:.3},\"read\":{:.3},\"sink\":{:.3},\"hash\":{:.3},\"verify\":{:.3},\
-             \"end\":{:.3}}},\
-             \"share_pct\":{{\"advance\":{:.1},\"build\":{:.1},\"prepare\":{:.1},\"paint\":{:.1},\
-             \"submit\":{:.1},\"read\":{:.1},\"sink\":{:.1},\"hash\":{:.1},\"verify\":{:.1},\
-             \"end\":{:.1}}}}}",
-            avg_ms(self.total()),
-            avg_ms(self.advance),
-            avg_ms(self.build),
-            avg_ms(self.prepare),
-            avg_ms(self.paint),
-            avg_ms(self.submit),
-            avg_ms(self.read),
-            avg_ms(self.sink),
-            avg_ms(self.hash),
-            avg_ms(self.verify),
-            avg_ms(self.end),
-            share(self.advance),
-            share(self.build),
-            share(self.prepare),
-            share(self.paint),
-            share(self.submit),
-            share(self.read),
-            share(self.sink),
-            share(self.hash),
-            share(self.verify),
-            share(self.end),
-        )
-    }
+fn add_timing(acc: &mut FrameTiming, other: &FrameTiming) {
+    acc.advance += other.advance;
+    acc.build += other.build;
+    acc.prepare += other.prepare;
+    acc.paint += other.paint;
+    acc.submit += other.submit;
+    acc.read += other.read;
+    acc.sink += other.sink;
+    acc.hash += other.hash;
+    acc.verify += other.verify;
+    acc.end += other.end;
 }
 
 /// 性能**量级门禁**（B8 §3.3）：只拦灾难性退化，不卡正常波动。
@@ -622,11 +433,11 @@ impl FrameStats {
 
     /// `index` = 帧号；首帧（0）不计入窗口与门禁（含管线创建）。
     fn record(&mut self, index: u32, timing: &FrameTiming) {
-        self.totals.add(timing);
+        add_timing(&mut self.totals, timing);
         self.seen += 1;
         if index > 0 {
             if self.window_frames < TIMING_WINDOW {
-                self.window.add(timing);
+                add_timing(&mut self.window, timing);
                 self.window_frames += 1;
             }
             let total_ms = timing.total().as_secs_f64() * 1000.0;
@@ -641,11 +452,14 @@ impl FrameStats {
         if self.window_frames > 0 {
             eprintln!(
                 "{}",
-                self.window
-                    .summary_json(&format!("1..{}", self.window_frames), self.window_frames)
+                summary_json(
+                    &self.window,
+                    &format!("1..{}", self.window_frames),
+                    self.window_frames
+                )
             );
         }
-        eprintln!("{}", self.totals.summary_json("all", self.seen));
+        eprintln!("{}", summary_json(&self.totals, "all", self.seen));
         if let Some((frame, ms)) = self.slow.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
             return Err(format!(
                 "性能量级门禁失败：第 {frame} 帧耗时 {ms:.1}ms > {SLOW_FRAME_MS}ms（B8 §3.3；\
@@ -655,30 +469,6 @@ impl FrameStats {
         }
         Ok(())
     }
-}
-
-/// RGBA8 → 目标纹理格式字节序（默认 BGRA）；与 `to_rgba` 互逆。
-fn rgba_to_target(ctx: &RenderContext, rgba: &[u8]) -> Vec<u8> {
-    let mut out = rgba.to_vec();
-    let format = ctx.target_format();
-    if matches!(
-        format,
-        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-    ) {
-        for px in out.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
-    }
-    out
-}
-
-/// 一帧的像素视图（B8 Step 2）：sink 只吃这个，不感知渲染核心。
-struct FramePixels<'a> {
-    /// 目标纹理格式的字节（BGRA 等）——mp4 编码直接用。
-    raw: &'a [u8],
-    /// 规范化 RGBA8 —— PNG / 哈希用；没有 sink 需要时为空。
-    rgba: &'a [u8],
-    size: (u32, u32),
 }
 
 /// 逐帧输出 / 校验的挂载点（B8 Step 2 / 补充更正 §3.4）。
@@ -691,7 +481,7 @@ trait FrameSink {
         false
     }
 
-    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String>;
+    fn on_frame(&mut self, index: u32, frame: &FrameView<'_>) -> Result<(), String>;
 
     /// 上一帧的校验耗时（只有 [`HashSink`] 报），用于把 `t_hash` 从 `t_sink` 里拆出来。
     fn last_hash_time(&self) -> Duration {
@@ -711,7 +501,7 @@ impl FrameSink for PngSink {
         true
     }
 
-    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+    fn on_frame(&mut self, index: u32, frame: &FrameView<'_>) -> Result<(), String> {
         std::fs::create_dir_all(&self.dir)
             .map_err(|e| format!("创建目录 {} 失败：{e}", self.dir.display()))?;
         let path = self.dir.join(format!("frame_{index:05}.png"));
@@ -728,7 +518,7 @@ impl FrameSink for PngSink {
 struct FfmpegSink(Ffmpeg);
 
 impl FrameSink for FfmpegSink {
-    fn on_frame(&mut self, _index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+    fn on_frame(&mut self, _index: u32, frame: &FrameView<'_>) -> Result<(), String> {
         self.0.write(frame.raw)
     }
 
@@ -753,7 +543,7 @@ impl FrameSink for HashSink {
         true
     }
 
-    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+    fn on_frame(&mut self, index: u32, frame: &FrameView<'_>) -> Result<(), String> {
         // B2-6：旁路采样（只打印，不改序列哈希）。
         if self.digest_sample > 0 && index % self.digest_sample == 0 {
             let digest =

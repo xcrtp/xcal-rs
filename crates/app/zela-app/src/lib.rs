@@ -45,6 +45,8 @@ use zela_schedule::scheduler::Scheduler;
 mod assembly;
 pub mod export;
 mod formula;
+// B9 Step 3：`zela-render` 与 `zela-verify` 共用的**唯一**帧循环。
+pub mod frame_loop;
 
 /// **2D 场景选择**（启动参数切换，见 `main.rs`）。
 ///

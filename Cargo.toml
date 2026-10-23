@@ -65,6 +65,22 @@ version = "0.1.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xcrtp/zela"
 
+# B9 Step 1：**验证专用**的构建 profile。
+#
+# 为什么不是 `--release`：verify 路径要的是"跑得快但不放宽检查"。
+# - `inherits = "dev"` ⇒ 保留 `debug-assertions` 与 `overflow-checks`
+#   （关掉会让"dev 下溢出 panic"变成"静默 wrap"，等于用性能换掉正确性检查）；
+# - `debug = false` ⇒ 链接更快、二进制更小、进程启动更快（B9 §2.2②）；
+# - `incremental = false` ⇒ 验证构建不需要增量缓存目录，避免它和 dev 的缓存互相污染。
+#
+# 只有"要运行"的命令加 `--profile verify`（zela-compile / zela-render）；
+# `cargo check` / `cargo test` 仍走 dev（opt-level 对 check 无收益）。
+[profile.verify]
+inherits = "dev"
+opt-level = 3
+debug = false
+incremental = false
+
 [workspace.dependencies]
 eframe = { version = "0.36", default-features = false, features = [
     "wgpu",
