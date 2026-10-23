@@ -21,7 +21,7 @@
 # pbr_lights / pbr_scene / pendulum / orbit / spring）—— 它们此前只有像素好看，没有任何
 # 门禁证明；尤其 pbr_* 三件曾被 cube 的 NaN 噪点影响，"修好了"一直没有证据。
 # device = windows / RTX 4060 Laptop
-# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ 783da52+dirty
+# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ dbbdd44
 # slotA: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 7f4ce80
 # slotA: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 7f4ce80
 # slotA: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 7f4ce80
@@ -34,42 +34,42 @@
 # slotA: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 7f4ce80
 # slotA: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 7f4ce80
 # slotA: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 7f4ce80
-# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 783da52+dirty
-# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 783da52+dirty
-# slotB: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 783da52+dirty
-# slotB: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 783da52+dirty
-# slotB: surface_matrix.js = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 783da52+dirty
-# slotB: atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 783da52+dirty
-# slotB: fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 783da52+dirty
-# slotB: pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 783da52+dirty
-# slotB: pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 783da52+dirty
-# slotB: pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 783da52+dirty
-# slotB: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 783da52+dirty
-# slotB: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 783da52+dirty
-# slotB: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 783da52+dirty
-fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ 783da52+dirty
-storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ 783da52+dirty
-demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ 783da52+dirty
-surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 783da52+dirty
-surface_matrix.js = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ 783da52+dirty
-atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ 783da52+dirty
-fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ 783da52+dirty
-pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ 783da52+dirty
-pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ 783da52+dirty
-pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ 783da52+dirty
-pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ 783da52+dirty
-orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ 783da52+dirty
-spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ 783da52+dirty
+# slotB: fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ dbbdd44
+# slotB: storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ dbbdd44
+# slotB: demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ dbbdd44
+# slotB: surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ dbbdd44
+# slotB: surface_matrix.js = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ dbbdd44
+# slotB: atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ dbbdd44
+# slotB: fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ dbbdd44
+# slotB: pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ dbbdd44
+# slotB: pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ dbbdd44
+# slotB: pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ dbbdd44
+# slotB: pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ dbbdd44
+# slotB: orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ dbbdd44
+# slotB: spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ dbbdd44
+fourier = b6eaa864933847ff6cc9e8235cee0590181311290630f136734ed35d4a0fc759 @ dbbdd44
+storyboard = 6de42d6b15943c191541821011f5113d8fcbba4c88deb2a2a4fc281acc4fe974 @ dbbdd44
+demo3d = ddd69b3eaf65bcd07bf5fd56f1702647c899074ef853a2c822d486f076fc868f @ dbbdd44
+surface_matrix = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ dbbdd44
+surface_matrix.js = 928cd5f994692f78e0beda99bd5ed8f8b542dbb2af921753f81f7e06ec999bff @ dbbdd44
+atlas = 93632049ea06e3803bd2da79617aaaecf8de69bcdf28ad5f5a13062ec0b7cd16 @ dbbdd44
+fusion = 1a015d3d9a841ab096094378bc2b582561042abdeba916b05ba45eb8edfae200 @ dbbdd44
+pbr_materials = a9edead53f8b5546eca0bf39f5f60486a7b07f116051db121da76490a1eae250 @ dbbdd44
+pbr_lights = dd561ffa07d301b06c78b69cd975e9326b01b5a903557c835607d2604c96d15c @ dbbdd44
+pbr_scene = 3e18146ee264643d4ba9ae75ecbfdea71014e2ccda27b11a24a1e1b6f12d17de @ dbbdd44
+pendulum = 05ab8623be0fbf349029f4a59cca7c6f42bfd502b2b55d1d45755ed9ded9d1e7 @ dbbdd44
+orbit = 34a7c8bfdf1d28e363fccf68e2cc1299a28f9d8f405da712ecb259d66b9de5b0 @ dbbdd44
+spring = c6a3a2768561cad9e64c5fca021eb7974d36c07041e677b34fee644264f4b45b @ dbbdd44
 
 [smoke]
 # 320×240 @ 30fps，15 帧（0.5s）；覆盖 --script / --bundle 两条路径。
 # 边界：抓不到跨端浮点分歧（已知首次分歧在 fourier 第 103 帧）——
 # 本段绿只说明链路没断；完整基线必须在 main push / nightly 跑。
 # device = windows / RTX 4060 Laptop
-# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ 783da52+dirty
+# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ dbbdd44
 # slotA: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 7f4ce80
-# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 783da52+dirty
-smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 783da52+dirty
+# slotB: smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ dbbdd44
+smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ dbbdd44
 
 [vector]
 # 640×480，纯 2D 作品（vector_paths.lua）：同一脚本 / 同一 bundle，走 `--backend vector`。
@@ -77,10 +77,10 @@ smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ 783da
 # 口径与 [native] 相同：不符即 fail；`--script` 与 `--bundle` 两条路径逐位相同。
 # （slotA 是同批次脏树里的探针值，从未进入提交 ⇒ 标 pending，不冒充任何 commit。）
 # device = windows / RTX 4060 Laptop
-# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ 783da52+dirty
+# reason: B7 Step 3：JS 首次落地 —— surface_matrix.js 与 .lua 的 payload / 帧序列逐位相同，JS 作品进 manifest 与基线 @ dbbdd44
 # slotA: vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 7f4ce80
-# slotB: vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 783da52+dirty
-vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ 783da52+dirty
+# slotB: vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ dbbdd44
+vector_paths = 98d61c1a9e537562a849ca70ef3aa187a5e64b6685d6eb8ea8c44236b908dea8 @ dbbdd44
 
 [browser]
 # Chrome WebGPU，640×480 @ 30fps；已知与 native 存在「1 帧 1 像素」的跨端差异，仅存档
