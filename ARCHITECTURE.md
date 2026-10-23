@@ -845,6 +845,50 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   不重新 request_device）；状态栏常驻"选了谁 / 为什么 / 谁被拒、理由"。
 >   **矢量后端在浏览器能编译但不能出帧**：`Player::pixels` 的同步回读在 map 完成前取
 >   `getMappedRange` ⇒ `OperationError`（GAPS X2-03）⇒ 路由在 wasm 上显式拒绝矢量。
+>
+> **B12 批次（2026-10-23）：可观测性专题**。
+> 原则：**把已经存在但看不见的东西接出来，把不存在但需要的东西建起来**；本批不优化性能、
+> 不改渲染语义。
+> - **L0**：`init_tracing_headless()` 接入 headless 入口（默认 `warn`，`ZELA_LOG` 控级别，
+>   `ZELA_LOG_FILE` 控目标）；`zela-verify`（唯一默认门禁路径）与 `zela-render` 共用
+>   `frame_loop::FrameStats` 的同一套字段；`verify_ms` 保留但**显式标注"未启用"**。
+> - **决策可观测（Step 2）**：`RoutingDecision::{validate, json, object_json}`；空拒绝理由
+>   = 静默决策 ⇒ `run_frames` 直接失败；`zela-verify` 每作品每遍输出 `[decision]`。
+>   浏览器 compare 上下文补 `with_adapter`（此前 `caps = None`，能力校验静默消失）。
+> - **结构化落盘（Step 3）**：`ZELA_FRAME_REPORT=<path>` 追加 JSONL（逐帧计时汇总 + 决策 +
+>   **环境指纹**：GPU / API / os / arch / debug_assertions）。**环境指纹必填**——
+>   B8 的 dev/release 与 X1-11 的字体是同一类教训：脱离环境的数字不可比。
+> - **GPU 归因（Step 4）**：`zela_render_backends::gpu_timing` 三态
+>   （disabled / unsupported / measured）；做法是主帧前后各提交一个**空 compute pass**
+>   写 timestamp（队列按提交顺序执行 ⇒ span 覆盖主帧全部 GPU 工作，不改现有 24 处 pass）。
+>   `TIMESTAMP_QUERY` 只在 `ZELA_GPU_TIMING=1` 时请求（默认 device features 仍是空集）；
+>   测不出时给 `unsupported` + 理由，**不填 0**。
+> - **缓存与资源计数（Step 5）**：`FrameCacheStats` 此前零消费者 ⇒
+>   `diagnostics::{CacheTotals, take_cache_totals}` 接出；新增 `textures_created`
+>   （后端创建渲染目标的次数）——B8 "每帧建纹理"修好与否现在**有数**为证
+>   （pendulum 300 帧只建 2 张）。
+> - **量级门禁（Step 6）**：`FrameStats::check()` 恒开（单帧 > 500ms 即失败），打印才是可选的。
+>
+> **B13 批次（2026-10-23）：矢量作品对拍与字体口径**。
+> - **字体口径（Step 0）**：`tools/typst-fonts.txt` 是版本 / 文件名 / SHA-256 的**唯一真源**，
+>   `build.ps1`（下载+校验）与 xtask（对拍环境）共读；xtask 给所有对拍子进程注入
+>   `ZELA_TYPST_FONT_DIR`，缺失即报错。关闭判据 = **可复现**（同代码连续两次录制逐位相同），
+>   而不是"值被更新"。
+> - **对拍设施（Step 1）**：`zela-parity` —— 同一脚本走 `run_frames` 跑两遍
+>   （wgpu / 矢量），逐采样帧按 `vector_vs_wgpu.rs` 的判据比较（覆盖率相对差 ≤10% /
+>   全图 MAE ≤8 / 内部区 MAE ≤2，不放宽），另报差异 bbox、差异像素占比、有符号偏差；
+>   `--post match|backend-default` 把"后处理政策差异"与"渲染算法差异"分开，
+>   `--dump` 落盘最差帧两张图。
+> - **实测结论（Step 2，落档 GAPS Q 段）**：矢量后端在**2D 开放折线与 `Axes2D` 网格**
+>   上缺内容（`scene::push_shape` 把 Polyline 当闭合多边形、<3 点直接丢），
+>   在**3D 光照**上系统性偏暗（同参数下 fusion 内部区 MAE 149、偏差 +140/+158/+146）。
+>   2D 颜色 / 文字 / 圆形填充与 wgpu 基本一致（vector_paths 内部区 MAE 0.35）。
+>   ⇒ "后端融合还是分立"的判断现在有据：**修掉这两类差异之前，矢量不是 wgpu 的等价替代**。
+> - **纳管（Step 3）**：`[vector]` 段 2 → 11 条（同一作品在 `[native]` 与 `[vector]` 各一条，
+>   标签 `name#vector`，批量模式按 `--work` 顺序配对）；25 条对拍全绿。
+>   ⚠️ 这批矢量基线锁的是**当前行为**，X4-01 / X4-02 修好后必须重录。
+> - **被拒的 5 件**（不强行对拍，属既有能力边界）：`demo3d`（线框）、
+>   `surface_matrix` / `_js` / `atlas`（内容纹理）、`capability_gaps`（2D+3D 混排）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

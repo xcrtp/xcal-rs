@@ -470,6 +470,31 @@
 
 ---
 
+## P. B12 批次记账（可观测性专题，2026-10-23）
+
+> 计划《B12执行计划_可观测性专题》。一句话：**把已经存在但看不见的接出来，把不存在但需要的建起来**；
+> 本批不优化性能、不改渲染语义。
+> 四个入口：`ZELA_LOG` / `ZELA_LOG_FILE`（日志）、`ZELA_FRAME_TIMING`（逐帧计时打印）、
+> `ZELA_FRAME_REPORT=<path>`（结构化 JSONL）、`ZELA_GPU_TIMING=1`（GPU timestamp）。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X3-01 | **唯一默认门禁路径零计时能力**：`zela-verify` 里 `timing/Instant/elapsed` 全空，而 B9 之后它是默认门禁 | 验证 / 计时 | **已关闭（Step 1）** | `frame_loop::FrameStats` / `timing_json` / `summary_json` 下沉为**唯一实现**，`zela-render` 删掉本地副本、`zela-verify` 新增 `report_timings`；`ZELA_FRAME_TIMING=1` 时两边字段名**完全一致**（`advance/build/prepare/paint/submit/read/sink/hash/verify/end/total`）。实测：fourier 216 帧 avg_total 2.335ms、pendulum 300 帧 1.746ms |
+| X3-02 | **采了没人消费**：telemetry 默认开、每帧有成本，但 headless 入口从不初始化 subscriber（唯一调用点在 `zela-gui`） | 日志 / 接线 | **已关闭（Step 1）** | 新增 `init_tracing_headless()`（默认 `warn`、`ZELA_LOG` 控级别、`ZELA_LOG_FILE` 控目标，打开失败回落 stderr 并**报出来**）；接入 `zela-render` / `zela-verify` / `zela-playback`（浏览器侧同样生效）。不再"付了钱拿不到东西" |
+| X3-03 | **决策过程未落盘**：B11 的 `BackendRouter` 只 `eprintln!` 一行，产物里查不到"走的哪个后端、为什么" | 路由 / 验证 | **已关闭（Step 2）** | `RoutingDecision::{validate, json, object_json}`；`run_frames` 对每条决策先 `validate()`（空拒绝理由 = 静默决策 ⇒ **显式失败**）；`zela-verify` 每作品每遍 `[decision]`，并进结构化报告。已知静默路径一并修掉：`zela-web` compare 上下文补 `with_adapter`（此前 `caps = None` ⇒ 参数按 `Default` 兜底，能力校验静默消失） |
+| X3-04 | 没有可解析、可 diff、可归档的结构化输出；B8 的 dev/release 教训说明**脱离环境的性能数没有意义** | 观测 / 落盘 | **已关闭（Step 3）** | `ZELA_FRAME_REPORT=<path>` 每作品每遍追加一行 JSON：`timings.all` / `timings.window` / `decisions` / **`env`（GPU / vendor / device / driver / API / os / arch / debug_assertions，必填）** / `cache` / `textures_created` / `gpu`。实测 env 记录为 `NVIDIA GeForce RTX 4060 Laptop GPU / Vulkan / windows / x86_64` |
+| X3-05 | **GPU 侧完全黑盒**（24 处 `timestamp_writes` 全是 `None`）：B8 的分级计时全是 CPU wall-clock，测不出 GPU 执行时间 | 渲染 / 归因 | **已关闭（Step 4）** | `zela_render_backends::gpu_timing`：三态 `disabled / unsupported / measured`，`GpuSpan` 在主帧前后各提交一个空 compute pass 写 timestamp（不改任何现有 pass）。实测 `--backend vector`：script 遍 424.995ms（首帧含建管线）、bundle 遍 2.919ms；未请求 feature 时输出 `unsupported: device 未请求 TIMESTAMP_QUERY`（**不填 0**）。单测 3 条 |
+| X3-06 | telemetry 自身成本**没有精确 A/B**：它是编译期 feature（`zela-schedule` 默认开），而 7 个 crate 依赖它 ⇒ cargo 特性合并使"单点关闭"无效 | 观测 / 成本 | **记账（Step 6）** | 上界实测（`ZELA_FRAME_TIMING=1`）：pendulum `advance` 0.058–0.074ms/帧（3.3–3.9%，总 1.75–1.88ms）、fourier 0.164–0.167ms/帧（7.0–7.1%，总 2.34ms）。telemetry 采集是 `advance` 的**子集** ⇒ 其成本低于该占比（B8 的 93% 在 hash+sink，不在采集）。触发：需要精确数字时，从 7 个 manifest 同时 `default-features = false` 再对比（跨 manifest 改动，未并入本批） |
+| X3-07 | `FrameCacheStats` 有定义、有填充、**零外部消费者** | 渲染 / 观测 | **已关闭（Step 5）** | `diagnostics::{CacheTotals, record_cache, take_cache_totals}`（取走即清零）；`scene_callback` 两个 2D finish 点上报；实测 pendulum 300 帧 `geom 600/600`（动画内容每帧几何都变，符合预期）、`reveal 600/297`（区间变化不触发 miss，与文档口径一致） |
+| X3-08 | 量级门禁只在 `ZELA_FRAME_TIMING=1` 时"呈报"，不进退出码 | 验证 / 门禁 | **已关闭（Step 6）** | `FrameStats::check()` 从 `report()` 拆出并**恒开**（单帧 > 500ms ⇒ 失败；首帧含建管线，按既有口径不计）；`zela-verify` 两遍渲染都接上，打印仍可选 |
+| X3-09 | **buffer 数与显存未计数**：wgpu 没有全局资源查询，要自己包一层 `create_buffer` / 纹理尺寸累加才拿得到 | 渲染 / 观测 | **记账（Step 5）** | 本批只接出 `textures_created`（2D color+msaa、3D msaa+depth 的**创建**次数；pendulum 300 帧 = 2 张 ⇒ B8 "每帧建纹理"有数为证）。触发：需要"显存占用"曲线时，在 `WgpuBackend2D` / `WgpuBackend3D` 的资源创建处统一记账（buffer 无 `size()` 端口，需自存） |
+| X3-10 | xtask 自身不初始化 tracing subscriber | 验证 / 日志 | **记账（Step 1）** | xtask 只**拉起子进程**，每个子进程各自 `init_tracing_headless()`；xtask 自己的 `println!` 已足够。触发：xtask 内部需要 `tracing::warn!` 时再补（否则会静默丢） |
+| X3-11 | `t_verify` 字段恒 0：GPU 校验 pass 未实现（B8 占位） | 验证 / 计时 | **记账（Step 1）** | 保留字段（字段名与 B8 一致，前后可比），但 `FrameStats::report` 固定打印 `[timing-note] verify_ms 恒 0 是因为 GPU 校验 pass **未启用**`，结构化报告也带 `verify_note`。触发：实现 GPU 校验 pass 时删掉这两处提示 |
+
+**P 段小计（B12）**：已关闭 7（X3-01、X3-02、X3-03、X3-04、X3-05、X3-07、X3-08）· 记账 4（X3-06、X3-09、X3-10、X3-11）。
+
+---
+
 ## Q. B13 批次记账（矢量作品对拍与字体口径，2026-10-23）
 
 > 计划《B13执行计划_矢量作品对拍与字体口径》。一句话：给 11 件"能渲染但零证据"的矢量作品
