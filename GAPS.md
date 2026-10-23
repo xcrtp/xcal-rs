@@ -415,7 +415,12 @@
 | W1-03 | JS 适配器（boa）实现完整但**零作品**：没有一件脚本走 JS，等于没有兑现证据 | 脚本 / Pod 装配 | **已关闭（B7 Step 3）** | `surface_matrix.js` 是 `surface_matrix.lua` 的逐语句翻译（同组件、同字段、同枚举、同顺序）。判据与实测：① 分镜 JSON **逐字节相同** ⇒ `payload hash` 两件都是 `e0951fd4…`（带确定字体）；② 帧序列哈希两件都是 `928cd5f9…`（640×480，1 帧，`script == bundle`）⇒「同一场景、两种语言、同一像素」成立。落地配套：`js` 进 xtask 对拍 features（`typst,js`，纯 Rust，不让对拍依赖本机 Python）、`build.ps1` 的编译命令同开 `js`（不进 wasm —— 网页只回放 ZSB）、`zela-verify` 支持"作品名自带扩展名"（同名 `.lua` / `.js` 并存时探测顺序选不出来） |
 | W1-04 | `[browser]` 段定位待改：JS 是唯一能进 wasm 的脚本语言，但真值仍未录制 | 基线 / 浏览器 | **记账（B7 Step 3 探测）** | `surface_matrix.js` 的 ZSB 与其它作品**同一容器格式**（回放端只解释分镜，不关心源语言）⇒ 浏览器侧第一次具备"可比对"的前提；`build.ps1` 已带 `?compare=1` 对拍入口。本机跑不出浏览器产物（需要 `wasm-pack` + Chrome WebGPU）⇒ 本批不录值，`[browser]` 段维持"仅存档、不参与自动比对"。触发：在 Chrome WebGPU 打开 `index.html?compare=1` 跑一次即可补录（`[browser]` 只增不改语义） |
 
-**M 段小计（B7）**：已关闭 2（W1-02、W1-03）· 记账 2（W1-01、W1-04）。
+| W1-05 | 6 项"零使用能力"里只有 3 项在脚本层**可达**（`scene.despawn` / `Curve.Const` / `Target.CameraEye`）；`Group` / `Target.Phase` / `Target.MorphT` 是**没有入口**，不是没人用：`Group` 不在 `SceneApi` 签名里、`PhaseAnim` 只由函数图像对象内部产生、`MorphShape` 只在渲染/测试里构造 | 脚本 API / 能力兑现 | **已关闭（B7 Step 4，`zela.scene@8→@9`）** | 新增三个入口：`scene.group(zela.Group{id})` → `Group` 标签、`scene.phase_anim(zela.PhaseAnim{phase,omega})` → `PhaseAnim`、`scene.morph(zela.Morph{from,to,closed,t,samples})` → `MorphShape`（折线点表走 `Path2D::from_polyline`，与 `reveal`/`polyline` 同口径）；指纹 `15_573_081_187_359_822_637 → 10_059_647_094_731_395_853`。**`Group` 判断结论**：语义 = 纯组合标签、不含变换、不嵌套，与 `Parent`（父子变换累乘）分工清晰 ⇒ **补，不删**。作品 `capability_gaps.lua`（90 帧）一次覆盖 6 项，`script == bundle`；`despawn` 有效性用"去掉那一行"的对照脚本实测：哈希 `d66b333a…` ≠ `29713c3d…`（白圆出现在视口内） |
+| W1-06 | `Target.Phase` 写入的 `phase` **没有消费者**：脚本层没有创建函数图像对象的入口（`FunctionX2Y` + `Sampler1D` 不暴露，且函数是 Rust 闭包，ZSB 无法序列化） | 脚本 API / 动画目标 | **记账（B7 Step 4）** | `capability_gaps.lua` 里 `phase` 每帧被 `BindingApplySystem` 写入（组件值确实变了），但 `SceneRecordSystem` 只在函数图像对象上取 `x + phase` ⇒ **像素不变**。触发：要暴露函数图像对象时必须先解决"函数怎么持久化"（命名函数表 vs 表达式子集），不是加一个组件构造器就够 |
+| W1-07 | `scene.despawn` **没有时间参数**：在 commit 期执行 ⇒ 只能表达"创建后取消"，无法表达"动画中途移除" | 脚本 API / 生命周期 | **记账（B7 Step 4）** | `scene_service::scene_despawn` → `SceneEncoder::despawn`，写入 SceneScript 的 `despawns`，commit 时一次性应用。作品用它做"条件性不生成"（对照实测见 W1-05）。触发：需要中途销毁时，得给 `despawn` 加时间轴参数（属动画语义扩展，不是补一个字段） |
+| W1-08 | A6「`zela.scene` 指纹只变一次」被 Step 4 打破（`@7→@8` 后又 `@8→@9`） | 验收口径 | **记账（用户明确豁免）** | 根因：计划 §6.1 把 `Group` / `Target.Phase` / `Target.MorphT` 当成"可达但零使用"，实际按代码是"不可达"（W1-05）；Step 1 已提交，无法合并。用户在 Step 4 明确选择"开 @8→@9，六项全补" ⇒ 本条只留痕，不作为违规 |
+
+**M 段小计（B7）**：已关闭 3（W1-02、W1-03、W1-05）· 记账 4（W1-01、W1-04、W1-06、W1-07）。
 
 ---
 

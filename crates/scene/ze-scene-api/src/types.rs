@@ -253,6 +253,42 @@ pub struct Opacity {
     pub value: f32,
 }
 
+/// 组标签（B7 Step 4）：**纯组合**，不含变换。
+///
+/// 与 `Parent` 的分工（这也是「补作品而不是删」的依据）：`Parent` 级联父子变换，
+/// `Group` 只给对象打一个"同属一批"的标签，供整体查询 / 批量控制使用；
+/// 二者不能互相替代，也**不支持嵌套**。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
+#[pod_type(name = "zela.Group")]
+pub struct Group {
+    pub id: u32,
+}
+
+/// 函数图像相位参数（B7 Step 4）：`Target.Phase` 每帧写 `phase`。
+///
+/// `phase` 的消费者只有函数图像对象（`x + phase` 的采样平移）；脚本层目前
+/// 没有创建函数图像对象的入口 ⇒ 本组件可挂、可写，但**不改变像素**（GAPS W1-06）。
+#[derive(Clone, Copy, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.PhaseAnim")]
+pub struct PhaseAnim {
+    pub phase: f32,
+    pub omega: f32,
+}
+
+/// 可变形形状（B7 Step 4）：`from` / `to` 两条折线 + 形变参数 `t`。
+///
+/// `Target.MorphT` 每帧写 `t` ∈ [0,1]；渲染侧对两条折线按弧长插值。
+/// `samples = 0` 表示用默认顶点数（与 `MorphShape::new` 一致）。
+#[derive(Clone, Debug, PartialEq, PodType)]
+#[pod_type(name = "zela.Morph")]
+pub struct Morph {
+    pub from: Vec<Vec2>,
+    pub to: Vec<Vec2>,
+    pub closed: bool,
+    pub t: f32,
+    pub samples: u32,
+}
+
 /// Transform 的写入通道（S3；B7 起只有三条显式通道 —— `Auto` 已删除）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PodType)]
 #[pod_type(name = "zela.TransformChannel")]

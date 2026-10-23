@@ -11,9 +11,9 @@
 
 use ze_scene_core::animation::TargetKind;
 use crate::types::{
-    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Formula, Light, Material3D, Name,
-    Opacity, Parent, PathList, PathShape, Polyline, Reveal, RevealPath, Stroke, Surface, Text,
-    Transform, Transform3D, TransformChannel,
+    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Formula, Group, Light, Material3D,
+    Morph, Name, Opacity, Parent, PathList, PathShape, PhaseAnim, Polyline, Reveal, RevealPath,
+    Stroke, Surface, Text, Transform, Transform3D, TransformChannel,
 };
 use ze_pod_core::Handle;
 use ze_pod_macro::capability;
@@ -23,9 +23,14 @@ use ze_pod_macro::capability;
 /// `@7 → @8`（B7 Step 1）：删除 `Target.TransformValue`（按值类型猜写哪一列的静默兜底）
 /// 与 `TransformChannel.Auto`。删一个零使用方法**不改变任何像素**，但改变能力表面
 /// ⇒ 必须升版本，让"脚本引用了不存在的目标"在装配期显式失败。
+///
+/// `@8 → @9`（B7 Step 4，用户明确豁免 A6「指纹只变一次」）：补齐三个此前
+/// **脚本层不可达**的能力入口 —— `group`（`Group` 标签）、`phase_anim`（`Target.Phase`
+/// 的写入对象）、`morph`（`Target.MorphT` 的写入对象）。它们此前不是"没人用"，
+/// 而是**没有入口**（见 GAPS W1-05）。
 #[capability(
     namespace = "zela.scene",
-    version = "8",
+    version = "9",
     description = "脚本可见的场景装配接口（结构化组件 / 对象 / 动画）",
     bindings
 )]
@@ -113,6 +118,15 @@ pub struct SceneApi<'a> {
 
     /// 构造 Surface（B3 Step 0）：`Surface` + `SurfaceRenderer` + `SurfaceTexture` 组件组。
     pub surface: fn(&'a dyn Pod, surface: Surface) -> Handle,
+
+    /// 构造组标签组件（B7 Step 4）：**纯组合**，不做父子变换累乘（与 `Parent` 分工）。
+    pub group: fn(&'a dyn Pod, group: Group) -> Handle,
+
+    /// 构造函数图像相位组件（B7 Step 4）：`Target.Phase` 每帧写 `phase`。
+    pub phase_anim: fn(&'a dyn Pod, phase: PhaseAnim) -> Handle,
+
+    /// 构造可变形形状组件（B7 Step 4）：`Target.MorphT` 每帧写 `t`。
+    pub morph: fn(&'a dyn Pod, morph: Morph) -> Handle,
 }
 
 /// 宿主暴露给脚本的内容编译接口。
@@ -140,9 +154,9 @@ pub struct ContentApi<'a> {
 // 指纹算法是固定 FNV-1a（跨 Rust 版本稳定），见 `ze_pod_core::capability_fingerprint`。
 
 /// `zela.scene` 的当前自述版本（必须与 `#[capability(version = ...)]` 逐字一致）。
-pub const SCENE_API_VERSION: &str = "8";
+pub const SCENE_API_VERSION: &str = "9";
 /// `zela.scene` 的 `hash(signatures())` 基线。
-pub const SCENE_API_FINGERPRINT: u64 = 15_573_081_187_359_822_637;
+pub const SCENE_API_FINGERPRINT: u64 = 10_059_647_094_731_395_853;
 /// `zela.content` 的当前自述版本。
 pub const CONTENT_API_VERSION: &str = "1";
 /// `zela.content` 的 `hash(signatures())` 基线。

@@ -779,6 +779,24 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   比 PNG **字节**（不挂哈希时没有哈希值可拿）。
 > - **`hashes` 全量**：167s（B8 前 dev）→ 52.48s（profile 切换）→ **13.07s**（批量 + V3-12）；
 >   编译：首次 verify-profile 全量 + 六步 530.57s，增量 9.03s。
+>
+> **B7 批次（2026-10-23）：内容丰满期（能力兑现 · JS 落地 · 覆盖矩阵）**。
+> - **原则：已建能力必须在作品中可见，且由机制保证**（口号没有机制必然漂移）。
+>   "零使用"要分三种：真没人用 / **脚本层不可达** / 纯标签（合理但无像素）。
+> - **Step 1（`@7→@8`）**：删 `Target.TransformValue` 与 `TransformChannel.Auto`
+>   （按值类型猜写哪一列、猜不中静默跳过、且没有 Rotation 分支）；六条基线逐位不变。
+> - **Step 2**：manifest 的 13 个作品全部进 `[native]` 对拍 + `payload-hash` 全量非 `-`
+>   （此前 12 件写 `-`，唯一有值的 fourier 也已不可复现 —— W1-02）。
+>   顺带发现 `MeshGeometry.id` 取自**进程内**计数器且随 serde 进 payload
+>   ⇒ ZSB 不是源码的纯函数（W1-01，记账未修）。
+> - **Step 3**：`surface_matrix.js` 是 `surface_matrix.lua` 的逐语句翻译，分镜 JSON 与
+>   帧序列哈希**逐位相同**（"同一场景、两种语言、同一像素"，Pod 架构最强实证）；
+>   `js`（boa，纯 Rust）进对拍 features，否则它会继续腐烂。
+> - **Step 4（`@8→@9`，用户豁免 A6 的"只变一次"）**：`Group` / `Target.Phase` /
+>   `Target.MorphT` 此前**根本没有脚本入口**（不是没人用）⇒ 新增 `scene.group` /
+>   `scene.phase_anim` / `scene.morph`；作品 `capability_gaps.lua` 一次覆盖
+>   `despawn` / `Curve.Const` / `Phase` / `CameraEye` / `MorphT` / `Group`。
+>   `Group` 判断结论 = **纯组合标签、不做父子变换累乘，与 `Parent` 分工清晰 ⇒ 补，不删**。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

@@ -24,16 +24,19 @@ use ze_scene_core::object::{
 };
 use ze_pod_core::{FunctionId, Handle, HandleTable, Pod, PodError, PodId, QualifiedName, RegistryPod};
 use ze_render_ir::{FillSolid, MeasureSpace, Opacity as NativeOpacity, StrokeSolid};
-use ze_scene_contract::{Components, Name as NativeName, Parent as NativeParent};
+use ze_scene_contract::{Components, Group as NativeGroup, GroupId as NativeGroupId, Name as NativeName, Parent as NativeParent};
 
 use crate::content_service::PathStore;
 use crate::types::{
-    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Light, LightKind, LineStyle,
-    Material3D, Name, Opacity, Parent, Path, PathShape, Polyline, Reveal, RevealPath, ShaderVariant,
-    Stroke, Surface, SurfaceMapping, SurfaceRenderer, Texture, TextureFilter, Transform, Transform3D,
-    TransformChannel,
+    Arrow, Axes2D, Camera2D, Camera3D, Circle, Cube, Curve, Fill, Group, Light, LightKind, LineStyle,
+    Material3D, Morph, Name, Opacity, Parent, Path, PathShape, PhaseAnim, Polyline, Reveal,
+    RevealPath, ShaderVariant, Stroke, Surface, SurfaceMapping, SurfaceRenderer, Texture,
+    TextureFilter, Transform, Transform3D, TransformChannel,
 };
-use ze_scene_core::components::{Light as NativeLight, Material3D as NativeMaterial3D};
+use ze_scene_core::components::{
+    Light as NativeLight, Material3D as NativeMaterial3D, MorphShape as NativeMorphShape,
+    PhaseAnim as NativePhaseAnim,
+};
 use ze_scene_core::surface::{
     Surface as NativeSurface, SurfaceMapping as NativeSurfaceMapping,
     SurfaceRenderer as NativeSurfaceRenderer, SurfaceTexture as NativeSurfaceTexture,
@@ -208,6 +211,25 @@ impl SceneServicePod {
             "zela.Surface",
             "ze_pod_core.Handle",
             scene_surface,
+        );
+        // B7 Step 4：三个此前脚本层不可达的能力入口。
+        registry.register_fn1_named::<Group, Handle>(
+            "zela.scene::group",
+            "zela.Group",
+            "ze_pod_core.Handle",
+            scene_group,
+        );
+        registry.register_fn1_named::<PhaseAnim, Handle>(
+            "zela.scene::phase_anim",
+            "zela.PhaseAnim",
+            "ze_pod_core.Handle",
+            scene_phase_anim,
+        );
+        registry.register_fn1_named::<Morph, Handle>(
+            "zela.scene::morph",
+            "zela.Morph",
+            "ze_pod_core.Handle",
+            scene_morph,
         );
         registry.register_fn1_named::<Transform3D, Handle>(
             "zela.scene::transform3d",
@@ -601,6 +623,50 @@ fn scene_polyline(pod: &dyn Pod, polyline: Polyline) -> Handle {
         .borrow_mut()
         .components
         .insert(vec![Box::new(reveal)])
+}
+
+/// `zela.Group` → `Group` 标签组件（纯组合，不含变换）。
+fn scene_group(pod: &dyn Pod, group: Group) -> Handle {
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(NativeGroup::new(NativeGroupId::new(
+            group.id,
+        )))])
+}
+
+/// `zela.PhaseAnim` → `PhaseAnim { phase, omega }`（`Target.Phase` 的写入对象）。
+fn scene_phase_anim(pod: &dyn Pod, phase: PhaseAnim) -> Handle {
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(NativePhaseAnim::new(phase.phase, phase.omega))])
+}
+
+/// `zela.Morph` → `MorphShape`（`Target.MorphT` 的写入对象）。
+///
+/// 折线点表 → `Path2D::from_polyline`，与 `reveal` / `polyline` 同一口径。
+fn scene_morph(pod: &dyn Pod, morph: Morph) -> Handle {
+    let to_points = |points: &[crate::types::Vec2]| -> Vec<NotionVec2> {
+        points
+            .iter()
+            .map(|p| NotionVec2::new(p.x, p.y))
+            .collect()
+    };
+    let from = ze_notion::Path2D::from_polyline(&to_points(&morph.from), morph.closed);
+    let to = ze_notion::Path2D::from_polyline(&to_points(&morph.to), morph.closed);
+    let mut native = NativeMorphShape::new(from, to);
+    native.t = morph.t;
+    if morph.samples > 0 {
+        native.samples = morph.samples;
+    }
+    service(pod)
+        .rec
+        .borrow_mut()
+        .components
+        .insert(vec![Box::new(native)])
 }
 
 fn scene_parent(pod: &dyn Pod, parent: Parent) -> Handle {

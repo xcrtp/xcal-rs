@@ -1060,6 +1060,8 @@ const HASHES_WORKS: &[(&str, Option<&str>)] = &[
     ("pendulum", None),
     ("orbit", None),
     ("spring", None),
+    // B7 Step 4：零使用能力补齐（despawn / Curve.Const / Phase / CameraEye / MorphT / Group）。
+    ("capability_gaps", None),
 ];
 
 /// 取某作品的基线值（`vector_paths` 在 `[vector]`，其余在 `[native]`）。

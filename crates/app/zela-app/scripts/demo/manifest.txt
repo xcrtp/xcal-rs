@@ -37,3 +37,4 @@ surface_matrix  Surface能力矩阵      surface_matrix.lua  e0951fd48d4d8fb96b4
 surface_matrix_js  Surface能力矩阵(JS) surface_matrix.js  e0951fd48d4d8fb96b4f2ba649427201ed57a15fe501a0161f7215b2b5639fe0
 atlas           2D纹理进3D           atlas.lua       5e5bc366aaac21ef37786d051302254a332a541a891b41bb93e4703fbbcd69b9
 vector_paths    矢量后端作品         vector_paths.lua 94e90dcc14b954a602b0e5ce3f3b64c9966db9a778df15b14e8bc9c31b8ebb3f
+capability_gaps 能力缺口补齐        capability_gaps.lua 3c3d89bbaf5a41784cd5da4c28b6af1f5175af15d3088e11608dd2e24e58d5f2
