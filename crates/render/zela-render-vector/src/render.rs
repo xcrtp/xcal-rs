@@ -203,6 +203,34 @@ impl Record {
         let clear = [0.0; 4];
         Record { key1: key, m1: m, fill: clear, fill2: clear, stroke, stroke2: stroke, background: clear, background2: clear, params: [0.0, curves as f32, width, 0.0], flags: (shape_bits as u64) << STYLE, ..Zeroable::zeroed() }
     }
+
+    /// **Modified by Zela (B10 Step 2)**: a **mesh** record — the shape is a `Kind::Mesh`
+    /// raster (see `Store::add_mesh`), drawn triangle by triangle in a 3D view.
+    ///
+    /// `steps` is the raster's own count (its triangles; a surface's faces) — it is what
+    /// `Raster::shown` windows over, so it must be the **whole** count for a fully drawn mesh
+    /// (`params = [0, steps]`). `material` is upstream's `(metallic, roughness, reflectance)`;
+    /// `Some(_)` writes `material[3] = 1`, and only then does the renderer light the mesh
+    /// per fragment (`render.rs` 的 `material = three_d && Kind::Mesh && material[3] > 0`).
+    pub(crate) fn mesh(key: u64, steps: u32, m: Mat34, fill: [f32; 4], material: Option<[f32; 3]>) -> Self {
+        let clear = [0.0; 4];
+        Record {
+            key1: key,
+            m1: m,
+            fill,
+            fill2: fill,
+            stroke: clear,
+            stroke2: clear,
+            background: clear,
+            background2: clear,
+            params: [0.0, steps as f32, 0.0, 0.0],
+            material: match material {
+                Some([metallic, roughness, reflectance]) => [metallic, roughness, reflectance, 1.0],
+                None => [0.0; 4],
+            },
+            ..Zeroable::zeroed()
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]

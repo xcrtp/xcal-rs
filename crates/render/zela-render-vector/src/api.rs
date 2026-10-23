@@ -158,6 +158,76 @@ fn centroid_area(points: &[[f64; 3]]) -> [f32; 6] {
     ]
 }
 
+/// 一条 **3D 网格**记录（B10 Step 2）：模型空间顶点 + 三角形索引 + 材质。
+///
+/// 输入精度与上游一致：位置 / UV / 法线都是 **f64**，三角形是 u32。上游
+/// `Mesh::new` 要求"每个点一个 (u, v)" ⇒ [`uvs`](Self::uvs) 为 `None` 时本入口补零；
+/// `normals` 为 `None` 时由上游按面积加权自动求法线（`smooth_normals`）。
+///
+/// 本批**不带纹理**（GAPS V2-13：纹理 / 渐变的宿主入口仍缺）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshRecord {
+    /// 顶点位置（模型空间）。
+    pub positions: Vec<[f64; 3]>,
+    /// 可选逐顶点 UV（长度须等于 `positions`；`None` ⇒ 上游补 `(0, 0)`）。
+    pub uvs: Option<Vec<[f64; 2]>>,
+    /// 可选逐顶点法线（长度须等于 `positions`；`None` ⇒ 上游按面积加权求）。
+    pub normals: Option<Vec<[f64; 3]>>,
+    /// 三角形索引（三个一组；`positions` 的下标）。
+    pub triangles: Vec<u32>,
+    /// 表面色（straight RGBA，0..1）；受光时作为反照率。
+    pub fill: [f32; 4],
+    /// 3×4 模型矩阵（行主序）。
+    pub model: [[f32; 4]; 3],
+    /// 材质 `[metallic, roughness, reflectance]`；`Some(_)` ⇒ 该网格按材质逐片元受光
+    /// （上游 `material[3] = 1`）。`None` ⇒ 不受光（只按 `fill` 平涂）。
+    pub material: Option<[f32; 3]>,
+}
+
+impl MeshRecord {
+    /// 几何自洽性检查（显式失败，不静默丢三角形）。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.positions.is_empty() {
+            return Err("mesh: 顶点为空".to_string());
+        }
+        if self.triangles.is_empty() || self.triangles.len() % 3 != 0 {
+            return Err(format!(
+                "mesh: 三角形索引必须是三个一组（实际 {} 个）",
+                self.triangles.len()
+            ));
+        }
+        if let Some(index) = self
+            .triangles
+            .iter()
+            .find(|&&index| index as usize >= self.positions.len())
+        {
+            return Err(format!(
+                "mesh: 索引 {index} 超出顶点数 {}",
+                self.positions.len()
+            ));
+        }
+        if let Some(uvs) = &self.uvs {
+            if uvs.len() != self.positions.len() {
+                return Err(format!(
+                    "mesh: UV 数 {} ≠ 顶点数 {}",
+                    uvs.len(),
+                    self.positions.len()
+                ));
+            }
+        }
+        if let Some(normals) = &self.normals {
+            if normals.len() != self.positions.len() {
+                return Err(format!(
+                    "mesh: 法线数 {} ≠ 顶点数 {}",
+                    normals.len(),
+                    self.positions.len()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 一条**描边**路径（`Record` 的描边形态，B6 Step 2.1）。
 ///
 /// 上游编码（已核对 `vector.wgsl:807`）：`params.z` = 描边**半宽**；
@@ -212,6 +282,13 @@ pub enum Light {
         angle: f32,
         softness: f32,
         shadows: bool,
+    },
+    /// **B10 Step 2**：环境图（上游 `kind = 4`）。`id` 指向 [`Player`] 里
+    /// `add_environment` 上传的那张图；上游把它放在"点光 reach"的槽位（`slot[7]`）。
+    ///
+    /// AO 的生效条件正是"存在环境光（kind 0）或环境图（kind 4）"（见 `occlusion_of`）。
+    Environment {
+        id: u32,
     },
 }
 
@@ -285,6 +362,12 @@ impl Light {
                 out[11] = scale;
                 out[12] = -outer * scale;
                 out[13] = if shadows { 1.0 } else { 0.0 };
+            }
+            // B10 Step 2：环境图槽位 —— `kind = 4`，id 放在"点光 reach"的位置
+            // （上游 `environment_of` 读 `slot[7]`）。
+            Light::Environment { id } => {
+                out[3] = 4.0;
+                out[7] = id as f32;
             }
         }
         out
@@ -412,41 +495,67 @@ fn render_with_view(
     let mut player = crate::render::Player::new(width, height, samples);
     let mut built: Vec<Record> = Vec::with_capacity(records.len());
     for (i, record) in records.iter().enumerate() {
-        let (points, ranges) = match record {
-            PathRecord::Fill(path) => (&path.points, &path.ranges),
-            PathRecord::Stroke(path) => (&path.points, &path.ranges),
-        };
-        if points.len() % 4 != 0 || points.is_empty() {
-            return Err(format!("record {i}: control points are not whole curves"));
-        }
         let key = i as u64 + 1;
-        let point_bytes: &[u8] = bytemuck::cast_slice(points);
-        let range_bytes: &[u8] = bytemuck::cast_slice(ranges);
-        player.upload(Upload::path(
-            key,
-            point_bytes,
-            range_bytes,
-            centroid_area(points),
-        )?)?;
-        let curves = (points.len() / 4) as u32;
-        built.push(match record {
-            PathRecord::Fill(path) => Record::filled(
-                key,
-                curves,
-                path.model,
-                path.fill,
-                path.shade_in_3d,
-                path.material,
-            ),
-            PathRecord::Stroke(path) => Record::stroked(
-                key,
-                curves,
-                path.model,
-                path.stroke,
-                path.width,
-                path.shape_bits,
-            ),
-        });
+        match record {
+            PathRecord::Fill(path) => {
+                let curves = upload_path(&mut player, key, i, &path.points, &path.ranges)?;
+                built.push(Record::filled(
+                    key,
+                    curves,
+                    path.model,
+                    path.fill,
+                    path.shade_in_3d,
+                    path.material,
+                ));
+            }
+            PathRecord::Stroke(path) => {
+                let curves = upload_path(&mut player, key, i, &path.points, &path.ranges)?;
+                built.push(Record::stroked(
+                    key,
+                    curves,
+                    path.model,
+                    path.stroke,
+                    path.width,
+                    path.shape_bits,
+                ));
+            }
+            PathRecord::Mesh(mesh) => {
+                mesh.validate()
+                    .map_err(|error| format!("record {i}: {error}"))?;
+                // 上游要求"每个点一个 (u, v)"：没有 UV 时补零（不改变几何）。
+                let zero_uvs;
+                let uvs: &[[f64; 2]] = match &mesh.uvs {
+                    Some(uvs) => uvs,
+                    None => {
+                        zero_uvs = vec![[0.0, 0.0]; mesh.positions.len()];
+                        &zero_uvs
+                    }
+                };
+                let point_bytes: &[u8] = bytemuck::cast_slice(&mesh.positions);
+                let uv_bytes: &[u8] = bytemuck::cast_slice(uvs);
+                let normal_bytes: &[u8] = match &mesh.normals {
+                    Some(normals) => bytemuck::cast_slice(normals),
+                    None => &[],
+                };
+                let triangle_bytes: &[u8] = bytemuck::cast_slice(&mesh.triangles);
+                player.upload(Upload::mesh(
+                    key,
+                    point_bytes,
+                    uv_bytes,
+                    normal_bytes,
+                    triangle_bytes,
+                    0,
+                    0,
+                )?)?;
+                built.push(Record::mesh(
+                    key,
+                    (mesh.triangles.len() / 3) as u32,
+                    mesh.model,
+                    mesh.fill,
+                    mesh.material,
+                ));
+            }
+        }
     }
     let record_bytes: Vec<u8> = bytemuck::cast_slice(&built).to_vec();
 
@@ -458,15 +567,42 @@ fn render_with_view(
     })?
 }
 
-/// **3D 路径渲染**（B6 Step 1.2）：`View3`（含灯 / tone / bloom / AO）+ 路径记录。
+/// 上传一条路径并返回曲线数（填充与描边共用）。
+fn upload_path(
+    player: &mut crate::render::Player,
+    key: u64,
+    index: usize,
+    points: &[[f64; 3]],
+    ranges: &[[u32; 4]],
+) -> Result<u32, String> {
+    if points.len() % 4 != 0 || points.is_empty() {
+        return Err(format!("record {index}: control points are not whole curves"));
+    }
+    player.upload(Upload::path(
+        key,
+        bytemuck::cast_slice(points),
+        bytemuck::cast_slice(ranges),
+        centroid_area(points),
+    )?)?;
+    Ok((points.len() / 4) as u32)
+}
+
+/// **3D 路径 / 网格渲染**（B6 Step 1.2 / B10 Step 2）：`View3`（含灯 / tone / bloom / AO）
+/// + 混合记录（路径与网格按声明顺序绘制）。
 pub fn render_3d(view: &View3, records: &[PathRecord]) -> Result<Vec<u8>, String> {
-    render_with_view(
-        view_3d(view),
-        view.size.0,
-        view.size.1,
-        1,
-        records,
-    )
+    render_3d_with(view.size.0, view.size.1, 1, view, records)
+}
+
+/// 同 [`render_3d`]，但显式给画布尺寸与**采样数**（`frame_loop` 的 3D 分支用 4，
+/// 与 2D 路径同口径；`render_3d` 固定 1 是 B6 遗留的调用约定）。
+pub fn render_3d_with(
+    width: u32,
+    height: u32,
+    samples: u32,
+    view: &View3,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    render_with_view(view_3d(view), width, height, samples, records)
 }
 
 /// 一条绘制记录（保持声明顺序 = 绘制顺序）。
@@ -474,6 +610,8 @@ pub fn render_3d(view: &View3, records: &[PathRecord]) -> Result<Vec<u8>, String
 pub enum PathRecord {
     Fill(FilledPath),
     Stroke(StrokedPath),
+    /// **B10 Step 2**：3D 网格（可受光）。
+    Mesh(MeshRecord),
 }
 
 impl From<FilledPath> for PathRecord {
@@ -485,6 +623,12 @@ impl From<FilledPath> for PathRecord {
 impl From<StrokedPath> for PathRecord {
     fn from(path: StrokedPath) -> Self {
         Self::Stroke(path)
+    }
+}
+
+impl From<MeshRecord> for PathRecord {
+    fn from(mesh: MeshRecord) -> Self {
+        Self::Mesh(mesh)
     }
 }
 
@@ -804,6 +948,122 @@ mod tests {
             outside_on > outside_off,
             "bloom 应让亮区外溢：off = {outside_off}，on = {outside_on}"
         );
+    }
+
+    /// **B10 Step 2 验收（网格）**：三角形网格在 3D 视图里真的画出来，且
+    /// `material = Some(_)` 让它走"逐片元受光"，于是 tone 映射（bloom 合成 pass 里的
+    /// AgX）真的改像素 —— 这正是 §0.2 那条链（`Kind::Mesh` → material → plan.lit →
+    /// glow → bloom/tone）的入口。
+    #[test]
+    fn mesh_records_draw_and_are_lit() {
+        let mesh = |material: Option<[f32; 3]>| MeshRecord {
+            positions: vec![
+                [-1.0, -1.0, 0.0],
+                [1.0, -1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [-1.0, 1.0, 0.0],
+            ],
+            uvs: None,
+            normals: None,
+            triangles: vec![0, 1, 2, 0, 2, 3],
+            fill: [0.8, 0.2, 0.2, 1.0],
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            material,
+        };
+        let view = |tone: ze_render_ir::ToneCurve| View3 {
+            frame: (4.0, 4.0),
+            center: [0.0, 0.0, 0.0],
+            axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            zoom: 1.0,
+            focal: 8.0,
+            size: (64, 64),
+            background: [0.0, 0.0, 0.0, 1.0],
+            light_source: [0.0, 0.0, 1.0],
+            exposure: 4.0,
+            tone: Some(tone),
+            bloom: 1.0,
+            ao: None,
+            lights: vec![
+                // 光来自 +Z（相机在 +Z 侧，看到的是被照亮的一面）。
+                Light::Sun {
+                    direction: [0.0, 0.0, 1.0],
+                    color: [1.0, 1.0, 1.0],
+                    intensity: 3.0,
+                    shadows: false,
+                },
+                Light::Ambient {
+                    color: [1.0, 1.0, 1.0],
+                    intensity: 0.4,
+                },
+            ],
+        };
+        let frame = |material: Option<[f32; 3]>, tone: ze_render_ir::ToneCurve| {
+            let records = [PathRecord::from(mesh(material))];
+            match render_3d(&view(tone), &records) {
+                Ok(frame) => frame,
+                Err(error) => panic!("矢量 3D 网格起不来：{error}"),
+            }
+        };
+
+        let lit = frame(Some([0.0, 0.5, 1.0]), ze_render_ir::ToneCurve::AgX);
+        let center = pixel(&lit, 64, 32, 32);
+        assert!(
+            center[..3].iter().any(|c| *c > 16),
+            "网格应真的画出来（中央非背景）：{center:?}"
+        );
+
+        let clip = frame(Some([0.0, 0.5, 1.0]), ze_render_ir::ToneCurve::Clip);
+        assert_ne!(
+            pixel(&clip, 64, 32, 32),
+            center,
+            "有材质的网格 ⇒ plan.lit ⇒ tone（bloom 合成 pass）必须生效：AgX ≠ clip"
+        );
+
+        let unlit = frame(None, ze_render_ir::ToneCurve::AgX);
+        assert_ne!(
+            pixel(&unlit, 64, 32, 32),
+            center,
+            "material = None 时不应走受光路径（与 Some 必须不同）"
+        );
+    }
+
+    /// 网格几何自洽性：空顶点 / 非三元组索引 / 越界索引 / UV 数不匹配都显式报错。
+    #[test]
+    fn mesh_record_validates_its_geometry() {
+        let base = MeshRecord {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            uvs: None,
+            normals: None,
+            triangles: vec![0, 1, 2],
+            fill: [1.0; 4],
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            material: None,
+        };
+        base.validate().expect("合法三角面");
+
+        let mut empty = base.clone();
+        empty.positions.clear();
+        assert!(empty.validate().is_err());
+
+        let mut partial = base.clone();
+        partial.triangles = vec![0, 1];
+        assert!(partial.validate().is_err());
+
+        let mut out_of_range = base.clone();
+        out_of_range.triangles = vec![0, 1, 9];
+        assert!(out_of_range.validate().is_err());
+
+        let mut bad_uv = base.clone();
+        bad_uv.uvs = Some(vec![[0.0, 0.0]; 2]);
+        assert!(bad_uv.validate().is_err());
     }
 
     /// **B6 Step 1 验收（AO）**：AO 是屏幕空间的深度遮挡，**单块平面没有凹陷 ⇒ 不会变暗**
