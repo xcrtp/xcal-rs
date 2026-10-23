@@ -17,7 +17,7 @@
 //!   该取舍记在 GAPS X1-03。
 
 use ze_notion::{Color32, Mat4};
-use ze_render_ir::{AmbientOcclusion, Bloom, MeshForm, RenderParams, ToneMapping};
+use ze_render_ir::{AmbientOcclusion, MeshForm, RenderParams, ToneMapping};
 use ze_scene_core::components::{Material3D, MeshGeometry, PrimitiveTopology};
 use ze_scene_core::object::{Camera3D, Projection};
 use zela_render::draw::DrawQueue;
