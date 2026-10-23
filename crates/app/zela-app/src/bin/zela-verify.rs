@@ -19,8 +19,11 @@
 //! # 输出（机器可读，一行一个作品）
 //!
 //! ```text
+//! [decision] {"work":"fourier","pass":"script","backend":"Wgpu","reason":"…","rejected":[]}
 //! [verify] {"work":"fourier","size":"640x480","frames":216,"script":"<64 hex>","bundle":"<64 hex>","payload":"<64 hex>"}
 //! ```
+//!
+//! `[decision]` 是 B12 Step 2 的决策日志：B13 对拍出现差异时，第一现场就是它。
 //!
 //! 失败时**点名**作品与路径（`work · script|bundle`），不报"批量失败"。
 
@@ -32,7 +35,7 @@ use zela_app::frame_loop::{
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, compile_script, language_from_path,
 };
-use zela_render_backends::{HeadlessTarget, RenderContext, StandardBackends};
+use zela_render_backends::{HeadlessTarget, RenderContext, RoutingDecision, StandardBackends};
 use zela_scene_bundle::frame_hash::FrameSequenceHash;
 use zela_scene_bundle::{Bundle, MetaInput};
 
@@ -299,6 +302,15 @@ fn run_sink_bypass(ctx: &RenderContext, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// B12 Step 2：路由决策落盘（每作品每遍一行，字段与 `zela-render` 一致）。
+///
+/// 拒绝理由非空由 `run_frames` 内的 `validate()` 保证 —— 这里不再重复判断。
+fn report_decisions(work: &str, pass: &str, decisions: &[RoutingDecision]) {
+    for decision in decisions {
+        println!("{}", decision.json(work, pass));
+    }
+}
+
 /// B12 Step 1.2：`zela-verify` 是**唯一默认门禁路径**，必须与 `zela-render` 同字段计时。
 ///
 /// 默认不打印（门禁输出要保持可读）；`ZELA_FRAME_TIMING=1` 时逐帧 `[timing]` + 每遍
@@ -344,7 +356,7 @@ fn render_png(
         backend: work.backend,
         vector_params: None,
     };
-    let timings = run_frames(
+    let (timings, decisions) = run_frames(
         ctx,
         &mut runtime,
         &mut backends,
@@ -366,6 +378,7 @@ fn render_png(
         },
     )
     .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
+    report_decisions(&work.name, "png", &decisions);
     report_timings(&work.name, "png", &timings);
     Ok(first)
 }
@@ -391,7 +404,7 @@ fn render_hash(
         backend: work.backend,
         vector_params: None,
     };
-    let timings = run_frames(
+    let (timings, decisions) = run_frames(
         ctx,
         runtime,
         &mut backends,
@@ -405,6 +418,7 @@ fn render_hash(
         },
     )
     .map_err(|e| format!("[{}] {path} 渲染失败：{e}", work.name))?;
+    report_decisions(&work.name, path, &decisions);
     report_timings(&work.name, path, &timings);
     Ok(hash.hex())
 }

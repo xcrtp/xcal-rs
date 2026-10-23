@@ -71,6 +71,18 @@ pub struct RoutingDecision {
 }
 
 impl RoutingDecision {
+    /// 显式 `--backend wgpu` 的决策。
+    ///
+    /// 该路径**不取帧快照**（省一次构图），因此没有内容事实可路由；但决策仍要记录一条，
+    /// 否则默认门禁路径在 B13 的决策日志里会缺条目（看起来像"没做决策"）。
+    pub fn explicit_wgpu() -> Self {
+        Self {
+            backend: BackendKind::Wgpu,
+            reason: "显式指定 wgpu：不取帧快照、不做回退".to_string(),
+            rejected: Vec::new(),
+        }
+    }
+
     /// 一行可读报告（B11 §6.4：选了谁、为什么、谁被拒、拒绝理由）。
     pub fn report(&self) -> String {
         let mut out = format!("选择 {:?}（{}）", self.backend, self.reason);
@@ -79,6 +91,69 @@ impl RoutingDecision {
         }
         out
     }
+
+    /// 结构化一行（B12 Step 2）：可 diff、可归档，B13 对拍时作为"第一现场"。
+    ///
+    /// 只含决策本身的事实，不含时间戳 / 运行次数 —— 同一输入必须产出同一行（C1）。
+    pub fn json(&self, work: &str, pass: &str) -> String {
+        let rejected: Vec<String> = self
+            .rejected
+            .iter()
+            .map(|(kind, why)| {
+                format!(
+                    "{{\"backend\":\"{kind:?}\",\"reason\":\"{}\"}}",
+                    escape_json(why)
+                )
+            })
+            .collect();
+        format!(
+            "[decision] {{\"work\":\"{}\",\"pass\":\"{}\",\"backend\":\"{:?}\",\
+             \"reason\":\"{}\",\"rejected\":[{}]}}",
+            escape_json(work),
+            escape_json(pass),
+            self.backend,
+            escape_json(&self.reason),
+            rejected.join(",")
+        )
+    }
+
+    /// C4：拒绝理由不得为空（空理由 = 静默决策），且"被选中的后端不得同时出现在拒绝里"。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.reason.trim().is_empty() {
+            return Err(format!(
+                "{:?} 的选择理由为空 ⇒ 静默决策（B12 Step 2 / C4）",
+                self.backend
+            ));
+        }
+        for (kind, why) in &self.rejected {
+            if why.trim().is_empty() {
+                return Err(format!(
+                    "{kind:?} 的拒绝理由为空 ⇒ 静默决策（B12 Step 2 / C4）"
+                ));
+            }
+            if *kind == self.backend {
+                return Err(format!("{kind:?} 既被选中又被拒 ⇒ 决策自相矛盾"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// JSON 字符串转义（拒绝理由里有中文与 `⇒`，不能假设安全字符集）。
+fn escape_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// 按偏好得到尝试顺序。
@@ -303,5 +378,91 @@ mod tests {
         let a = route(LoopBackend::Vector, content, capable()).unwrap();
         let b = route(LoopBackend::Vector, content, capable()).unwrap();
         assert_eq!(a, b);
+        // B12 Step 2：可重复也包括**落盘行**逐字节相同（不含时间 / 次数）。
+        assert_eq!(a.json("work", "script"), b.json("work", "script"));
+    }
+
+    /// B12 Step 2：生产路径产生的每条决策都能通过校验（拒绝理由非空）。
+    #[test]
+    fn every_production_decision_passes_validation() {
+        let weak = Some(AdapterFacts {
+            features: wgpu::Features::empty(),
+            blends_float32: false,
+        });
+        let contents = [
+            plain_2d(),
+            FrameContent {
+                has_content_texture: true,
+                ..plain_2d()
+            },
+            FrameContent {
+                has_3d_camera: true,
+                has_meshes: 5,
+                ..Default::default()
+            },
+            FrameContent {
+                has_3d_camera: true,
+                has_2d_primitives: 2,
+                has_meshes: 1,
+                ..Default::default()
+            },
+            FrameContent {
+                has_3d_camera: true,
+                has_meshes: 1,
+                has_line_meshes: true,
+                ..Default::default()
+            },
+        ];
+        for content in contents {
+            for preference in [
+                LoopBackend::Auto,
+                LoopBackend::AutoFrame,
+                LoopBackend::Wgpu,
+                LoopBackend::Vector,
+            ] {
+                let decision = route(preference, content, capable()).unwrap();
+                decision
+                    .validate()
+                    .unwrap_or_else(|e| panic!("{preference:?} / {content:?}：{e}"));
+            }
+            // adapter 不足 / 缺失也必须带理由（不能"悄悄回退"）。
+            for facts in [weak, None] {
+                let decision = route(LoopBackend::Vector, content, facts).unwrap();
+                decision.validate().unwrap();
+            }
+        }
+        RoutingDecision::explicit_wgpu().validate().unwrap();
+    }
+
+    /// 空理由 = 静默决策 ⇒ 校验必须报错（不是警告）。
+    #[test]
+    fn empty_reason_fails_validation() {
+        let mut decision = RoutingDecision::explicit_wgpu();
+        decision.reason.clear();
+        assert!(decision.validate().unwrap_err().contains("静默决策"));
+
+        let mut decision = RoutingDecision::explicit_wgpu();
+        decision.rejected.push((BackendKind::Vector, "  ".to_string()));
+        assert!(decision.validate().unwrap_err().contains("静默决策"));
+
+        let mut decision = RoutingDecision::explicit_wgpu();
+        decision.rejected.push((BackendKind::Wgpu, "不该同时出现".to_string()));
+        assert!(decision.validate().unwrap_err().contains("自相矛盾"));
+    }
+
+    /// 落盘行是合法 JSON 形状：转义引号后仍能定位到拒绝理由。
+    #[test]
+    fn decision_json_escapes_and_carries_the_rejection() {
+        let content = FrameContent {
+            has_content_texture: true,
+            ..plain_2d()
+        };
+        let decision = route(LoopBackend::Vector, content, capable()).unwrap();
+        let line = decision.json("surface_matrix", "script");
+        assert!(line.starts_with("[decision] {"));
+        assert!(line.contains("\"backend\":\"Wgpu\""));
+        assert!(line.contains("\"backend\":\"Vector\",\"reason\":\""));
+        assert!(line.contains("内容纹理"));
+        assert!(!line.contains('\n'));
     }
 }

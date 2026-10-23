@@ -376,10 +376,19 @@ async fn run_with(
     let mut display_backends = StandardBackends::new(&display_ctx);
 
     // ── S6：对拍用独立上下文（离屏 Srgb）与独立后端 ─────────────────────
+    //
+    // B12 Step 2：**带 adapter**。此前这里走 `RenderContext::new` ⇒ `caps = None`
+    // ⇒ 渲染参数按 `Default` 兜底而非 `default_for(caps)`，能力校验静默消失。
     let compare_ctx = RenderContext::new(
         display_ctx.device.clone(),
         display_ctx.queue.clone(),
         DEFAULT_TARGET_FORMAT,
+    )
+    .with_adapter(
+        display_ctx
+            .adapter()
+            .cloned()
+            .ok_or_else(|| js_err("display 上下文缺少 adapter（B11 Step 5.3）"))?,
     );
     let mut compare_backends = StandardBackends::new(&compare_ctx);
     let mut hasher = FrameSequenceHash::new(WIDTH, HEIGHT);

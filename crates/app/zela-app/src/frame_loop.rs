@@ -269,7 +269,9 @@ fn vector_capabilities() -> ze_render_ir::Capabilities {
 /// - 每帧顺序：advance → 构图 → 渲染 + 回读 → `on_frame` → `end_frame`。
 ///
 /// `on_frame` 收到 `(帧号, 像素视图)`，返回该帧**哈希耗时**（未哈希 ⇒ `ZERO`）。
-/// 返回逐帧计时（调用方负责汇总与门禁）。
+///
+/// 返回 `(逐帧计时, 去重后的路由决策)`：计时交给调用方汇总与门禁；决策交给调用方落盘
+/// （B12 Step 2 —— B11 只打印，没沉淀）。
 pub fn run_frames(
     ctx: &RenderContext,
     runtime: &mut Runtime,
@@ -278,7 +280,7 @@ pub fn run_frames(
     options: FrameLoopOptions,
     want_rgba: bool,
     on_frame: &mut dyn FnMut(u32, FrameView<'_>) -> Result<Duration, String>,
-) -> Result<Vec<FrameTiming>, String> {
+) -> Result<(Vec<FrameTiming>, Vec<RoutingDecision>), String> {
     let (width, height) = (options.width, options.height);
     runtime.driver.with_scheduler_mut(|scheduler| {
         scheduler.resources_mut().insert(ViewRect {
@@ -312,6 +314,8 @@ pub fn run_frames(
     let dt = 1.0 / options.fps as f32;
     let frames = frames_for(runtime, options.fps);
     let mut timings = Vec::with_capacity(frames as usize);
+    // B12 Step 2：决策日志（相邻重复只留一条；`AutoFrame` 可能真的换后端）。
+    let mut decisions: Vec<RoutingDecision> = Vec::new();
 
     for index in 0..frames {
         let mut timing = FrameTiming::default();
@@ -324,7 +328,8 @@ pub fn run_frames(
             .wait();
         timing.advance = mark.elapsed();
 
-        // ── B11 Step 4：先选后端（作品级：第一帧决定后固定） ──────────────────
+        // ── B11 Step 4 + B12 Step 2：先选后端（作品级：第一帧决定后固定） ──────
+        // 决策本身是可观测对象：逐条校验（拒绝理由不得为空），并收集起来交给调用方落盘。
         let build_mark = Instant::now();
         let mut snapshot: Option<zela_playback::vector_frame::VectorFrame> =
             if options.backend == LoopBackend::Wgpu {
@@ -333,9 +338,9 @@ pub fn run_frames(
                 Some(zela_playback::vector_frame::VectorFrame::take(&runtime)?)
             };
         let snapshot_time = build_mark.elapsed();
-        let wanted = if options.backend == LoopBackend::Wgpu {
+        let decision = if options.backend == LoopBackend::Wgpu {
             // 显式 wgpu：与改动前逐位相同，不付快照代价。
-            BackendKind::Wgpu
+            RoutingDecision::explicit_wgpu()
         } else {
             let snap = snapshot.as_ref().expect("非 wgpu 路径已取快照");
             let decision = match (&pinned, options.backend) {
@@ -354,8 +359,14 @@ pub fn run_frames(
             if options.backend != LoopBackend::AutoFrame {
                 pinned = Some(decision.clone());
             }
-            decision.backend
+            decision
         };
+        // C4：空拒绝理由 = 静默决策 ⇒ 在这里就失败，不让它流进产物。
+        decision.validate()?;
+        if decisions.last() != Some(&decision) {
+            decisions.push(decision.clone());
+        }
+        let wanted = decision.backend;
 
         // 渲染参数：默认值按**实际**后端能力取（wgpu 仍走 `default_for(caps)` ⇒ 逐位相同）。
         let mut params = match options.vector_params {
@@ -470,5 +481,5 @@ pub fn run_frames(
         timings.push(timing);
     }
 
-    Ok(timings)
+    Ok((timings, decisions))
 }

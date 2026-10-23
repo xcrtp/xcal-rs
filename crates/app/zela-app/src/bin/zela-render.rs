@@ -26,8 +26,7 @@ use std::time::{Duration, Instant};
 
 use zela_app::export::{ExportError, target_pix_fmt, write_png};
 use zela_app::frame_loop::{
-    FrameLoopOptions, FrameTiming, FrameView, LoopBackend, frames_for, run_frames,
-    timing_json,
+    FrameLoopOptions, FrameView, LoopBackend, frames_for, run_frames, timing_json,
 };
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, language_from_path,
@@ -305,8 +304,17 @@ fn run() -> Result<(), String> {
     let timing_lines = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
     let mut stats = zela_app::frame_loop::FrameStats::new();
 
+    // B12 Step 2：决策日志需要一个作品标签（单进程路径取脚本 / 产物文件名）。
+    let work_label = args
+        .script
+        .as_ref()
+        .or(args.bundle.as_ref())
+        .and_then(|path| path.file_stem())
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "inline".to_string());
+
     // B9 Step 3：帧循环唯一实现在 `zela_app::frame_loop`（与 `zela-verify` 共用）。
-    let timings = run_frames(
+    let (timings, decisions) = run_frames(
         &ctx,
         &mut runtime,
         &mut backends,
@@ -332,6 +340,11 @@ fn run() -> Result<(), String> {
             Ok(sinks.iter().map(|sink| sink.last_hash_time()).sum())
         },
     )?;
+
+    // B12 Step 2：决策落盘（与 B13 对拍同一份字段；拒绝理由非空由 `run_frames` 校验）。
+    for decision in &decisions {
+        eprintln!("{}", decision.json(&work_label, "render"));
+    }
 
     for (index, timing) in timings.iter().enumerate() {
         if timing_lines {

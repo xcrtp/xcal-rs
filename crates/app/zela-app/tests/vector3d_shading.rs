@@ -32,7 +32,7 @@ fn render(
     let mut backends = StandardBackends::new(ctx);
     let mut target = HeadlessTarget::new();
     let mut frame: Vec<u8> = Vec::new();
-    run_frames(
+    let (_timings, _decisions) = run_frames(
         ctx,
         &mut runtime,
         &mut backends,
