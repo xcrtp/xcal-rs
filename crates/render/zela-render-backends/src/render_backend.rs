@@ -103,11 +103,15 @@ pub fn implemented_capabilities() -> ze_render_ir::caps::RenderCapabilitySet {
 }
 
 /// 按所需 namespace 协商；任一缺失 ⇒ 显式 [`CapabilityNegotiationError`]。
+///
+/// B10 Step 1：协商结果也要带上网格形态 —— 它与 [`implemented_capabilities`] 描述的
+/// 是**同一个后端**，只差"被要求了哪些 namespace"。
 pub fn negotiate_capabilities(
     required: &[&str],
 ) -> Result<ze_render_ir::caps::RenderCapabilitySet, ze_render_ir::caps::CapabilityNegotiationError>
 {
     ze_render_ir::caps::negotiate(IMPLEMENTED_NAMESPACES, required)
+        .map(|set| set.with_mesh(ze_render_ir::caps::MeshForms::tri()))
 }
 
 #[cfg(test)]
