@@ -76,8 +76,11 @@ capability_gaps = d66b333a8b03594e20c0c1ff94c51c62505444d26f556cffdeff51c9898f65
 smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ a311cb9
 
 [vector]
-# 640×480，纯 2D 作品（vector_paths.lua）：同一脚本 / 同一 bundle，走 `--backend vector`。
-# 覆盖填充 + 描边（butt/miter、折线 Reveal）+ 文本路径；静态 1 帧。
+# 640×480，同一脚本 / 同一 bundle 走 `--backend vector`（不支持则显式报错，不静默降级）。
+# - vector_paths：纯 2D，覆盖填充 + 描边（butt/miter、折线 Reveal）+ 文本路径；静态 1 帧。
+# - shaded_meshes（B10 Step 4）：**真 3D 网格 + 着色栈**（墙 / 地板 / 亮立方体，静态 1 帧）；
+#   这条才是"tone / bloom / AO 第一次出现在作品画面上"的证据（逐项判据见
+#   `zela-app/tests/vector3d_shading.rs`）。
 # 口径与 [native] 相同：不符即 fail；`--script` 与 `--bundle` 两条路径逐位相同。
 # （slotA 是同批次脏树里的探针值，从未进入提交 ⇒ 标 pending，不冒充任何 commit。）
 # device = windows / RTX 4060 Laptop
