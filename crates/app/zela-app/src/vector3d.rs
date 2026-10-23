@@ -226,6 +226,7 @@ pub fn has_meshes(queue: &DrawQueue) -> bool {
 mod tests {
     use super::*;
     use ze_notion::Vec3;
+    use ze_render_ir::Bloom;
     use ze_scene_core::components::PrimitiveTopology;
 
     fn camera(projection: Projection) -> Camera3D {
