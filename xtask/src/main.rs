@@ -808,7 +808,7 @@ fn step_coverage(root: &Path) -> Result<(), String> {
         Vec::new()
     };
 
-    let capabilities = xtask::collect_capabilities(&api, &types, &target);
+    let capabilities = xtask::collect_capabilities(&api, &types, &target)?;
     let scripts_root = scripts_dir(root);
     let mut scripts = String::new();
     for relative in xtask::manifest_scripts(&manifest) {

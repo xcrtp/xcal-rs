@@ -16,6 +16,11 @@ pub struct SceneApi<'a> {
     /// 顺序播放一段动画。
     pub animate: fn(&'a dyn Pod, object: Handle, clip: Handle, duration: f64) -> (),
 }
+
+pub struct ContentApi<'a> {
+    /// 编译纯文本为描边路径。
+    pub text: fn(&'a dyn Pod, spec: Text) -> PathList,
+}
 "#;
 
 const TYPES: &str = r#"
@@ -43,7 +48,7 @@ const GAPS: &str = r#"
 "#;
 
 fn capabilities() -> Vec<Capability> {
-    collect_capabilities(API, TYPES, TARGET)
+    collect_capabilities(API, TYPES, TARGET).expect("夹具源码应抽得出全部类别")
 }
 
 /// 方法名 / 枚举变体 / 构造器别名都从源码抽（顺序 = 源码顺序）。
@@ -57,6 +62,7 @@ fn capabilities_come_from_source() {
             "scene:circle",
             "scene:spawn",
             "scene:animate",
+            "content:text",
             "Curve:Const",
             "Curve:Phase",
             "TransformChannel:Position",
@@ -82,6 +88,7 @@ fn usage_accepts_method_and_constructor_forms() {
     let scripts = r#"
         local c = Circle { x = 0.0, y = 0.0, r = 1.0 }
         scene.spawn({ c })
+        content.text(Text { source = "AB" })
         scene.animate(c, scene.clip(Target.MorphT, Curve.Phase { omega = 1.0 }), 1.0)
         scene.parallel(c, scene.clip(Target.CircleRadius, Curve.Const { value = 1.0 }))
         scene.clip_transform(TransformChannel.Position, Curve.Const { value = 1.0 })
@@ -154,4 +161,12 @@ fn exemption_format_is_enforced() {
             "`{source}` 应被拒绝"
         );
     }
+}
+
+/// 整类能力抽不到（源码结构变了）⇒ 抽取阶段就显式报错，不得安静地少检查。
+#[test]
+fn missing_capability_class_is_an_explicit_error() {
+    let error = collect_capabilities(API, TYPES, "// TargetKind 被挪走了\n")
+        .expect_err("抽不到 Target ⇒ fail");
+    assert!(error.contains("Target"), "错误应点名缺失类别：{error}");
 }

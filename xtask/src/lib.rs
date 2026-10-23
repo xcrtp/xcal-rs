@@ -836,11 +836,14 @@ pub struct CoverageReport {
 }
 
 /// 从源码抽能力清单：`SceneApi` / `ContentApi` 的方法 + 三个动画枚举的变体。
+///
+/// 任何**整类抽不到**（例如 `TargetKind` 被挪走）都显式报错 —— 解析规则与源码结构
+/// 脱节时最危险的失败是"安静地少检查"。
 pub fn collect_capabilities(
     api_rs: &str,
     types_rs: &str,
     target_rs: &str,
-) -> Vec<Capability> {
+) -> Result<Vec<Capability>, String> {
     let mut out = Vec::new();
     for (struct_name, kind) in [("SceneApi", "scene"), ("ContentApi", "content")] {
         out.extend(collect_methods(api_rs, "api.rs", struct_name, kind));
@@ -858,7 +861,15 @@ pub fn collect_capabilities(
         "TargetKind",
         "Target",
     ));
-    out
+    for kind in ["scene", "content", "Target", "Curve", "TransformChannel"] {
+        if !out.iter().any(|capability| capability.kind == kind) {
+            return Err(format!(
+                "从源码抽不到任何 `{kind}` 能力 —— 能力清单的解析规则可能已与源码结构脱节\
+                 （改结构时请同步修 `collect_capabilities` 的定位串）"
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// 抽 `pub struct X<'a> { … }` 里的 `pub name: fn(&'a dyn Pod, …) -> …` 方法。
