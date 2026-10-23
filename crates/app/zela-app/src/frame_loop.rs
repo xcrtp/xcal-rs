@@ -189,12 +189,17 @@ pub fn timing_json(t: &FrameTiming, frame: u32) -> String {
 
 /// 窗口汇总（JSON）：各段平均值与占比（占比按 `total` 算）。
 pub fn summary_json(t: &FrameTiming, window: &str, frames: usize) -> String {
+    format!("[timing-summary] {}", summary_body(t, window, frames))
+}
+
+/// 汇总对象本体（B12 Step 3：报告要把计时与决策 / 环境指纹拼进同一个对象）。
+pub fn summary_body(t: &FrameTiming, window: &str, frames: usize) -> String {
     let n = frames.max(1) as f64;
     let avg_ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
     let total = avg_ms(t.total()).max(f64::MIN_POSITIVE);
     let share = |d: Duration| avg_ms(d) / total * 100.0;
     format!(
-        "[timing-summary] {{\"window\":\"{window}\",\"frames\":{frames},\
+        "{{\"window\":\"{window}\",\"frames\":{frames},\
          \"avg_total_ms\":{:.3},\
          \"avg\":{{\"advance\":{:.3},\"build\":{:.3},\"prepare\":{:.3},\"paint\":{:.3},\
          \"submit\":{:.3},\"read\":{:.3},\"sink\":{:.3},\"hash\":{:.3},\"verify\":{:.3},\
@@ -224,6 +229,81 @@ pub fn summary_json(t: &FrameTiming, window: &str, frames: usize) -> String {
         share(t.verify),
         share(t.end),
     )
+}
+
+/// 环境指纹（B12 Step 3）：**必填** —— 脱离环境的性能数字没有意义
+/// （B8 的 dev/release 教训与 X1-11 的字体教训是同一条）。
+///
+/// `adapter = None` 时显式写 `"gpu":null` + `"missing":"adapter"`，**不伪造型号**。
+pub fn environment_json(adapter: Option<&wgpu::Adapter>) -> String {
+    let (gpu, vendor, device, driver, api) = match adapter {
+        Some(adapter) => {
+            let info = adapter.get_info();
+            (
+                format!("\"{}\"", escape_json(&info.name)),
+                info.vendor.to_string(),
+                info.device.to_string(),
+                format!("\"{}\"", escape_json(&info.driver)),
+                format!("\"{:?}\"", info.backend),
+            )
+        }
+        None => (
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+            "null".to_string(),
+        ),
+    };
+    format!(
+        "{{\"gpu\":{gpu},\"vendor\":{vendor},\"device\":{device},\"driver\":{driver},\
+         \"api\":{api},\"os\":\"{}\",\"arch\":\"{}\",\"debug_assertions\":{},\
+         \"missing\":\"{}\"}}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cfg!(debug_assertions),
+        if adapter.is_some() { "" } else { "adapter" },
+    )
+}
+
+fn escape_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 累加一段帧（B12 Step 3：报告要"全部帧"与"窗口"两份汇总）。
+///
+/// `skip_first` 与 [`FrameStats::record`] 同口径（首帧含管线创建）；`limit` 限制参与
+/// 累加的帧数（窗口 = 30）。
+pub fn accumulate(
+    timings: &[FrameTiming],
+    skip_first: bool,
+    limit: Option<usize>,
+) -> (FrameTiming, usize) {
+    let mut acc = FrameTiming::default();
+    let mut count = 0;
+    for (index, timing) in timings.iter().enumerate() {
+        if skip_first && index == 0 {
+            continue;
+        }
+        if limit.is_some_and(|limit| count >= limit) {
+            break;
+        }
+        add_timing(&mut acc, timing);
+        count += 1;
+    }
+    (acc, count)
 }
 
 fn add_timing(acc: &mut FrameTiming, other: &FrameTiming) {

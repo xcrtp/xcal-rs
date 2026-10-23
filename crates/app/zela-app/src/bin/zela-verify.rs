@@ -30,7 +30,8 @@
 use std::path::{Path, PathBuf};
 
 use zela_app::frame_loop::{
-    FrameLoopOptions, FrameStats, FrameTiming, LoopBackend, frames_for, run_frames, timing_json,
+    FrameLoopOptions, FrameStats, FrameTiming, LoopBackend, TIMING_WINDOW, accumulate,
+    environment_json, frames_for, run_frames, summary_body, timing_json,
 };
 use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, compile_script, language_from_path,
@@ -149,9 +150,11 @@ fn run() -> Result<(), String> {
 
     // **一次** GPU 初始化：19 次进程调用的固定开销在这里被摊平。
     let ctx = RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
+    // B12 Step 3：环境指纹**必填**（GPU / API / os / arch / debug 断言），报告里逐条带上。
+    let env = environment_json(ctx.adapter());
 
     if args.sink_bypass {
-        return run_sink_bypass(&ctx, &args);
+        return run_sink_bypass(&ctx, &args, &env);
     }
 
     for work in &args.works {
@@ -170,7 +173,7 @@ fn run() -> Result<(), String> {
         // ── 路径 1：脚本 ──
         let mut runtime = build_script_runtime(ctx.clone(), source, language)
             .map_err(|e| format!("[{}] 脚本装配失败：{e}", work.name))?;
-        let script_hash = render_hash(&ctx, &mut runtime, work, args.fps, "script")?;
+        let script_hash = render_hash(&ctx, &mut runtime, work, args.fps, "script", &env)?;
         drop(runtime);
 
         // ── 路径 2：同一份 ZSB ──
@@ -180,7 +183,7 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("[{}] ZSB 解析失败：{e}", work.name))?;
         let mut runtime = build_bundle_runtime(ctx.clone(), &bundle)
             .map_err(|e| format!("[{}] bundle 装配失败：{e}", work.name))?;
-        let bundle_hash = render_hash(&ctx, &mut runtime, work, args.fps, "bundle")?;
+        let bundle_hash = render_hash(&ctx, &mut runtime, work, args.fps, "bundle", &env)?;
 
         println!(
             "[verify] {{\"work\":\"{}\",\"size\":\"{}x{}\",\"frames\":{},\"script\":\"{}\",\
@@ -264,7 +267,7 @@ fn locate_script(dir: &Path, name: &str) -> Result<(PathBuf, ScriptLanguage), St
 /// **V3-12 检查**（并入本进程，B7 Step 0.3）：挂 / 不挂哈希时的像素产出必须逐位相同。
 ///
 /// 比 PNG **字节**而不是序列哈希 —— 不挂哈希时本来就没有哈希值可拿，比它是自证。
-fn run_sink_bypass(ctx: &RenderContext, args: &Args) -> Result<(), String> {
+fn run_sink_bypass(ctx: &RenderContext, args: &Args, env: &str) -> Result<(), String> {
     let work = Work {
         name: "vector_paths".to_string(),
         width: 640,
@@ -278,7 +281,9 @@ fn run_sink_bypass(ctx: &RenderContext, args: &Args) -> Result<(), String> {
     let mut sizes = Vec::new();
     for (name, hash) in [("with-hash", true), ("no-hash", false)] {
         let dir = root.join(name);
-        sizes.push(render_png(ctx, &source, language, &work, args.fps, &dir, hash)?.len());
+        sizes.push(
+            render_png(ctx, &source, language, &work, args.fps, &dir, hash, env)?.len(),
+        );
     }
     if sizes[0] != sizes[1] {
         return Err(format!(
@@ -311,6 +316,58 @@ fn report_decisions(work: &str, pass: &str, decisions: &[RoutingDecision]) {
     }
 }
 
+/// B12 Step 3：**结构化落盘**（计时 + 决策 + 环境指纹，一行一个作品/一遍）。
+///
+/// 目标 = `ZELA_FRAME_REPORT=<path>`（JSONL，追加）。不设 ⇒ 完全不写（门禁无副作用）。
+/// 环境指纹由调用方预先算好（`frame_loop::environment_json`）且**必填**：
+/// 没有 GPU / profile / 架构的计时数字不可比（B8 的 dev-release 与 X1-11 是同一类教训）。
+fn report_work(
+    work: &Work,
+    pass: &str,
+    frames: u32,
+    env: &str,
+    timings: &[FrameTiming],
+    decisions: &[RoutingDecision],
+) {
+    let Ok(path) = std::env::var("ZELA_FRAME_REPORT") else {
+        return;
+    };
+    if path.trim().is_empty() {
+        return;
+    }
+    let (all, all_n) = accumulate(timings, false, None);
+    let (window, window_n) = accumulate(timings, true, Some(TIMING_WINDOW));
+    let decisions: Vec<String> = decisions
+        .iter()
+        .map(|decision| decision.object_json(&work.name, pass))
+        .collect();
+    let line = format!(
+        "{{\"work\":\"{}\",\"pass\":\"{pass}\",\"size\":\"{}x{}\",\"frames\":{frames},\
+         \"env\":{env},\"timings\":{{\"all\":{},\"window\":{}}},\
+         \"verify_note\":\"verify_ms 未启用（GPU 校验 pass 未实现，B12 Step 1.3）\",\
+         \"decisions\":[{}]}}",
+        work.name,
+        work.width,
+        work.height,
+        summary_body(&all, "all", all_n),
+        summary_body(&window, &format!("1..{window_n}"), window_n),
+        decisions.join(","),
+    );
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            use std::io::Write;
+            if let Err(error) = writeln!(file, "{line}") {
+                eprintln!("[report] 写 {path} 失败：{error}");
+            }
+        }
+        Err(error) => eprintln!("[report] 打开 {path} 失败：{error}"),
+    }
+}
+
 /// B12 Step 1.2：`zela-verify` 是**唯一默认门禁路径**，必须与 `zela-render` 同字段计时。
 ///
 /// 默认不打印（门禁输出要保持可读）；`ZELA_FRAME_TIMING=1` 时逐帧 `[timing]` + 每遍
@@ -340,11 +397,13 @@ fn render_png(
     fps: f64,
     dir: &Path,
     hash: bool,
+    env: &str,
 ) -> Result<Vec<u8>, String> {
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("创建目录 {} 失败：{e}", dir.display()))?;
     let mut runtime = build_script_runtime(ctx.clone(), source, language)
         .map_err(|e| format!("[{}] 装配失败：{e}", work.name))?;
+    let frames = frames_for(&runtime, fps);
     let mut backends = StandardBackends::new(ctx);
     let mut target = HeadlessTarget::new();
     let mut sequence = FrameSequenceHash::new(work.width, work.height);
@@ -380,6 +439,7 @@ fn render_png(
     .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
     report_decisions(&work.name, "png", &decisions);
     report_timings(&work.name, "png", &timings);
+    report_work(work, "png", frames, env, &timings, &decisions);
     Ok(first)
 }
 
@@ -393,10 +453,12 @@ fn render_hash(
     work: &Work,
     fps: f64,
     path: &str,
+    env: &str,
 ) -> Result<String, String> {
     let mut backends = StandardBackends::new(ctx);
     let mut target = HeadlessTarget::new();
     let mut hash = FrameSequenceHash::new(work.width, work.height);
+    let frames = frames_for(runtime, fps);
     let options = FrameLoopOptions {
         width: work.width,
         height: work.height,
@@ -420,5 +482,6 @@ fn render_hash(
     .map_err(|e| format!("[{}] {path} 渲染失败：{e}", work.name))?;
     report_decisions(&work.name, path, &decisions);
     report_timings(&work.name, path, &timings);
+    report_work(work, path, frames, env, &timings, &decisions);
     Ok(hash.hex())
 }

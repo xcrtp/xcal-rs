@@ -96,6 +96,11 @@ impl RoutingDecision {
     ///
     /// 只含决策本身的事实，不含时间戳 / 运行次数 —— 同一输入必须产出同一行（C1）。
     pub fn json(&self, work: &str, pass: &str) -> String {
+        format!("[decision] {}", self.object_json(work, pass))
+    }
+
+    /// 决策对象本体（B12 Step 3：结构化报告要把决策嵌进同一个 JSON 对象）。
+    pub fn object_json(&self, work: &str, pass: &str) -> String {
         let rejected: Vec<String> = self
             .rejected
             .iter()
@@ -107,7 +112,7 @@ impl RoutingDecision {
             })
             .collect();
         format!(
-            "[decision] {{\"work\":\"{}\",\"pass\":\"{}\",\"backend\":\"{:?}\",\
+            "{{\"work\":\"{}\",\"pass\":\"{}\",\"backend\":\"{:?}\",\
              \"reason\":\"{}\",\"rejected\":[{}]}}",
             escape_json(work),
             escape_json(pass),
