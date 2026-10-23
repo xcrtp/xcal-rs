@@ -306,8 +306,9 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
         println!("[xtask] 对拍模式：独立进程（--independent 诊断路径）");
         let mut map = std::collections::BTreeMap::new();
         for (work, backend) in HASHES_WORKS {
+            // 标签而不是作品名：同一作品两个后端各要一条（B13 Step 3）。
             map.insert(
-                (*work).to_string(),
+                work_label(work, *backend),
                 compare_script_vs_bundle_with_backend(root, work, "640x480", None, *backend)?,
             );
         }
@@ -345,11 +346,12 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     // （B7 Step 2：手写清单曾让 7 个已纳管作品算完就被丢掉）。
     let mut records: Vec<(String, String, String)> =
         vec![("smoke".to_string(), "smoke".to_string(), smoke_hash)];
-    for (work, _) in HASHES_WORKS {
+    for (work, backend) in HASHES_WORKS {
+        let label = work_label(work, *backend);
         records.push((
-            baseline_section(work).to_string(),
+            baseline_section(*backend).to_string(),
             (*work).to_string(),
-            recorded(work)?,
+            recorded(&label)?,
         ));
     }
     let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
@@ -662,9 +664,9 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let path = root.join("GAPS.md");
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
-    // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）、N 段（B10）与 O 段（B11）都是
-    // "编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O."] {
+    // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）、N 段（B10）、O 段（B11）、
+    // P 段（B12）与 Q 段（B13）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q."] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
@@ -681,7 +683,9 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
                     || id.starts_with("S4-")
                     || id.starts_with("W1-")
                     || id.starts_with("X1-")
-                    || id.starts_with("X2-"));
+                    || id.starts_with("X2-")
+                    || id.starts_with("X3-")
+                    || id.starts_with("X4-"));
             if !is_item {
                 continue;
             }
@@ -1189,7 +1193,7 @@ fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<()
             let expected = if skip_baseline {
                 None
             } else {
-                Some(baseline_for(&baselines, work)?)
+                Some(baseline_for(&baselines, work, *backend)?)
             };
             let hash = compare_script_vs_bundle_with_backend(
                 root,
@@ -1198,21 +1202,21 @@ fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<()
                 expected.as_deref(),
                 *backend,
             )?;
-            out.push(((*work).to_string(), hash));
+            out.push((work_label(work, *backend), hash));
         }
         out
     } else {
         println!("[xtask] 对拍模式：批量（一次 GPU 初始化；--independent 可切回独立进程）");
         let hashes = batch_hashes(root)?;
         if !skip_baseline {
-            for (work, hash) in &hashes {
-                let expected = baseline_for(&baselines, work)?;
+            for ((work, backend), (label, hash)) in HASHES_WORKS.iter().zip(hashes.iter()) {
+                let expected = baseline_for(&baselines, work, *backend)?;
                 if *hash != expected {
                     return Err(format!(
-                        "{work}: 序列哈希与基线不符（批量）\n  实测 = {hash}\n  基线 = {expected}"
+                        "{label}: 序列哈希与基线不符（批量）\n  实测 = {hash}\n  基线 = {expected}"
                     ));
                 }
-                println!("[xtask] {work}: 基线（{hash}）");
+                println!("[xtask] {label}: 基线（{hash}）");
             }
         }
         hashes
@@ -1221,9 +1225,9 @@ fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<()
     // B9 Step 5：V3-12 自动化（挂/不挂 HashSink 的像素产出逐位相同）。
     assert_sink_bypass(root)?;
 
-    for (work, hash) in &hashes {
-        let section = baseline_section(work);
-        current.push((section, work.as_str(), hash.as_str()));
+    // 同一作品可能同时纳管两个后端 ⇒ section 取自条目本身，不按名字反查。
+    for ((work, backend), (_, hash)) in HASHES_WORKS.iter().zip(hashes.iter()) {
+        current.push((baseline_section(*backend), work, hash.as_str()));
     }
     // smoke 的当前值在 `--step hashes` 里不重算（由 `--step smoke` 负责）；
     // 报告只呈现本次实测到的作品，未实测项不伪造。
@@ -1278,11 +1282,35 @@ const HASHES_WORKS: &[(&str, Option<&str>)] = &[
     ("capability_gaps", None),
     // B10 Step 4：真 3D 网格 + 着色栈的作品级证据（必须走矢量后端才有着色栈）。
     ("shaded_meshes", Some("vector")),
+    // B13 Step 3：9 件此前只有 wgpu 门禁的作品补上**矢量基线**。
+    // 同一作品在两个 section 各一条（`[native]` 保既有门禁，`[vector]` 是新证据）；
+    // 批量模式下靠 `--work` 的出现顺序配对，名称重复不是问题。
+    ("fourier", Some("vector")),
+    ("storyboard", Some("vector")),
+    ("fusion", Some("vector")),
+    ("pbr_materials", Some("vector")),
+    ("pbr_lights", Some("vector")),
+    ("pbr_scene", Some("vector")),
+    ("pendulum", Some("vector")),
+    ("orbit", Some("vector")),
+    ("spring", Some("vector")),
 ];
 
-/// 取某作品的基线值（矢量后端的作品在 `[vector]`，其余在 `[native]`）。
-fn baseline_for(baselines: &Baselines, work: &str) -> Result<String, String> {
-    let name = baseline_section(work);
+/// 报告 / 重录用的唯一标签：同一作品同时纳管两个后端时不能只用作品名。
+fn work_label(work: &str, backend: Option<&str>) -> String {
+    match backend {
+        Some(backend) => format!("{work}#{backend}"),
+        None => work.to_string(),
+    }
+}
+
+/// 取某作品在**指定后端**段里的基线值（`Some(_)` ⇒ `[vector]`，`None` ⇒ `[native]`）。
+fn baseline_for(
+    baselines: &Baselines,
+    work: &str,
+    backend: Option<&str>,
+) -> Result<String, String> {
+    let name = baseline_section(backend);
     let section = if name == "vector" {
         &baselines.vector
     } else {
@@ -1294,12 +1322,9 @@ fn baseline_for(baselines: &Baselines, work: &str) -> Result<String, String> {
         .ok_or_else(|| format!("baselines.txt 的 [{name}] 段缺少 `{work}`"))
 }
 
-/// 作品所在的基线段：由 [`HASHES_WORKS`] 的 backend 派生（`Some(_)` ⇒ `[vector]`）。
-fn baseline_section(work: &str) -> &'static str {
-    match HASHES_WORKS.iter().find(|(name, _)| *name == work) {
-        Some((_, Some(_))) => "vector",
-        _ => "native",
-    }
+/// 基线段：由条目自身的 backend 决定（同一作品在两个段各有一条）。
+fn baseline_section(backend: Option<&str>) -> &'static str {
+    if backend.is_some() { "vector" } else { "native" }
 }
 
 /// 从 `[verify] {...}` 的 JSON 行里取一个字符串字段（只含本仓自产的扁平 JSON）。
@@ -1350,7 +1375,7 @@ fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
         return Err("批量对拍失败（zela-verify 退出码非 0；上面的错误点明了作品与路径）".to_string());
     }
 
-    let mut hashes: Vec<(String, String)> = Vec::new();
+    let mut verified: Vec<(String, String, String)> = Vec::new();
     for line in stdout.lines() {
         // B12 Step 2 / B13：决策日志原样转出（每作品每遍一条，含拒绝理由）。
         if let Some(rest) = line.strip_prefix("[decision] ") {
@@ -1363,20 +1388,32 @@ fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
         let work = json_field(rest, "work").ok_or_else(|| format!("无法解析 work：{line}"))?;
         let script = json_field(rest, "script").ok_or_else(|| format!("无法解析 script：{line}"))?;
         let bundle = json_field(rest, "bundle").ok_or_else(|| format!("无法解析 bundle：{line}"))?;
+        verified.push((work.to_string(), script.to_string(), bundle.to_string()));
+    }
+    // 名称会重复（B13 Step 3：同一作品同时纳管 wgpu 与矢量）⇒ 按 `--work` 的出现顺序配对；
+    // 名字不符说明两边顺序漂了，必须显式报错而不是错位比对。
+    if verified.len() != HASHES_WORKS.len() {
+        return Err(format!(
+            "批量对拍产出了 {} 行 [verify]，HASHES_WORKS 有 {} 条（zela-verify 漏跑或多跑）",
+            verified.len(),
+            HASHES_WORKS.len()
+        ));
+    }
+    let mut hashes: Vec<(String, String)> = Vec::with_capacity(verified.len());
+    for ((work, backend), (name, script, bundle)) in HASHES_WORKS.iter().zip(verified.iter()) {
+        if name != work {
+            return Err(format!(
+                "zela-verify 输出顺序与 HASHES_WORKS 不一致：期望 `{work}`，得到 `{name}`"
+            ));
+        }
         if script != bundle {
             return Err(format!(
-                "{work}: --script 与 --bundle 哈希不一致（批量）\n  script = {script}\n  bundle = {bundle}"
+                "{name}: --script 与 --bundle 哈希不一致（批量）\n  script = {script}\n  bundle = {bundle}"
             ));
         }
-        println!("[xtask] {work}: script == bundle（{script}）");
-        hashes.push((work.to_string(), script.to_string()));
-    }
-    for (work, _) in HASHES_WORKS {
-        if !hashes.iter().any(|(name, _)| name == work) {
-            return Err(format!(
-                "批量对拍缺少 `{work}` 的结果（zela-verify 未产出该作品的 [verify] 行）"
-            ));
-        }
+        let label = work_label(work, *backend);
+        println!("[xtask] {label}: script == bundle（{script}）");
+        hashes.push((label, script.clone()));
     }
     Ok(hashes)
 }

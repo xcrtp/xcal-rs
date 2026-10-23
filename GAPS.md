@@ -445,9 +445,9 @@
 | X1-08 | **网页黑屏**：B8 给逐帧计时加了 `std::time::Instant::now()`，而它在 `wasm32-unknown-unknown` 上是 `panic!("time not implemented on this platform")` ⇒ 页面加载完产物、第一次出帧即 abort（`select` 停在 `disabled`，canvas 全黑） | 渲染后端 / wasm | **已关闭（B10 修复）** | `zela-render-backends` 引入 `web-time`，四处计时起点改走 `clock()`（wasm 用 `performance.now()`，native 转发 `std::time::Instant`）。实测（Chrome，`python -m http.server` 起的地产）：fourier `播放完成：216 帧`、`select.disabled = false`、canvas `toDataURL` 28.5 KB（非黑）；切到 `shaded_meshes` 正常播放 1 帧。**教训**：`--step wasm` 只编译不运行，抓不到这类运行期 panic（WASM_PORT_SURVEY 的 P0-2 曾被"telemetry 换 ZeroClock"判为已解，B8 又引入一处） |
 | X1-09 | `zela-compile` 在 **dev profile** 下编译 JS 脚本会栈溢出（`0xC00000FD`）：boa 的解析 / 编译在未优化构建里递归很深，`build.ps1` 因此卡在 `surface_matrix.js` | 装配 / 构建脚本 | **已关闭（B10 修复）** | `zela_app::compile_script` 把"装配 + 执行"整体放到 **64 MiB 栈**的专用线程（`boa::Context` 是 `!Send`，只能整根线程内建；只把纯数据 `CompiledScript` join 回来）。修复后 dev profile 编 `surface_matrix.js` 成功，payload 与优化构建一致；`build.ps1` 全量通过、16 件 payload 全部与 manifest 相符 |
 | X1-10 | **字形孔洞被填**：`ze_content::stroke_outlines` 按**子轮廓**产出多条 `StrokeOutline` ⇒ `content.text` 给每个 counter（`o`/`e` 的内圈）一个独立 `Path`，脚本逐条 `Fill` ⇒ 内圈被当作实心形状填满（wgpu / 矢量后端表现一致，与渲染器无关） | 内容路径 / 矢量后端作品 | **已关闭（字形孔洞修复）** | `stroke_outlines` 改为**每个字形一条** `Path2D`（全部子轮廓 `MoveTo` 分段 + `Close`，闭合时去掉重复尾点），填充按 nonzero 规则挖孔。证据：`vector_paths` 修复前后同帧仅 **424 px** 变化，bbox x 281–369 / y 419–440（正是 `e`、`o` 的 counter），其余笔画逐像素不变；`ze-content` 新增 `counter_contour_stays_in_the_same_path`，矢量后端既有 `concave_ring_keeps_its_hole` 证明多子路径 nonzero 正确。payload 随字形数变化（fourier 63→50 对象），`[vector] vector_paths` 重录为 `07bd4301…` |
-| X1-11 | **4 条 `[native]` 帧基线相对 HEAD 不可复现**（fourier / storyboard / surface_matrix / surface_matrix.js）：实测 `45669d03…` / `e6ed98b6…` / `9a34bf69…`，基线 `b6eaa864…` / `6de42d6b…` / `928cd5f9…` | 基线 / 验证 | **记账（随 X1-10 重录，原因未查清）** | 排除项（逐条实测）：① 把 `stroke.rs` 临时回退到 HEAD 重渲，与修复后**逐帧逐像素 diff = 0**（216 / 135 / 1 帧）⇒ 与本次改动无关；② 旧代码 + 确定性字体（`ZELA_TYPST_FONT_DIR`）得 `9ee250b0…`，仍非基线；③ 新代码 + 确定性字体得 `0cb8b4a1…`；④ 回退 `compile_script` 大栈线程仍 `45669d03…`；⑤ 旧代码 + 确定性字体复现了 manifest 的 fourier payload `a5bdfbe7…` ⇒ 字形轮廓本身没漂。基线标注为 `0dabd3e+dirty`（脏树录制），四条已在本次重录中分别归因；**未知差异没有被"重录"掩盖**：本条保留为待查项，触发条件是"需要跨版本回溯文本类作品的像素" |
+| X1-11 | **4 条 `[native]` 帧基线相对 HEAD 不可复现**（fourier / storyboard / surface_matrix / surface_matrix.js）：实测 `45669d03…` / `e6ed98b6…` / `9a34bf69…`，基线 `b6eaa864…` / `6de42d6b…` / `928cd5f9…` | 基线 / 验证 | **已关闭（B13 Step 0）** | 病因 = **同一作品两套字体口径**：payload 断言在 `build.ps1` 的 `ZELA_TYPST_FONT_DIR` 下做，帧基线却在系统字体下录（`grep ZELA_TYPST_FONT_DIR xtask/` 零命中）。修法：`tools/typst-fonts.txt` 成为唯一真源（版本 + 文件名 + SHA-256），`build.ps1` 与 xtask 共读；xtask 的 `cargo_command`（`xtask/src/main.rs`）对**所有**对拍子进程注入 `ZELA_TYPST_FONT_DIR`，字体缺失**显式报错**（不静默退回系统字体）。关闭判据 = **可复现**：同代码连续两次录制 16 条哈希逐位相同（`target/xtask/b13-font-run1|2.log`）。4 条新值 `0cb8b4a1…` / `be286560…` / `a6e4394c…`（`surface_matrix` 与 `_js` 相同）；另外 atlas `d180e51f…`、vector_paths `c34f7a3d…` 同步变化（两件也含文本）。此前排除项（回退 `stroke.rs` diff = 0、旧代码+确定字体 = payload `a5bdfbe7…` 等）逐条保留，见 git 历史 `25c1d3a` 的提交说明 |
 
-**N 段小计（B10）**：已关闭 6（X1-01、X1-02、X1-05、X1-08、X1-09、X1-10）· 记账 5（X1-03、X1-04、X1-06、X1-07、X1-11）。
+**N 段小计（B10）**：已关闭 7（X1-01、X1-02、X1-05、X1-08、X1-09、X1-10、X1-11）· 记账 4（X1-03、X1-04、X1-06、X1-07）。
 
 ---
 
@@ -467,6 +467,25 @@
 | X2-07 | `--step wasm` 只 `cargo check` 不运行，抓不到运行期 panic（X1-08 的教训） | 验证 | **记账（B11 §8）** | 本批 Step 5 用**浏览器实测**收口（Chrome + 本地 `http.server`）：① 工具栏新增"后端：自动 / wgpu / 矢量"，切到"矢量"触发重播（同一块 device、不重新 fetch、不整页重载），`fourier` 重播 **216 帧**；② `vector_paths` 画面非黑（`canvas.toDataURL` 29 214 B）；③ 状态栏常驻决策行：`后端：选择 Wgpu（自动路由：Wgpu 能力覆盖本帧）`、`后端：选择 Wgpu（首选 Vector 被拒 ⇒ 回退到 Wgpu）；Vector 被拒：浏览器侧矢量后端还没有异步回读…`。矢量在浏览器**不能出帧**（X2-03）⇒ 本批止步于"接口就绪 + 记账"（计划 §7.1 的退路）。headless Chrome + WebGPU 的 smoke 未进 CI（GPU 依赖会 flaky），触发：CI 有稳定 GPU 时补 |
 
 **O 段小计（B11）**：已关闭 2（X2-01、X2-02）· 记账 5（X2-03、X2-04、X2-05、X2-06、X2-07）。
+
+---
+
+## Q. B13 批次记账（矢量作品对拍与字体口径，2026-10-23）
+
+> 计划《B13执行计划_矢量作品对拍与字体口径》。一句话：给 11 件"能渲染但零证据"的矢量作品
+> 建立作品级对拍证据与基线，并把"payload 用确定字体、帧基线用系统字体"的口径分裂修掉。
+> 对拍入口：`zela-parity --scripts crates/app/zela-app/scripts --fps 30 --sample 30 --post match --dump --out <dir>`。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X4-01 | 矢量后端**丢 2D 开放折线与坐标轴网格**：`fn zela_render_vector::scene::push_shape` 把 `Shape2D::Polyline` 一律当**闭合多边形**（`points.len() < 3` 直接不产出），`Shape2D::Line` 直接返回空；`Axes2D` 生成的网格线因此整片消失 | 渲染后端 / 2D 映射 | **记账（B13 Step 1 对拍暴露）** | 判据沿用 `vector_vs_wgpu.rs`（覆盖率相对差 ≤ 10% / 全图 MAE ≤ 8 / 内部区 MAE ≤ 2，**未放宽**）。实测 `--post match`：fourier 覆盖率相对差 **0.7239**、内部区 MAE 100.78；pendulum 0.3614 / 61.91；spring 0.1602（边带 114.43）；storyboard 0.6394 / 101.76。落档图（最差帧，`target/xtask/parity-dump/`）：`fourier-f00210-*` 的 wgpu 有网格 + 方波曲线、矢量两者皆无；`pendulum-f00240-*` 缺摆杆与轨迹弧；`spring-f00150-*` 缺地面线。圆 / 填充 / 文字两侧都在 ⇒ 问题局限于开放子路径与线段。触发：要矢量后端出**完整** 2D 画面时，先让开放折线走 `ranges` 闭合位 = 0 的子路径、并让 2 点折线 / `Line` 仍产出描边几何，再重录 `[vector]` |
+| X4-02 | 矢量 3D 输出**系统性偏暗**：同一份 `RenderParams` 下，fusion / shaded_meshes / pbr_* 的整体亮度显著低于 wgpu | 渲染后端 / 3D 光照 | **记账（B13 Step 1）** | `--post match`：fusion 内部区 MAE 149.04、有符号偏差 **+140 / +158 / +146**（wgpu − vector）；shaded_meshes 全图 MAE 24.94 / 内部区 30.53；pbr_scene 内部区 26.11；pbr_materials 35.60。落档图 `fusion-f00060-*`、`shaded_meshes-f00000-*`：**几何与构图一致，只有亮度/饱和度不同** ⇒ 系统性偏移（B13 §6.2 要求的解释项），不是几何错位，也不是抗锯齿。候选原因（未定，本批不猜）：3D 光照强度 / 环境项口径、sRGB 编码落点。触发：定"后端融合还是分立"之前必须解释本条数值来源 |
+| X4-03 | **后处理政策差异**混进差异里：矢量按自身能力默认开 tone/bloom/ao，wgpu headless 默认全关 | 渲染后端 / 口径 | **记账（B13 Step 1）** | 同一批作品两种口径各跑一次：2D 作品（fourier / storyboard / pendulum / orbit / spring / vector_paths）**逐项完全相同**（2D 分支不读 params，见 X1-07）；3D 作品数值变化：fusion 全图 MAE 14.15→15.09、pbr_materials 9.18→6.61、pbr_lights 4.27→2.22、pbr_scene 3.34→2.47、shaded_meshes 23.08→24.94。⇒ 差异里有一块是**政策**不是算法。两份落档：`target/xtask/parity/`（backend-default）与 `target/xtask/parity-match/`（match） |
+| X4-04 | 浏览器侧无法做同一套对拍 | 验证 | **记账（B13 Step 1，依赖 X2-03）** | `zela-parity` 只在 native 可用（wasm 上矢量不能出帧，理由同 X2-03）。触发：异步回读落地后，把采样循环搬进页面 |
+| X4-05 | **字体口径分裂**（X1-11 的病因）：payload 断言用 `ZELA_TYPST_FONT_DIR`，帧基线用系统字体 | 验证 / 可复现性 | **已关闭（B13 Step 0）** | `tools/typst-fonts.txt` = 唯一真源（版本 + 文件名 + SHA-256），`build.ps1` 与 xtask 共读；xtask 给所有对拍子进程注入 `ZELA_TYPST_FONT_DIR`，缺失即报错。验证：连续两次录制 16 条逐位相同；含文本 6 条基线重录（fourier `0cb8b4a1…`、storyboard `be286560…`、surface_matrix(_js) `a6e4394c…`、atlas `d180e51f…`、vector_paths `c34f7a3d…`） |
+| X4-06 | `[vector]` 段只有 2 条（`vector_paths` 2D + `shaded_meshes` 3D），9 件矢量可渲作品零门禁 | 基线 / 门禁 | **已关闭（B13 Step 3）** | `HASHES_WORKS` 扩到 25 条（同一作品在 `[native]` 与 `[vector]` 各一条，靠 `--work` 顺序配对、标签 `name#vector` 区分）；`[vector]` 11 条。`cargo verify --step hashes` 全绿。⚠️ 这批矢量基线是在 X4-01 / X4-02 **已知存在的前提下**录的 ⇒ 它们锁的是"当前行为"，不是"正确画面"；X4-01/02 修好后必须重录 |
+
+**Q 段小计（B13）**：已关闭 2（X4-05、X4-06）· 记账 4（X4-01、X4-02、X4-03、X4-04）。
 
 ---
 
