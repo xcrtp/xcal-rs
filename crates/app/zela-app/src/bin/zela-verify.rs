@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use zela_app::frame_loop::{
-    FrameLoopOptions, FrameStats, FrameTiming, LoopBackend, TIMING_WINDOW, accumulate,
+    FrameLoopOptions, FrameRun, FrameStats, FrameTiming, LoopBackend, TIMING_WINDOW, accumulate,
     environment_json, frames_for, run_frames, summary_body, timing_json,
 };
 use zela_app::{
@@ -149,7 +149,27 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("创建目录 {} 失败：{e}", args.tmp.display()))?;
 
     // **一次** GPU 初始化：19 次进程调用的固定开销在这里被摊平。
-    let ctx = RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
+    //
+    // B12 Step 4：只有显式开启 GPU 计时才请求 `TIMESTAMP_QUERY`（默认空集，B11 C2）。
+    // 请求失败 ⇒ 退回不请求，让 `run_frames` 把状态标成 `unsupported` 并带理由。
+    let want_gpu_timing = std::env::var("ZELA_GPU_TIMING").is_ok_and(|value| value != "0");
+    let ctx = if want_gpu_timing {
+        match RenderContext::headless_with_format_and_features(
+            zela_render_backends::DEFAULT_TARGET_FORMAT,
+            zela_render_backends::gpu_timing::TIMING_FEATURE,
+        ) {
+            Ok(ctx) => ctx,
+            Err(error) => {
+                eprintln!(
+                    "[gpu-timing] 无法请求 TIMESTAMP_QUERY：{error}（退回不测，**不填 0**）"
+                );
+                RenderContext::headless()
+                    .map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?
+            }
+        }
+    } else {
+        RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?
+    };
     // B12 Step 3：环境指纹**必填**（GPU / API / os / arch / debug 断言），报告里逐条带上。
     let env = environment_json(ctx.adapter());
 
@@ -321,29 +341,23 @@ fn report_decisions(work: &str, pass: &str, decisions: &[RoutingDecision]) {
 /// 目标 = `ZELA_FRAME_REPORT=<path>`（JSONL，追加）。不设 ⇒ 完全不写（门禁无副作用）。
 /// 环境指纹由调用方预先算好（`frame_loop::environment_json`）且**必填**：
 /// 没有 GPU / profile / 架构的计时数字不可比（B8 的 dev-release 与 X1-11 是同一类教训）。
-fn report_work(
-    work: &Work,
-    pass: &str,
-    frames: u32,
-    env: &str,
-    timings: &[FrameTiming],
-    decisions: &[RoutingDecision],
-) {
+fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) {
     let Ok(path) = std::env::var("ZELA_FRAME_REPORT") else {
         return;
     };
     if path.trim().is_empty() {
         return;
     }
-    let (all, all_n) = accumulate(timings, false, None);
-    let (window, window_n) = accumulate(timings, true, Some(TIMING_WINDOW));
-    let decisions: Vec<String> = decisions
+    let (all, all_n) = accumulate(&run.timings, false, None);
+    let (window, window_n) = accumulate(&run.timings, true, Some(TIMING_WINDOW));
+    let decisions: Vec<String> = run
+        .decisions
         .iter()
         .map(|decision| decision.object_json(&work.name, pass))
         .collect();
     let line = format!(
         "{{\"work\":\"{}\",\"pass\":\"{pass}\",\"size\":\"{}x{}\",\"frames\":{frames},\
-         \"env\":{env},\"timings\":{{\"all\":{},\"window\":{}}},\
+         \"env\":{env},\"timings\":{{\"all\":{},\"window\":{}}},\"gpu\":{},\
          \"verify_note\":\"verify_ms 未启用（GPU 校验 pass 未实现，B12 Step 1.3）\",\
          \"decisions\":[{}]}}",
         work.name,
@@ -351,6 +365,7 @@ fn report_work(
         work.height,
         summary_body(&all, "all", all_n),
         summary_body(&window, &format!("1..{window_n}"), window_n),
+        run.gpu_json(),
         decisions.join(","),
     );
     match std::fs::OpenOptions::new()
@@ -415,7 +430,7 @@ fn render_png(
         backend: work.backend,
         vector_params: None,
     };
-    let (timings, decisions) = run_frames(
+    let run = run_frames(
         ctx,
         &mut runtime,
         &mut backends,
@@ -437,9 +452,9 @@ fn render_png(
         },
     )
     .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
-    report_decisions(&work.name, "png", &decisions);
-    report_timings(&work.name, "png", &timings);
-    report_work(work, "png", frames, env, &timings, &decisions);
+    report_decisions(&work.name, "png", &run.decisions);
+    report_timings(&work.name, "png", &run.timings);
+    report_work(work, "png", frames, env, &run);
     Ok(first)
 }
 
@@ -466,7 +481,7 @@ fn render_hash(
         backend: work.backend,
         vector_params: None,
     };
-    let (timings, decisions) = run_frames(
+    let run = run_frames(
         ctx,
         runtime,
         &mut backends,
@@ -480,8 +495,8 @@ fn render_hash(
         },
     )
     .map_err(|e| format!("[{}] {path} 渲染失败：{e}", work.name))?;
-    report_decisions(&work.name, path, &decisions);
-    report_timings(&work.name, path, &timings);
-    report_work(work, path, frames, env, &timings, &decisions);
+    report_decisions(&work.name, path, &run.decisions);
+    report_timings(&work.name, path, &run.timings);
+    report_work(work, path, frames, env, &run);
     Ok(hash.hex())
 }

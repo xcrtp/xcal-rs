@@ -314,7 +314,7 @@ fn run() -> Result<(), String> {
         .unwrap_or_else(|| "inline".to_string());
 
     // B9 Step 3：帧循环唯一实现在 `zela_app::frame_loop`（与 `zela-verify` 共用）。
-    let (timings, decisions) = run_frames(
+    let run = run_frames(
         &ctx,
         &mut runtime,
         &mut backends,
@@ -342,11 +342,15 @@ fn run() -> Result<(), String> {
     )?;
 
     // B12 Step 2：决策落盘（与 B13 对拍同一份字段；拒绝理由非空由 `run_frames` 校验）。
-    for decision in &decisions {
+    for decision in &run.decisions {
         eprintln!("{}", decision.json(&work_label, "render"));
     }
+    // B12 Step 4：GPU 计时状态（`disabled` 是默认，不刷屏；其余都显式打印）。
+    if run.gpu_status.state != zela_render_backends::gpu_timing::GpuTimingState::Disabled {
+        eprintln!("[gpu-timing] {}", run.gpu_json());
+    }
 
-    for (index, timing) in timings.iter().enumerate() {
+    for (index, timing) in run.timings.iter().enumerate() {
         if timing_lines {
             eprintln!("{}", timing_json(timing, index as u32));
         }

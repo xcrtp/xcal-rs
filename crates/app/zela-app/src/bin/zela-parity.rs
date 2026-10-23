@@ -549,7 +549,7 @@ fn render_pass(
             PostMode::BackendDefault => None,
         },
     };
-    let (_, decisions) = run_frames(
+    let run = run_frames(
         ctx,
         &mut runtime,
         &mut backends,
@@ -567,7 +567,7 @@ fn render_pass(
     Ok(Pass {
         frames,
         samples,
-        decisions,
+        decisions: run.decisions,
     })
 }
 

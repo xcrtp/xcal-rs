@@ -50,6 +50,9 @@ pub mod registry;
 // 放在本 crate 而不是宿主：native 与浏览器必须用**同一份**决策。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub mod routing;
+// B12 Step 4：GPU 时间归因（timestamp query）。不支持 ⇒ 显式 unsupported，不静默给 0。
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub mod gpu_timing;
 pub mod resource_cache;
 
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
@@ -66,6 +69,8 @@ pub use registry::{
 };
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use routing::{FrameContent, LoopBackend, RoutingDecision};
+#[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
+pub use gpu_timing::{GpuSpan, GpuTimingState, GpuTimingSupport};
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use render_target::RenderTarget;
 pub use resource_cache::{DeferredDestroyer, GpuResourceCache, ResourceCache, ResourceKey};

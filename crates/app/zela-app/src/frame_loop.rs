@@ -28,6 +28,7 @@ use zela_render_backends::{
 use zela_scene_ecs::DriverCommand;
 use zela_scene_ecs::contract::WorldView;
 
+use zela_render_backends::gpu_timing::{GpuSpan, GpuTimingSupport};
 use zela_render_backends::routing as backend_router;
 pub use zela_render_backends::routing::LoopBackend;
 use zela_render_backends::RoutingDecision;
@@ -342,6 +343,43 @@ fn vector_capabilities() -> ze_render_ir::Capabilities {
     }
 }
 
+/// 一次运行的全部可观测产出（B12 Step 2/3/4）。
+pub struct FrameRun {
+    /// 逐帧分段计时（CPU wall-clock）。
+    pub timings: Vec<FrameTiming>,
+    /// 去重后的路由决策（B12 Step 2）。
+    pub decisions: Vec<RoutingDecision>,
+    /// 逐帧 GPU span（ms），与 [`Self::timings`] 等长；`None` = 该帧未测出。
+    pub gpu_ms: Vec<Option<f64>>,
+    /// GPU 计时支持性（B12 Step 4）：**必填**，`Disabled` / `Unsupported` 都带理由。
+    pub gpu_status: GpuTimingSupport,
+}
+
+impl FrameRun {
+    /// 已测出的帧的平均 GPU span（ms）。没有一帧测出 ⇒ `None`（不是 0）。
+    pub fn gpu_avg_ms(&self) -> Option<f64> {
+        let measured: Vec<f64> = self.gpu_ms.iter().flatten().copied().collect();
+        if measured.is_empty() {
+            return None;
+        }
+        Some(measured.iter().sum::<f64>() / measured.len() as f64)
+    }
+
+    /// GPU 计时一行 JSON（与 [`GpuTimingSupport::json`] 同形，多了实测平均值）。
+    pub fn gpu_json(&self) -> String {
+        format!(
+            "{{\"state\":\"{}\",\"reason\":\"{}\",\"frames_measured\":{},\"avg_ms\":{}}}",
+            self.gpu_status.state.name(),
+            self.gpu_status.reason.replace('"', "\\\""),
+            self.gpu_ms.iter().flatten().count(),
+            match self.gpu_avg_ms() {
+                Some(ms) => format!("{ms:.3}"),
+                None => "null".to_string(),
+            },
+        )
+    }
+}
+
 /// 逐帧渲染（**唯一**实现）。
 ///
 /// - 开始前写入 `ViewRect`（headless 没有 egui 布局：视口 = 整幅画面）；
@@ -350,8 +388,7 @@ fn vector_capabilities() -> ze_render_ir::Capabilities {
 ///
 /// `on_frame` 收到 `(帧号, 像素视图)`，返回该帧**哈希耗时**（未哈希 ⇒ `ZERO`）。
 ///
-/// 返回 `(逐帧计时, 去重后的路由决策)`：计时交给调用方汇总与门禁；决策交给调用方落盘
-/// （B12 Step 2 —— B11 只打印，没沉淀）。
+/// 返回 [`FrameRun`]：计时交给调用方汇总与门禁；决策与 GPU span 交给调用方落盘。
 pub fn run_frames(
     ctx: &RenderContext,
     runtime: &mut Runtime,
@@ -360,7 +397,7 @@ pub fn run_frames(
     options: FrameLoopOptions,
     want_rgba: bool,
     on_frame: &mut dyn FnMut(u32, FrameView<'_>) -> Result<Duration, String>,
-) -> Result<(Vec<FrameTiming>, Vec<RoutingDecision>), String> {
+) -> Result<FrameRun, String> {
     let (width, height) = (options.width, options.height);
     runtime.driver.with_scheduler_mut(|scheduler| {
         scheduler.resources_mut().insert(ViewRect {
@@ -397,6 +434,22 @@ pub fn run_frames(
     // B12 Step 2：决策日志（相邻重复只留一条；`AutoFrame` 可能真的换后端）。
     let mut decisions: Vec<RoutingDecision> = Vec::new();
 
+    // B12 Step 4：GPU 时间归因（默认关闭；需 device 显式请求 `TIMESTAMP_QUERY`）。
+    // 任何一步不可用都落到 `Unsupported` + 理由，**不静默给 0**。
+    let want_gpu = std::env::var("ZELA_GPU_TIMING").is_ok_and(|value| value != "0");
+    let (mut gpu_span, mut gpu_status) = if !want_gpu {
+        (None, GpuTimingSupport::disabled())
+    } else {
+        match ctx.adapter() {
+            Some(adapter) => match GpuSpan::new(&ctx.device, &ctx.queue, adapter) {
+                Ok(span) => (Some(span), GpuTimingSupport::measured()),
+                Err(reason) => (None, GpuTimingSupport::unsupported(reason)),
+            },
+            None => (None, GpuTimingSupport::unsupported("上下文没有 adapter")),
+        }
+    };
+    let mut gpu_ms: Vec<Option<f64>> = Vec::with_capacity(frames as usize);
+
     for index in 0..frames {
         let mut timing = FrameTiming::default();
 
@@ -407,6 +460,13 @@ pub fn run_frames(
             .submit(DriverCommand::Advance { dt })
             .wait();
         timing.advance = mark.elapsed();
+
+        // B12 Step 4：起始标记（空 compute pass 只写 timestamp；队列按提交顺序执行）。
+        let begin_error = gpu_span.as_ref().and_then(|span| span.begin().err());
+        if let Some(reason) = begin_error {
+            gpu_status = GpuTimingSupport::unsupported(reason);
+            gpu_span = None;
+        }
 
         // ── B11 Step 4 + B12 Step 2：先选后端（作品级：第一帧决定后固定） ──────
         // 决策本身是可观测对象：逐条校验（拒绝理由不得为空），并收集起来交给调用方落盘。
@@ -558,8 +618,26 @@ pub fn run_frames(
         });
         timing.end = mark.elapsed();
 
+        // B12 Step 4：结束标记 + 回读（测不出 ⇒ 降级为 `Unsupported`，不填 0）。
+        let finished = gpu_span.as_ref().map(|span| span.finish());
+        let measured = match finished {
+            Some(Ok(ms)) => Some(ms),
+            Some(Err(reason)) => {
+                gpu_status = GpuTimingSupport::unsupported(reason);
+                gpu_span = None;
+                None
+            }
+            None => None,
+        };
+        gpu_ms.push(measured);
+
         timings.push(timing);
     }
 
-    Ok((timings, decisions))
+    Ok(FrameRun {
+        timings,
+        decisions,
+        gpu_ms,
+        gpu_status,
+    })
 }

@@ -267,6 +267,12 @@ async fn create_display(document: &Document) -> Result<Display, JsValue> {
         })
         .await
         .map_err(|e| js_err(format!("No suitable GPU adapter: {e}")))?;
+    // B12 Step 4：GPU 计时可用性**显式探测**（不假设；结果进控制台，便于浏览器侧记账）。
+    let timing = zela_render_backends::gpu_timing::probe(&adapter);
+    web_sys::console::log_1(&JsValue::from_str(&format!(
+        "[gpu-timing] {}",
+        timing.json()
+    )));
     let caps = surface.get_capabilities(&adapter);
     let format = *caps
         .formats
