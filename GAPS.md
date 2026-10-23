@@ -391,9 +391,15 @@
 | V3-04 | 双缓冲流水线（原 Step 4） | 性能 / 流水线 | **已关闭（取消）** | `t_read`（含 GPU 等待）实测 dev 1.3–4.4%、release 17–32%，但整帧已降到 3.7–5.2 ms（release）⇒ 绝对值 ≤1.7 ms。按更正件 §3.2 的 30% 线直接取消；理由记账：夹具路径的毫秒级回读不值得一套双缓冲复杂度 |
 | V3-05 | GPU 校验 pass / tile 指纹（原 Step 3′B） | 性能 / 校验 | **记账（推迟，不是否决）** | GPU 校验的真实收益是省 CPU 哈希（54 ms dev），而该代价已被 Step 3′0 的库级修复覆盖（release 0.64 ms）⇒ "为加速而换基线格式 + 全量重录"的理由不成立。触发条件：release 下哈希重新成为主瓶颈，或需要"差异定位到 tile"的诊断能力（那种场景 tile 指纹确实比 32B 全局摘要强） |
 | V3-06 | sink 抽象（原 Step 2）：主流程被迫为测试夹具付哈希代价 | 装配 / 导出 | **已关闭（B8 Step 2）** | `FrameSink`（`PngSink` / `FfmpegSink` / `HashSink`）；`--hash` 显式挂、`--hash-out` 隐含，**默认不挂**；xtask 对拍显式传 `--hash`。V3-12：同帧 PNG **字节**在挂/不挂哈希时逐位相同（fourier `frame_00100` 与 `vector_paths` 各验一次） |
-| V3-07 | dev 与 release 的 20–40× 差距没有任何记账，容易被当成"优化没生效" | 性能 / 构建 | **记账** | 同机同码：hash 26.5 → 0.64 ms、PNG 41.5 → 1.8 ms、整帧 77.0 → 5.2 ms。`cargo verify` 跑 **dev**，所以门禁付的是 dev 成本；任何性能结论必须标注 profile。触发：若要让门禁吃 release 成本，需单独决策（编译时间换运行时间） |
+| V3-07 | dev 与 release 的 20–40× 差距没有任何记账，容易被当成"优化没生效" | 性能 / 构建 | **已关闭（B9 Step A + Step 1）** | 同机同码：hash 26.5 → 0.64 ms、PNG 41.5 → 1.8 ms、整帧 77.0 → 5.2 ms。B9 用实验证明两者**像素逐位一致**（release 下 fourier `b6eaa864…`、demo3d `ddd69b3e…`、vector_paths `98d61c1a…` 全部等于基线）⇒ 门禁可以改用 `[profile.verify]`（opt-level 3 + debug=false，仍继承 dev 的检查） |
+| V3-08 | §0.3「实际渲染 110 ms/帧」的推算被实测推翻后，没有回答"切 profile 会不会改变像素" | 性能 / 构建 | **已关闭（B9 Step A）** | 三个作品（2D 路径 / 3D PBR / 矢量后端）的 release 序列哈希与基线逐位相同；无需 `fp-contract=off`，也没有分歧帧。 |
+| V3-09 | `cargo verify` 全程跑在未优化构建上（全仓无 `[profile]`，xtask 的 `cargo run` 没有 `--release`） | 性能 / 构建 | **已关闭（B9 Step 1）** | 根 `Cargo.toml` 新增 `[profile.verify]`（`inherits = "dev"` + opt-level 3 + debug=false + incremental=false）；xtask 抽 `run_args()` 统一给 `zela-compile` / `zela-render` 加 `--profile verify`，`check` / `test` 仍走 dev。实测：`hashes` 52.48s（profile 切换后、仍是 19 次进程）；编译：增量 9.03s。 |
+| V3-10 | 每次渲染进程约 4s 的固定开销没有拆分（"不知道贵在哪"） | 性能 / 构建 | **已关闭（B9 Step 2，探针未提交）** | verify profile 下实测（fourier / vector_paths）：GPU 初始化 **531 / 502 ms**、脚本运行时构建（含 typst）**718 / 668 ms**、`StandardBackends::new` **5 ms**、首帧 18 ms / 439 ms（后者含矢量管线创建）、其余帧 4.5 ms/帧 ⇒ 固定开销里 **GPU init 与运行时构建各占一半**；不需要惰性 pipeline。 |
+| V3-11 | 19 次进程调用 ≈ 46s 固定开销（占 profile 切换后 `hashes` 的 ~88%） | 性能 / 装配 | **已关闭（B9 Step 3）** | 新 bin `zela-verify`：**一次** GPU 初始化，逐作品新建 Runtime 与 `StandardBackends`（`wgpu_3d` 的离屏/深度目标按 `LayerId` 索引，复用会串味 ⇒ 选安全方案），编译也在同进程（§4.5）。帧循环抽到 `zela_app::frame_loop`，与 `zela-render` **共用一份**（不是第二条渲染路径）。实测：批量 **6.46s** vs 独立进程 **53.16s**，6 个作品哈希逐位相同；`--independent` 保留为对照组。 |
+| V3-12 | 「挂 / 不挂 HashSink 像素逐位相同」（B8 的 V3-12）只有人工比对，会腐烂 | 测试 / 门禁 | **已关闭（B9 Step 5）** | `xtask::assert_sink_bypass` 并入 `--step hashes`：`vector_paths`（1 帧）分别挂/不挂哈希各渲一次，比 **PNG 字节**（不比序列哈希 —— 不挂时没有哈希值，比哈希是自证）。实测 39504 B 完全相同。 |
+| V3-13 | `opt-level = 3` 会让编译变慢、与"验证要快"存在张力 | 性能 / 构建 | **记账（本批末测量，未引入 sccache / lld）** | 首次 verify-profile 全量构建 + 六步全跑 = **530.57s**（含 test/wasm/structure/smoke/hashes，编译时间未单独隔离）；改一个 zela-app 源文件后的增量重建 = **9.03s**。未引入 sccache（外部依赖 + CI 配置）与换链接器（需 `.cargo/config.toml` 分 target），理由见 B9 §5.2 的风险栏。触发：若首次构建时间成为日常瓶颈，再按 §5.3/§5.4 逐项评估。 |
 
-**L 段小计（B8）**：已关闭 5（V3-01/02/03/04/06）· 记账 2（V3-05、V3-07）。
+**L 段小计（B8 + B9）**：已关闭 12（V3-01/02/03/04/06/07/08/09/10/11/12）· 记账 2（V3-05、V3-13）。
 
 ---
 

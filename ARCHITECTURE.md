@@ -761,6 +761,24 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （`NoFilter` 实测更慢且文件大 4.3 倍）。只改文件字节，不改哈希输入。
 > - **不做**：双缓冲（V3-04 取消：`t_read` ≤ 1.7 ms）、tile 指纹 / 换基线格式
 >   （V3-05 推迟）、GPU 校验 pass（同上）、CI 分级（等优化后成本重定）。
+>
+> **B9 批次（2026-10-23）：构建 profile 与固定开销（纯性能，像素零变化）**。
+> - **`[profile.verify]`（Step 1）**：`inherits = "dev"`（保留 debug-assertions / overflow-checks）
+>   + `opt-level = 3` + `debug = false`。xtask 的 `run_args()` 统一给 `zela-compile` /
+>   `zela-render` 加 `--profile verify`；`check` / `test` 仍走 dev。
+>   前置实验（Step A）：release 与 dev 的序列哈希在 2D / 3D / 矢量三条路径上**逐位相同**。
+> - **启动剖面（Step 2，临时探针未提交）**：每次渲染进程的固定开销里，
+>   **GPU 初始化 ~0.5s** 与 **脚本运行时构建（含 typst）~0.7s** 各占一半，
+>   `StandardBackends::new` 只有 5 ms ⇒ 不需要惰性 pipeline。
+> - **批量化（Step 3）**：新 bin `zela-verify` —— **一次** GPU 初始化跑完全部作品
+>   （每个作品新建 Runtime + `StandardBackends`；后者复用会有 `LayerId` 串味风险），
+>   编译也在同一进程。帧循环抽成 `zela_app::frame_loop`，`zela-render` 与
+>   `zela-verify` **共用一份**（不得出现第二条渲染路径）。`xtask --independent`
+>   保留独立进程模式做对照；实测批量 6.46s vs 独立 53.16s，6 个哈希逐位相同。
+> - **V3-12 自动化（Step 5）**：`xtask::assert_sink_bypass` 并入 `--step hashes`，
+>   比 PNG **字节**（不挂哈希时没有哈希值可拿）。
+> - **`hashes` 全量**：167s（B8 前 dev）→ 52.48s（profile 切换）→ **13.07s**（批量 + V3-12）；
+>   编译：首次 verify-profile 全量 + 六步 530.57s，增量 9.03s。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）
