@@ -39,6 +39,8 @@ ze-content = { path = "../../kernel/ze-content" }
 ze-prerender = { path = "../../kernel/ze-prerender", default-features = false }
 # 几何原语：S1 形变 demo 需要直接构造 Path2D（MorphShape 的 from/to）。
 ze-notion = { path = "../../kernel/ze-notion" }
+# B10：矢量后端的能力自述（`Capabilities` / `MeshForm`）与渲染参数默认值。
+ze-render-ir = { path = "../../kernel/ze-render-ir" }
 # B6：`--backend vector` 需要矢量后端入口（`LayerKind` 判断"纯 2D 帧"来自 ze-scene-core）。
 zela-render-vector = { path = "../../render/zela-render-vector" }
 # 场景对象层：图元 newtype 与摆放组件（Circle / Path / Line / Rect / Transform）。

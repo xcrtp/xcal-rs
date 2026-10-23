@@ -286,6 +286,7 @@ fn run() -> Result<(), String> {
             } else {
                 LoopBackend::Wgpu
             },
+            vector_params: None,
         },
         need_rgba,
         &mut |index, frame| {

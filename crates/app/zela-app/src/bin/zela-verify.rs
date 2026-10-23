@@ -318,6 +318,7 @@ fn render_png(
         height: work.height,
         fps,
         backend: work.backend,
+        vector_params: None,
     };
     run_frames(
         ctx,
@@ -363,6 +364,7 @@ fn render_hash(
         height: work.height,
         fps,
         backend: work.backend,
+        vector_params: None,
     };
     run_frames(
         ctx,

@@ -346,12 +346,11 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     let mut records: Vec<(String, String, String)> =
         vec![("smoke".to_string(), "smoke".to_string(), smoke_hash)];
     for (work, _) in HASHES_WORKS {
-        let section = if *work == "vector_paths" {
-            "vector"
-        } else {
-            "native"
-        };
-        records.push((section.to_string(), (*work).to_string(), recorded(work)?));
+        records.push((
+            baseline_section(work).to_string(),
+            (*work).to_string(),
+            recorded(work)?,
+        ));
     }
     let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
     fs::write(&baseline_path, next)
@@ -1063,7 +1062,7 @@ fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<()
     assert_sink_bypass(root)?;
 
     for (work, hash) in &hashes {
-        let section = if work == "vector_paths" { "vector" } else { "native" };
+        let section = baseline_section(work);
         current.push((section, work.as_str(), hash.as_str()));
     }
     // smoke 的当前值在 `--step hashes` 里不重算（由 `--step smoke` 负责）；
@@ -1117,19 +1116,30 @@ const HASHES_WORKS: &[(&str, Option<&str>)] = &[
     ("spring", None),
     // B7 Step 4：零使用能力补齐（despawn / Curve.Const / Phase / CameraEye / MorphT / Group）。
     ("capability_gaps", None),
+    // B10 Step 4：真 3D 网格 + 着色栈的作品级证据（必须走矢量后端才有着色栈）。
+    ("shaded_meshes", Some("vector")),
 ];
 
-/// 取某作品的基线值（`vector_paths` 在 `[vector]`，其余在 `[native]`）。
+/// 取某作品的基线值（矢量后端的作品在 `[vector]`，其余在 `[native]`）。
 fn baseline_for(baselines: &Baselines, work: &str) -> Result<String, String> {
-    let (name, section) = if work == "vector_paths" {
-        ("vector", &baselines.vector)
+    let name = baseline_section(work);
+    let section = if name == "vector" {
+        &baselines.vector
     } else {
-        ("native", &baselines.native)
+        &baselines.native
     };
     section
         .get(work)
         .cloned()
         .ok_or_else(|| format!("baselines.txt 的 [{name}] 段缺少 `{work}`"))
+}
+
+/// 作品所在的基线段：由 [`HASHES_WORKS`] 的 backend 派生（`Some(_)` ⇒ `[vector]`）。
+fn baseline_section(work: &str) -> &'static str {
+    match HASHES_WORKS.iter().find(|(name, _)| *name == work) {
+        Some((_, Some(_))) => "vector",
+        _ => "native",
+    }
 }
 
 /// 从 `[verify] {...}` 的 JSON 行里取一个字符串字段（只含本仓自产的扁平 JSON）。
