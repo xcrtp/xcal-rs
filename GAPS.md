@@ -419,8 +419,9 @@
 | W1-06 | `Target.Phase` 写入的 `phase` **没有消费者**：脚本层没有创建函数图像对象的入口（`FunctionX2Y` + `Sampler1D` 不暴露，且函数是 Rust 闭包，ZSB 无法序列化） | 脚本 API / 动画目标 | **记账（B7 Step 4）** | `capability_gaps.lua` 里 `phase` 每帧被 `BindingApplySystem` 写入（组件值确实变了），但 `SceneRecordSystem` 只在函数图像对象上取 `x + phase` ⇒ **像素不变**。触发：要暴露函数图像对象时必须先解决"函数怎么持久化"（命名函数表 vs 表达式子集），不是加一个组件构造器就够 |
 | W1-07 | `scene.despawn` **没有时间参数**：在 commit 期执行 ⇒ 只能表达"创建后取消"，无法表达"动画中途移除" | 脚本 API / 生命周期 | **记账（B7 Step 4）** | `scene_service::scene_despawn` → `SceneEncoder::despawn`，写入 SceneScript 的 `despawns`，commit 时一次性应用。作品用它做"条件性不生成"（对照实测见 W1-05）。触发：需要中途销毁时，得给 `despawn` 加时间轴参数（属动画语义扩展，不是补一个字段） |
 | W1-08 | A6「`zela.scene` 指纹只变一次」被 Step 4 打破（`@7→@8` 后又 `@8→@9`） | 验收口径 | **记账（用户明确豁免）** | 根因：计划 §6.1 把 `Group` / `Target.Phase` / `Target.MorphT` 当成"可达但零使用"，实际按代码是"不可达"（W1-05）；Step 1 已提交，无法合并。用户在 Step 4 明确选择"开 @8→@9，六项全补" ⇒ 本条只留痕，不作为违规 |
+| W1-09 | 「新增能力必须在作品中体现」只是一句口号，没有任何检查 —— 与 GAPS 行号腐烂、`optional_missing` 无人消费同类 | 测试 / 门禁 | **已关闭（B7 Step 5）** | 新 step `cargo verify --step coverage`：能力清单**从源码抽**（`SceneApi` / `ContentApi` 方法 + `Target` / `Curve` / `TransformChannel` 变体，不维护第二张手写表），与 manifest 作品脚本（**去注释**，否则一句注释就能把能力标成已用）比对。未覆盖 ⇒ 必须在 `demo/capability_exemptions.txt` 写 `kind:name -> W1-xx`，且该 `W1-xx` 必须是 GAPS 里真实存在的表格行；豁免过期（能力已被覆盖）也 fail。首次运行：**49/49 覆盖 · 豁免 0**。单测 6 条（抽取 / 两种写法 / 未覆盖点名 / 假 GAPS 行 / 过期豁免 / 格式） |
 
-**M 段小计（B7）**：已关闭 3（W1-02、W1-03、W1-05）· 记账 5（W1-01、W1-04、W1-06、W1-07、W1-08）。
+**M 段小计（B7）**：已关闭 4（W1-02、W1-03、W1-05、W1-09）· 记账 5（W1-01、W1-04、W1-06、W1-07、W1-08）。
 
 ---
 

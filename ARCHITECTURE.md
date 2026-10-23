@@ -797,6 +797,11 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   `scene.phase_anim` / `scene.morph`；作品 `capability_gaps.lua` 一次覆盖
 >   `despawn` / `Curve.Const` / `Phase` / `CameraEye` / `MorphT` / `Group`。
 >   `Group` 判断结论 = **纯组合标签、不做父子变换累乘，与 `Parent` 分工清晰 ⇒ 补，不删**。
+> - **Step 5（覆盖矩阵机制）**：`cargo verify --step coverage` 从**源码**抽能力清单
+>   （`SceneApi` / `ContentApi` 的方法 + `Target` / `Curve` / `TransformChannel` 的变体），
+>   与 manifest 作品的脚本（**去注释后**）比对：未覆盖 ⇒ 必须在
+>   `demo/capability_exemptions.txt` 豁免，且该行必须指向 GAPS 里**真实存在**的 `W1-xx`
+>   表格行；豁免过期（能力已被覆盖）同样失败 ⇒ 能力不落地就会红，机制不会腐烂。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

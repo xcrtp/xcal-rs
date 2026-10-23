@@ -16,9 +16,9 @@ use std::path::Path;
 /// 用法文本。
 pub const USAGE: &str = "\
 用法：
-  cargo verify               # full：check + test + wasm + structure + smoke + hashes
+  cargo verify               # full：check + test + wasm + structure + coverage + smoke + hashes
   cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
-  cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
+  cargo verify --step <name> # 单步：check | test | wasm | structure | coverage | smoke | hashes
   cargo verify --record --reason <text>
                              # 录制设备重录基线（基线策略 §九）：强制 reason、自动回填
                              # 上一槽 commit、轮换 slotA/slotB、写 device 行
@@ -40,16 +40,18 @@ pub enum Step {
     Test,
     Wasm,
     Structure,
+    Coverage,
     Smoke,
     Hashes,
 }
 
 impl Step {
-    pub const ALL: [Step; 6] = [
+    pub const ALL: [Step; 7] = [
         Step::Check,
         Step::Test,
         Step::Wasm,
         Step::Structure,
+        Step::Coverage,
         Step::Smoke,
         Step::Hashes,
     ];
@@ -60,6 +62,7 @@ impl Step {
             Step::Test => "test",
             Step::Wasm => "wasm",
             Step::Structure => "structure",
+            Step::Coverage => "coverage",
             Step::Smoke => "smoke",
             Step::Hashes => "hashes",
         }
@@ -787,4 +790,370 @@ pub fn frame_digest_sample_interval(raw: Option<&str>) -> Option<usize> {
 /// 单帧 digest 的标签行（含帧号与 64 位摘要；调用方提供 `digest`）。
 pub fn frame_digest_line(index: u64, digest: &str) -> String {
     format!("[frame-digest] frame = {index} digest = {digest}")
+}
+
+// ─── B7 Step 5：能力覆盖矩阵 ───────────────────────────────────────────────
+//
+// 目的（计划 §7.1）：「所有新增能力必须在作品中体现」如果没有机制，会像
+// GAPS 行号 / 旧读数一样腐烂。这里从**源码**抽能力清单、从**manifest 作品的脚本**
+// 抽使用情况，未覆盖项必须出现在豁免清单里并指向一条 GAPS 记账。
+//
+// 为什么从源码抽而不是维护一份清单：手写清单本身就是"第二张真相表"，会漂移
+// （与 `TargetKind::ALL` 代替字符串表同一教训）。
+
+/// 一项脚本可见能力。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capability {
+    /// `scene` / `content`（方法）或 `Target` / `Curve` / `TransformChannel`（枚举）。
+    pub kind: String,
+    pub name: String,
+    /// 组件构造器形态的别名：`scene.circle` ↔ `Circle { … }`（Lua）/ `Circle({ … })`（JS）。
+    pub alias: Option<String>,
+    /// 出处（`文件:行`）—— 报错时点名，省得读者再搜。
+    pub location: String,
+}
+
+impl Capability {
+    /// `kind:name`（豁免清单 / 报错用）。
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.kind, self.name)
+    }
+}
+
+/// 一条豁免：`<kind>:<name> -> <GAPS 编号>`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exemption {
+    pub capability: String,
+    pub gaps: String,
+}
+
+/// 覆盖检查的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoverageReport {
+    pub total: usize,
+    pub covered: Vec<String>,
+    pub exempted: Vec<Exemption>,
+}
+
+/// 从源码抽能力清单：`SceneApi` / `ContentApi` 的方法 + 三个动画枚举的变体。
+pub fn collect_capabilities(
+    api_rs: &str,
+    types_rs: &str,
+    target_rs: &str,
+) -> Vec<Capability> {
+    let mut out = Vec::new();
+    for (struct_name, kind) in [("SceneApi", "scene"), ("ContentApi", "content")] {
+        out.extend(collect_methods(api_rs, "api.rs", struct_name, kind));
+    }
+    out.extend(collect_variants(types_rs, "types.rs", "Curve", "Curve"));
+    out.extend(collect_variants(
+        types_rs,
+        "types.rs",
+        "TransformChannel",
+        "TransformChannel",
+    ));
+    out.extend(collect_variants(
+        target_rs,
+        "target.rs",
+        "TargetKind",
+        "Target",
+    ));
+    out
+}
+
+/// 抽 `pub struct X<'a> { … }` 里的 `pub name: fn(&'a dyn Pod, …) -> …` 方法。
+fn collect_methods(src: &str, file: &str, struct_name: &str, kind: &str) -> Vec<Capability> {
+    let header = format!("pub struct {struct_name}<'a> {{");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for (index, raw) in src.lines().enumerate() {
+        let line = raw.trim();
+        if !inside {
+            inside = line == header;
+            continue;
+        }
+        if line.starts_with('}') {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("pub ") else {
+            continue;
+        };
+        let Some((name, sig)) = rest.split_once(':') else {
+            continue;
+        };
+        let sig = sig.trim();
+        if !sig.starts_with("fn(&'a dyn Pod") {
+            continue;
+        }
+        out.push(Capability {
+            kind: kind.to_string(),
+            name: name.trim().to_string(),
+            alias: constructor_alias(sig),
+            location: format!("{file}:{}", index + 1),
+        });
+    }
+    out
+}
+
+/// 单结构体参数（`shape: Circle`）⇒ 构造器别名 `Circle`；多参数 / 容器类型 ⇒ 无。
+fn constructor_alias(signature: &str) -> Option<String> {
+    let open = signature.find('(')?;
+    let close = signature.rfind(')')?;
+    let params = signature.get(open + 1..close)?;
+    let params: Vec<&str> = params.split(',').map(str::trim).collect();
+    // 第一个参数是 `&'a dyn Pod`；组件方法恰好还有一个。
+    if params.len() != 2 {
+        return None;
+    }
+    let ty = params[1].split_once(':')?.1.trim();
+    let is_ident = ty
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_uppercase())
+        && ty.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    is_ident.then(|| ty.to_string())
+}
+
+/// 抽 `pub enum X { … }` 的变体名（跳过注释 / 属性 / 空行）。
+fn collect_variants(src: &str, file: &str, enum_name: &str, owner: &str) -> Vec<Capability> {
+    let header = format!("pub enum {enum_name} {{");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for (index, raw) in src.lines().enumerate() {
+        let line = raw.trim();
+        if !inside {
+            inside = line == header;
+            continue;
+        }
+        if line.starts_with('}') {
+            break;
+        }
+        if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        let name: String = line
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        out.push(Capability {
+            kind: owner.to_string(),
+            name,
+            alias: None,
+            location: format!("{file}:{}", index + 1),
+        });
+    }
+    out
+}
+
+/// 去掉脚本注释（Lua `--` / JS `//`，切到行尾）。
+///
+/// 覆盖判定只看**代码**：否则一句「这里本来可以用 `Target.Phase`」就能把能力
+/// 标成"已使用"，机制立刻失真。
+pub fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let cut = ["--", "//"]
+            .iter()
+            .filter_map(|marker| line.find(marker))
+            .min()
+            .unwrap_or(line.len());
+        out.push_str(line[..cut].trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// 该能力是否被这批脚本文本用到。
+pub fn capability_used(capability: &Capability, scripts: &str) -> bool {
+    match capability.kind.as_str() {
+        "scene" | "content" => {
+            contains_call(scripts, &capability.kind, &capability.name)
+                || capability
+                    .alias
+                    .as_deref()
+                    .is_some_and(|alias| contains_constructor(scripts, alias))
+        }
+        owner => contains_path(scripts, owner, &capability.name),
+    }
+}
+
+/// `scene.spawn(` / `content.text(`（允许空白）。
+fn contains_call(text: &str, namespace: &str, name: &str) -> bool {
+    let needle = format!("{namespace}.{name}");
+    let mut from = 0;
+    while let Some(position) = text[from..].find(&needle) {
+        let start = from + position;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !is_ident_byte(before(text, start));
+        let after = text[end..].trim_start();
+        if before_ok && after.starts_with('(') {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// `Circle {` / `Circle({`（构造器形态）。
+fn contains_constructor(text: &str, alias: &str) -> bool {
+    let mut from = 0;
+    while let Some(position) = text[from..].find(alias) {
+        let start = from + position;
+        let end = start + alias.len();
+        let before_ok = start == 0 || !is_ident_byte(before(text, start));
+        let after = text[end..].trim_start();
+        if before_ok && (after.starts_with('{') || after.starts_with('(')) {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// `Target.Phase` / `Curve.Const`（枚举路径，变体名后不得紧跟标识符字符）。
+fn contains_path(text: &str, owner: &str, variant: &str) -> bool {
+    let needle = format!("{owner}.{variant}");
+    let mut from = 0;
+    while let Some(position) = text[from..].find(&needle) {
+        let start = from + position;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !is_ident_byte(before(text, start));
+        let after_ok = !text[end..]
+            .chars()
+            .next()
+            .is_some_and(is_ident_byte);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+fn before(text: &str, index: usize) -> char {
+    text[..index].chars().next_back().unwrap_or(' ')
+}
+
+fn is_ident_byte(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// 解析豁免清单（`kind:name -> W1-xx`；`#` 起注释，空行跳过）。
+pub fn parse_exemptions(text: &str) -> Result<Vec<Exemption>, String> {
+    let mut out = Vec::new();
+    for (index, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((capability, gaps)) = line.split_once("->") else {
+            return Err(format!(
+                "capability_exemptions:{} 缺 `->`（格式：`kind:name -> W1-xx  # 说明`）：{raw}",
+                index + 1
+            ));
+        };
+        let capability = capability.trim();
+        let gaps = gaps.trim();
+        if !capability.contains(':') {
+            return Err(format!(
+                "capability_exemptions:{} 缺 `kind:` 前缀（如 `scene:wait` / `Target:Phase`）：{raw}",
+                index + 1
+            ));
+        }
+        if !gaps.starts_with("W1-") {
+            return Err(format!(
+                "capability_exemptions:{} 必须指向 GAPS 的 `W1-xx` 记账：{raw}",
+                index + 1
+            ));
+        }
+        out.push(Exemption {
+            capability: capability.to_string(),
+            gaps: gaps.to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// 覆盖检查：**未覆盖且未豁免 ⇒ 失败**；豁免过期 / 指向不存在的 GAPS 行 ⇒ 也失败。
+pub fn check_coverage(
+    capabilities: &[Capability],
+    scripts: &str,
+    exemptions: &[Exemption],
+    gaps: &str,
+) -> Result<CoverageReport, String> {
+    let ids: BTreeSet<String> = capabilities.iter().map(Capability::id).collect();
+    let scripts = strip_comments(scripts);
+    let scripts = scripts.as_str();
+    let mut exempted_ids = BTreeSet::new();
+    for exemption in exemptions {
+        if !ids.contains(&exemption.capability) {
+            return Err(format!(
+                "豁免指向不存在的能力：`{}`（改名 / 删除能力后请同步清理 capability_exemptions.txt）",
+                exemption.capability
+            ));
+        }
+        // 与 GAPS 交叉核对：必须是表格里真实存在的记账行。
+        if !gaps.contains(&format!("| {} |", exemption.gaps)) {
+            return Err(format!(
+                "豁免引用的 `{}` 在 GAPS.md 里没有对应的表格行（记账不能只写在豁免文件里）",
+                exemption.gaps
+            ));
+        }
+        exempted_ids.insert(exemption.capability.clone());
+    }
+
+    let mut covered = Vec::new();
+    let mut missing = Vec::new();
+    for capability in capabilities {
+        let id = capability.id();
+        if capability_used(capability, scripts) {
+            if exempted_ids.contains(&id) {
+                return Err(format!(
+                    "豁免已过期：`{id}` 已被 manifest 作品覆盖 ⇒ 删掉 capability_exemptions.txt 里那一行"
+                ));
+            }
+            covered.push(id);
+        } else if !exempted_ids.contains(&id) {
+            missing.push(format!("  {} （{}）", id, capability.location));
+        }
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "以下能力**没有被任何 manifest 作品使用**，也没有进豁免清单：\n{}\n  \
+             ⇒ 补一个作品用到它，或在 `demo/capability_exemptions.txt` 里写 \
+             `<kind>:<name> -> <W1-xx>`（并在 GAPS 记账理由与触发条件）",
+            missing.join("\n")
+        ));
+    }
+    Ok(CoverageReport {
+        total: capabilities.len(),
+        covered,
+        exempted: exemptions.to_vec(),
+    })
+}
+
+/// 从 manifest 文本取每行的脚本相对路径（`id <title…> script [hash]`）。
+pub fn manifest_scripts(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        // 4 列及以上：`id <title…> script payload-hash`；恰好 3 列：`id title script`。
+        let script = if parts.len() == 3 {
+            parts[2]
+        } else {
+            parts[parts.len() - 2]
+        };
+        out.push(script.to_string());
+    }
+    out
 }

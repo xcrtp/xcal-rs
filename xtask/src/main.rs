@@ -1,9 +1,9 @@
 //! xtask：本机验证入口（`cargo verify`）。
 //!
 //! ```text
-//! cargo verify               # full：check + test + wasm + structure + smoke + hashes
+//! cargo verify               # full：check + test + wasm + structure + coverage + smoke + hashes
 //! cargo verify --fast        # 开发循环：check + test + 短对拍（smoke）
-//! cargo verify --step <name> # 单步：check | test | wasm | structure | smoke | hashes
+//! cargo verify --step <name> # 单步：check | test | wasm | structure | coverage | smoke | hashes
 //! cargo verify --record --reason <text>
 //!                            # 录制设备重录基线（见 lib.rs：两槽窗口 / 强制 reason）
 //! ```
@@ -254,6 +254,7 @@ fn run(options: &Options) -> Result<(), String> {
             Step::Test => step_test(&root, &plan)?,
             Step::Wasm => step_wasm(&root)?,
             Step::Structure => step_structure(&root)?,
+            Step::Coverage => step_coverage(&root)?,
             Step::Smoke => step_smoke(&root, options.skip_baseline)?,
             Step::Hashes => step_hashes(&root, options.skip_baseline, options.independent)?,
         }
@@ -779,6 +780,60 @@ fn subtotal_line(counts: &[usize; 4]) -> String {
         }
     }
     parts.join(" · ")
+}
+
+/// **能力覆盖矩阵**（B7 Step 5）：每个脚本可见能力都必须被 manifest 作品用到，
+/// 否则必须在 `demo/capability_exemptions.txt` 里豁免、并指向一条真实存在的 GAPS 记账。
+///
+/// 为什么读源码而不是维护清单：手写清单是"第二张真相表"，加一个能力忘改一处就失真
+/// —— 这正是本批要消灭的失败模式（见 `xtask/src/lib.rs` 的同一段注释）。
+fn step_coverage(root: &Path) -> Result<(), String> {
+    let read = |relative: &str| -> Result<String, String> {
+        let path = root.join(relative);
+        fs::read_to_string(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))
+    };
+    let api = read("crates/scene/ze-scene-api/src/api.rs")?;
+    let types = read("crates/scene/ze-scene-api/src/types.rs")?;
+    let target = read("crates/scene/ze-scene-core/src/animation/target.rs")?;
+    let manifest = read("crates/app/zela-app/scripts/demo/manifest.txt")?;
+    let gaps = read("GAPS.md")?;
+
+    let exemptions_path = scripts_dir(root).join("demo").join("capability_exemptions.txt");
+    let exemptions = if exemptions_path.is_file() {
+        xtask::parse_exemptions(
+            &fs::read_to_string(&exemptions_path)
+                .map_err(|error| format!("读取 {} 失败：{error}", exemptions_path.display()))?,
+        )?
+    } else {
+        Vec::new()
+    };
+
+    let capabilities = xtask::collect_capabilities(&api, &types, &target);
+    let scripts_root = scripts_dir(root);
+    let mut scripts = String::new();
+    for relative in xtask::manifest_scripts(&manifest) {
+        let path = scripts_root.join(&relative);
+        scripts.push_str(
+            &fs::read_to_string(&path)
+                .map_err(|error| format!("读取作品脚本 {} 失败：{error}", path.display()))?,
+        );
+        scripts.push('\n');
+    }
+
+    let report = xtask::check_coverage(&capabilities, &scripts, &exemptions, &gaps)?;
+    println!(
+        "[xtask] 能力覆盖：{}/{} 被 manifest 作品使用（豁免 {} 条）",
+        report.covered.len(),
+        report.total,
+        report.exempted.len()
+    );
+    for exemption in &report.exempted {
+        println!(
+            "[xtask] 豁免 {} → {}（GAPS 已记账）",
+            exemption.capability, exemption.gaps
+        );
+    }
+    Ok(())
 }
 
 fn step_structure(root: &Path) -> Result<(), String> {

@@ -1,0 +1,15 @@
+# 能力覆盖豁免清单（B7 Step 5 的机制输入，`cargo verify --step coverage` 消费）
+#
+# 默认**不需要**任何条目：每个脚本可见能力（`SceneApi` / `ContentApi` 的方法、
+# `Target` / `Curve` / `TransformChannel` 的变体）都必须被 `demo/manifest.txt`
+# 里的某个作品用到。
+#
+# 只有在"能力正确、但当前没有作品能用到它"时才写豁免；格式：
+#
+#   <kind>:<name> -> <GAPS 编号>  # 理由与触发条件写在 GAPS 的对应行里
+#
+# · kind ∈ scene | content | Target | Curve | TransformChannel
+# · GAPS 编号必须是 GAPS.md 里**真实存在的表格行**（`| W1-xx |`），否则检查失败
+# · 该能力一旦被作品覆盖，这一行就会变成"豁免过期"⇒ 检查失败，必须删掉
+#
+# 目前为空：全部能力都被 manifest 作品覆盖。
