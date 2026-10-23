@@ -64,7 +64,9 @@
 cargo run -q -p zela-compile --no-default-features --features typst -- \
   crates/app/zela-app/scripts/fourier.lua --out /tmp/fourier.zsb
 
-# 2) 渲染并输出序列哈希（--frames 表示不依赖 ffmpeg；--hash-out 可选）
+# 2) 渲染并输出序列哈希（--frames 表示不依赖 ffmpeg）
+#    B8 Step 2：哈希是**可选 sink** —— `--hash` 打印、`--hash-out FILE` 打印并写文件；
+#    不传就完全不哈希（主流程默认不付这份代价）。xtask 对拍显式传 `--hash`。
 cargo run -q -p zela-app --no-default-features --features typst --bin zela-render -- \
   --script crates/app/zela-app/scripts/fourier.lua \
   --frames /tmp/f_s --fps 30 --size 640x480 --hash-out /tmp/f_s.hash

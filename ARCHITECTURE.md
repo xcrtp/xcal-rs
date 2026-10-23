@@ -744,6 +744,23 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > - **仍未做**：`zela.render.shapes` 签名（V2-12，`submit_shapes` **没有任何实现**，改签名只会
 >   得到一个无实现可校验的 ABI）、`BackendKind::Vector` 可注册（V2-18：它没有可自述的
 >   namespace）、渐变 / 纹理 / dash（V2-13）、"开着色栈的脚本作品"（V2-19）。
+>
+> **B8 批次（2026-10-23）：性能优化与可观测性（纯性能，像素零变化）**。
+> - **可观测性（Step 1）**：`zela-render` 每帧十段计时（`advance / build / prepare(tess+upload) /
+>   paint / submit / read(含 GPU 等待) / sink / hash / verify(占位) / end`），`ZELA_FRAME_TIMING=1`
+>   逐帧打 `[timing]` JSON、收尾打 `[timing-summary]`（窗口 + 全程），并设 500 ms 量级门禁
+>   （首帧除外）。**profile 必须随数字一起报**（见 GAPS V3-07）。
+> - **实测推翻了"渲染慢"的判断（V3-03）**：fourier 渲染核心 8.9 ms/帧（dev），
+>   原本的 115 ms 里 93% 是**手写 SHA-256（54 ms）+ PNG 默认压缩档（57 ms）**。
+> - **sink 抽象（Step 2，V3-06）**：`FrameSink` = `PngSink` / `FfmpegSink` / `HashSink`；
+>   渲染核心不感知 sink，哈希默认**不挂**（`--hash` / `--hash-out` 才挂），
+>   xtask 对拍显式传 `--hash`。挂与不挂产出同一份像素（V3-12 用 PNG 字节验证）。
+> - **sha256 快路径（Step 3′0，V3-01）**：手写实现继续服务 payload hash；帧序列哈希走
+>   `sha256_fast`（非 wasm 用 `sha2`，wasm 回退手写实现，两条路径有逐位对拍）。
+> - **PNG 压缩档（Step 3′00，V3-02）**：`Compression::Fast` + `FilterType::Sub`
+>   （`NoFilter` 实测更慢且文件大 4.3 倍）。只改文件字节，不改哈希输入。
+> - **不做**：双缓冲（V3-04 取消：`t_read` ≤ 1.7 ms）、tile 指纹 / 换基线格式
+>   （V3-05 推迟）、GPU 校验 pass（同上）、CI 分级（等优化后成本重定）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）
