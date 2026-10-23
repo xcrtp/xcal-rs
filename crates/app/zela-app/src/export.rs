@@ -210,6 +210,14 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
     let mut encoder = png::Encoder::new(writer, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
+    // B8 Step 3′00：改用 level 1 + **单一**滤波器（crate 默认是 level 6 + 逐行试全部滤波器，
+    // 640×480 实测 ≈57 ms/帧 → 42 ms/帧）。**只影响 .png 文件字节**：序列哈希吃的是像素缓冲，
+    // 不读 PNG，所以基线值与本改动无关（见 frame_hash 的模块说明）。
+    //
+    // 选 `Sub` 而不是 `NoFilter`：实测 `NoFilter` 反而更慢（46 ms）且文件大 4.3 倍
+    // （419 KB vs 97 KB）—— 少一道滤波换来的是压缩器要在更差的分布上工作。
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::FilterType::Sub);
     let mut writer = encoder.write_header().map_err(|e| ExportError::Png {
         path: path.to_path_buf(),
         message: e.to_string(),
