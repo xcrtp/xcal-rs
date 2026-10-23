@@ -67,6 +67,17 @@ pub struct MeshGeometry {
     /// 图元拓扑。
     pub topology: PrimitiveTopology,
     /// 进程内唯一且跨 `clone` 稳定的几何 id。
+    ///
+    /// **B10 Step 0：运行态字段，不进产物**（W1-01）。它是 GPU 缓存键
+    /// （`ResourceKey::Versioned`）的一部分，与"几何长什么样"无关；序列化它会让
+    /// 同一脚本的 payload 取决于"本进程此前造过多少几何体"。
+    ///
+    /// 取舍（B10 §2.4 要求写明）：解码时用 [`next_geometry_id`] **重新分配**，即
+    /// **计数器推进**。理由：置 0 会让所有解码体撞号（缓存键相同 ⇒ 不同几何共用
+    /// GPU 缓冲）；推进则保持"进程内唯一"，且解码结果不再依赖编码顺序
+    /// （因为 id 根本不写进产物）。代价：同一份产物的两次解码得到不同 id ——
+    /// 这只是运行态身份，不影响像素，也不进任何哈希。
+    #[serde(skip, default = "next_geometry_id")]
     id: u64,
     /// 几何内容版本号，由 [`MeshGeometry::bump_version`] 递增。
     version: u64,
@@ -316,6 +327,49 @@ mod tests {
         assert_eq!(geometry.bump_version(), 1);
         assert_eq!(geometry.version(), 1);
         assert_eq!(geometry.id(), id_before, "bump_version 不改 id");
+    }
+
+    /// B10 Step 0（W1-01）：几何 id 是**运行态身份**，不进产物。
+    ///
+    /// 判据：两份内容相同、但在不同时刻构造的几何，序列化后必须**逐字节相同**
+    /// （修复前它们的 `id` 不同 ⇒ payload 依赖进程历史）。
+    #[test]
+    fn geometry_id_is_not_serialized() {
+        let build = || {
+            MeshGeometry::new(
+                vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+                Some(vec![0, 1, 2]),
+                PrimitiveTopology::Triangles,
+            )
+        };
+        let first = build();
+        // 中间再造几件，确保 id 计数器已经推进（修复前这正是 payload 差异的来源）。
+        let _noise: Vec<MeshGeometry> = (0..3).map(|_| build()).collect();
+        let second = build();
+        assert_ne!(first.id(), second.id(), "构造期仍分配唯一 id");
+
+        let left = serde_json::to_string(&first).expect("可序列化");
+        let right = serde_json::to_string(&second).expect("可序列化");
+        assert_eq!(left, right, "产物不得含运行态 id");
+        assert!(!left.contains("\"id\""), "payload 里不应再有 id 字段：{left}");
+    }
+
+    /// 解码后**重新分配** id（计数器推进）：不得出现"解码体 id 全 0 撞号"。
+    #[test]
+    fn decoded_geometry_gets_a_fresh_id() {
+        let source = MeshGeometry::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, PrimitiveTopology::Triangles);
+        let json = serde_json::to_string(&source).expect("可序列化");
+
+        let first: MeshGeometry = serde_json::from_str(&json).expect("可反序列化");
+        let second: MeshGeometry = serde_json::from_str(&json).expect("可反序列化");
+        assert_ne!(first.id(), 0, "解码必须重新分配，而不是留 0");
+        assert_ne!(first.id(), second.id(), "两次解码不得撞号");
+        assert_ne!(first.id(), source.id(), "解码体不复用编码体的 id");
+
+        // 解码之后再新建几何体，也要与已分配的两个 id 都不同。
+        let fresh = MeshGeometry::new(vec![Vec3::ZERO], None, PrimitiveTopology::Triangles);
+        assert_ne!(fresh.id(), first.id());
+        assert_ne!(fresh.id(), second.id());
     }
 
     #[test]

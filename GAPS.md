@@ -409,7 +409,7 @@
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| W1-01 | `MeshGeometry.id` 取自**进程内**全局计数器（`ze-scene-core/components/3d.rs` 的 `next_geometry_id`），且随 serde 序列化进 ZSB payload ⇒ 同一脚本的 payload hash 取决于"本进程此前造过多少几何体"，ZSB 不是源码的纯函数 | 装配产物 / 可复现性 | **记账（B7 Step 2 发现，本批不改）** | `zela-compile`（一进程一作品，build.ps1 的路径）与 `zela-verify`（一批作品共用进程）对 fusion / pbr_materials / pbr_lights / pbr_scene / atlas 算出不同 payload（如 fusion `5db2aecb…` vs `64c00b63…`）；解包对比：**唯一差异**是 `creates/*/*/data/id`（1,2,3 vs 7,8,9），其余字节相同。因此 `demo/manifest.txt` 断言的是"一进程一作品"的值（build.ps1 的真实路径）。触发：需要编译产物可复现（构建缓存 / 跨机比对 / 内容寻址）时，把 id 排除出 payload（serde skip，解码时重分配） |
+| W1-01 | `MeshGeometry.id` 取自**进程内**全局计数器（`ze-scene-core/components/3d.rs` 的 `next_geometry_id`），且随 serde 序列化进 ZSB payload ⇒ 同一脚本的 payload hash 取决于"本进程此前造过多少几何体"，ZSB 不是源码的纯函数 | 装配产物 / 可复现性 | **已关闭（B10 Step 0）** | 修法：`#[serde(skip, default = "next_geometry_id")]` —— **运行态字段不进产物，解码时重新分配**（计数器推进；置 0 会让解码体撞号，见代码注释的取舍说明）。单测 2 条：同内容不同时刻构造的几何序列化**逐字节相同**（且 JSON 里没有 `id`）；两次解码 / 解码后再新建三者 id 互不相同。实测：15 件 payload 在"同进程批量（zela-verify）"与"一进程一作品（zela-compile）"两种布局下**逐位相同**；manifest 15 条逐件断言通过；15 条帧基线逐位不变（`hashes` 全绿）。副作用（预期）：7 件含网格的作品 payload 值变化（`demo3d` / `fusion` / `pbr_*` / `atlas` / `capability_gaps`），manifest 已同步更新 |
 | W1-02 | manifest 的 payload 断言长期空转：13 件里 12 件写 `-`（等于没断言），唯一有值的 fourier 也已不可复现 | 装配产物 / 门禁 | **已关闭（B7 Step 2）** | fourier 的 `f8ed3eae…` 停在 45b0f85（改名 + ZSB 容器 v3）；当前代码下**任一字体配置都复现不出**（系统字体 `dad48069…`、`ZELA_TYPST_FONT_DIR` 确定字体 `a5bdfbe7…`）⇒ 该断言今日必然失败（不断言它从哪次提交开始坏）。Step 2 用 build.ps1 的同一命令逐件重算 13 条并逐条断言通过；含文本的 5 件（fourier / storyboard / surface_matrix / atlas / vector_paths）必须带确定字体才可复现，已写进 manifest 表头 |
 
 | W1-03 | JS 适配器（boa）实现完整但**零作品**：没有一件脚本走 JS，等于没有兑现证据 | 脚本 / Pod 装配 | **已关闭（B7 Step 3）** | `surface_matrix.js` 是 `surface_matrix.lua` 的逐语句翻译（同组件、同字段、同枚举、同顺序）。判据与实测：① 分镜 JSON **逐字节相同** ⇒ `payload hash` 两件都是 `e0951fd4…`（带确定字体）；② 帧序列哈希两件都是 `928cd5f9…`（640×480，1 帧，`script == bundle`）⇒「同一场景、两种语言、同一像素」成立。落地配套：`js` 进 xtask 对拍 features（`typst,js`，纯 Rust，不让对拍依赖本机 Python）、`build.ps1` 的编译命令同开 `js`（不进 wasm —— 网页只回放 ZSB）、`zela-verify` 支持"作品名自带扩展名"（同名 `.lua` / `.js` 并存时探测顺序选不出来） |
@@ -423,7 +423,7 @@
 | W1-10 | `Target.TransformValue` + `TransformChannel.Auto` 是**零使用**的静默兜底：按 `AnimValue` 类型猜写哪一列、猜不中静默跳过，且**没有 Rotation 分支**（想转的动画永远不动、还不报错） | 场景 API / 动画 | **已关闭（B7 Step 1，`zela.scene@7→@8`）** | 删除后唯一入口是显式的 `scene.clip_transform(channel, curve)`（Position / Rotation / Scale 三条通道互不覆盖）。六条既有基线**逐位不变**（`hashes` 全绿）⇒ 纯能力面收缩，不动像素。指纹常量**未变**（`FnSig` 是名字级，不覆盖枚举变体）⇒ 版本常量手动升 `@8` 并在 `api.rs` 留注释 |
 | W1-11 | manifest 里 7 个作品只有"像素好看"，没有任何回归门禁（fusion / pbr_materials / pbr_lights / pbr_scene / pendulum / orbit / spring） | 测试 / 门禁 | **已关闭（B7 Step 2）** | 全部进 `baselines.txt` 的 `[native]` 段（`HASHES_WORKS` 13 条，批量与独立两条路径**共用**一张表）；`--record` 的硬门禁要求每件 `--script == --bundle`。顺带修掉 `--record` 的**手写录制清单**会漏录新增作品的缺陷（改为从 `HASHES_WORKS` 派生）。`hashes` 19.53s（A5 ≤30s） |
 
-**M 段小计（B7）**：已关闭 6（W1-02、W1-03、W1-05、W1-09、W1-10、W1-11）· 记账 5（W1-01、W1-04、W1-06、W1-07、W1-08）。
+**M 段小计（B7）**：已关闭 7（W1-01、W1-02、W1-03、W1-05、W1-09、W1-10、W1-11）· 记账 4（W1-04、W1-06、W1-07、W1-08）。
 
 ---
 

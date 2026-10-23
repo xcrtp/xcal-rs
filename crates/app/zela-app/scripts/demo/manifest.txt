@@ -18,23 +18,24 @@
 # ZELA_TYPST_FONT_DIR 时复现**（build.ps1 会做）。本地裸跑 `zela-compile` 读到系统字体，
 # 这几件会算出不同的值 —— 差异属预期，不得据此改本表。
 #
-# 另：自建网格的作品（fusion / pbr_* / atlas）payload 里带 `MeshGeometry.id`，
-# 它取自**进程内**计数器 ⇒ 必须"一进程一作品"编译（build.ps1 即如此）。
-# 同进程连编多件（如 zela-verify 批量）会让 id 递增，payload 随之不同（GAPS W1-01）。
+# 另（B10 Step 0 起）：`MeshGeometry.id` 已**不进产物**（运行态 GPU 缓存键），
+# 因此自建网格的作品（demo3d / fusion / pbr_* / atlas / capability_gaps）
+# 在"同进程批量编译"与"一进程一作品"两种布局下 payload **逐位相同**。
+# 此前它们依赖进程内计数器（GAPS W1-01，已关闭）。
 #
 # id            title              script          payload-hash
 fourier         傅里叶级数展开      fourier.lua     a5bdfbe744cd8e9f0aad5fc44eba05202d902292b172b6eb38902da1378ff0c9
 storyboard      分镜演示            storyboard.lua  6ec4b10a70df93f9d500e3f2fcbef6d0637b8329802711f1ac5dcc949d2a09ad
-demo3d          3D 场景             demo3d.lua      ab472a4a2d92239009440fa152ab66c7836e2025c0db2f01edfdbc013866333f
-fusion          融合演示(双面+透明) fusion.lua      5db2aecb21c65d444d8677f8d23aa1a2bed2147f7950f66bf41f1eced54da9af
-pbr_materials   PBR材质画廊        pbr_materials.lua e62509791c9c14f7e762810ad6896a390ac054651f166c21bcdec926945521ab
-pbr_lights      PBR光照实验室      pbr_lights.lua   8a47bc5904e7220043bbe570a1d72fd6661e0375892d48ebbb6eb798960dbeea
-pbr_scene       PBR材质秀          pbr_scene.lua    798ccb863a104fd9d2e097a221ff5a295316c5f3ebe240c8aa5cdee2ebe59d43
+demo3d          3D 场景             demo3d.lua      60bfe38fd896ec13ba88433da1d7d33415fee55eeab312e707f018c17c631070
+fusion          融合演示(双面+透明) fusion.lua      089f650e02c516e83e4b548f23706e6ef4d285573c534129c4b58f0dc1842823
+pbr_materials   PBR材质画廊        pbr_materials.lua 6eeed7ffd8d63329ede27b3a510eeedc5d0b7f2bdee61750c77184aa00256c20
+pbr_lights      PBR光照实验室      pbr_lights.lua   696392eb4d8a9aa0ed0d987912eb7c04e9e03f1451547e07571debcf22df8b06
+pbr_scene       PBR材质秀          pbr_scene.lua    8a2d784f668076405795e1d38afdbb596fb0f599d6b09615aa22dcb2bb5a79c1
 pendulum        钟摆动画            pendulum.lua    ac3c11d23040dfd39441f3a766a7290dfdc6388d26169fc328b34c2e9f59e2d8
 orbit           公转行星            orbit.lua       1c5bb18a28e597d941a16cb333da461ab970bc6e2b0fb0d4228104d472603671
 spring          弹跳小球            spring.lua      5e088e67c090a31c3489ec764ae59801e12dad50a94a675ee24524a3b8eca859
 surface_matrix  Surface能力矩阵      surface_matrix.lua  e0951fd48d4d8fb96b4f2ba649427201ed57a15fe501a0161f7215b2b5639fe0
 surface_matrix_js  Surface能力矩阵(JS) surface_matrix.js  e0951fd48d4d8fb96b4f2ba649427201ed57a15fe501a0161f7215b2b5639fe0
-atlas           2D纹理进3D           atlas.lua       5e5bc366aaac21ef37786d051302254a332a541a891b41bb93e4703fbbcd69b9
+atlas           2D纹理进3D           atlas.lua       f98304a79060ad9e06184ca35a330a9ff97480e63d2f4cbcde43f07d0fe487f7
 vector_paths    矢量后端作品         vector_paths.lua 94e90dcc14b954a602b0e5ce3f3b64c9966db9a778df15b14e8bc9c31b8ebb3f
-capability_gaps 能力缺口补齐        capability_gaps.lua 3c3d89bbaf5a41784cd5da4c28b6af1f5175af15d3088e11608dd2e24e58d5f2
+capability_gaps 能力缺口补齐        capability_gaps.lua b90c2eb0aa3f5b8f29a151300eda15bb5975ce292b3da89f7cd0faef84e3102b
