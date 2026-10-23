@@ -86,12 +86,12 @@ smoke = 2847735c2b708fed676416d21759695b872e43529b11e3a23c3402a7fca6368f @ ea23b
 
 [vector]
 # 640×480，同一脚本 / 同一 bundle 走 `--backend vector`（不支持则显式报错，不静默降级）。
-# - vector_paths：纯 2D，覆盖填充 + 描边（butt/miter、折线 Reveal）+ 文本路径；静态 1 帧。
-# - shaded_meshes（B10 Step 4）：**真 3D 网格 + 着色栈**（墙 / 地板 / 亮立方体，静态 1 帧）；
-#   这条才是"tone / bloom / AO 第一次出现在作品画面上"的证据（逐项判据见
-#   `zela-app/tests/vector3d_shading.rs`）。
+# - **2D 6 件**（B14）：fourier / storyboard / pendulum / orbit / spring / vector_paths ——
+#   覆盖网格线（`Axes2D`）、开放折线（`Polyline` / `Line`）、reveal 曲线与文本路径。
+# - **3D 5 件**（B14）：fusion / pbr_materials / pbr_lights / pbr_scene / shaded_meshes ——
+#   真网格 + 光照（`Light` 组件自 B14 起**真正生效**，X5-01）+ 着色栈。
 # 口径与 [native] 相同：不符即 fail；`--script` 与 `--bundle` 两条路径逐位相同。
-# （slotA 是同批次脏树里的探针值，从未进入提交 ⇒ 标 pending，不冒充任何 commit。）
+# 已知残差（记账，不是基线错误）：X5-02 取景 / X5-03 点光与高光 / X5-05 透明合成 / X5-04 细笔画。
 # device = windows / RTX 4060 Laptop
 # reason: B14：2D 开放折线/reveal 桥接 + 3D 灯方向与强度归一化 + LightQueue 注入（X4-01/X4-02/X5-01）；含 Light 的 7 件 native 与 5 件 vector 基线与 6 件 2D vector 基线同步重录 @ ea23b60
 # slotA: vector_paths = c34f7a3db03db2a683399e567573fb86dc52bcd8b80b79599942083dcb69b3b5 @ 164f6e3
