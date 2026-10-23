@@ -27,7 +27,9 @@ pub const CLOSE_EPS: f32 = 1e-4;
 
 /// 一条已落到世界坐标的描边轮廓。
 ///
-/// 每个子轮廓单独一条——多轮廓字形（`o`/`B`/`8`）不会在轮廓之间产生桥接线。
+/// **每个 IR item（字形）一条**：该字形的全部子轮廓（`o`/`B`/`8` 的内圈等）
+/// 以 `MoveTo` 分段保留在同一个 `Path2D` 里，既不产生轮廓间的桥接线，
+/// 又让填充按 nonzero 规则把 counter 挖成孔洞（拆成多条独立路径会被逐个填满）。
 /// `width` 已是世界单位（标称 pt × `target / nominal`）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeOutline {
@@ -63,18 +65,35 @@ pub fn stroke_outlines(
         let Some((color, width)) = stroke_style(item, scale) else {
             continue;
         };
+        let mut path = Path2D::new();
         for sub in item.path.flatten_subpaths(FLATTEN_TOLERANCE) {
             if sub.is_empty() {
                 continue;
             }
             let closed = is_closed(&sub);
-            let world: Vec<Vec2> = sub.iter().map(|p| transform.apply_point(*p)).collect();
-            built.push(StrokeOutline {
-                path: Path2D::from_polyline(&world, closed),
-                color,
-                width,
-            });
+            // 闭合时 `flatten_subpaths` 已在组尾重复了起点；去掉重复尾点，
+            // 由 `Close` 命令表达闭合（保留轮廓方向 ⇒ nonzero 填孔成立）。
+            let points = if closed { &sub[..sub.len() - 1] } else { &sub[..] };
+            if points.is_empty() {
+                continue;
+            }
+            let world: Vec<Vec2> = points.iter().map(|p| transform.apply_point(*p)).collect();
+            path.move_to(world[0]);
+            for p in &world[1..] {
+                path.line_to(*p);
+            }
+            if closed {
+                path.close();
+            }
         }
+        if path.commands.is_empty() {
+            continue;
+        }
+        built.push(StrokeOutline {
+            path,
+            color,
+            width,
+        });
     }
 
     if sort_reading_order {
@@ -218,6 +237,50 @@ mod tests {
         let moved = stroke_outlines(&ir, 12.0, Vec2::new(3.0, 4.0), false);
         assert!((moved[0].path.compute_bounds().unwrap().min.x - 3.0).abs() < 1e-6);
         assert!((moved[0].path.compute_bounds().unwrap().min.y - 4.0).abs() < 1e-6);
+    }
+
+    /// 多轮廓字形：外圈 + 反向内圈（counter）必须留在**同一条** `Path2D` 里。
+    ///
+    /// 拆成两条独立路径时，填充会把内圈当作独立实心形状填满（`o`/`e` 的孔洞消失）；
+    /// 合在一条路径里才能按 nonzero 规则挖孔。
+    #[test]
+    fn counter_contour_stays_in_the_same_path() {
+        let mut path = Path2D::new();
+        // 外圈（逆时针）。
+        path.move_to(Vec2::new(0.0, 0.0));
+        path.line_to(Vec2::new(4.0, 0.0));
+        path.line_to(Vec2::new(4.0, 4.0));
+        path.line_to(Vec2::new(0.0, 4.0));
+        path.close();
+        // 内圈（顺时针）—— 反向以形成孔洞。
+        path.move_to(Vec2::new(1.0, 1.0));
+        path.line_to(Vec2::new(1.0, 3.0));
+        path.line_to(Vec2::new(3.0, 3.0));
+        path.line_to(Vec2::new(3.0, 1.0));
+        path.close();
+
+        let mut ir = ContentIR::empty(ContentSource::from_raw("hole"), 12.0);
+        ir.items = vec![StyledPath::filled(path, Color32::WHITE)];
+        ir.recompute_bounds();
+
+        let outlines = stroke_outlines(&ir, 12.0, Vec2::ZERO, false);
+        assert_eq!(outlines.len(), 1, "一个 IR item 只该产出一条轮廓");
+        let moves = outlines[0]
+            .path
+            .commands
+            .iter()
+            .filter(|c| matches!(c, ze_notion::PathCommand::MoveTo(_)))
+            .count();
+        let closes = outlines[0]
+            .path
+            .commands
+            .iter()
+            .filter(|c| matches!(c, ze_notion::PathCommand::Close))
+            .count();
+        assert_eq!((moves, closes), (2, 2), "两条子轮廓须同路径且都闭合");
+        // 闭合由 `Close` 表达，组尾重复起点须已去掉（否则留下零长度边）。
+        let bounds = outlines[0].path.compute_bounds().unwrap();
+        assert!((bounds.max.x - 4.0).abs() < 1e-6 && (bounds.max.y - 4.0).abs() < 1e-6);
     }
 
     /// 空 IR ⇒ 无轮廓（与两个旧实现一致的早退口径）。

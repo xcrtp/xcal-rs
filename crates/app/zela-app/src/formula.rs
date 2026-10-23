@@ -351,10 +351,11 @@ mod tests {
         }
     }
 
-    /// 多轮廓字形（`o`/`B`/`8` 的内外圈）必须拆成多条独立路径，
-    /// 否则会在轮廓间画出横穿字形内部的桥接线。
+    /// 多轮廓字形（`o`/`B`/`8` 的内外圈）必须留在**同一条路径**里：
+    /// 同一路径 ⇒ 填充按 nonzero 规则把内圈挖成孔洞；不同子路径之间由
+    /// `MoveTo` 分隔 ⇒ 不会画出横穿字形内部的桥接线。
     #[test]
-    fn multi_contour_splits_into_separate_paths() {
+    fn multi_contour_shares_one_path_without_bridges() {
         let mut path = Path2D::new();
         // 外圈矩形 + 内圈矩形（模拟 `o`）。
         path.move_to(GVec2::new(0.0, 0.0))
@@ -377,21 +378,25 @@ mod tests {
 
         let spec = FormulaSpec::new("o", 10.0, ze_notion::Vec2::ZERO);
         let paths = compile_to_stroke_paths(&ir, &spec);
-        assert_eq!(paths.len(), 2, "双轮廓应拆成两条独立路径");
-        for (path, _, _, _) in &paths {
-            assert_eq!(path_points(path).len(), 5, "每个轮廓：4 顶点 + 回起点");
-            assert!(
-                matches!(path.commands.last(), Some(ze_notion::PathCommand::Close)),
-                "轮廓应闭合"
-            );
-        }
-        // 两条路径顶点完全不重叠（没有跨轮廓的桥接点）。
-        let outer = path_points(&paths[0].0);
-        let inner = path_points(&paths[1].0);
-        assert_ne!(
-            (outer[0].x, outer[0].y),
-            (inner[0].x, inner[0].y),
-            "内外圈起点应不同"
+        assert_eq!(paths.len(), 1, "一个字形只该产出一条路径（counter 同路径才能挖孔）");
+        let path = &paths[0].0;
+        assert_eq!(path_points(path).len(), 8, "两个轮廓各 4 顶点（重复尾点已去掉）");
+        let moves = path
+            .commands
+            .iter()
+            .filter(|c| matches!(c, ze_notion::PathCommand::MoveTo(_)))
+            .count();
+        let closes = path
+            .commands
+            .iter()
+            .filter(|c| matches!(c, ze_notion::PathCommand::Close))
+            .count();
+        assert_eq!((moves, closes), (2, 2), "两条子轮廓由 MoveTo 分隔且都闭合");
+        // 第二个子轮廓起点必须是 MoveTo（而不是从上一条轮廓末尾 LineTo 过去）。
+        assert!(
+            matches!(path.commands[5], ze_notion::PathCommand::MoveTo(_)),
+            "内圈起点应为 MoveTo（不得有桥接线）：{:?}",
+            path.commands
         );
     }
 

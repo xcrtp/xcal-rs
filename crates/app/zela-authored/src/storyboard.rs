@@ -202,13 +202,14 @@ fn keyframes_vec2(dur: f64, from: ze_notion::Vec2, to: ze_notion::Vec2) -> Curve
     }
 }
 
-/// 公式 `y = \sin x` → **每个描边子轮廓**一个书写动画对象，返回其**脚本句柄**
+/// 公式 `y = \sin x` → **每个字形**一个书写动画对象，返回其**脚本句柄**
 /// （**已按阅读顺序** = 包围盒 `min_x` 升序）。
 ///
-/// 每个子轮廓独立成对象（而不是把整条公式塞进一个 `Reveal`）：`Reveal` 的弧长
+/// 每个字形独立成对象（而不是把整条公式塞进一个 `Reveal`）：`Reveal` 的弧长
 /// `s` 是在**整条路径**上跨子路径累加的（`normalize_advance`），若合成一条，
-/// 字形轮廓会"一个接一个"地写，但切口**无法**在轮廓之间停顿/独立排期；
-/// 拆成多个对象后由 `Timeline` 给每个轮廓一段（见 `build`）⇒ 真正的**逐笔**书写。
+/// 字形轮廓会"一个接一个"地写，但切口**无法**在字形之间停顿/独立排期；
+/// 拆成多个对象后由 `Timeline` 给每个字形一段（见 `build`）⇒ 真正的**逐笔**书写。
+/// 字形内部的多个子轮廓（如 `i` 的点与竖）留在同一路径里，由 nonzero 规则填孔。
 ///
 /// **顺序显式定义**（`ze_content::order_by_reading_order`）：返回顺序 = 书写顺序 =
 /// 从左往右。**局限**：只按 `min_x` 单键排序 ⇒ 单行公式正确；多行 / 上下标可能不符
@@ -242,11 +243,11 @@ fn spawn_formula_reveal(enc: &mut SceneEncoder, engine: &InMemoryEngine) -> Vec<
     handles
 }
 
-/// **T3 标注文字**：纯文本 → 描边路径 → 每个子轮廓一个**带 `Transform` 的对象**。
+/// **T3 标注文字**：纯文本 → 描边路径 → 每个字形一个**带 `Transform` 的对象**。
 ///
-/// 与 [`spawn_formula_reveal`] 同口径（逐轮廓独立对象，避免轮廓间桥接线），
-/// 差别只在：这里是**静态**文字（不进时间轴），位置由 T1 的 `Transform` 施加
-/// （文字几何在原点编译）—— 同时验证 Text 与摆放通道可组合。
+/// 与 [`spawn_formula_reveal`] 同口径（逐字形独立对象，字形内多子轮廓同路径，
+/// 避免轮廓间桥接线），差别只在：这里是**静态**文字（不进时间轴），位置由 T1 的
+/// `Transform` 施加（文字几何在原点编译）—— 同时验证 Text 与摆放通道可组合。
 ///
 /// 编译失败（如 Typst 引擎不可用）时静默跳过（优雅降级，不 panic）。
 fn spawn_text_label(enc: &mut SceneEncoder, engine: &InMemoryEngine) {

@@ -360,7 +360,8 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
            → zela-render::ir_to_draw_cmds（scale = 目标字号 / nominal_font_size，
                                           Shape2D::Path + Style2D + Transform2D）
            → zela-app::formula（接线桥：flatten_subpaths + apply_point
-                               → Path 组件（Path2D）+ StrokeSolid，每个子轮廓一条实体）
+                               → Path 组件（Path2D）+ StrokeSolid，每个字形一条实体，
+                                 字形内全部子轮廓同路径 ⇒ 填充按 nonzero 挖孔）
 ```
 
 - **铁律**：`typst` 仅允许出现在 `ze-prerender` 且 feature-gated；`zela-render`
@@ -368,10 +369,11 @@ System 只做"取相机 / 取相位 → 调对象层 `refresh`"的接线。原�
 - 锚点两级映射：`Glyph.span` → `WorldExt::range`（main source 字节区间）
   → 原始归一化源码 `find`；归一化/哈希统一由 `ze-content` 实现，保证跨引擎一致。
 - **消费侧接线**（`crates/app/zela-app/src/formula.rs`）：复用 `ir_to_draw_cmds` 的
-  缩放/平移，不另写变换；用 `Path2D::flatten_subpaths` 按子轮廓分组，每个子轮廓
-  单独 spawn 一条 `(Path, StrokeSolid)`（多轮廓字形 `o`/`B`/`8` 因此不会出现横穿
-  字形内部的桥接线）。零 System 改动——复用现有 `record_scene` 的 `(Path, StrokeSolid)`
-  分支。
+  缩放/平移，不另写变换；用 `Path2D::flatten_subpaths` 按子轮廓分组后，把**同一字形**
+  的全部子轮廓写进**同一个** `Path2D`（`MoveTo` 分段 + `Close`），再按字形 spawn 一条
+  `(Path, StrokeSolid)`。这样既不会出现横穿字形内部的桥接线，填充又能按 nonzero 规则
+  把 `o`/`e` 的 counter 挖成孔洞（拆成多条独立路径会被逐条填满）。
+  零 System 改动——复用现有 `record_scene` 的 `(Path, StrokeSolid)` 分支。
 - **字号解耦**：`FormulaSpec.nominal_font_size`（Typst 编译标称字号，默认 12.0）决定
   曲线提取精度与 IR 本地点尺度；`FormulaSpec.font_size` 是目标显示大小，仅经
   `ir_to_draw_cmds` 的 `scale = target / nominal` 生效。展平容差是相对标称尺度的绝对值，

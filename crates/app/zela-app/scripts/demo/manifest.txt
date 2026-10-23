@@ -23,9 +23,13 @@
 # 在"同进程批量编译"与"一进程一作品"两种布局下 payload **逐位相同**。
 # 此前它们依赖进程内计数器（GAPS W1-01，已关闭）。
 #
+# 另（字形孔洞修复）：`stroke_outlines` 现在**每个字形一条**多子路径 `Path2D`
+# （counter 靠 nonzero 规则挖孔，不再拆成独立形状）。所以含文本的作品的 Path
+# 条数按**字形**计（如 fourier 63 → 50 个对象），payload 随之变化 —— 属预期。
+#
 # id            title              script          payload-hash
-fourier         傅里叶级数展开      fourier.lua     a5bdfbe744cd8e9f0aad5fc44eba05202d902292b172b6eb38902da1378ff0c9
-storyboard      分镜演示            storyboard.lua  6ec4b10a70df93f9d500e3f2fcbef6d0637b8329802711f1ac5dcc949d2a09ad
+fourier         傅里叶级数展开      fourier.lua     0def0109e2ad84266407d3d9b77d0288095ac613ee37a551c5e4c9b2689751bb
+storyboard      分镜演示            storyboard.lua  ab19b3a294d2bf5ca2b622f7cc28a2d3eed061c72cb0b6830626f4f3dd7cf637
 demo3d          3D 场景             demo3d.lua      60bfe38fd896ec13ba88433da1d7d33415fee55eeab312e707f018c17c631070
 fusion          融合演示(双面+透明) fusion.lua      089f650e02c516e83e4b548f23706e6ef4d285573c534129c4b58f0dc1842823
 pbr_materials   PBR材质画廊        pbr_materials.lua 6eeed7ffd8d63329ede27b3a510eeedc5d0b7f2bdee61750c77184aa00256c20
@@ -34,9 +38,9 @@ pbr_scene       PBR材质秀          pbr_scene.lua    8a2d784f668076405795e1d38
 pendulum        钟摆动画            pendulum.lua    ac3c11d23040dfd39441f3a766a7290dfdc6388d26169fc328b34c2e9f59e2d8
 orbit           公转行星            orbit.lua       1c5bb18a28e597d941a16cb333da461ab970bc6e2b0fb0d4228104d472603671
 spring          弹跳小球            spring.lua      5e088e67c090a31c3489ec764ae59801e12dad50a94a675ee24524a3b8eca859
-surface_matrix  Surface能力矩阵      surface_matrix.lua  e0951fd48d4d8fb96b4f2ba649427201ed57a15fe501a0161f7215b2b5639fe0
-surface_matrix_js  Surface能力矩阵(JS) surface_matrix.js  e0951fd48d4d8fb96b4f2ba649427201ed57a15fe501a0161f7215b2b5639fe0
-atlas           2D纹理进3D           atlas.lua       f98304a79060ad9e06184ca35a330a9ff97480e63d2f4cbcde43f07d0fe487f7
-vector_paths    矢量后端作品         vector_paths.lua 94e90dcc14b954a602b0e5ce3f3b64c9966db9a778df15b14e8bc9c31b8ebb3f
+surface_matrix  Surface能力矩阵      surface_matrix.lua  bc132f3424f92c12b77f57b00e6eb39898adbb93d09d39c617e961a6bcbd9b51
+surface_matrix_js  Surface能力矩阵(JS) surface_matrix.js  bc132f3424f92c12b77f57b00e6eb39898adbb93d09d39c617e961a6bcbd9b51
+atlas           2D纹理进3D           atlas.lua       7ae2a453b3aec2cc349ef2230a2a23f6375cb788810d67a9197abcf1cc5b2527
+vector_paths    矢量后端作品         vector_paths.lua b2f6f4f8eeded354294e64bb8111f49817031c523efa0946579dcc7458605b9c
 capability_gaps 能力缺口补齐        capability_gaps.lua b90c2eb0aa3f5b8f29a151300eda15bb5975ce292b3da89f7cd0faef84e3102b
 shaded_meshes   3D网格着色栈        shaded_meshes.lua 452685591f879e125fbec27a8ae032dd9f4e929de3be9a7524f63837de340a02

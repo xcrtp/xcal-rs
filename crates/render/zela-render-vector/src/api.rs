@@ -1066,6 +1066,68 @@ mod tests {
         assert!(bad_uv.validate().is_err());
     }
 
+    /// **闭合孔洞**：同一路径里的两条子路径（外圈 CCW + 内圈 CW）按 nonzero 规则
+    /// 必须留下孔；孔被填满说明填充规则 / 子路径方向在某一层丢了。
+    ///
+    /// 这是 `vector_paths` 里字母 `o` / `e` 计数器（counter）被填色的最小复现。
+    #[test]
+    fn concave_ring_keeps_its_hole() {
+        let ring = |points: &[[f64; 3]]| {
+            let n = points.len();
+            let mut curves = Vec::new();
+            for i in 0..n {
+                let a = points[i];
+                let b = points[(i + 1) % n];
+                let lerp = |t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+                curves.extend_from_slice(&[a, lerp(1.0 / 3.0), lerp(2.0 / 3.0), b]);
+            }
+            FilledPath {
+                points: curves,
+                ranges: vec![[0, n as u32, 1, 0]],
+                fill: [1.0, 0.0, 0.0, 1.0],
+                model: [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ],
+                shade_in_3d: false,
+                material: None,
+            }
+        };
+        // 外圈 CCW、内圈 CW（世界 y 向上）。
+        // 2D 视图里 1 世界单位 = 1 px（`projection = 1/(size/2)`）⇒ 外圈 ±16、内圈 ±8。
+        let mut merged = ring(&[
+            [-16.0, -16.0, 0.0],
+            [16.0, -16.0, 0.0],
+            [16.0, 16.0, 0.0],
+            [-16.0, 16.0, 0.0],
+        ]);
+        let inner = ring(&[
+            [-8.0, -8.0, 0.0],
+            [-8.0, 8.0, 0.0],
+            [8.0, 8.0, 0.0],
+            [8.0, -8.0, 0.0],
+        ]);
+        let offset = (merged.points.len() / 4) as u32;
+        merged.points.extend_from_slice(&inner.points);
+        merged.ranges.extend(
+            inner
+                .ranges
+                .iter()
+                .map(|r| [r[0] + offset, r[1] + offset, r[2], r[3]]),
+        );
+
+        let frame = match render_2d(64, 64, 1, [0.0, 0.0, 0.0, 1.0], &[merged.into()]) {
+            Ok(frame) => frame,
+            Err(error) => panic!("矢量后端起不来：{error}"),
+        };
+        let center = pixel(&frame, 64, 32, 32);
+        // 环带中点：(32, 20) 在外圈 16 与内圈 24 之间。
+        let edge = pixel(&frame, 64, 32, 20);
+        assert!(edge[0] > 200, "环带应被填充：{edge:?}");
+        assert!(center[0] < 32, "孔洞必须保持背景色：{center:?}");
+    }
+
     /// **B6 Step 1 验收（AO）**：AO 是屏幕空间的深度遮挡，**单块平面没有凹陷 ⇒ 不会变暗**
     /// （这是正确行为，不是没接上）。所以用"墙 + 地板"的内角来验：有环境光时内角变暗；
     /// 只有方向光时 AO **无效**（上游 `occlusion_of()` 的结构）。
