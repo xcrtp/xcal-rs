@@ -1,14 +1,14 @@
 //! `zela-render`：headless 薄壳 —— 脚本直接渲到视频。
 //!
 //! ```text
-//! zela-render <脚本路径> [--frames DIR] [--fps N] [--out FILE] [--size WxH]
-//! zela-render --bundle <file.zsb> [--frames DIR] [--fps N] [--out FILE] [--size WxH]
+//! zela-render <脚本路径> [--frames DIR] [--fps N] [--out FILE] [--size WxH] [--hash]
+//! zela-render --bundle <file.zsb> [--frames DIR] [--fps N] [--out FILE] [--size WxH] [--hash]
 //! ```
 //!
 //! - 默认 **ffmpeg 管道**（rawvideo → libx264）；ffmpeg 不在 PATH ⇒ **明确报错**并提示 `--frames`；
 //! - `--frames DIR` 走序列帧（PNG，交给外部工具合成）；
-//! - `--hash-out FILE` 额外写出**帧像素序列哈希**（只覆盖画面像素，不含编码器元数据；
-//!   两种 sink 都会计算并打印 `[frame-hash] sequence = …`）；
+//! - **B8 Step 2**：逐帧哈希是一个**可选 sink**（`--hash` 打印、`--hash-out FILE` 打印并写文件）。
+//!   主流程**默认不挂**它 ⇒ 不付哈希代价；挂与不挂的像素产出逐位相同（同一渲染核心）。
 //! - 帧数 = `ceil(duration × fps)`，时长由脚本 / 产物决定；
 //! - 脚本语言按扩展名推断（`.lua` / `.py`）；`.py` 但未开 `python` feature ⇒ 明确报错；
 //! - `--bundle` 读 ZSB 产物：先做可还原性检查，再走**与脚本完全相同**的 Runtime 路径。
@@ -43,6 +43,10 @@ struct Args {
     bundle: Option<PathBuf>,
     frames_dir: Option<PathBuf>,
     hash_out: Option<PathBuf>,
+    /// B8 Step 2：是否挂 `HashSink`（主流程默认**不挂**）。
+    ///
+    /// `--hash-out` 隐含开启（它要拿这个值写文件）；显式 `--hash` 只打印不写文件。
+    hash: bool,
     fps: f64,
     out: PathBuf,
     size: (u32, u32),
@@ -71,6 +75,7 @@ impl Args {
         let mut bundle: Option<PathBuf> = None;
         let mut frames_dir = None;
         let mut hash_out = None;
+        let mut hash = false;
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
         let mut size = (640u32, 480u32);
@@ -92,6 +97,8 @@ impl Args {
                         raw.get(i).ok_or("--hash-out 需要一个文件参数")?,
                     ));
                 }
+                // B8 Step 2：显式挂 HashSink（默认不挂 ⇒ 主流程不付哈希代价）。
+                "--hash" => hash = true,
                 // 与位置参数等价（计划 A0 的验收命令使用 `--script PATH`）。
                 "--script" => {
                     i += 1;
@@ -172,6 +179,7 @@ impl Args {
             bundle,
             frames_dir,
             hash_out,
+            hash,
             fps,
             out,
             size,
@@ -277,7 +285,6 @@ fn run() -> Result<(), String> {
     }
     // 跨运行时对拍口径：逐帧累积**规范化 RGBA8 像素**的序列哈希。
     // 与 sink 无关（PNG / ffmpeg 都算同一个值），也不含任何编码器元数据。
-    let mut frame_hash = FrameSequenceHash::new(width, height);
     // B2-6（D7）：**分层标签旁路** —— `ZELA_FRAME_DIGEST_SAMPLE=N` 时每 N 帧打印
     // 该帧的独立 digest。旁路不进入 `frame_hash`（判定与诊断分离）。
     let digest_sample: u32 = std::env::var("ZELA_FRAME_DIGEST_SAMPLE")
@@ -286,14 +293,28 @@ fn run() -> Result<(), String> {
         .filter(|n| *n > 0)
         .unwrap_or(0);
 
-    let mut sink = match &args.frames_dir {
-        Some(dir) => Sink::Png {
-            dir: dir.clone(),
-            width,
-            height,
-        },
-        None => Sink::Ffmpeg(Ffmpeg::spawn(&ctx, &args.out, args.fps, (width, height))?),
-    };
+    // B8 Step 2：sink 装配。输出 sink 恒有一个（PNG 或 mp4）；HashSink 只有显式要求才挂。
+    let mut sinks: Vec<Box<dyn FrameSink>> = Vec::new();
+    match &args.frames_dir {
+        Some(dir) => sinks.push(Box::new(PngSink { dir: dir.clone() })),
+        None => sinks.push(Box::new(FfmpegSink(Ffmpeg::spawn(
+            &ctx,
+            &args.out,
+            args.fps,
+            (width, height),
+        )?))),
+    }
+    if args.hash || args.hash_out.is_some() {
+        sinks.push(Box::new(HashSink {
+            hash: FrameSequenceHash::new(width, height),
+            size: (width, height),
+            digest_sample,
+            hash_out: args.hash_out.clone(),
+            last: Duration::ZERO,
+        }));
+    }
+    // 只有某个 sink 需要 RGBA8 时才做通道规范化（省一次全帧拷贝）。
+    let need_rgba = sinks.iter().any(|sink| sink.wants_rgba());
 
     // B8 Step 1：逐帧分段计时（默认只在窗口汇总 / 门禁上用；逐帧 JSON 由环境变量开启）。
     let timing_lines = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
@@ -307,9 +328,9 @@ fn run() -> Result<(), String> {
         runtime.driver.submit(DriverCommand::Advance { dt }).wait();
         timing.advance = mark.elapsed();
 
-        // B6 Step 2.3：矢量后端走"同一个场景 → 快照 → 记录"的路径；只支持纯 2D 帧
-        // （3D / 内容纹理图层没有对应的矢量记录，显式报错，不静默跳过）。
-        let rgba = if args.backend == Backend::Vector {
+        // 本帧的目标格式字节与（按需的）RGBA8。渲染核心只产出这两样，不感知 sink。
+        let convert: Duration;
+        let (raw, rgba): (Vec<u8>, Vec<u8>) = if args.backend == Backend::Vector {
             let mark = Instant::now();
             let (layers, draws) = runtime.driver.with_scheduler(|scheduler| {
                 let options = zela_render::FrameOptions::default();
@@ -359,9 +380,9 @@ fn run() -> Result<(), String> {
 
             // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。
             let mark = Instant::now();
-            sink.write(&ctx, index, &rgba_to_target(&ctx, &rgba))?;
-            timing.sink = mark.elapsed();
-            rgba
+            let raw = rgba_to_target(&ctx, &rgba);
+            convert = mark.elapsed();
+            (raw, rgba)
         } else {
             let mark = Instant::now();
             let callback = runtime
@@ -396,23 +417,32 @@ fn run() -> Result<(), String> {
             timing.submit = headless.render.submit;
             timing.read = headless.read;
 
+            // 只有需要 RGBA 的 sink 在场时才做通道规范化。
             let mark = Instant::now();
-            // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
-            let rgba = to_rgba(&ctx, &pixels);
-            sink.write(&ctx, index, &pixels)?;
-            timing.sink = mark.elapsed();
-            rgba
+            let rgba = if need_rgba {
+                to_rgba(&ctx, &pixels)
+            } else {
+                Vec::new()
+            };
+            convert = mark.elapsed();
+            (pixels, rgba)
         };
-        // B2-6：旁路采样（只打印，不改序列哈希）。
-        if digest_sample > 0 && index % digest_sample == 0 {
-            let digest =
-                zela_scene_bundle::sha256::hex(&zela_scene_bundle::sha256::sha256(&rgba));
-            eprintln!("[frame-digest] frame = {index} digest = {digest}");
-        }
 
+        // B8 Step 2：所有 sink 吃同一份帧像素（hash 只是其中一个 sink）。
         let mark = Instant::now();
-        frame_hash.push_frame(&rgba);
-        timing.hash = mark.elapsed();
+        {
+            let frame = FramePixels {
+                raw: &raw,
+                rgba: &rgba,
+                size: (width, height),
+            };
+            for sink in &mut sinks {
+                sink.on_frame(index, &frame)?;
+            }
+        }
+        let sink_all = mark.elapsed() + convert;
+        timing.hash = sinks.iter().map(|sink| sink.last_hash_time()).sum();
+        timing.sink = sink_all.saturating_sub(timing.hash);
 
         let mark = Instant::now();
         runtime.driver.with_scheduler_mut(|scheduler| {
@@ -426,22 +456,9 @@ fn run() -> Result<(), String> {
         stats.record(index, &timing);
     }
 
-    sink.finish()?;
-
-    let sequence = frame_hash.hex();
-    eprintln!(
-        "[frame-hash] sequence = {sequence}（{} 帧，{}×{}，RGBA8）",
-        frame_hash.frames(),
-        width,
-        height
-    );
-    if let Some(path) = &args.hash_out {
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录 {} 失败：{e}", parent.display()))?;
-        }
-        std::fs::write(path, format!("{sequence}\n"))
-            .map_err(|e| format!("写 {} 失败：{e}", path.display()))?;
+    // B8 Step 2：收尾交给 sink（`HashSink` 在这里打印 `[frame-hash]` 并写 `--hash-out`）。
+    for sink in sinks {
+        sink.finish()?;
     }
 
     // B8 Step 1：分段耗时汇总（JSON 行）+ 量级门禁（> 500ms 才失败）。
@@ -620,11 +637,14 @@ impl FrameStats {
     }
 
     fn report(&self) -> Result<(), String> {
-        eprintln!(
-            "{}",
-            self.window
-                .summary_json(&format!("1..{}", self.window_frames), self.window_frames)
-        );
+        // 单帧作品没有"1..30"窗口，跳过该行（否则打印一列 0，易误读）。
+        if self.window_frames > 0 {
+            eprintln!(
+                "{}",
+                self.window
+                    .summary_json(&format!("1..{}", self.window_frames), self.window_frames)
+            );
+        }
         eprintln!("{}", self.totals.summary_json("all", self.seen));
         if let Some((frame, ms)) = self.slow.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
             return Err(format!(
@@ -652,37 +672,121 @@ fn rgba_to_target(ctx: &RenderContext, rgba: &[u8]) -> Vec<u8> {
     out
 }
 
-enum Sink {
-    Png {
-        dir: PathBuf,
-        width: u32,
-        height: u32,
-    },
-    Ffmpeg(Ffmpeg),
+/// 一帧的像素视图（B8 Step 2）：sink 只吃这个，不感知渲染核心。
+struct FramePixels<'a> {
+    /// 目标纹理格式的字节（BGRA 等）——mp4 编码直接用。
+    raw: &'a [u8],
+    /// 规范化 RGBA8 —— PNG / 哈希用；没有 sink 需要时为空。
+    rgba: &'a [u8],
+    size: (u32, u32),
 }
 
-impl Sink {
-    fn write(&mut self, ctx: &RenderContext, index: u32, pixels: &[u8]) -> Result<(), String> {
-        match self {
-            Self::Png { dir, width, height } => {
-                std::fs::create_dir_all(&dir)
-                    .map_err(|e| format!("创建目录 {} 失败：{e}", dir.display()))?;
-                let path = dir.join(format!("frame_{index:05}.png"));
-                let rgba = to_rgba(ctx, pixels);
-                write_png(&path, *width, *height, &rgba).map_err(|e| e.to_string())
-            }
-            Self::Ffmpeg(encoder) => encoder.write(pixels),
-        }
+/// 逐帧输出 / 校验的挂载点（B8 Step 2 / 补充更正 §3.4）。
+///
+/// 硬约束（V3-12）：渲染核心**不感知** sink —— 命令序列与像素产出与"挂了哪些 sink"
+/// 完全无关。挂不挂 `HashSink` 只决定要不要多做一次哈希，不改走哪条渲染路径。
+trait FrameSink {
+    /// 是否需要 RGBA8（决定主循环要不要做通道规范化）。
+    fn wants_rgba(&self) -> bool {
+        false
     }
 
-    fn finish(self) -> Result<(), String> {
-        match self {
-            Self::Png { dir, .. } => {
-                eprintln!("完成：序列帧在 {}", dir.display());
-                Ok(())
-            }
-            Self::Ffmpeg(encoder) => encoder.finish(),
+    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String>;
+
+    /// 上一帧的校验耗时（只有 [`HashSink`] 报），用于把 `t_hash` 从 `t_sink` 里拆出来。
+    fn last_hash_time(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn finish(self: Box<Self>) -> Result<(), String>;
+}
+
+/// PNG 序列（`--frames DIR`）。
+struct PngSink {
+    dir: PathBuf,
+}
+
+impl FrameSink for PngSink {
+    fn wants_rgba(&self) -> bool {
+        true
+    }
+
+    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+        std::fs::create_dir_all(&self.dir)
+            .map_err(|e| format!("创建目录 {} 失败：{e}", self.dir.display()))?;
+        let path = self.dir.join(format!("frame_{index:05}.png"));
+        write_png(&path, frame.size.0, frame.size.1, frame.rgba).map_err(|e| e.to_string())
+    }
+
+    fn finish(self: Box<Self>) -> Result<(), String> {
+        eprintln!("完成：序列帧在 {}", self.dir.display());
+        Ok(())
+    }
+}
+
+/// mp4（`--out FILE`，经 ffmpeg 管道）。
+struct FfmpegSink(Ffmpeg);
+
+impl FrameSink for FfmpegSink {
+    fn on_frame(&mut self, _index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+        self.0.write(frame.raw)
+    }
+
+    fn finish(self: Box<Self>) -> Result<(), String> {
+        self.0.finish()
+    }
+}
+
+/// 帧序列哈希（**可选**；`--hash` 或 `--hash-out` 才挂）。
+///
+/// 这是唯一会做像素级计算（SHA-256）的 sink；它的存在与否不改变像素产出。
+struct HashSink {
+    hash: FrameSequenceHash,
+    size: (u32, u32),
+    digest_sample: u32,
+    hash_out: Option<PathBuf>,
+    last: Duration,
+}
+
+impl FrameSink for HashSink {
+    fn wants_rgba(&self) -> bool {
+        true
+    }
+
+    fn on_frame(&mut self, index: u32, frame: &FramePixels<'_>) -> Result<(), String> {
+        // B2-6：旁路采样（只打印，不改序列哈希）。
+        if self.digest_sample > 0 && index % self.digest_sample == 0 {
+            let digest =
+                zela_scene_bundle::sha256::hex(&zela_scene_bundle::sha256::sha256(frame.rgba));
+            eprintln!("[frame-digest] frame = {index} digest = {digest}");
         }
+        let mark = Instant::now();
+        self.hash.push_frame(frame.rgba);
+        self.last = mark.elapsed();
+        Ok(())
+    }
+
+    fn last_hash_time(&self) -> Duration {
+        self.last
+    }
+
+    fn finish(self: Box<Self>) -> Result<(), String> {
+        let sequence = self.hash.hex();
+        eprintln!(
+            "[frame-hash] sequence = {sequence}（{} 帧，{}×{}，RGBA8）",
+            self.hash.frames(),
+            self.size.0,
+            self.size.1
+        );
+        if let Some(path) = &self.hash_out {
+            if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建目录 {} 失败：{e}", parent.display()))?;
+            }
+            std::fs::write(path, format!("{sequence}\n"))
+                .map_err(|e| format!("写 {} 失败：{e}", path.display()))?;
+        }
+        Ok(())
     }
 }
 

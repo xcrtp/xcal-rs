@@ -992,6 +992,8 @@ fn render(
     args.extend(strings(&["--bin", "zela-render", "--"]));
     args.extend(source.iter().map(|value| value.to_string()));
     args.extend(strings(&["--frames", frames, "--fps", "30", "--size", size]));
+    // B8 Step 2：哈希是可选的 sink，对拍必须显式挂上（主流程默认不挂）。
+    args.extend(strings(&["--hash"]));
     if let Some(backend) = backend {
         args.extend(strings(&["--backend", backend]));
     }
