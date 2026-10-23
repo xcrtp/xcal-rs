@@ -2,6 +2,10 @@
 //
 // 为什么自带而不是引外部 crate：ZSB 的**格式 crate 必须保持极轻**（浏览器侧只引它），
 // 且内容 hash 是格式的一部分，不应随依赖树漂移。实现只服务 `payload hash`。
+//
+// B8 Step 3′0 补充：**帧序列哈希**（每帧 1.2 MB）不该用它 —— 朴素实现 + 每次调用全量
+// 拷贝实测只有 ~22 MB/s。那个负载走 [`sha256_fast`]（非 wasm 目标是 `sha2` crate，
+// 同算法同摘要）；本文件的实现继续服务 payload hash，并为两条路径提供对拍基准。
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -99,6 +103,25 @@ pub fn hex(bytes: &[u8]) -> String {
     out
 }
 
+/// **帧序列哈希专用的快路径**（B8 Step 3′0）。
+///
+/// 与 [`sha256`] 是**同一个算法**（FIPS 180-4 SHA-256）⇒ 同一输入必须给出同一摘要；
+/// 只是实现不同、按目标选择：
+/// - 非 wasm（native / 浏览器对拍的 native 侧）：`sha2` crate，含 SHA-NI 运行时检测；
+/// - wasm32：仍用本文件的手写实现（本 crate 不为浏览器引入 `sha2`）。
+///
+/// 对拍用例 `fast_path_matches_the_hand_written_one` 钉住"两条路径逐位一致"。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sha256_fast(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(data).into()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn sha256_fast(data: &[u8]) -> [u8; 32] {
+    sha256(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +139,35 @@ mod tests {
         assert_eq!(
             hex(&sha256(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+    }
+
+    /// **B8 Step 3′0**：快路径与手写实现逐位一致（含真实的 1.2 MB 帧尺寸）。
+    ///
+    /// 覆盖 64 字节块的边界（63 / 64 / 65）与超长输入，避免"只在短输入上一致"。
+    #[test]
+    fn fast_path_matches_the_hand_written_one() {
+        let frame = (0..640 * 480 * 4).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        let cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"abc".to_vec(),
+            vec![0xA5; 63],
+            vec![0x5A; 64],
+            vec![0x11; 65],
+            frame,
+        ];
+        for data in &cases {
+            assert_eq!(
+                sha256_fast(data),
+                sha256(data),
+                "两条 SHA-256 路径对同一输入必须同摘要（len = {}）",
+                data.len()
+            );
+        }
+        // 快路径也必须过 FIPS 向量（避免"两条路径一起错"）。
+        assert_eq!(
+            hex(&sha256_fast(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 }

@@ -83,6 +83,9 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0" }
 # 序列帧导出：最小 PNG 编码器（全仓此前零图像库）。
 png = "0.17"
+# B8 Step 3′0：帧序列哈希的快路径。手写 SHA-256（`zela-scene-bundle` 自带）只服务
+# payload hash；每帧 1.2MB 的负载用 `sha2`（含 SHA-NI 运行时检测）。仅在非 wasm 目标启用。
+sha2 = "0.10"
 # GPU 测试汇报：直接写 fd 2，绕过 libtest 的输出捕获（见 gpu_test.rs）。
 libc = "0.2"
 

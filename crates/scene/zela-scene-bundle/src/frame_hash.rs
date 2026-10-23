@@ -22,7 +22,7 @@
 // 两端都必须先**规范化**为上述 RGBA8（通道顺序按同一目标格式转换；V1 不做
 // sRGB / 线性域转换，因此两端必须使用相同的目标纹理格式）。
 
-use crate::sha256::{hex, sha256};
+use crate::sha256::{hex, sha256, sha256_fast};
 
 /// 逐帧累积的像素序列哈希（内存 O(1)，不保存历史帧）。
 pub struct FrameSequenceHash {
@@ -58,7 +58,8 @@ impl FrameSequenceHash {
             self.height
         );
 
-        let digest = sha256(rgba);
+        // B8 Step 3′0：大输入走快路径（同算法同摘要；wasm 上仍回落手写实现）。
+        let digest = sha256_fast(rgba);
         let mut buf = Vec::with_capacity(32 + 4 + 32);
         buf.extend_from_slice(&self.state);
         buf.extend_from_slice(&self.frames.to_le_bytes());

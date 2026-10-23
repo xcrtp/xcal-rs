@@ -14,6 +14,11 @@ ze-render-ir = { path = "../../kernel/ze-render-ir" }
 serde.workspace = true
 serde_json.workspace = true
 
+# B8 Step 3′0：**帧序列哈希**的快路径（每帧 1.2 MB）。只在非 wasm 目标引入 ——
+# wasm 侧仍走本 crate 自带的手写实现（见 `sha256::sha256_fast`），保持格式 crate 极轻。
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sha2.workspace = true
+
 [dev-dependencies]
 # 测试构造一个最小装配产物（Circle 组件）。
 ze-scene-core = { path = "../../scene/ze-scene-core" }
