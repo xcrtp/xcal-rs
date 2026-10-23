@@ -101,6 +101,80 @@ pub fn fingerprints() -> [(&'static str, u64); 4] {
     ]
 }
 
+/// 3D 网格的**形态标识**（B10 Step 1）。
+///
+/// 契约只说"后端接受哪种形态"，不搬运顶点布局细节 —— 布局是后端实现自己的事
+/// （wgpu 用 `standard_3d()` 交错缓冲；矢量后端内部压成 `[pos, v] / [normal, u]`）。
+///
+/// - [`MeshForm::Tri`]：三角形面（`positions + indices`），有面积、可受光；
+/// - [`MeshForm::Line`]：线段（无面积，只描线）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshForm {
+    Tri,
+    Line,
+}
+
+impl MeshForm {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Tri => "tri",
+            Self::Line => "line",
+        }
+    }
+}
+
+/// 后端接受的网格形态集合（B10 Step 1）。
+///
+/// 为什么是**集合**而不是单个枚举：同一后端可能同时接受两种形态（上游 `TriMesh` /
+/// `LineMesh` 就是按 device features 二选一）。`default()` = 一种都不接受 ——
+/// 新增后端必须**显式自述**，不靠默认值蒙混。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MeshForms {
+    pub tri: bool,
+    pub line: bool,
+}
+
+impl MeshForms {
+    /// 只接受三角形面。
+    pub const fn tri() -> Self {
+        Self {
+            tri: true,
+            line: false,
+        }
+    }
+
+    /// 只接受线段。
+    pub const fn line() -> Self {
+        Self {
+            tri: false,
+            line: true,
+        }
+    }
+
+    /// 两种都接受。
+    pub const fn both() -> Self {
+        Self {
+            tri: true,
+            line: true,
+        }
+    }
+
+    pub const fn supports(self, form: MeshForm) -> bool {
+        match form {
+            MeshForm::Tri => self.tri,
+            MeshForm::Line => self.line,
+        }
+    }
+}
+
+/// 请求了后端不接受的网格形态（B10 §3.2：**不支持即报错，不得静默选一个**）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("渲染能力缺网格形态：{}（后端自述接受 {}）", .requested.name(), .accepted)]
+pub struct MeshFormError {
+    pub requested: MeshForm,
+    pub accepted: &'static str,
+}
+
 /// 后端声明实现了哪些 capability（**显式集合**，不是"试着调用"）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RenderCapabilitySet {
@@ -108,6 +182,8 @@ pub struct RenderCapabilitySet {
     pub render3d: bool,
     pub mixed: bool,
     pub shapes: bool,
+    /// B10 Step 1：3D 网格形态。`from_names` 不猜（保持空集），必须显式给。
+    pub mesh: MeshForms,
 }
 
 impl RenderCapabilitySet {
@@ -121,18 +197,47 @@ impl RenderCapabilitySet {
             out.render3d |= set.render3d;
             out.mixed |= set.mixed;
             out.shapes |= set.shapes;
+            out.mesh.tri |= set.mesh.tri;
+            out.mesh.line |= set.mesh.line;
         }
         out
     }
 
     /// 从 namespace 名集合构造（未知名字 ⇒ 由调用方先校验）。
+    ///
+    /// 网格形态**不由名字推出**（它不是 namespace）⇒ 这里留空集，
+    /// 后端必须自己填 `mesh`（见 [`Self::with_mesh`]）。
     pub fn from_names(names: &[&str]) -> Self {
         Self {
             render2d: names.contains(&render2d::NAMESPACE),
             render3d: names.contains(&render3d::NAMESPACE),
             mixed: names.contains(&mixed::NAMESPACE),
             shapes: names.contains(&shapes::NAMESPACE),
+            mesh: MeshForms::default(),
         }
+    }
+
+    /// 带网格形态的自述（链式；`from_names` 之后调用）。
+    pub fn with_mesh(mut self, mesh: MeshForms) -> Self {
+        self.mesh = mesh;
+        self
+    }
+
+    /// **提交前按能力校验网格形态**：不支持 ⇒ 显式错误（不静默换一种）。
+    pub fn require_mesh(self, form: MeshForm) -> Result<(), MeshFormError> {
+        if self.mesh.supports(form) {
+            return Ok(());
+        }
+        let accepted = match (self.mesh.tri, self.mesh.line) {
+            (true, true) => "tri, line",
+            (true, false) => "tri",
+            (false, true) => "line",
+            (false, false) => "（无）",
+        };
+        Err(MeshFormError {
+            requested: form,
+            accepted,
+        })
     }
 
     /// 缺失的 namespace（按固定顺序）。
@@ -248,16 +353,50 @@ mod tests {
             render2d::NAMESPACE,
             render3d::NAMESPACE,
             mixed::NAMESPACE,
-        ]);
+        ])
+        .with_mesh(MeshForms::tri());
         let vector = RenderCapabilitySet {
             shapes: true,
             mixed: true,
+            mesh: MeshForms::line(),
             ..RenderCapabilitySet::default()
         };
         let system = RenderCapabilitySet::union(&[wgpu, vector]);
         assert!(system.render2d && system.render3d && system.mixed && system.shapes);
         // 单个后端仍如实自述（shapes 不因另一个后端支持就变 true）。
         assert!(!wgpu.shapes);
+        // B10 Step 1：网格形态也是并集（各自仍如实自述）。
+        assert!(system.mesh.tri && system.mesh.line);
+        assert!(!wgpu.mesh.line);
+    }
+
+    // ─── B10 Step 1：网格形态是能力的一部分 ────────────────────────────────
+
+    /// `from_names` **不猜**网格形态：不认识网格的后端必须是"一种都不接受"。
+    #[test]
+    fn from_names_does_not_guess_mesh_forms() {
+        let set = RenderCapabilitySet::from_names(&[render3d::NAMESPACE]);
+        assert!(set.render3d);
+        assert_eq!(set.mesh, MeshForms::default());
+        assert!(!set.mesh.tri && !set.mesh.line);
+    }
+
+    /// 请求不支持的形态 ⇒ **显式错误**（不静默换一种），错误文案点名两侧。
+    #[test]
+    fn unsupported_mesh_form_fails_explicitly() {
+        let tri_only = RenderCapabilitySet::from_names(&[render3d::NAMESPACE])
+            .with_mesh(MeshForms::tri());
+        tri_only.require_mesh(MeshForm::Tri).expect("tri 受支持");
+
+        let error = tri_only.require_mesh(MeshForm::Line).expect_err("line 不受支持");
+        assert_eq!(error.requested, MeshForm::Line);
+        assert_eq!(error.accepted, "tri");
+        assert!(error.to_string().contains("line"), "{error}");
+        assert!(error.to_string().contains("tri"), "{error}");
+
+        let none = RenderCapabilitySet::default();
+        let error = none.require_mesh(MeshForm::Tri).expect_err("空集不受支持");
+        assert_eq!(error.accepted, "（无）");
     }
 
     /// 签名集合里**不出现** wgpu 机制名（契约只表达意图，D19）。

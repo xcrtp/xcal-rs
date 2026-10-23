@@ -94,8 +94,12 @@ pub const IMPLEMENTED_NAMESPACES: &[&str] = &[
 ];
 
 /// 本后端实现的 capability 集合（对应契约函数 `capabilities()`）。
+///
+/// B10 Step 1：另自述接受的网格形态 —— wgpu 的 3D 上传是"三角形面 + 索引"
+/// （`standard_3d()`），只报 [`MeshForms::tri`]。
 pub fn implemented_capabilities() -> ze_render_ir::caps::RenderCapabilitySet {
     ze_render_ir::caps::RenderCapabilitySet::from_names(IMPLEMENTED_NAMESPACES)
+        .with_mesh(ze_render_ir::caps::MeshForms::tri())
 }
 
 /// 按所需 namespace 协商；任一缺失 ⇒ 显式 [`CapabilityNegotiationError`]。

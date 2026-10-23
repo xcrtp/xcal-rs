@@ -39,8 +39,13 @@ impl BackendKind {
     }
 
     /// 本后端的能力集合。
+    ///
+    /// B10 Step 1：除 namespace 外还要自述**接受的网格形态**。两个后端都只吃
+    /// 三角形面（wgpu：`standard_3d()` 交错顶点 + 索引；矢量：`Upload::mesh` 的
+    /// `triangles`）；`MeshForm::Line` 目前无人接受 ⇒ 请求它必须显式失败。
     pub fn capabilities(self) -> RenderCapabilitySet {
         RenderCapabilitySet::from_names(self.namespaces())
+            .with_mesh(ze_render_ir::caps::MeshForms::tri())
     }
 
     /// 本后端的**后处理能力**（B6 Step 1.3）：着色栈是矢量路径的固有部分。

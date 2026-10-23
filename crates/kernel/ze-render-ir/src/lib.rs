@@ -37,8 +37,8 @@ pub mod uniform;
 
 pub use degrade::ToShape2D;
 pub use caps::{
-    CapabilityNegotiationError, NAMESPACES, PINNED_FINGERPRINTS, RenderCapabilitySet,
-    fingerprints, negotiate, signatures_of,
+    CapabilityNegotiationError, MeshForm, MeshFormError, MeshForms, NAMESPACES, PINNED_FINGERPRINTS,
+    RenderCapabilitySet, fingerprints, negotiate, signatures_of,
 };
 pub use draw::{DrawCommand, ZIndex, ZOrder};
 pub use layer::{LayerBlend, LayerId};
