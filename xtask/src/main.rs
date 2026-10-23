@@ -340,27 +340,18 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     // 3) 改写文件（纯函数，逻辑在 lib.rs，tests/ 覆盖）。
     let text = fs::read_to_string(&baseline_path)
         .map_err(|error| format!("读取 {} 失败：{error}", baseline_path.display()))?;
-    let records = [
-        ("smoke".to_string(), "smoke".to_string(), smoke_hash),
-        ("native".to_string(), "fourier".to_string(), recorded("fourier")?),
-        (
-            "native".to_string(),
-            "storyboard".to_string(),
-            recorded("storyboard")?,
-        ),
-        ("native".to_string(), "demo3d".to_string(), recorded("demo3d")?),
-        (
-            "native".to_string(),
-            "surface_matrix".to_string(),
-            recorded("surface_matrix")?,
-        ),
-        ("native".to_string(), "atlas".to_string(), recorded("atlas")?),
-        (
-            "vector".to_string(),
-            "vector_paths".to_string(),
-            recorded("vector_paths")?,
-        ),
-    ];
+    // 录制清单**派生自** `HASHES_WORKS`：新增作品只需改那张表，不再漏录
+    // （B7 Step 2：手写清单曾让 7 个已纳管作品算完就被丢掉）。
+    let mut records: Vec<(String, String, String)> =
+        vec![("smoke".to_string(), "smoke".to_string(), smoke_hash)];
+    for (work, _) in HASHES_WORKS {
+        let section = if *work == "vector_paths" {
+            "vector"
+        } else {
+            "native"
+        };
+        records.push((section.to_string(), (*work).to_string(), recorded(work)?));
+    }
     let next = apply_record(&text, &device, reason, &head, dirty, &records)?;
     fs::write(&baseline_path, next)
         .map_err(|error| format!("写入 {} 失败：{error}", baseline_path.display()))?;
@@ -671,8 +662,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let path = root.join("GAPS.md");
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
-    // K 段（B4+B5+B6）与 L 段（B8+B9）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L."] {
+    // K 段（B4+B5+B6）、L 段（B8+B9）与 M 段（B7）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L.", "## M."] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
@@ -684,7 +675,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
                 continue;
             }
             let id = cells[0].trim_matches('*').trim();
-            let is_item = id.contains('-') && (id.starts_with('V') || id.starts_with("S4-"));
+            let is_item = id.contains('-')
+                && (id.starts_with('V') || id.starts_with("S4-") || id.starts_with("W1-"));
             if !is_item {
                 continue;
             }
@@ -1058,6 +1050,14 @@ const HASHES_WORKS: &[(&str, Option<&str>)] = &[
     ("atlas", None),
     // B6 V2-07：矢量后端作品。
     ("vector_paths", Some("vector")),
+    // B7 Step 2：此前零回归保护的 7 个 manifest 作品。
+    ("fusion", None),
+    ("pbr_materials", None),
+    ("pbr_lights", None),
+    ("pbr_scene", None),
+    ("pendulum", None),
+    ("orbit", None),
+    ("spring", None),
 ];
 
 /// 取某作品的基线值（`vector_paths` 在 `[vector]`，其余在 `[native]`）。

@@ -403,6 +403,19 @@
 
 ---
 
+## M. B7 批次记账（内容丰满期，2026-10-23）
+
+> 计划《B7执行计划_内容丰满期》。Step 0 / 1 / 2 已落地（Step 3–5 见后续提交）。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| W1-01 | `MeshGeometry.id` 取自**进程内**全局计数器（`ze-scene-core/components/3d.rs` 的 `next_geometry_id`），且随 serde 序列化进 ZSB payload ⇒ 同一脚本的 payload hash 取决于"本进程此前造过多少几何体"，ZSB 不是源码的纯函数 | 装配产物 / 可复现性 | **记账（B7 Step 2 发现，本批不改）** | `zela-compile`（一进程一作品，build.ps1 的路径）与 `zela-verify`（一批作品共用进程）对 fusion / pbr_materials / pbr_lights / pbr_scene / atlas 算出不同 payload（如 fusion `5db2aecb…` vs `64c00b63…`）；解包对比：**唯一差异**是 `creates/*/*/data/id`（1,2,3 vs 7,8,9），其余字节相同。因此 `demo/manifest.txt` 断言的是"一进程一作品"的值（build.ps1 的真实路径）。触发：需要编译产物可复现（构建缓存 / 跨机比对 / 内容寻址）时，把 id 排除出 payload（serde skip，解码时重分配） |
+| W1-02 | manifest 的 payload 断言长期空转：13 件里 12 件写 `-`（等于没断言），唯一有值的 fourier 也已不可复现 | 装配产物 / 门禁 | **已关闭（B7 Step 2）** | fourier 的 `f8ed3eae…` 停在 45b0f85（改名 + ZSB 容器 v3）；当前代码下**任一字体配置都复现不出**（系统字体 `dad48069…`、`ZELA_TYPST_FONT_DIR` 确定字体 `a5bdfbe7…`）⇒ 该断言今日必然失败（不断言它从哪次提交开始坏）。Step 2 用 build.ps1 的同一命令逐件重算 13 条并逐条断言通过；含文本的 5 件（fourier / storyboard / surface_matrix / atlas / vector_paths）必须带确定字体才可复现，已写进 manifest 表头 |
+
+**M 段小计（B7）**：已关闭 1（W1-02）· 记账 1（W1-01）。
+
+---
+
 ## 统计与维护约定
 
 | 类别 | 数量 |
