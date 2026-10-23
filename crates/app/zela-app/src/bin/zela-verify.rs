@@ -358,6 +358,7 @@ fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) 
     let line = format!(
         "{{\"work\":\"{}\",\"pass\":\"{pass}\",\"size\":\"{}x{}\",\"frames\":{frames},\
          \"env\":{env},\"timings\":{{\"all\":{},\"window\":{}}},\"gpu\":{},\
+         \"cache\":{},\"textures_created\":{},\
          \"verify_note\":\"verify_ms 未启用（GPU 校验 pass 未实现，B12 Step 1.3）\",\
          \"decisions\":[{}]}}",
         work.name,
@@ -366,6 +367,8 @@ fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) 
         summary_body(&all, "all", all_n),
         summary_body(&window, &format!("1..{window_n}"), window_n),
         run.gpu_json(),
+        run.cache.json(),
+        run.textures_created,
         decisions.join(","),
     );
     match std::fs::OpenOptions::new()
@@ -387,20 +390,23 @@ fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) 
 ///
 /// 默认不打印（门禁输出要保持可读）；`ZELA_FRAME_TIMING=1` 时逐帧 `[timing]` + 每遍
 /// `[timing-summary]`，字段名与 `zela-render` 完全一致。
-fn report_timings(work: &str, pass: &str, timings: &[FrameTiming]) {
-    if !std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0") {
-        return;
-    }
+fn report_timings(work: &str, pass: &str, timings: &[FrameTiming]) -> Result<(), String> {
+    let print = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
     let mut stats = FrameStats::new();
     for (index, timing) in timings.iter().enumerate() {
-        eprintln!("{}", timing_json(timing, index as u32));
+        if print {
+            eprintln!("{}", timing_json(timing, index as u32));
+        }
         stats.record(index as u32, timing);
     }
-    eprintln!("[timing-work] {work} · {pass}");
-    if let Err(error) = stats.report() {
-        // 量级门禁在 Step 6 才接入退出码；这里只呈报。
-        eprintln!("[timing] {error}");
+    if print {
+        eprintln!("[timing-work] {work} · {pass}");
+        if let Err(error) = stats.report() {
+            eprintln!("[timing] {error}");
+        }
     }
+    // B12 Step 6：**量级门禁恒开**（单帧 > 500ms ⇒ 退出码非 0）；打印才是可选的。
+    stats.check().map_err(|error| format!("[{work}] {pass}：{error}"))
 }
 
 /// 渲一个作品并把 PNG 写进 `dir`；`hash` 决定是否同时累积序列哈希。
@@ -453,7 +459,7 @@ fn render_png(
     )
     .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
     report_decisions(&work.name, "png", &run.decisions);
-    report_timings(&work.name, "png", &run.timings);
+    report_timings(&work.name, "png", &run.timings)?;
     report_work(work, "png", frames, env, &run);
     Ok(first)
 }
@@ -496,7 +502,7 @@ fn render_hash(
     )
     .map_err(|e| format!("[{}] {path} 渲染失败：{e}", work.name))?;
     report_decisions(&work.name, path, &run.decisions);
-    report_timings(&work.name, path, &run.timings);
+    report_timings(&work.name, path, &run.timings)?;
     report_work(work, path, frames, env, &run);
     Ok(hash.hex())
 }

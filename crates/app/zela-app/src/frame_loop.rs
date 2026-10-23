@@ -155,6 +155,14 @@ impl FrameStats {
         eprintln!(
             "[timing-note] verify_ms 恒 0 是因为 GPU 校验 pass **未启用**（B12 Step 1.3），不代表校验耗时 0"
         );
+        self.check()
+    }
+
+    /// **量级门禁**（B12 Step 6）：单帧 > [`SLOW_FRAME_MS`] 才失败。
+    ///
+    /// 与打印分离：门禁**恒开**（不依赖 `ZELA_FRAME_TIMING`），打印才是可选的。
+    /// 首帧（含管线创建）不计（与 [`Self::record`] 同口径）。
+    pub fn check(&self) -> Result<(), String> {
         if let Some((frame, ms)) = self.slow.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
             return Err(format!(
                 "性能量级门禁失败：第 {frame} 帧耗时 {ms:.1}ms > {SLOW_FRAME_MS}ms（B8 §3.3；\
@@ -353,6 +361,10 @@ pub struct FrameRun {
     pub gpu_ms: Vec<Option<f64>>,
     /// GPU 计时支持性（B12 Step 4）：**必填**，`Disabled` / `Unsupported` 都带理由。
     pub gpu_status: GpuTimingSupport,
+    /// 本次运行的 2D 缓存命中统计（B12 Step 5；此前有填充、零消费者）。
+    pub cache: zela_render_backends::diagnostics::CacheTotals,
+    /// 本次运行**创建**的渲染目标纹理数（稳态应远小于帧数 × 图层数）。
+    pub textures_created: usize,
 }
 
 impl FrameRun {
@@ -449,6 +461,10 @@ pub fn run_frames(
         }
     };
     let mut gpu_ms: Vec<Option<f64>> = Vec::with_capacity(frames as usize);
+
+    // B12 Step 5：缓存 / 资源计数取本轮增量（计数是进程级累计，取走即清零）。
+    let _ = zela_render_backends::diagnostics::take_cache_totals();
+    let textures_before = zela_render_backends::diagnostics::textures_created();
 
     for index in 0..frames {
         let mut timing = FrameTiming::default();
@@ -639,5 +655,8 @@ pub fn run_frames(
         decisions,
         gpu_ms,
         gpu_status,
+        cache: zela_render_backends::diagnostics::take_cache_totals(),
+        textures_created: zela_render_backends::diagnostics::textures_created()
+            .saturating_sub(textures_before),
     })
 }

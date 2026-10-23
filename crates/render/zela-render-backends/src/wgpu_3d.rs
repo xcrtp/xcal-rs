@@ -857,6 +857,8 @@ impl WgpuBackend3D {
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            // B12 Step 5：资源计数（**创建**次数；稳态逐帧增量应为 0）。
+            crate::diagnostics::record_textures_created(1);
             guard.insert(
                 layer_id,
                 MsaaTarget {
@@ -903,6 +905,8 @@ impl WgpuBackend3D {
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            // B12 Step 5：资源计数（**创建**次数；稳态逐帧增量应为 0）。
+            crate::diagnostics::record_textures_created(1);
             guard.insert(
                 layer_id,
                 DepthTarget {

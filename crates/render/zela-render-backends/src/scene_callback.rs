@@ -317,6 +317,15 @@ impl SceneCompositorCallback {
                 backend.finish_frame(encoder, layer.id, &geometry)
             };
 
+            // B12 Step 5：缓存统计此前零消费者 ⇒ 在这里上交（进程级累计，运行结束取走）。
+            crate::diagnostics::record_cache(
+                frame.cache.geom_requests,
+                frame.cache.geom_misses,
+                frame.cache.morph_requests,
+                frame.cache.morph_misses,
+                frame.cache.reveal_requests,
+                frame.cache.reveal_misses,
+            );
             let Frame2DData {
                 offscreen,
                 _arena_buffer,
@@ -372,6 +381,15 @@ impl SceneCompositorCallback {
                     }) else {
                         continue;
                     };
+                    // B12 Step 5：同上的缓存统计上交（视口层）。
+                    crate::diagnostics::record_cache(
+                        frame.cache.geom_requests,
+                        frame.cache.geom_misses,
+                        frame.cache.morph_requests,
+                        frame.cache.morph_misses,
+                        frame.cache.reveal_requests,
+                        frame.cache.reveal_misses,
+                    );
                     let Frame2DData {
                         offscreen,
                         _arena_buffer,
