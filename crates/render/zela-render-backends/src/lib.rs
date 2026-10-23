@@ -117,8 +117,11 @@ pub use frame::build_scene_callback;
 // W1：不依赖 egui 的装配 + 渲染入口。
 #[cfg(any(feature = "wgpu", feature = "egui-wgpu"))]
 pub use standard_backends::{
-    BackendStore, ScreenParams, StandardBackends, render_frame_headless_async,
-    render_frame_to_view,
+    BackendStore, HeadlessTiming, RenderTiming, ScreenParams, StandardBackends,
+    render_frame_headless_async, render_frame_to_view, render_frame_to_view_timed,
 };
 #[cfg(all(feature = "blocking", any(feature = "wgpu", feature = "egui-wgpu")))]
-pub use standard_backends::{render_frame_headless, render_single_frame};
+pub use standard_backends::{
+    HeadlessTarget, render_frame_headless, render_frame_headless_cached,
+    render_frame_headless_cached_timed, render_frame_headless_to_target, render_single_frame,
+};

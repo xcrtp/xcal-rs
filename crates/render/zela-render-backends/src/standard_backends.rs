@@ -205,6 +205,26 @@ impl BackendStore for TypeMapStore<'_> {
     }
 }
 
+/// 一帧的**CPU 侧**分段耗时（B8 Step 1）。
+///
+/// 只在录制侧能分开的三段：`prepare`（构帧体 + 三角化 + 写 uniform）、
+/// `paint`（主 pass 录制）、`submit`（`queue.submit`）。GPU 实际执行发生在
+/// 提交之后、由回读的 `poll(wait)` 承担，因此 `submit` 不含 GPU 时间 —— 那是
+/// `t_read` 的一部分（见 `HeadlessTiming`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderTiming {
+    pub prepare: std::time::Duration,
+    pub paint: std::time::Duration,
+    pub submit: std::time::Duration,
+}
+
+/// 一帧的分段耗时：录制三段 + 回读（含 GPU 等待）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeadlessTiming {
+    pub render: RenderTiming,
+    pub read: std::time::Duration,
+}
+
 /// **把一帧渲染进给定 view**（S1）：不建纹理、不回读。
 ///
 /// 这是显示路径与离屏路径的**唯一共享帧体入口**：
@@ -220,6 +240,19 @@ pub fn render_frame_to_view(
     clear: wgpu::Color,
     view: &wgpu::TextureView,
 ) {
+    let _ = render_frame_to_view_timed(ctx, backends, frame, screen, clear, view);
+}
+
+/// 同 [`render_frame_to_view`]，但回报三段 CPU 计时（B8 Step 1）。
+pub fn render_frame_to_view_timed(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+    view: &wgpu::TextureView,
+) -> RenderTiming {
+    let mut timing = RenderTiming::default();
     let geometry = Frame2DGeometry {
         viewport_points: frame.viewport_points(),
         pixels_per_point: screen.pixels_per_point,
@@ -233,6 +266,7 @@ pub fn render_frame_to_view(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("zela-frame-encoder"),
         });
+    let prepare = std::time::Instant::now();
     let composed = frame.prepare_frame(
         ctx.device(),
         ctx.queue(),
@@ -240,7 +274,9 @@ pub fn render_frame_to_view(
         screen,
         backends,
     );
+    timing.prepare = prepare.elapsed();
 
+    let paint = std::time::Instant::now();
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zela-frame-main-pass"),
@@ -265,8 +301,90 @@ pub fn render_frame_to_view(
             frame.paint_frame(compositor, &composed, &mut pass);
         }
     }
+    timing.paint = paint.elapsed();
 
+    let submit = std::time::Instant::now();
     ctx.submit(encoder.finish());
+    timing.submit = submit.elapsed();
+    timing
+}
+
+/// **headless 渲染目标缓存**（B8 Step 0）：序列帧导出时把 `create_texture` 提到循环外。
+///
+/// 为什么需要：`render_frame_headless` 原先每帧 `create_texture` + `create_view`
+/// （第 296 行那个反模式 —— 与第 356 行注释警告的"每帧重建后端丢缓存"是同一类问题）。
+/// 逐帧分配一张 640×480 纹理本身不贵，但它让 GPU 无法稳定复用同一块显存，
+/// 且与"回读 buffer 每帧新建"叠在一起成为固定开销。
+///
+/// 复用边界（与计划 §2.2 对应）：
+/// - **尺寸 / 格式变化** ⇒ 重建（不得复用错误规格）；
+/// - **设备丢失** ⇒ 调用 [`Self::invalidate`]（本类型持有的是旧 device 的句柄；
+///   设备丢失后整个 `RenderContext` 都要重建，缓存必须跟着丢）；
+/// - **上一帧仍被持有** ⇒ [`crate::render_frame_headless_cached`] 在**回读完成后**
+///   才返回，因此下一次复用时上一帧的拷贝已结束（同步路径安全）。
+///   异步（双缓冲）路径**不得**直接复用本缓存，见 B8 Step 4。
+#[cfg(feature = "blocking")]
+#[derive(Default)]
+pub struct HeadlessTarget {
+    inner: Option<HeadlessTargetInner>,
+}
+
+#[cfg(feature = "blocking")]
+struct HeadlessTargetInner {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+}
+
+#[cfg(feature = "blocking")]
+impl HeadlessTarget {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 丢弃当前纹理（设备丢失 / 需要强制重分配时调用）。
+    pub fn invalidate(&mut self) {
+        self.inner = None;
+    }
+
+    /// 按 `size` / 当前目标格式取可用的目标（不匹配则重建）；返回纹理与视图。
+    fn ensure(
+        &mut self,
+        ctx: &RenderContext,
+        size: [u32; 2],
+    ) -> (&wgpu::Texture, &wgpu::TextureView) {
+        let format = ctx.target_format();
+        let reusable = self
+            .inner
+            .as_ref()
+            .is_some_and(|inner| inner.size == size && inner.format == format);
+        if !reusable {
+            let texture = ctx.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("zela-headless-target"),
+                size: wgpu::Extent3d {
+                    width: size[0].max(1),
+                    height: size[1].max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.inner = Some(HeadlessTargetInner {
+                texture,
+                view,
+                size,
+                format,
+            });
+        }
+        let inner = self.inner.as_ref().expect("刚确保过目标纹理");
+        (&inner.texture, &inner.view)
+    }
 }
 
 /// **headless（非 egui）渲染入口**（W1 的产出）。
@@ -277,6 +395,9 @@ pub fn render_frame_to_view(
 /// 返回**紧凑像素**（行距 `w*4`，左上角为原点）；字节序为目标纹理格式
 /// （默认 `Bgra8UnormSrgb` ⇒ **BGRA**）。喂给 PNG 编码器前需按
 /// [`RenderContext::target_format`] 转换通道（示例：`zela_playback::to_rgba`）。
+///
+/// ⚠️ 单帧便捷入口：序列帧导出请用 [`render_frame_headless_cached`]，
+/// 否则每帧重建目标纹理（B8 Step 0）。
 #[cfg(feature = "blocking")]
 pub fn render_frame_headless(
     ctx: &RenderContext,
@@ -285,6 +406,37 @@ pub fn render_frame_headless(
     screen: ScreenParams,
     clear: wgpu::Color,
 ) -> Vec<u8> {
+    let mut target = HeadlessTarget::new();
+    render_frame_headless_cached(ctx, backends, frame, screen, clear, &mut target)
+}
+
+/// 同 [`render_frame_headless`]，但**复用**调用方持有的目标纹理（B8 Step 0）。
+///
+/// 返回时回读已完成 ⇒ 下一帧复用同一纹理是安全的（同步路径）。
+#[cfg(feature = "blocking")]
+pub fn render_frame_headless_cached(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+    target: &mut HeadlessTarget,
+) -> Vec<u8> {
+    render_frame_headless_cached_timed(ctx, backends, frame, screen, clear, target).0
+}
+
+/// 同 [`render_frame_headless_cached`]，并回报分段耗时（B8 Step 1）。
+///
+/// `read` 段包含 **GPU 执行等待**（`poll(wait)`）—— 录制侧无法单独拿到 GPU 时间。
+#[cfg(feature = "blocking")]
+pub fn render_frame_headless_cached_timed(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+    target: &mut HeadlessTarget,
+) -> (Vec<u8>, HeadlessTiming) {
     let geometry = Frame2DGeometry {
         viewport_points: frame.viewport_points(),
         pixels_per_point: screen.pixels_per_point,
@@ -293,24 +445,41 @@ pub fn render_frame_headless(
     let (_, _, width, height) = geometry.viewport_px();
     let (width, height) = (width.max(1), height.max(1));
 
-    let target = ctx.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some("zela-headless-target"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
+    let (texture, view) = target.ensure(ctx, [width, height]);
+    let render = render_frame_to_view_timed(ctx, backends, frame, screen, clear, view);
+    let read = std::time::Instant::now();
+    let pixels = ctx.read_texture(texture, (width, height));
+    (
+        pixels,
+        HeadlessTiming {
+            render,
+            read: read.elapsed(),
         },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: ctx.target_format(),
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    )
+}
 
-    render_frame_to_view(ctx, backends, frame, screen, clear, &view);
-    ctx.read_texture(&target, (width, height))
+/// **渲染进缓存目标但不回读**（B8 Step 1/2）：供 sink 化路径使用。
+///
+/// 返回本帧目标的尺寸；像素要等 [`RenderContext::read_texture`] 或 sink 自己回读。
+#[cfg(feature = "blocking")]
+pub fn render_frame_headless_to_target(
+    ctx: &RenderContext,
+    backends: &mut StandardBackends,
+    frame: &SceneCompositorCallback,
+    screen: ScreenParams,
+    clear: wgpu::Color,
+    target: &mut HeadlessTarget,
+) -> (wgpu::Texture, wgpu::TextureView, [u32; 2]) {
+    let geometry = Frame2DGeometry {
+        viewport_points: frame.viewport_points(),
+        pixels_per_point: screen.pixels_per_point,
+        screen_size_px: screen.size_in_pixels,
+    };
+    let (_, _, width, height) = geometry.viewport_px();
+    let (width, height) = (width.max(1), height.max(1));
+    let (texture, view) = target.ensure(ctx, [width, height]);
+    render_frame_to_view(ctx, backends, frame, screen, clear, view);
+    (texture.clone(), view.clone(), [width, height])
 }
 
 /// **异步 headless 回读**（S3；浏览器对拍用）。

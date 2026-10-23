@@ -22,6 +22,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use ze_notion::{Rect2D, Vec2};
 use zela_app::export::{ExportError, target_pix_fmt, to_rgba, write_png};
@@ -29,7 +30,9 @@ use zela_app::{
     ScriptLanguage, build_bundle_runtime, build_script_runtime, language_from_path,
 };
 use zela_render::ViewRect;
-use zela_render_backends::{RenderContext, ScreenParams, StandardBackends, render_frame_headless};
+use zela_render_backends::{
+    RenderContext, ScreenParams, StandardBackends, render_frame_headless_cached_timed,
+};
 use zela_scene_ecs::DriverCommand;
 use zela_scene_ecs::contract::WorldView;
 use zela_scene_bundle::Bundle;
@@ -245,6 +248,8 @@ fn run() -> Result<(), String> {
         a: 1.0,
     };
     let mut backends = StandardBackends::new(&ctx);
+    // B8 Step 0：目标纹理跨帧复用（原先每帧 create_texture）。
+    let mut target = zela_render_backends::HeadlessTarget::new();
 
     // B4 Step 2：渲染参数（档 1 默认值 = 当前行为；档 2 命令行覆盖 `--size`）。
     // B6 §0.3：默认值**按后端能力**取（`default_for`）——wgpu 的 `PostCaps::none()` ⇒
@@ -290,13 +295,22 @@ fn run() -> Result<(), String> {
         None => Sink::Ffmpeg(Ffmpeg::spawn(&ctx, &args.out, args.fps, (width, height))?),
     };
 
+    // B8 Step 1：逐帧分段计时（默认只在窗口汇总 / 门禁上用；逐帧 JSON 由环境变量开启）。
+    let timing_lines = std::env::var("ZELA_FRAME_TIMING").is_ok_and(|value| value != "0");
+    let mut stats = FrameStats::new();
+
     for index in 0..frames {
+        let mut timing = FrameTiming::default();
+
         // **与 GUI 同一条命令**：固定 dt（导出比实时墙钟更确定）。
+        let mark = Instant::now();
         runtime.driver.submit(DriverCommand::Advance { dt }).wait();
+        timing.advance = mark.elapsed();
 
         // B6 Step 2.3：矢量后端走"同一个场景 → 快照 → 记录"的路径；只支持纯 2D 帧
         // （3D / 内容纹理图层没有对应的矢量记录，显式报错，不静默跳过）。
         let rgba = if args.backend == Backend::Vector {
+            let mark = Instant::now();
             let (layers, draws) = runtime.driver.with_scheduler(|scheduler| {
                 let options = zela_render::FrameOptions::default();
                 let view = zela_render::frame::build_scene_view(
@@ -337,8 +351,19 @@ fn run() -> Result<(), String> {
                 clear.b as f32,
                 clear.a as f32,
             ];
-            zela_render_vector::render_scene_2d(width, height, 4, background, &items)?
+            timing.build = mark.elapsed();
+
+            let mark = Instant::now();
+            let rgba = zela_render_vector::render_scene_2d(width, height, 4, background, &items)?;
+            timing.prepare = mark.elapsed();
+
+            // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。
+            let mark = Instant::now();
+            sink.write(&ctx, index, &rgba_to_target(&ctx, &rgba))?;
+            timing.sink = mark.elapsed();
+            rgba
         } else {
+            let mark = Instant::now();
             let callback = runtime
                 .driver
                 .with_scheduler(|scheduler| {
@@ -356,11 +381,26 @@ fn run() -> Result<(), String> {
                     .and_then(zela_render_backends::frame::build_scene_callback)
                 })
                 .ok_or_else(|| "本帧没有可渲染图层（场景为空）".to_string())?;
+            timing.build = mark.elapsed();
 
-            let pixels = render_frame_headless(&ctx, &mut backends, &callback, screen, clear);
+            let (pixels, headless) = render_frame_headless_cached_timed(
+                &ctx,
+                &mut backends,
+                &callback,
+                screen,
+                clear,
+                &mut target,
+            );
+            timing.prepare = headless.render.prepare;
+            timing.paint = headless.render.paint;
+            timing.submit = headless.render.submit;
+            timing.read = headless.read;
+
+            let mark = Instant::now();
             // 先规范化成 RGBA8（与 PNG 写盘同一份字节），再进序列哈希。
             let rgba = to_rgba(&ctx, &pixels);
             sink.write(&ctx, index, &pixels)?;
+            timing.sink = mark.elapsed();
             rgba
         };
         // B2-6：旁路采样（只打印，不改序列哈希）。
@@ -369,15 +409,21 @@ fn run() -> Result<(), String> {
                 zela_scene_bundle::sha256::hex(&zela_scene_bundle::sha256::sha256(&rgba));
             eprintln!("[frame-digest] frame = {index} digest = {digest}");
         }
-        frame_hash.push_frame(&rgba);
-        if args.backend == Backend::Vector {
-            // 矢量帧已是 RGBA8；sink 的写入口径是目标格式（BGRA），这里做一次通道交换。
-            sink.write(&ctx, index, &rgba_to_target(&ctx, &rgba))?;
-        }
 
+        let mark = Instant::now();
+        frame_hash.push_frame(&rgba);
+        timing.hash = mark.elapsed();
+
+        let mark = Instant::now();
         runtime.driver.with_scheduler_mut(|scheduler| {
             zela_render::frame::end_frame(scheduler.resources_mut());
         });
+        timing.end = mark.elapsed();
+
+        if timing_lines {
+            eprintln!("{}", timing.json(index));
+        }
+        stats.record(index, &timing);
     }
 
     sink.finish()?;
@@ -398,6 +444,9 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("写 {} 失败：{e}", path.display()))?;
     }
 
+    // B8 Step 1：分段耗时汇总（JSON 行）+ 量级门禁（> 500ms 才失败）。
+    stats.report()?;
+
     // 软失败汇总：三角化失败只跳过该绘制，不中断导出、不改退出码。
     let skipped = zela_render_backends::diagnostics::total_skipped();
     if skipped > 0 {
@@ -406,6 +455,186 @@ fn run() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// 一帧的分段耗时（B8 Step 1）。
+///
+/// 段的边界严格对应代码里能独立计时的位置：
+/// - `advance`：`DriverCommand::Advance`（含场景系统推进）；
+/// - `build`：`build_scene_view` + `build_frame_inputs` + `build_scene_callback`
+///   （矢量后端：view 构造 + 快照，不含绘制）；
+/// - `prepare`：`prepare_frame` —— **含三角化与 `write_buffer`**（B8 计划里的 `t_tess`，
+///   在本代码结构里与"构帧体"不可分：都在 `WgpuBackend2D::finish_frame` 内）；
+///   矢量后端这一格是整帧 `render_scene_2d` 的 CPU 侧耗时；
+/// - `paint`：主 pass 录制；
+/// - `submit`：`queue.submit`（**不含** GPU 执行）；
+/// - `read`：回读，**包含 GPU 等待**（`poll(wait)`）⇒ 这是唯一能看到 GPU 时间的段；
+/// - `sink`：PNG / mp4 编码（含目标格式 ↔ RGBA 的通道转换）；
+/// - `hash`：`FrameSequenceHash::push_frame`；
+/// - `verify`：**GPU 校验 pass**（B8 补充更正 §二.2）—— 当前恒为 0，Step 3′ 后填真实值；
+/// - `end`：`end_frame`（帧末清理）。
+#[derive(Debug, Clone, Copy, Default)]
+struct FrameTiming {
+    advance: Duration,
+    build: Duration,
+    prepare: Duration,
+    paint: Duration,
+    submit: Duration,
+    read: Duration,
+    sink: Duration,
+    hash: Duration,
+    /// GPU 校验 pass（占位：字段先定死，Step 3′ 前后是同一套字段）。
+    verify: Duration,
+    end: Duration,
+}
+
+impl FrameTiming {
+    fn total(&self) -> Duration {
+        self.advance
+            + self.build
+            + self.prepare
+            + self.paint
+            + self.submit
+            + self.read
+            + self.sink
+            + self.hash
+            + self.verify
+            + self.end
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.advance += other.advance;
+        self.build += other.build;
+        self.prepare += other.prepare;
+        self.paint += other.paint;
+        self.submit += other.submit;
+        self.read += other.read;
+        self.sink += other.sink;
+        self.hash += other.hash;
+        self.verify += other.verify;
+        self.end += other.end;
+    }
+
+    fn json(&self, frame: u32) -> String {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        format!(
+            "[timing] {{\"frame\":{frame},\"advance_ms\":{:.3},\"build_ms\":{:.3},\
+             \"prepare_ms\":{:.3},\"paint_ms\":{:.3},\"submit_ms\":{:.3},\
+             \"read_ms\":{:.3},\"sink_ms\":{:.3},\"hash_ms\":{:.3},\"verify_ms\":{:.3},\
+             \"end_ms\":{:.3},\"total_ms\":{:.3}}}",
+            ms(self.advance),
+            ms(self.build),
+            ms(self.prepare),
+            ms(self.paint),
+            ms(self.submit),
+            ms(self.read),
+            ms(self.sink),
+            ms(self.hash),
+            ms(self.verify),
+            ms(self.end),
+            ms(self.total()),
+        )
+    }
+
+    /// 窗口汇总（JSON）：各段平均值与占比（占比按 `total` 算）。
+    fn summary_json(&self, window: &str, frames: usize) -> String {
+        let n = frames.max(1) as f64;
+        let avg_ms = |d: Duration| d.as_secs_f64() * 1000.0 / n;
+        let total = avg_ms(self.total()).max(f64::MIN_POSITIVE);
+        let share = |d: Duration| avg_ms(d) / total * 100.0;
+        format!(
+            "[timing-summary] {{\"window\":\"{window}\",\"frames\":{frames},\
+             \"avg_total_ms\":{:.3},\
+             \"avg\":{{\"advance\":{:.3},\"build\":{:.3},\"prepare\":{:.3},\"paint\":{:.3},\
+             \"submit\":{:.3},\"read\":{:.3},\"sink\":{:.3},\"hash\":{:.3},\"verify\":{:.3},\
+             \"end\":{:.3}}},\
+             \"share_pct\":{{\"advance\":{:.1},\"build\":{:.1},\"prepare\":{:.1},\"paint\":{:.1},\
+             \"submit\":{:.1},\"read\":{:.1},\"sink\":{:.1},\"hash\":{:.1},\"verify\":{:.1},\
+             \"end\":{:.1}}}}}",
+            avg_ms(self.total()),
+            avg_ms(self.advance),
+            avg_ms(self.build),
+            avg_ms(self.prepare),
+            avg_ms(self.paint),
+            avg_ms(self.submit),
+            avg_ms(self.read),
+            avg_ms(self.sink),
+            avg_ms(self.hash),
+            avg_ms(self.verify),
+            avg_ms(self.end),
+            share(self.advance),
+            share(self.build),
+            share(self.prepare),
+            share(self.paint),
+            share(self.submit),
+            share(self.read),
+            share(self.sink),
+            share(self.hash),
+            share(self.verify),
+            share(self.end),
+        )
+    }
+}
+
+/// 性能**量级门禁**（B8 §3.3）：只拦灾难性退化，不卡正常波动。
+///
+/// 首帧包含管线 / 着色器创建，不计入；阈值取实测均值的约 4 倍。
+const SLOW_FRAME_MS: f64 = 500.0;
+/// 汇总窗口：实测数据按"前 30 帧"回报（B8 §3.4），另给全程汇总。
+const TIMING_WINDOW: usize = 30;
+
+/// 逐帧计时累加器。
+struct FrameStats {
+    totals: FrameTiming,
+    seen: usize,
+    window: FrameTiming,
+    window_frames: usize,
+    slow: Vec<(u32, f64)>,
+}
+
+impl FrameStats {
+    fn new() -> Self {
+        Self {
+            totals: FrameTiming::default(),
+            seen: 0,
+            window: FrameTiming::default(),
+            window_frames: 0,
+            slow: Vec::new(),
+        }
+    }
+
+    /// `index` = 帧号；首帧（0）不计入窗口与门禁（含管线创建）。
+    fn record(&mut self, index: u32, timing: &FrameTiming) {
+        self.totals.add(timing);
+        self.seen += 1;
+        if index > 0 {
+            if self.window_frames < TIMING_WINDOW {
+                self.window.add(timing);
+                self.window_frames += 1;
+            }
+            let total_ms = timing.total().as_secs_f64() * 1000.0;
+            if total_ms > SLOW_FRAME_MS {
+                self.slow.push((index, total_ms));
+            }
+        }
+    }
+
+    fn report(&self) -> Result<(), String> {
+        eprintln!(
+            "{}",
+            self.window
+                .summary_json(&format!("1..{}", self.window_frames), self.window_frames)
+        );
+        eprintln!("{}", self.totals.summary_json("all", self.seen));
+        if let Some((frame, ms)) = self.slow.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+            return Err(format!(
+                "性能量级门禁失败：第 {frame} 帧耗时 {ms:.1}ms > {SLOW_FRAME_MS}ms（B8 §3.3；\
+                 共 {} 帧超限）",
+                self.slow.len()
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// RGBA8 → 目标纹理格式字节序（默认 BGRA）；与 `to_rgba` 互逆。
