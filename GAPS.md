@@ -366,14 +366,14 @@
 | V2-12 | `zela.render.shapes` 签名只有 `capabilities` / `submit_shapes`：**没有** `create_target` / `upload`；且 `PathList` 表达不了 `Circle` / `Rect` / `Group` | 能力契约 / 装配 | **未执行（B6 复核后仍不改）** | 改签名必须同步 `PINNED_FINGERPRINTS`（`shapes = 1_097_982_529_554_556_752`）。**为什么不改**：`submit_shapes` 在仓库里**没有任何实现也没有任何调用点**（`IMPLEMENTED_NAMESPACES` 不含它、wgpu 协商 shapes 本就显式失败），脚本层也没有 `create_target` / `upload` 的绑定表；此时把入参改成尚不存在的 `ShapeList` 只会得到一个**没有实现可校验的 ABI 字符串**（违反"不得为凑可注册而填未验证的编码"）。触发：真正要接 `shapes` 时，先定 target 生命周期与 `Shape2D` 列表的宿主载体，再一次性改签名 + 指纹 |
 | V2-13 | 渐变笔刷行 / 纹理图片 / dash 未映射（**缺概念**，不是缺映射） | 渲染后端 | **记账（B5 §七）** | 渐变需先定义色标 + 轴向与 `Style2D` 的关系；图片需给 `Shape2D` 加 `Image` 变体（R-04）；dash 需先有 dash 概念（上游是 `dash[3]` 周期/占空/相位）。触发：作品需要时 |
 | V2-14 | 矢量后端的**描边记录**未接 | 渲染后端 | **已关闭（B6 Step 2.1）** | ⚠️ B5 的阻塞理由**不成立**：`Curves.miter` 由 `render.rs:476 Store::add_path` 自动计算，与 `vector.rs` 无关；真正缺的只是 `Record` 的描边构造。现在 `Record::stroked`（`stroke` + `params.z` = **宽度** + `flags >> STYLE` = `cap \| joint << 2`）已落地，`scene::scene_records` 按"先填充后描边"产出。**事实更正**：`params.w` 是背景描边的宽度，不是 miter；miter limit 硬编码在 wgsl（见 V2-11）。宽度语义由实测钉住（传半宽会画出一半宽）。对拍：描边三角形 934 vs 954 像素、MAE 0.20/255、内部区 0.29 |
-| V2-15 | 着色栈的**结构事实**：`tone` 由 bloom 的合成 pass 应用，而那条 pass 只在**存在 3D layered 计划**时运行（`render.rs:2419`）；`occlusion_of()` 还要求存在环境光（类型 4）或全向光（类型 0），否则 AO 静默不生效 | 渲染后端 | **已关闭（B6 Step 1 验收用例）** | 结论不变（B6 §2.5 说 "bloom/tone 独立于光照" **不成立**），但现在有 3 条 3D 用例正面钉住：有 3D 计划时 `AgX ≠ clip`（2D-only 帧仍相等，见 `tone_mapping_changes_pixels_and_defaults_are_identical`）；AO 有环境光时让内角变暗、只有方向光时**逐位不变**。另记：受光/材质编码来自上游 `feed.py:1134`（`shade_in_3d` → `LIT`）与 `:1150`（`material[3] = 1`），`plan.lit` 按 `material[3] > 0` 判定 |
+| V2-15 | 着色栈的**结构事实**：`tone` 由 bloom 的合成 pass 应用，而那条 pass 只在**存在 3D layered 计划**时运行（`render.rs:2419`）；`occlusion_of()` 还要求存在环境光（类型 4）或全向光（类型 0），否则 AO 静默不生效 | 渲染后端 | **已关闭（B6 Step 1 验收用例；B10 Step 4 升级为作品级证据）** | 结论不变（B6 §2.5 说 "bloom/tone 独立于光照" **不成立**）。B6 的 3 条 3D 用例（`AgX ≠ clip` / bloom 外溢 / AO 需环境光）已被 **B10 的作品级证据**取代并加强：`shaded_meshes` 走 `--backend vector`，同一份 ZSB 只切换 `vector_params`（`tests/vector3d_shading.rs`）⇒ tone 差 >2000 像素、bloom 开更亮、AO 开更暗；帧序列哈希进 `[vector]` 基线（`58ab1f0e…`）。另记：受光/材质编码来自上游 `feed.py:1134`（`shade_in_3d` → `LIT`）与 `:1150`（`material[3] = 1`），`plan.lit` 按 `material[3] > 0` 判定 |
 | V2-16 | `ToneCurve` 语义错配（B4 建契约时按常见命名猜的）：`Reinhard` / `Aces`，而 `tone.wgsl` 只有 `0 = clip` / `1 = AgX` | 渲染 IR | **已关闭（B6 Step 1.1）** | 改为 `ToneCurve { Clip, #[default] AgX }`；`default_for(caps)` 按后端能力取默认（wgpu 全关 / 矢量全开），显式请求不支持项仍报错 —— 与"静默降级"的区别写进 `RenderParams::default_for` 文档 |
 | V2-17 | 校验口径：静态单帧测不出**闪烁**（时域不稳定） | 测试 / 对拍 | **已关闭（B6 Step 4）** | `per_frame_tolerance_holds_across_an_animation`：8 帧旋转 + 平移矩形，逐帧走**同一套**门禁（非空 + 覆盖率 ≤10% + 全图 MAE ≤ 8 + 内部区 ≤ 2），再对帧间 MAE 序列取"最大 ≤ 3×均值"。实测：逐帧 MAE 0.03–0.08，帧间均值 1.31 / 最大 1.54 ⇒ 无异常跳变。阈值来自实测数据（不是先设一个宽到永远绿的数） |
 | V2-18 | `BackendKind::Vector` 仍 `is_available() == false`（B6 Step 2.3 未转 true） | 渲染后端 / 装配 | **未执行（B6 复核：无可自述 namespace）** | 注册的意义是"给系统能力加 namespace"。矢量后端**没有**可自述的：`zela.render2d` / `render3d` 的 `upload(PodBytes)` 吃三角化顶点（矢量后端按路径解析渲染，不吃），`zela.render.shapes` 未定稿（V2-12）。⇒ 注册它不会带来任何能力，翻开关就是凑数（违反 §四.4）。`--backend vector` 是 `zela-render` 的**进程级开关**（同一份 `DrawQueue` 快照），不经注册表；`post_caps()` 已能自述（`Wgpu = none()` / `Vector = all()`） |
-| V2-19 | "开着色栈（tone + bloom + AO + env）的作品"无法用脚本表达 | 作品 / 脚本 API | **记账（B6 Step 3 第二件作品改为像素用例）** | 脚本层没有"2D 光源 / 曝光 / tone / bloom"的表达（`zela.scene@7` 本批不变），而矢量后端**不吃 3D 图层**（`--backend vector` 对含 3D 的帧显式报错）⇒ 脚本作品开不了着色栈。验收改为**3D 固定场景像素用例**：`tone_mapping_changes_a_lit_3d_frame`（AgX ≠ clip，clip 死白 / AgX 压回）、`bloom_spreads_bright_pixels_outward`（亮区外溢）、`ambient_occlusion_requires_ambient_light`（墙 + 地板内角变暗；只有方向光时无效）。环境图（env）本次未接：`View3` 没有环境图入口，`Environment` 上传仍是 `pub(crate)` |
+| V2-19 | "开着色栈（tone + bloom + AO + env）的作品"无法用脚本表达 | 作品 / 脚本 API | **部分关闭（B10 Step 4）** | **B6 的结论已被 B10 推翻一半**：`--backend vector` 现在支持含 3D 相机的帧（`frame_loop` 的 3D 分支），`shaded_meshes` 就是"开着色栈的作品"，帧哈希进 `[vector]` 基线。**仍缺**：脚本层仍不能自己表达曝光 / tone 曲线 / bloom 强度（现在吃的是"矢量后端默认全开"），`env` 也没有脚本入口（X1-04） |
 | S4-14 | 孤儿 Surface：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用 ⇒ 内容既不在视口画（S4-10 起跳过）、也不参与合成、也没有代理平面 ⇒ **完全不可见且不报错** | 渲染管线 | **已关闭（B5 A-2）** | `content_texture_specs` 在同一趟里 `for_each::<Material3D>` 查引用；无人引用 ⇒ `SurfaceError::UnconsumedSurface`（报错文案给出修法：设 `composite=true` 或让 3D 材质引用）。测试 `unconsumed_content_surface_errors_explicitly`（无人引用报错 / 有引用通过 / composite=true 通过） |
 
-**K 段小计（B4 + B5 + B6）**：已关闭 16（V1-01..05、V2-01/02、V2-07、V2-08/09、V2-10、V2-14、V2-15、V2-16/17、S4-14）· 部分关闭 1（V2-06）· 记账 5（V2-03/04、V2-11、V2-13、V2-19）· 未执行 2（V2-12、V2-18）。
+**K 段小计（B4 + B5 + B6）**：已关闭 16（V1-01..05、V2-01/02、V2-07、V2-08/09、V2-10、V2-14、V2-15、V2-16/17、S4-14）· 部分关闭 2（V2-06、V2-19）· 记账 4（V2-03/04、V2-11、V2-13）· 未执行 2（V2-12、V2-18）。
 
 ---
 
@@ -424,6 +424,26 @@
 | W1-11 | manifest 里 7 个作品只有"像素好看"，没有任何回归门禁（fusion / pbr_materials / pbr_lights / pbr_scene / pendulum / orbit / spring） | 测试 / 门禁 | **已关闭（B7 Step 2）** | 全部进 `baselines.txt` 的 `[native]` 段（`HASHES_WORKS` 13 条，批量与独立两条路径**共用**一张表）；`--record` 的硬门禁要求每件 `--script == --bundle`。顺带修掉 `--record` 的**手写录制清单**会漏录新增作品的缺陷（改为从 `HASHES_WORKS` 派生）。`hashes` 19.53s（A5 ≤30s） |
 
 **M 段小计（B7）**：已关闭 7（W1-01、W1-02、W1-03、W1-05、W1-09、W1-10、W1-11）· 记账 4（W1-04、W1-06、W1-07、W1-08）。
+
+---
+
+## N. B10 批次记账（着色栈生效与 3D 记录接入，2026-10-23）
+
+> 计划《B10执行计划_着色栈生效与3D记录接入》。**路线 A**（矢量后端自己承载 3D 网格）。
+> 一句话：把"已经移植进来、但被 `pub(crate)` 挡住"的 3D 能力接出来，让着色栈第一次
+> 出现在作品画面上。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X1-01 | 渲染能力契约只描述 namespace（标量 / 枚举），**无法表达"这个后端接受哪种 3D 网格"** | 渲染 IR | **已关闭（B10 Step 1）** | `RenderCapabilitySet` 新增 `mesh: MeshForms`（`MeshForm::Tri` / `Line`）+ `require_mesh()`：不支持所请求形态 ⇒ **显式报错**（不静默换一种）。`from_names` **不猜**（留空集），两个后端各自显式自述 `tri`（wgpu：`standard_3d()`；矢量：`Upload::mesh` 的 `triangles`）。单测 3 条：`from_names_does_not_guess_mesh_forms` / `unsupported_mesh_form_fails_explicitly` / 并集 |
+| X1-02 | 上游的 `Upload::{Mesh, Texture, Environment}` 与 `Record` 的 mesh 记录都在，但 `pub(crate)` 挡住 ⇒ 宿主无法提交 3D 网格 | 渲染后端 / 宿主 | **已关闭（B10 Step 2/3）** | 新公开入口：`MeshRecord`（f64 顶点 / 可选 UV·法线 / u32 三角形 / 材质 / 模型矩阵）+ `PathRecord::Mesh` + `render_3d_with(width,height,samples,view,records)`；`Record::mesh` 写 `params=[0, 三角形数]` 与 `material[3]=1`（受光的关键）。⚠️ **计划 §5.1 与代码不符**：计划说"顶点解析按 f32/u32 硬编码、缺 Float2x3，是全批唯一需发明处"；本仓的 `mesh::Mesh::new` 实际吃 **f64 三元组**（`read::<[f64;3]>`）并在内部压成 `[pos,v]/[normal,u]` ⇒ **不需要新增顶点格式分支**，Step 3 退化为"加一个记录变体" |
+| X1-03 | `Material3D` 没有 upstream 的 reflectance 分量（材质四元组是 `[metallic, roughness, reflectance, 1]`） | 场景组件 / 材质映射 | **记账（B10 Step 2）** | 宿主桥取常数 `0.5`（电介质 F0 ≈ 0.04），写在 `zela-app/src/vector3d.rs` 的 `DEFAULT_REFLECTANCE`。触发：作品需要金属/电介质强区分时，把 reflectance 进 `Material3D`（会改场景 API 版本） |
+| X1-04 | **环境图（IBL）**：上游 `Upload::Environment` 与 `Light::Environment{id}` 已接出，但场景脚本没有环境图入口，`RenderParams.env` 也没有任何代码桥接到上传 | 渲染后端 / 脚本 | **记账（B10 Step 2）** | `Light::Environment { id }` 按上游编码（`kind=4`，id 放 `slot[7]`）；`upload(Upload::environment(...))` 可用了。触发：脚本层需要"环境光照"时，先定环境图的 ZSB 载体（图片资源）与 `RenderParams.env` 的宿主接线 |
+| X1-05 | 着色栈的**作品级证据**（V2-15 的收尾）：此前只有单元测试，没有一件作品在着色栈下出帧 | 作品 / 基线 | **已关闭（B10 Step 4）** | 新作品 `shaded_meshes.lua`（墙 + 地板 + 中央亮立方体，全部是真网格）+ `--backend vector`：帧哈希 **`58ab1f0e…`** 进 `[vector]` 基线。判据（`tests/vector3d_shading.rs`，同一份 ZSB 只切 `vector_params`）：tone AgX≠clip（差 >2000 像素）、bloom 关掉更暗、AO 关掉更亮。`frame_loop` 的 3D 分支：`Camera3D → View3`、`LightQueue → Light`（方向取反 + 环境 0.2）、`DrawQueue::meshes → MeshRecord` |
+| X1-06 | 2D 图元与 3D 网格**混排帧**仍不支持：有 3D 相机时若队列里还有 2D 图元 ⇒ 显式报错 | 渲染后端 / 装配 | **记账（B10 Step 4）** | 混排需要 overlay 记录（屏幕空间与 3D 同帧合成），上游有 `OVERLAY` 位但宿主没有"2D 图元进 3D 视图"的语义（世界坐标 vs 屏幕坐标）。触发：作品需要 3D 里贴文字/箭头时 |
+| X1-07 | 矢量后端的 2D 入口**不吃** `RenderParams`（`render_scene_2d` 仍用 `ViewOptions::default()`）⇒ 同一份 `params` 在 2D/3D 两条路径上的含义不一致 | 渲染后端 / 宿主 | **记账（B10 Step 4）** | 实测：`vector_paths` 的帧哈希在 B10 前后**逐位不变**（`98d61c1a…`）—— 2D 分支不读 params，所以"着色栈默认开"只影响 3D 帧。触发：2D 也要 tone/bloom 时，把 `ViewOptions` 从 `RenderParams` 投影过去（会改 2D 基线） |
+
+**N 段小计（B10）**：已关闭 3（X1-01、X1-02、X1-05）· 记账 4（X1-03、X1-04、X1-06、X1-07）。
 
 ---
 

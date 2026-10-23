@@ -802,6 +802,25 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   与 manifest 作品的脚本（**去注释后**）比对：未覆盖 ⇒ 必须在
 >   `demo/capability_exemptions.txt` 豁免，且该行必须指向 GAPS 里**真实存在**的 `W1-xx`
 >   表格行；豁免过期（能力已被覆盖）同样失败 ⇒ 能力不落地就会红，机制不会腐烂。
+>
+> **B10 批次（2026-10-23）：着色栈生效与 3D 记录接入**。
+> - **路线裁决：A（矢量后端自己承载 3D 网格），B（跨后端混合）否决**。两条硬理由：
+>   ① B 路线下 mesh 由 wgpu 渲、不进矢量 store，而 **AO 的深度 pass 与阴影的 `cast_by`
+>   都只吃 store 里的 `Kind::Mesh`** ⇒ 参数填了没效果、还不报错（静默失效）；
+>   ② 两个后端各有自己的 device（`zela-render-vector` 内部 `Gpu::new()` 自建），
+>   纹理无法直接共享 ⇒ B 需要先改造 `with_gpu` 注入外部 device，是架构级改动，而 A 是接线。
+> - **真正的门闩不是"没有 3D 视图"，是"没有 Mesh 记录"**：`material` / `light` / `glow`
+>   三级条件都要 `Kind::Mesh`，缺了它 bloom 的合成 pass 不创建 —— tone 也就无处应用。
+> - **契约（Step 1）**：`RenderCapabilitySet` 新增 `mesh: MeshForms`（`Tri` / `Line`）
+>   与 `require_mesh()`；后端必须显式自述，不支持所请求形态即**报错**。
+> - **接线（Step 2/3）**：`MeshRecord` + `PathRecord::Mesh` + `render_3d_with`；
+>   `Record::mesh` 写 `material[3] = 1` 是"受光"的开关。**计划 §5.1 与代码不符**：
+>   本仓 `mesh::Mesh::new` 吃 f64 三元组、内部再压成 GPU 布局 ⇒ 不需要新顶点格式分支。
+> - **作品级证据（Step 4）**：`shaded_meshes.lua`（真网格的墙 / 地板 / 亮立方体）走
+>   `--backend vector`，帧哈希进 `[vector]` 基线；同一份 ZSB 只切 `vector_params`，
+>   tone（AgX≠clip）/ bloom（开更亮）/ AO（开更暗）逐项可判读。
+>   `Camera3D → View3`、`LightQueue → Light`（方向取反 + 环境 0.2）的桥在
+>   `zela-app/src/vector3d.rs`（`zela-render-vector` 只依赖 kernel，不认识场景队列）。
 
 
 ### 已知未接线项（Known unwired，记账非缺陷）

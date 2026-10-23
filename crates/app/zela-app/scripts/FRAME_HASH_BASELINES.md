@@ -124,13 +124,17 @@ CI 分层（`.github/workflows/architecture.yml` 的 `hashes` job）：
 | `[native]` | native（Vulkan headless） | atlas | 120 / 640×480 | 同上（B3 Step 5-4：2D 公式内容 → 3D 平面） | ✅ 不符即 fail |
 | `[smoke]` | native（Vulkan headless） | smoke | 15 / 320×240 | 同上（PR / `--fast` 快速反馈） | ✅ 不符即 fail，但**不等价于完整基线** |
 | `[vector]` | native（矢量后端） | vector_paths | 1 / 640×480 | `zela-render --backend vector --script/--bundle` | ✅ 不符即 fail |
+| `[vector]` | native（矢量后端） | shaded_meshes | 1 / 640×480 | 同上（B10 Step 4：真 3D 网格 + 着色栈，静态） | ✅ 不符即 fail |
 | `[browser]` | 浏览器（Chrome WebGPU） | fourier | 216 / 640×480 | `zela-web` + `?compare=1` | ❌ **仅留档** |
 
 > `[vector]` 于 2026-10-23（B6 Step 3，V2-07）首次登记：同一脚本 / 同一 ZSB，只是把
 > `zela-render` 的出帧后端换成矢量路径（`--backend vector`）。它校验的是**矢量后端自己的
 > 确定性**，不是"与 wgpu 逐位相同"（两者 AA 方式不同，跨后端判据见
-> `zela-render-backends/tests/vector_vs_wgpu.rs` 的容差回归）。`--backend vector` 只接受
-> 纯 2D 帧；含 3D / 内容纹理图层时**显式报错**（GAPS V2-12/V2-18）。
+> `zela-render-backends/tests/vector_vs_wgpu.rs` 的容差回归）。
+>
+> **B10 Step 4 起** `--backend vector` 支持**含 3D 相机的帧**（网格走 `MeshRecord`，
+> 着色栈按后端能力默认全开）；`shaded_meshes` 就是这条路径的基线。仍不支持：
+> 纯 2D 与 3D **混排**、内容纹理 / Surface 图层（显式报错，见 GAPS X1-06 / V2-12 / V2-13）。
 
 > `surface_matrix` / `atlas` 于 2026-10-22（B3 Step 5）首次登记。首次登记时两项**没有旧值行**，
 > 只写 `# slotB:` 与生效行、**没有 `# slotA:`**（`--record` 允许"新增 key 直接登记"）。

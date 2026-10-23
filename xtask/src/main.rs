@@ -662,8 +662,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let path = root.join("GAPS.md");
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
-    // K 段（B4+B5+B6）、L 段（B8+B9）与 M 段（B7）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L.", "## M."] {
+    // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）与 N 段（B10）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L.", "## M.", "## N."] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
@@ -676,7 +676,10 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
             }
             let id = cells[0].trim_matches('*').trim();
             let is_item = id.contains('-')
-                && (id.starts_with('V') || id.starts_with("S4-") || id.starts_with("W1-"));
+                && (id.starts_with('V')
+                    || id.starts_with("S4-")
+                    || id.starts_with("W1-")
+                    || id.starts_with("X1-"));
             if !is_item {
                 continue;
             }
