@@ -194,8 +194,8 @@ impl Record {
 
     /// Modified by Zela (B6 Step 2.1): a **stroked** record — the shape upstream's Python would
     /// send for a stroked mobject. `width` is the stroke's **full width** in scene units
-    /// (`vector.wgsl` treats `params.z` as the width: an empirical A/B in
-    /// `stroke_matches_wgpu_on_a_closed_polyline` pins it — passing a half width halves the
+    /// (`vector.wgsl` treats `params.z` as the width: an empirical A/B in `api.rs`'s
+    /// `stroke_width_is_the_drawn_width` pins it — passing a half width halves the
     /// stroke). `shape_bits` is `cap | joint << 2` (`STYLE` bits, `:57` / `:459`), `0` being a
     /// butt cap and miter joint. `params.w` stays 0: it is the *background* stroke's width,
     /// which we don't use.

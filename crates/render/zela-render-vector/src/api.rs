@@ -230,9 +230,13 @@ impl MeshRecord {
 
 /// 一条**描边**路径（`Record` 的描边形态，B6 Step 2.1）。
 ///
-/// 上游编码（已核对 `vector.wgsl:807`）：`params.z` = 描边**半宽**；
+/// 上游编码：`params.z` = 描边**宽度**（`Record::stroked` 原样写入，不缩放、不减半）；
 /// `Paint.brush2.w = cap | joint << 2`（`0` = butt + miter）。
 /// miter limit 在着色器里硬编码 10（GAPS V2-11），不由记录传入。
+///
+/// ⚠️ 着色器把该槽位读进名为 `half` 的局部量（`vector.wgsl:807`），那是**它内部的**
+/// 命名，不是本字段的口径。口径以实测钉住：`stroke_width_is_the_drawn_width`
+/// 断言"传 10 px 量到 10 px"（B11 §10）。
 #[derive(Debug, Clone)]
 pub struct StrokedPath {
     /// 控制点：每 4 个一组（与 [`FilledPath`] 相同口径）。
@@ -241,7 +245,7 @@ pub struct StrokedPath {
     pub ranges: Vec<[u32; 4]>,
     /// 描边色（straight RGBA，0..1）。
     pub stroke: [f32; 4],
-    /// 描边**宽度**（像素；写入时减半成半宽）。
+    /// 描边**宽度**（场景单位，`camera.unit` 换算为像素；**原样**写入 `params.z`）。
     pub width: f32,
     /// 形态位：`cap | joint << 2`（0 = butt + miter）。
     pub shape_bits: u32,
@@ -682,6 +686,50 @@ mod tests {
     fn pixel(frame: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
         let at = ((y * width + x) * 4) as usize;
         [frame[at], frame[at + 1], frame[at + 2], frame[at + 3]]
+    }
+
+    /// **描边宽度口径（B11 §10）**：`StrokedPath::width` 是**宽度**，画出来就该是这么宽。
+    ///
+    /// `vector.wgsl` 把该槽位读进名为 `half` 的局部量，光读代码很容易得出"要传半宽"
+    /// 的错误结论；这条断言是唯一能钉住写入端口径的证据：传 10 就必须量到 ~10 px，
+    /// 不是 ~20 px。测量列取线段中部，阈值取半强度（AA 边缘不算入）。
+    #[test]
+    fn stroke_width_is_the_drawn_width() {
+        let (w, h) = (64u32, 64u32);
+        let width = 10.0f32;
+        // 水平线段 y = 0，从 x = -20 到 x = 20（两条直线段）。
+        let line = StrokedPath {
+            points: vec![
+                [-20.0, 0.0, 0.0],
+                [-13.33, 0.0, 0.0],
+                [-6.67, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [6.67, 0.0, 0.0],
+                [13.33, 0.0, 0.0],
+                [20.0, 0.0, 0.0],
+            ],
+            ranges: vec![[0, 2, 0, 0]],
+            stroke: [1.0, 0.0, 0.0, 1.0],
+            width,
+            shape_bits: 0,
+            model: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+        };
+        let frame = match render_2d(w, h, 1, [0.0, 0.0, 0.0, 1.0], &[line.clone().into()]) {
+            Ok(frame) => frame,
+            Err(error) => panic!("矢量后端起不来：{error}"),
+        };
+        let covered = (0..h)
+            .filter(|y| pixel(&frame, w, w / 2, *y)[0] > 128)
+            .count();
+        assert!(
+            (covered as f32 - width).abs() <= 1.0,
+            "宽度 {width} 应画出 {width} px 的线，实测 {covered} px（半宽/全宽口径混了？）"
+        );
     }
 
     /// 矢量路径真的能画出来：中央是填充色，四角是背景色。
