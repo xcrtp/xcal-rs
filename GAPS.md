@@ -373,7 +373,7 @@
 | V2-19 | "开着色栈（tone + bloom + AO + env）的作品"无法用脚本表达 | 作品 / 脚本 API | **记账（B6 Step 3 第二件作品改为像素用例）** | 脚本层没有"2D 光源 / 曝光 / tone / bloom"的表达（`zela.scene@7` 本批不变），而矢量后端**不吃 3D 图层**（`--backend vector` 对含 3D 的帧显式报错）⇒ 脚本作品开不了着色栈。验收改为**3D 固定场景像素用例**：`tone_mapping_changes_a_lit_3d_frame`（AgX ≠ clip，clip 死白 / AgX 压回）、`bloom_spreads_bright_pixels_outward`（亮区外溢）、`ambient_occlusion_requires_ambient_light`（墙 + 地板内角变暗；只有方向光时无效）。环境图（env）本次未接：`View3` 没有环境图入口，`Environment` 上传仍是 `pub(crate)` |
 | S4-14 | 孤儿 Surface：`Renderer2D + composite=false` 且无 `Material3D.texture` 引用 ⇒ 内容既不在视口画（S4-10 起跳过）、也不参与合成、也没有代理平面 ⇒ **完全不可见且不报错** | 渲染管线 | **已关闭（B5 A-2）** | `content_texture_specs` 在同一趟里 `for_each::<Material3D>` 查引用；无人引用 ⇒ `SurfaceError::UnconsumedSurface`（报错文案给出修法：设 `composite=true` 或让 3D 材质引用）。测试 `unconsumed_content_surface_errors_explicitly`（无人引用报错 / 有引用通过 / composite=true 通过） |
 
-**K 段小计（B4 + B5 + B6）**：已关闭 16（V1-01..05、V2-01/02、V2-07、V2-08/09、V2-10、V2-14、V2-15、V2-16/17、S4-14）· 部分关闭 1（V2-06）· 记账 6（V2-03/04、V2-11、V2-13、V2-19）· 未执行 2（V2-12、V2-18）。
+**K 段小计（B4 + B5 + B6）**：已关闭 16（V1-01..05、V2-01/02、V2-07、V2-08/09、V2-10、V2-14、V2-15、V2-16/17、S4-14）· 部分关闭 1（V2-06）· 记账 5（V2-03/04、V2-11、V2-13、V2-19）· 未执行 2（V2-12、V2-18）。
 
 ---
 
@@ -394,12 +394,12 @@
 | V3-07 | dev 与 release 的 20–40× 差距没有任何记账，容易被当成"优化没生效" | 性能 / 构建 | **已关闭（B9 Step A + Step 1）** | 同机同码：hash 26.5 → 0.64 ms、PNG 41.5 → 1.8 ms、整帧 77.0 → 5.2 ms。B9 用实验证明两者**像素逐位一致**（release 下 fourier `b6eaa864…`、demo3d `ddd69b3e…`、vector_paths `98d61c1a…` 全部等于基线）⇒ 门禁可以改用 `[profile.verify]`（opt-level 3 + debug=false，仍继承 dev 的检查） |
 | V3-08 | §0.3「实际渲染 110 ms/帧」的推算被实测推翻后，没有回答"切 profile 会不会改变像素" | 性能 / 构建 | **已关闭（B9 Step A）** | 三个作品（2D 路径 / 3D PBR / 矢量后端）的 release 序列哈希与基线逐位相同；无需 `fp-contract=off`，也没有分歧帧。 |
 | V3-09 | `cargo verify` 全程跑在未优化构建上（全仓无 `[profile]`，xtask 的 `cargo run` 没有 `--release`） | 性能 / 构建 | **已关闭（B9 Step 1）** | 根 `Cargo.toml` 新增 `[profile.verify]`（`inherits = "dev"` + opt-level 3 + debug=false + incremental=false）；xtask 抽 `run_args()` 统一给 `zela-compile` / `zela-render` 加 `--profile verify`，`check` / `test` 仍走 dev。实测：`hashes` 52.48s（profile 切换后、仍是 19 次进程）；编译：增量 9.03s。 |
-| V3-10 | 每次渲染进程约 4s 的固定开销没有拆分（"不知道贵在哪"） | 性能 / 构建 | **已关闭（B9 Step 2，探针未提交）** | verify profile 下实测（fourier / vector_paths）：GPU 初始化 **531 / 502 ms**、脚本运行时构建（含 typst）**718 / 668 ms**、`StandardBackends::new` **5 ms**、首帧 18 ms / 439 ms（后者含矢量管线创建）、其余帧 4.5 ms/帧 ⇒ 固定开销里 **GPU init 与运行时构建各占一半**；不需要惰性 pipeline。 |
+| V3-10 | 每次渲染进程约 4s 的固定开销没有拆分（"不知道贵在哪"） | 性能 / 构建 | **已关闭（B9 Step 2 探针 + B7 Step 0.2 复测修正）** | verify profile 下实测（fourier / vector_paths）：GPU 初始化 **531 / 502 ms**、脚本运行时构建（含 typst）**718 / 668 ms**、`StandardBackends::new` **5 ms**、首帧 18 ms / 439 ms（后者含矢量管线创建）、其余帧 4.5 ms/帧。**B7 修正**：批量进程内逐作品复测 runtime 构建 = **0–1 ms** ⇒ 那 718 ms 是 **typst 世界 / 字体加载，进程级一次**，已天然跨作品复用；B9 报告结论②「runtime 构建每作品仍要付」**不成立**（这是好消息：不需要 hoist）。 |
 | V3-11 | 19 次进程调用 ≈ 46s 固定开销（占 profile 切换后 `hashes` 的 ~88%） | 性能 / 装配 | **已关闭（B9 Step 3）** | 新 bin `zela-verify`：**一次** GPU 初始化，逐作品新建 Runtime 与 `StandardBackends`（`wgpu_3d` 的离屏/深度目标按 `LayerId` 索引，复用会串味 ⇒ 选安全方案），编译也在同进程（§4.5）。帧循环抽到 `zela_app::frame_loop`，与 `zela-render` **共用一份**（不是第二条渲染路径）。实测：批量 **6.46s** vs 独立进程 **53.16s**，6 个作品哈希逐位相同；`--independent` 保留为对照组。 |
 | V3-12 | 「挂 / 不挂 HashSink 像素逐位相同」（B8 的 V3-12）只有人工比对，会腐烂 | 测试 / 门禁 | **已关闭（B9 Step 5）** | `xtask::assert_sink_bypass` 并入 `--step hashes`：`vector_paths`（1 帧）分别挂/不挂哈希各渲一次，比 **PNG 字节**（不比序列哈希 —— 不挂时没有哈希值，比哈希是自证）。实测 39504 B 完全相同。 |
 | V3-13 | `opt-level = 3` 会让编译变慢、与"验证要快"存在张力 | 性能 / 构建 | **记账（本批末测量，未引入 sccache / lld）** | 首次 verify-profile 全量构建 + 六步全跑 = **530.57s**（含 test/wasm/structure/smoke/hashes，编译时间未单独隔离）；改一个 zela-app 源文件后的增量重建 = **9.03s**。未引入 sccache（外部依赖 + CI 配置）与换链接器（需 `.cargo/config.toml` 分 target），理由见 B9 §5.2 的风险栏。触发：若首次构建时间成为日常瓶颈，再按 §5.3/§5.4 逐项评估。 |
 
-**L 段小计（B8 + B9）**：已关闭 12（V3-01/02/03/04/06/07/08/09/10/11/12）· 记账 2（V3-05、V3-13）。
+**L 段小计（B8 + B9）**：已关闭 11（V3-01/02/03/04/06/07/08/09/10/11/12）· 记账 2（V3-05、V3-13）。
 
 ---
 

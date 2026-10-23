@@ -47,6 +47,8 @@ struct Args {
     tmp: PathBuf,
     fps: f64,
     works: Vec<Work>,
+    /// B7 Step 0.3：把 V3-12（挂/不挂 HashSink 的像素一致性）并入本进程。
+    sink_bypass: bool,
 }
 
 impl Args {
@@ -54,7 +56,8 @@ impl Args {
         let raw: Vec<String> = std::env::args().skip(1).collect();
         if raw.is_empty() || raw.iter().any(|a| a == "--help" || a == "-h") {
             return Err(
-                "用法：zela-verify --scripts DIR --tmp DIR --work name=WxH[:vector] [--work ...]"
+                "用法：zela-verify --scripts DIR --tmp DIR --work name=WxH[:vector] [--work ...]\n\
+                 　　：zela-verify --scripts DIR --tmp DIR --sink-bypass（V3-12 检查）"
                     .to_string(),
             );
         }
@@ -62,6 +65,7 @@ impl Args {
         let mut tmp: Option<PathBuf> = None;
         let mut fps = 30.0f64;
         let mut works = Vec::new();
+        let mut sink_bypass = false;
         let mut i = 0;
         while i < raw.len() {
             match raw[i].as_str() {
@@ -87,6 +91,7 @@ impl Args {
                     i += 1;
                     works.push(parse_work(raw.get(i).ok_or("--work 需要 name=WxH[:vector]")?)?);
                 }
+                "--sink-bypass" => sink_bypass = true,
                 other => return Err(format!("未知参数：{other}")),
             }
             i += 1;
@@ -96,6 +101,7 @@ impl Args {
             tmp: tmp.ok_or("缺少 --tmp")?,
             fps,
             works,
+            sink_bypass,
         })
     }
 }
@@ -137,20 +143,22 @@ fn run() -> Result<(), String> {
     // **一次** GPU 初始化：19 次进程调用的固定开销在这里被摊平。
     let ctx = RenderContext::headless().map_err(|e| format!("无法创建 headless GPU 上下文：{e}"))?;
 
+    if args.sink_bypass {
+        return run_sink_bypass(&ctx, &args);
+    }
+
     for work in &args.works {
-        let script_path = args.scripts.join(format!("{}.lua", work.name));
+        let (script_path, language) = locate_script(&args.scripts, &work.name)?;
         let source = std::fs::read_to_string(&script_path)
             .map_err(|e| format!("[{}] 读取脚本 {} 失败：{e}", work.name, script_path.display()))?;
 
         // ── 编译（§4.5：也在同一进程里，避免 7 次 `zela-compile` 的启动开销）──
-        let language = language_from_path(&script_path).map_err(|e| e.to_string())?;
-        if language != ScriptLanguage::Lua {
-            return Err(format!(
-                "[{}] 批量对拍目前只接受 .lua（收到 {language:?}）",
-                work.name
-            ));
-        }
-        let payload = compile_and_write(&work.name, &source, &args.tmp.join(format!("{}.zsb", work.name)))?;
+        let payload = compile_and_write(
+            &work.name,
+            &source,
+            language,
+            &args.tmp.join(format!("{}.zsb", work.name)),
+        )?;
 
         // ── 路径 1：脚本 ──
         let mut runtime = build_script_runtime(ctx.clone(), source, language)
@@ -183,8 +191,13 @@ fn run() -> Result<(), String> {
 }
 
 /// 脚本 → ZSB（与 `zela-compile` 同一装配路径），返回 payload hash。
-fn compile_and_write(name: &str, source: &str, out: &Path) -> Result<String, String> {
-    let compiled = compile_script(source, ScriptLanguage::Lua)
+fn compile_and_write(
+    name: &str,
+    source: &str,
+    language: ScriptLanguage,
+    out: &Path,
+) -> Result<String, String> {
+    let compiled = compile_script(source, language)
         .map_err(|e| format!("[{name}] 编译失败：{e}"))?;
     let bundle = Bundle::encode(
         &compiled.script,
@@ -202,6 +215,117 @@ fn compile_and_write(name: &str, source: &str, out: &Path) -> Result<String, Str
     std::fs::write(out, bundle.to_bytes())
         .map_err(|e| format!("[{name}] 写 {} 失败：{e}", out.display()))?;
     Ok(bundle.payload_hash_hex())
+}
+
+/// 按 `.lua` / `.py` / `.js` 顺序探测作品脚本（B7 Step 0.1：不再硬编码扩展名）。
+///
+/// 语义不变：**找不到 ⇒ 显式报错并列出试过的扩展名**（不静默跳过）。
+/// 语言判断复用 [`language_from_path`]，不另写一套。
+fn locate_script(dir: &Path, name: &str) -> Result<(PathBuf, ScriptLanguage), String> {
+    let mut tried = Vec::new();
+    for ext in ["lua", "py", "js"] {
+        let path = dir.join(format!("{name}.{ext}"));
+        if path.is_file() {
+            let language = language_from_path(&path).map_err(|e| e.to_string())?;
+            return Ok((path, language));
+        }
+        tried.push(ext);
+    }
+    Err(format!(
+        "[{name}] 找不到脚本：{} 下没有 .{} 中的任何一个",
+        dir.display(),
+        tried.join(" / .")
+    ))
+}
+
+/// **V3-12 检查**（并入本进程，B7 Step 0.3）：挂 / 不挂哈希时的像素产出必须逐位相同。
+///
+/// 比 PNG **字节**而不是序列哈希 —— 不挂哈希时本来就没有哈希值可拿，比它是自证。
+fn run_sink_bypass(ctx: &RenderContext, args: &Args) -> Result<(), String> {
+    let work = Work {
+        name: "vector_paths".to_string(),
+        width: 640,
+        height: 480,
+        backend: LoopBackend::Vector,
+    };
+    let (script_path, language) = locate_script(&args.scripts, &work.name)?;
+    let source = std::fs::read_to_string(&script_path)
+        .map_err(|e| format!("读取脚本 {} 失败：{e}", script_path.display()))?;
+    let root = args.tmp.join("sink-bypass");
+    let mut sizes = Vec::new();
+    for (name, hash) in [("with-hash", true), ("no-hash", false)] {
+        let dir = root.join(name);
+        sizes.push(render_png(ctx, &source, language, &work, args.fps, &dir, hash)?.len());
+    }
+    if sizes[0] != sizes[1] {
+        return Err(format!(
+            "V3-12 失败：挂 / 不挂 HashSink 的 PNG 字节不同（{} B vs {} B）",
+            sizes[0], sizes[1]
+        ));
+    }
+    // 比字节本身：只比长度不够，读回来再比一次。
+    let frame = "frame_00000.png";
+    let a = std::fs::read(root.join("with-hash").join(frame))
+        .map_err(|e| format!("读取 with-hash 帧失败：{e}"))?;
+    let b = std::fs::read(root.join("no-hash").join(frame))
+        .map_err(|e| format!("读取 no-hash 帧失败：{e}"))?;
+    if a != b {
+        return Err("V3-12 失败：挂 / 不挂 HashSink 的 PNG 字节不同".to_string());
+    }
+    println!(
+        "[verify] {{\"sink_bypass\":\"ok\",\"bytes\":{}}}",
+        a.len()
+    );
+    Ok(())
+}
+
+/// 渲一个作品并把 PNG 写进 `dir`；`hash` 决定是否同时累积序列哈希。
+fn render_png(
+    ctx: &RenderContext,
+    source: &str,
+    language: ScriptLanguage,
+    work: &Work,
+    fps: f64,
+    dir: &Path,
+    hash: bool,
+) -> Result<Vec<u8>, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("创建目录 {} 失败：{e}", dir.display()))?;
+    let mut runtime = build_script_runtime(ctx.clone(), source, language)
+        .map_err(|e| format!("[{}] 装配失败：{e}", work.name))?;
+    let mut backends = StandardBackends::new(ctx);
+    let mut target = HeadlessTarget::new();
+    let mut sequence = FrameSequenceHash::new(work.width, work.height);
+    let mut first = Vec::new();
+    let options = FrameLoopOptions {
+        width: work.width,
+        height: work.height,
+        fps,
+        backend: work.backend,
+    };
+    run_frames(
+        ctx,
+        &mut runtime,
+        &mut backends,
+        &mut target,
+        options,
+        true,
+        &mut |index, frame| {
+            // 与 `PngSink` 同一个写盘函数（同一套编码参数）。
+            let path = dir.join(format!("frame_{index:05}.png"));
+            zela_app::export::write_png(&path, work.width, work.height, frame.rgba)
+                .map_err(|e| e.to_string())?;
+            if index == 0 {
+                first = std::fs::read(&path).map_err(|e| format!("读回 {} 失败：{e}", path.display()))?;
+            }
+            if hash {
+                sequence.push_frame(frame.rgba);
+            }
+            Ok(std::time::Duration::ZERO)
+        },
+    )
+    .map_err(|e| format!("[{}] 渲染失败：{e}", work.name))?;
+    Ok(first)
 }
 
 /// 一个作品的一遍渲染 → 序列哈希。

@@ -662,7 +662,136 @@ fn step_wasm(root: &Path) -> Result<(), String> {
 
 // ─── step: structure ────────────────────────────────────────────────────────
 
+/// GAPS 各托管段的"小计"必须与表格里的条目状态一致（B7 Step 0.2）。
+///
+/// 为什么要有这条检查：手写小计已连续错三次（B6 写 16 实际 17、B9 写 12 实际 11、
+/// B9-L 列举 11 写 12）。这里是**从条目状态重算**再与小计行比对，错了就红；
+/// 报错文案会给出重算后的正确小计，修起来是机械动作。
+fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
+    let path = root.join("GAPS.md");
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
+    // K 段（B4+B5+B6）与 L 段（B8+B9）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L."] {
+        let Some(body) = gaps_section(&text, prefix) else {
+            continue;
+        };
+        // 0 = 已关闭，1 = 部分关闭，2 = 记账，3 = 未执行
+        let mut counts = [0usize; 4];
+        for line in body.lines() {
+            let cells = table_cells(line);
+            if cells.len() < 4 {
+                continue;
+            }
+            let id = cells[0].trim_matches('*').trim();
+            let is_item = id.contains('-') && (id.starts_with('V') || id.starts_with("S4-"));
+            if !is_item {
+                continue;
+            }
+            let status = cells[3];
+            let bucket = if status.contains("部分关闭") {
+                1
+            } else if status.contains("已关闭") {
+                0
+            } else if status.contains("记账") {
+                2
+            } else if status.contains("未执行") {
+                3
+            } else {
+                continue;
+            };
+            counts[bucket] += 1;
+        }
+
+        let summary = body
+            .lines()
+            .find(|line| line.contains("段小计"))
+            .ok_or_else(|| format!("{prefix} 段缺少小计行"))?;
+        let labels = [
+            ("已关闭", 0usize),
+            ("部分关闭", 1),
+            ("记账", 2),
+            ("未执行", 3),
+        ];
+        for (label, bucket) in labels {
+            match number_after(summary, label) {
+                Some(written) if written == counts[bucket] => {}
+                Some(written) => {
+                    return Err(format!(
+                        "{prefix} 段小计与条目不符：`{label}` 写 {written}，实际 {}。\n  \
+                         正确的小计片段：{}\n  （请按表格重算，不要手写）",
+                        counts[bucket],
+                        subtotal_line(&counts),
+                    ));
+                }
+                None if counts[bucket] == 0 => {}
+                None => {
+                    return Err(format!(
+                        "{prefix} 段小计漏写 `{label}`（实际 {}）。正确的小计片段：{}",
+                        counts[bucket],
+                        subtotal_line(&counts),
+                    ));
+                }
+            }
+        }
+        println!(
+            "[xtask] GAPS {prefix} 小计一致：已关闭 {} · 部分关闭 {} · 记账 {} · 未执行 {}",
+            counts[0], counts[1], counts[2], counts[3]
+        );
+    }
+    Ok(())
+}
+
+/// 取 `prefix` 开头的一节（直到下一个 `## `）。
+fn gaps_section<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let start = text.find(prefix)?;
+    let rest = &text[start..];
+    let end = rest[3..]
+        .find("\n## ")
+        .map(|offset| offset + 3)
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// 把一行 markdown 表格拆成单元格（去掉首尾的 `|`）。
+fn table_cells(line: &str) -> Vec<&str> {
+    let trimmed = line.trim();
+    let Some(inner) = trimmed.strip_prefix('|').and_then(|rest| rest.strip_suffix('|')) else {
+        return Vec::new();
+    };
+    inner.split('|').collect()
+}
+
+/// `label` 之后第一个数字（`已关闭 11（…）` ⇒ `Some(11)`）。
+fn number_after(line: &str, label: &str) -> Option<usize> {
+    let rest = &line[line.find(label)? + label.len()..];
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// 重算后的小计片段（用于报错文案）。
+fn subtotal_line(counts: &[usize; 4]) -> String {
+    let mut parts = Vec::new();
+    for (label, count) in [
+        ("已关闭", counts[0]),
+        ("部分关闭", counts[1]),
+        ("记账", counts[2]),
+        ("未执行", counts[3]),
+    ] {
+        if count > 0 {
+            parts.push(format!("{label} {count}"));
+        }
+    }
+    parts.join(" · ")
+}
+
 fn step_structure(root: &Path) -> Result<(), String> {
+    // B7 Step 0.2：GAPS 的小计必须与条目状态一致（不依赖 jq，先跑）。
+    check_gaps_subtotals(root)?;
     let jq_available = Command::new("jq")
         .arg("--version")
         .stdout(Stdio::null())
@@ -1019,34 +1148,51 @@ fn batch_hashes(root: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(hashes)
 }
 
-/// **V3-12 自动化**（B9 Step 5）：挂 / 不挂 `HashSink` 时，输出 PNG 的**字节**必须相同。
+/// **V3-12 自动化**（B9 Step 5 → B7 Step 0.3 并入批进程）：挂 / 不挂 `HashSink` 时，
+/// 输出 PNG 的**字节**必须相同。
 ///
 /// 为什么比 PNG 字节而不是序列哈希：不挂哈希时本来就没有哈希值可拿，比哈希是自证。
-/// 用最便宜的 1 帧作品（`vector_paths`），两次渲染约 3s。
+/// B7 起这件事在 `zela-verify --sink-bypass` 里做 —— 同一次 GPU 初始化，不再多两次
+/// `cargo run`（B9 记账第 1 条：那两次曾让 `hashes` 从 6.46s 回到 13.07s）。
 fn assert_sink_bypass(root: &Path) -> Result<(), String> {
-    let with_hash = "target/xtask/sink-bypass/with-hash";
-    let no_hash = "target/xtask/sink-bypass/no-hash";
-    let source = ["--script", "crates/app/zela-app/scripts/vector_paths.lua"];
-    render_with(root, &source, with_hash, "640x480", Some("vector"), true)?;
-    render_with(root, &source, no_hash, "640x480", Some("vector"), false)?;
-
-    let frame = "frame_00000.png";
-    let read = |rel: &str| -> Result<Vec<u8>, String> {
-        let path = root.join(rel).join(frame);
-        fs::read(&path).map_err(|error| format!("读取 {} 失败：{error}", path.display()))
-    };
-    let (a, b) = (read(with_hash)?, read(no_hash)?);
-    if a != b {
-        return Err(format!(
-            "V3-12 失败：挂 / 不挂 HashSink 的 PNG 字节不同（{} B vs {} B）。\
-             说明哈希 sink 不是真旁路",
-            a.len(),
-            b.len()
-        ));
+    prepare_hashes_dir(root)?;
+    let scripts = scripts_dir(root);
+    let tmp = root.join("target").join("xtask").join("hashes");
+    let mut args = strings(&["run", "-q", "--profile", "verify", "-p", "zela-app"]);
+    args.extend(hashes_app_args());
+    args.extend(strings(&["--bin", "zela-verify", "--"]));
+    args.extend(strings(&[
+        "--scripts",
+        &scripts.display().to_string(),
+        "--tmp",
+        &tmp.display().to_string(),
+        "--fps",
+        "30",
+        "--sink-bypass",
+    ]));
+    println!("[xtask] $ cargo {}", args.join(" "));
+    let output = Command::new(cargo_program())
+        .args(&args)
+        .current_dir(root)
+        .output()
+        .map_err(|error| format!("启动 cargo 失败：{error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        eprint!("{stdout}{stderr}");
+        return Err("V3-12 检查失败（zela-verify --sink-bypass 退出码非 0）".to_string());
     }
+    let line = stdout
+        .lines()
+        .find(|line| line.starts_with("[verify] ") && line.contains("\"sink_bypass\":\"ok\""))
+        .ok_or_else(|| format!("V3-12 检查没有产出结果行：{stdout}{stderr}"))?;
+    let bytes = line
+        .split("\"bytes\":")
+        .nth(1)
+        .and_then(|rest| rest.trim_end_matches('}').trim().parse::<usize>().ok())
+        .ok_or_else(|| format!("V3-12 结果里没有 bytes：{line}"))?;
     println!(
-        "[xtask] V3-12：挂 / 不挂 HashSink 的 PNG 字节相同（{} B，vector_paths 1 帧）",
-        a.len()
+        "[xtask] V3-12：挂 / 不挂 HashSink 的 PNG 字节相同（{bytes} B，vector_paths 1 帧）"
     );
     Ok(())
 }
@@ -1154,25 +1300,11 @@ fn render(
     size: &str,
     backend: Option<&str>,
 ) -> Result<String, String> {
-    render_with(root, source, frames, size, backend, true)
-}
-
-/// 同 [`render`]，但可**不挂** `HashSink`（`hash = false`）—— V3-12 的对照实验用。
-fn render_with(
-    root: &Path,
-    source: &[&str],
-    frames: &str,
-    size: &str,
-    backend: Option<&str>,
-    hash: bool,
-) -> Result<String, String> {
     let mut args = run_args("zela-app", Some("zela-render"));
     args.extend(source.iter().map(|value| value.to_string()));
     args.extend(strings(&["--frames", frames, "--fps", "30", "--size", size]));
     // B8 Step 2：哈希是可选的 sink，对拍必须显式挂上（主流程默认不挂）。
-    if hash {
-        args.extend(strings(&["--hash"]));
-    }
+    args.extend(strings(&["--hash"]));
     if let Some(backend) = backend {
         args.extend(strings(&["--backend", backend]));
     }
@@ -1204,14 +1336,9 @@ fn render_with(
         }
     }
 
-    if hash {
-        parse_frame_hash(&stderr)
-            .or_else(|| parse_frame_hash(&stdout))
-            .ok_or_else(|| "输出中没有找到 `[frame-hash] sequence = …`".to_string())
-    } else {
-        // 没挂 HashSink ⇒ 本来就没有哈希行（不是失败）。
-        Ok(String::new())
-    }
+    parse_frame_hash(&stderr)
+        .or_else(|| parse_frame_hash(&stdout))
+        .ok_or_else(|| "输出中没有找到 `[frame-hash] sequence = …`".to_string())
 }
 
 fn parse_frame_hash(text: &str) -> Option<String> {
