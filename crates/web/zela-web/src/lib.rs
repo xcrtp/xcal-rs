@@ -58,6 +58,64 @@ static GENERATION: AtomicU32 = AtomicU32::new(0);
 /// 最近一次加载的产物：切后端直接重播它，不重新 fetch。
 static LAST_BUNDLE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
+/// B15 Step 0：浏览器侧 adapter 能力实测（**先量后动**）。
+///
+/// 落档在控制台（`[adapter-facts]`）与页面侧（[`adapter_facts`]）；单行、可复制、可 diff。
+static ADAPTER_FACTS: Mutex<String> = Mutex::new(String::new());
+
+/// B15 Step 0：最近一次探测到的 adapter 能力（键=值，空格分隔）。
+///
+/// 页面 / 控制台可直接读：`zela_web.adapter_facts()`。未初始化时为空串（不是默认值）。
+#[wasm_bindgen]
+pub fn adapter_facts() -> String {
+    ADAPTER_FACTS
+        .lock()
+        .map(|facts| facts.clone())
+        .unwrap_or_default()
+}
+
+/// 探测 adapter 是否自述某项 feature（`Features` 的命名位）。
+fn feature(adapter: &wgpu::Adapter, feature: wgpu::Features) -> bool {
+    adapter.features().contains(feature)
+}
+
+/// 探测某个纹理格式能否作为 `STORAGE_BINDING`（乙的前提）。
+fn storage_bindable(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> bool {
+    adapter
+        .get_texture_format_features(format)
+        .allowed_usages
+        .contains(wgpu::TextureUsages::STORAGE_BINDING)
+}
+
+/// B15 Step 0：把 adapter 能力压成一行可落档的事实（不含时间 / 随机数 / 负载）。
+fn probe_adapter_facts(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> String {
+    let downlevel = adapter.get_downlevel_capabilities();
+    let bits = adapter.features().bits().0;
+    format!(
+        "features={:x?} can_compute={} indirect_first_instance={} float32_blendable={} \
+         depth32float_stencil8={} adapter_specific_formats={} r32float_blendable={} \
+         rgba32float_storage={} rgba8unorm_storage={} surface_format={:?}",
+        bits,
+        downlevel
+            .flags
+            .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS),
+        feature(adapter, wgpu::Features::INDIRECT_FIRST_INSTANCE),
+        feature(adapter, wgpu::Features::FLOAT32_BLENDABLE),
+        feature(adapter, wgpu::Features::DEPTH32FLOAT_STENCIL8),
+        feature(
+            adapter,
+            wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        ),
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::R32Float)
+            .flags
+            .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
+        storage_bindable(adapter, wgpu::TextureFormat::Rgba32Float),
+        storage_bindable(adapter, wgpu::TextureFormat::Rgba8Unorm),
+        surface_format,
+    )
+}
+
 /// 后端偏好：0 = auto（按能力），1 = wgpu，2 = vector。
 static BACKEND_MODE: AtomicU8 = AtomicU8::new(0);
 
@@ -278,6 +336,12 @@ async fn create_display(document: &Document) -> Result<Display, JsValue> {
         .formats
         .first()
         .ok_or_else(|| js_err("surface 没有可用纹理格式"))?;
+    // B15 Step 0：能力实测先于任何渲染决策（缺 required ⇒ 路由显式拒绝，不硬上）。
+    let facts = probe_adapter_facts(&adapter, format);
+    if let Ok(mut slot) = ADAPTER_FACTS.lock() {
+        *slot = facts.clone();
+    }
+    web_sys::console::log_1(&JsValue::from_str(&format!("[adapter-facts] {facts}")));
     let (device, queue) = RenderContext::request_device_with_registry(&adapter, &registry)
         .await
         .map_err(|e| js_err(e.to_string()))?;
@@ -424,6 +488,8 @@ async fn run_with(
     // B11：作品级路由（第一帧决定；`set_backend` 会重新播放 ⇒ 每次播放重新决策）。
     let mut pinned: Option<RoutingDecision> = None;
     let mut scratch: Option<wgpu::Texture> = None;
+    // B15（乙）：显示路径的离屏目标 + GPU 内 present（首次真正用矢量时建）。
+    let mut vector_target: Option<VectorTarget> = None;
     // 状态栏常驻的后端决策行（B11 §7.4：选了谁、为什么、谁被拒）。
     let mut backend_line = String::new();
     // 矢量后端的默认渲染参数（`PostCaps::all()` ⇒ 着色栈默认开，与 native 同口径）。
@@ -511,19 +577,40 @@ async fn run_with(
 
         if wanted == BackendKind::Vector {
             let snapshot = pending.take().expect("矢量路径已有快照");
-            let rgba = snapshot
-                .render(
-                    &runtime,
-                    WIDTH,
-                    HEIGHT,
-                    &vector_params,
-                    [clear.r as f32, clear.g as f32, clear.b as f32, clear.a as f32],
-                )
-                .map_err(js_err)?;
-            present_vector_frame(&display_ctx, &mut scratch, &output, &rgba)?;
-            display_ctx.queue.present(output);
+            let background = [
+                clear.r as f32,
+                clear.g as f32,
+                clear.b as f32,
+                clear.a as f32,
+            ];
             if compare {
+                // B15（甲）+ compare：对拍**必须拿像素** ⇒ 走异步回读；显示仍走 CPU 上传
+                // （与改动前同一条路径，便于把"显示"与"对拍"分开归因）。
+                let rgba = snapshot
+                    .render_async(&runtime, WIDTH, HEIGHT, &vector_params, background)
+                    .await
+                    .map_err(js_err)?;
+                present_vector_frame(&display_ctx, &mut scratch, &output, &rgba)?;
+                display_ctx.queue.present(output);
                 hasher.push_frame(&rgba);
+            } else {
+                // B15（乙）：显示路径——合成进 Rgba8Unorm 目标，GPU 内 blit 到 surface。
+                // **零 CPU 往返**（不再有 1.2 MB 回读 + 1.2 MB 上传），但仍有一步
+                // GPU→GPU 转换（Rgba8Unorm → surface 格式），因此不是"零拷贝"。
+                let target = vector_target.get_or_insert_with(|| VectorTarget::new(&display_ctx));
+                snapshot
+                    .render_to_texture_async(
+                        &runtime,
+                        &target.texture,
+                        WIDTH,
+                        HEIGHT,
+                        &vector_params,
+                        background,
+                    )
+                    .await
+                    .map_err(js_err)?;
+                target.present(&display_ctx, &output);
+                display_ctx.queue.present(output);
             }
         } else {
             render_frame_to_view(
@@ -594,6 +681,167 @@ async fn run_with(
         );
     }
     Ok(())
+}
+
+/// B15（乙）：显示路径的离屏合成目标 + GPU 内 present。
+///
+/// 矢量合成写的是 `Rgba8Unorm` 的 **storage texture**；surface 通常是 `Bgra8Unorm`
+/// （WebGPU 核心不支持 storage binding）⇒ 宿主维持一张离屏目标，再全屏 blit 到 surface。
+/// **零 CPU 往返，但不是零拷贝**：`Rgba8Unorm → surface` 的这一步仍在。
+struct VectorTarget {
+    texture: wgpu::Texture,
+    blit: Blit,
+}
+
+impl VectorTarget {
+    fn new(ctx: &RenderContext) -> Self {
+        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("zela-vector-target"),
+            size: wgpu::Extent3d {
+                width: WIDTH,
+                height: HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // 与 `zela-render-vector` 的合成目标同格式（公共入口会再校验一次）。
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        Self {
+            texture,
+            blit: Blit::new(ctx),
+        }
+    }
+
+    fn present(&self, ctx: &RenderContext, output: &wgpu::SurfaceTexture) {
+        self.blit.draw(ctx, &self.texture, output);
+    }
+}
+
+/// 一像素对一像素的全屏拷贝（`textureLoad`，无采样 / 无过滤）。
+///
+/// 与 CPU 路径的 `rgba_to_target`（RGBA→BGRA 换位）等价：写入 surface 格式时通道顺序
+/// 由硬件按目标格式排列，数值逐字节不变。
+const BLIT_WGSL: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    let xy = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(xy * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(src, vec2<i32>(p.xy), 0);
+}
+"#;
+
+struct Blit {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+}
+
+impl Blit {
+    fn new(ctx: &RenderContext) -> Self {
+        let device = &ctx.device;
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("zela-vector-blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("zela-vector-blit"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("zela-vector-blit"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("zela-vector-blit"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: ctx.target_format(),
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self { pipeline, layout }
+    }
+
+    fn draw(&self, ctx: &RenderContext, src: &wgpu::Texture, output: &wgpu::SurfaceTexture) {
+        let source = src.create_view(&wgpu::TextureViewDescriptor::default());
+        let group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("zela-vector-blit"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&source),
+            }],
+        });
+        let target = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("zela-vector-blit"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("zela-vector-blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        ctx.queue.submit([encoder.finish()]);
+    }
 }
 
 /// 矢量帧（RGBA8）→ surface 纹理：写进一张目标格式的纹理，再拷到 surface。

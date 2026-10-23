@@ -460,13 +460,13 @@
 |---|---|---|---|---|
 | X2-01 | device features 曾由每个后端各自 request（wgpu 空集、矢量要 `FLOAT32_BLENDABLE` + `DEPTH32FLOAT_STENCIL8`）⇒ 同一块 device 无法共享 | 渲染后端 / 装配 | **已关闭（B11 Step 0/1）** | `BackendKind::required_features(adapter)` 自述 `BackendFeatures { required, preferred }`；`BackendRegistry::required_device_features` 只对**已注册且可用**后端取并集（C2）。守护测试 `union_is_empty_when_only_wgpu_is_registered`：仅 wgpu 注册 ⇒ `Features::empty()`，与改动前逐位相同。实测：`zela-render --backend vector` 注入后 `vector_paths` 仍为 `07bd4301…` |
 | X2-02 | `required` / `preferred` 混为一谈会把"有则更好"的 feature 变成硬门槛 | 渲染后端 | **已关闭（Step 0）** | 矢量 required = `DEPTH32FLOAT_STENCIL8` + adapter 自述的 `FLOAT32_BLENDABLE`；preferred = `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`（只影响 MSAA 档位）。单测覆盖：wgpu 显式空集、缺 float32 混合、缺深度模板、required ⊆ adapter |
-| X2-03 | 矢量后端在浏览器上**能编译但不能出帧**：`Player::pixels` 用 `map_async` + `getMappedRange` 同步回读，浏览器里 map 完成前就取 ⇒ `OperationError: getMappedRange failed` | 渲染后端 / wasm | **记账（B11 Step 5）** | `cargo check -p zela-render-vector --target wasm32-unknown-unknown` 通过；注入入口 `init_gpu(device, queue, adapter)` 已绕开 `Gpu::new()`（两处 wasm 不合法调用）。运行期缺的是**异步回读**（`map_async().await` 后再 `getMappedRange`），本批不做 ⇒ 路由在 wasm 上显式拒绝矢量（`is_available_on` = false，理由即本条），页面"矢量"回退 wgpu。触发：需要浏览器里逐帧对比两种后端时，把 `Player::pixels` 改成 async（native 侧用 `pollster` 包） |
+| X2-03 | 矢量后端在浏览器上**能编译但不能出帧**：`Player::pixels` 用 `map_async` + `getMappedRange` 同步回读，浏览器里 map 完成前就取 ⇒ `OperationError: getMappedRange failed` | 渲染后端 / wasm | **已关闭（B15 Step 1/2/3）** | 病因 = `Player::pixels` 的三连同步回读（`map_async` → `poll(wait)` → `getMappedRange`）；WebGPU 上 `poll` 是 no-op、map 未完成即取。修法：① 浏览器专走 `Player::pixels_async`（`map_async` 回调接 oneshot，`await` 后再取；native 同步签名不变）；② 显示路径改 `render_2d/3d_to_texture_async`（合成进宿主 `Rgba8Unorm` 目标，GPU 内 blit 到 surface，**零 CPU 往返**）；③ `BackendKind::is_available_on_facts` / `unavailable_reason_for` 去掉 wasm 拒绝。浏览器实测（本地 `http.server`）：`?zsb=./vector_paths.zsb` + 后端"矢量" ⇒ 状态栏 `后端：选择 Vector（显式指定矢量）`，画面出帧（截图为矢量作品：橙/蓝/绿路径 + "vector" 字形）；`pbr_lights` 走矢量连续播放。补测（独立 Edge + CDP，同一构建）：3D **510/510 帧**播完、零异常；`?compare=1` 输出 `3b94c49a…`（X4-04）；vector→wgpu→vector 双向切换各重播一次、无异常。内嵌浏览器自身的 GPU 崩溃见 X6-03（环境问题，非应用缺陷） |
 | X2-04 | 路由粒度：帧级切换会让同一作品中途换画风 | 路由 | **记账（Step 4）** | 默认**作品级**（第一帧决定后固定）；帧级留了 `--backend auto-frame`，默认关闭。触发：需要逐帧比对两种后端时 |
 | X2-05 | 并排分屏对比未做 | Demo 页 | **记账（Step 5）** | 单 canvas；本批只做"切换 + 状态栏给决策理由"（页面 `?compare=1` 仍输出序列哈希）。触发：需要同帧并排比像素差时 |
 | X2-06 | 3D 归属未定（矢量做 2D+3D / 分立协作） | 架构 | **记账（B11 §9）** | Device 注入对两条路都是前置，本批不预设立场；等"矢量 3D 在 WebGPU 上跑"的探测结果再定 |
-| X2-07 | `--step wasm` 只 `cargo check` 不运行，抓不到运行期 panic（X1-08 的教训） | 验证 | **记账（B11 §8）** | 本批 Step 5 用**浏览器实测**收口（Chrome + 本地 `http.server`）：① 工具栏新增"后端：自动 / wgpu / 矢量"，切到"矢量"触发重播（同一块 device、不重新 fetch、不整页重载），`fourier` 重播 **216 帧**；② `vector_paths` 画面非黑（`canvas.toDataURL` 29 214 B）；③ 状态栏常驻决策行：`后端：选择 Wgpu（自动路由：Wgpu 能力覆盖本帧）`、`后端：选择 Wgpu（首选 Vector 被拒 ⇒ 回退到 Wgpu）；Vector 被拒：浏览器侧矢量后端还没有异步回读…`。矢量在浏览器**不能出帧**（X2-03）⇒ 本批止步于"接口就绪 + 记账"（计划 §7.1 的退路）。headless Chrome + WebGPU 的 smoke 未进 CI（GPU 依赖会 flaky），触发：CI 有稳定 GPU 时补 |
+| X2-07 | `--step wasm` 只 `cargo check` 不运行，抓不到运行期 panic（X1-08 的教训） | 验证 | **记账（B11 §8）** | 本批 Step 5 用**浏览器实测**收口（Chrome + 本地 `http.server`）：① 工具栏新增"后端：自动 / wgpu / 矢量"，切到"矢量"触发重播（同一块 device、不重新 fetch、不整页重载），`fourier` 重播 **216 帧**；② `vector_paths` 画面非黑（`canvas.toDataURL` 29 214 B）；③ 状态栏常驻决策行：`后端：选择 Wgpu（自动路由：Wgpu 能力覆盖本帧）`、`后端：选择 Wgpu（首选 Vector 被拒 ⇒ 回退到 Wgpu）；Vector 被拒：浏览器侧矢量后端还没有异步回读…`。矢量在浏览器**不能出帧**（X2-03）⇒ 本批止步于"接口就绪 + 记账"（计划 §7.1 的退路）。headless Chrome + WebGPU 的 smoke 未进 CI（GPU 依赖会 flaky），触发：CI 有稳定 GPU 时补。**B15 更新**：矢量在浏览器已能出帧（X2-03 关闭），但 `--step wasm` 仍只编译；本批把实测要点落成可复现检查点（`adapter_facts()` + 截图 + 状态栏），**未接进 CI** |
 
-**O 段小计（B11）**：已关闭 2（X2-01、X2-02）· 记账 5（X2-03、X2-04、X2-05、X2-06、X2-07）。
+**O 段小计（B11）**：已关闭 3（X2-01、X2-02、X2-03）· 记账 4（X2-04、X2-05、X2-06、X2-07）。
 
 ---
 
@@ -506,11 +506,11 @@
 | X4-01 | 矢量后端**丢 2D 开放折线与坐标轴网格**：`fn zela_render_vector::scene::push_shape` 把 `Shape2D::Polyline` 一律当**闭合多边形**（`points.len() < 3` 直接不产出），`Shape2D::Line` 直接返回空；`Axes2D` 生成的网格线因此整片消失。另有更宽的一层：`RevealQueue` / `MorphQueue` **不在 `DrawQueue` 里**，而矢量快照只取了 `DrawQueue` | 渲染后端 / 2D 映射 | **已关闭（B14 Step 1）** | 两处修法：① `push_shape` 拆成 `Line` / `Polyline`（开放，`ranges` 闭合位 0）/ `Polygon`（闭合）三支，新增 `open_path`；单测 4 条（开放位为 0、2 点折线、`Line` 产出几何、`Polygon` 仍闭合）＋ GPU 用例 `open_subpath_fills_implicitly_and_strokes_without_closing`（填充隐式闭合、描边不回连）。② `zela_playback::vector_frame` 把 `RevealQueue` 按**归一化弧长**裁成开放折线（`clip_reveal`，单测 `reveal_clip_keeps_the_parameterized_span`）并追加在 DrawQueue 之后；`MorphQueue` 非空 ⇒ 路由**显式拒绝**（新增 `FrameContent::has_morphs` + 单测）。实测 `--post match`：fourier 覆盖率 0.7239 → **0.0195**、MAE 4.45 → **0.54**、内部区 100.78 → 3.01；storyboard 0.6394 → 0.0039 / 7.25 → 0.62 / 101.76 → 6.96；pendulum 0.3614 → 0.0258 / 0.35 → 0.06 / 61.91 → **2.00**；orbit 0.0131 / MAE 0.09（全绿）、spring 0.0144 / 0.04（全绿）。剩余细差见 X5-04 |
 | X4-02 | 矢量 3D 输出**系统性偏暗**：同一份 `RenderParams` 下，fusion / shaded_meshes / pbr_* 的整体亮度显著低于 wgpu | 渲染后端 / 3D 光照 | **部分关闭（B14 Step 0/2：亮度项已对齐；剩余差异归因到取景与高光/点光衰减）** | 归因（Step 0，只测量）：H1 tone 排除（`--post match` 已关 tone，差异仍在）；H3 sRGB 排除（白/灰两种 albedo 下比值恒定 2.26 ⇒ 不是传递曲线）；**H2 光照口径成立**。真因两条：① 桥里把光源方向**多取反了一次**（旧注释称 `LightQueue.direction` 是"传播方向"，而 wgpu `fs_pbr` 直接 `dot(n, dirs[i].xyz)` 当"指向光源"）⇒ 矢量侧所有正面收不到方向光，只剩 ambient（实测 white=124/灰=60，正好 = 0.2·albedo）；② 强度归一化不同：wgpu `(1−ambient)·I·NdotL·(kd·albedo/π+spec)`，矢量 `I·NdotL` ⇒ 桥里乘 `(1−ambient)/π`；③ `DEFAULT_REFLECTANCE` 0.5 → **0.04**（与 wgpu 电介质 F0 对齐）。修后（`--post match`）：pbr_scene 内部区 26.11 → **7.63**、MAE 0.73；pbr_lights 24.22 → **4.59**、MAE 0.54；shaded_meshes 30.53 → 23.83、MAE 19.48；pbr_materials 35.60 → 24.33、MAE 4.56；fusion 149 → 136.25。未达门限的部分见 X5-02 / X5-03 / X5-05（取景、点光衰减与高光、透明合成），**门限未放宽** |
 | X4-03 | **后处理政策差异**混进差异里：矢量按自身能力默认开 tone/bloom/ao，wgpu headless 默认全关 | 渲染后端 / 口径 | **记账（B13 Step 1）** | 同一批作品两种口径各跑一次：2D 作品（fourier / storyboard / pendulum / orbit / spring / vector_paths）**逐项完全相同**（2D 分支不读 params，见 X1-07）；3D 作品数值变化：fusion 全图 MAE 14.15→15.09、pbr_materials 9.18→6.61、pbr_lights 4.27→2.22、pbr_scene 3.34→2.47、shaded_meshes 23.08→24.94。⇒ 差异里有一块是**政策**不是算法。两份落档：`target/xtask/parity/`（backend-default）与 `target/xtask/parity-match/`（match） |
-| X4-04 | 浏览器侧无法做同一套对拍 | 验证 | **记账（B13 Step 1，依赖 X2-03）** | `zela-parity` 只在 native 可用（wasm 上矢量不能出帧，理由同 X2-03）。触发：异步回读落地后，把采样循环搬进页面 |
+| X4-04 | 浏览器侧无法做同一套对拍 | 验证 | **已关闭（B15 补测）** | 依赖解除：B15 把矢量回读改成异步（`Player::pixels_async`），`zela-web` 的 compare 分支改走 `VectorFrame::render_async`（与 native 共用 `scene_records` / `render_2d_async`）。浏览器实测（独立 Edge + CDP，`?zsb=./vector_paths.zsb&compare=1` + 后端"矢量"）：`对拍完成：3b94c49a137f8a9f98ee0c91577adc4e4b51049c1d047b2af41dbb88dca768e0（1 帧）`，控制台同时输出 `[frame-hash] sequence = …` ⇒ **可行性成立**（本批只验证可行性，不批量录浏览器基线） |
 | X4-05 | **字体口径分裂**（X1-11 的病因）：payload 断言用 `ZELA_TYPST_FONT_DIR`，帧基线用系统字体 | 验证 / 可复现性 | **已关闭（B13 Step 0）** | `tools/typst-fonts.txt` = 唯一真源（版本 + 文件名 + SHA-256），`build.ps1` 与 xtask 共读；xtask 给所有对拍子进程注入 `ZELA_TYPST_FONT_DIR`，缺失即报错。验证：连续两次录制 16 条逐位相同；含文本 6 条基线重录（fourier `0cb8b4a1…`、storyboard `be286560…`、surface_matrix(_js) `a6e4394c…`、atlas `d180e51f…`、vector_paths `c34f7a3d…`） |
 | X4-06 | `[vector]` 段只有 2 条（`vector_paths` 2D + `shaded_meshes` 3D），9 件矢量可渲作品零门禁 | 基线 / 门禁 | **已关闭（B13 Step 3；B14 已按修复重录）** | `HASHES_WORKS` 扩到 25 条（同一作品在 `[native]` 与 `[vector]` 各一条，靠 `--work` 顺序配对、标签 `name#vector` 区分）；`[vector]` 11 条。B13 首录锁定的是"当时行为"；**B14 在 X4-01 / X4-02 / X5-01 修完后一次性重录**（6 条 2D + 5 条 3D），现在锁的是修复后的画面（剩余已知差异见 X5-02/03/05） |
 
-**Q 段小计（B13）**：已关闭 3（X4-01、X4-05、X4-06）· 部分关闭 1（X4-02）· 记账 2（X4-03、X4-04）。
+**Q 段小计（B13）**：已关闭 4（X4-01、X4-04、X4-05、X4-06）· 部分关闭 1（X4-02）· 记账 1（X4-03）。
 
 ---
 
@@ -533,6 +533,22 @@
 | X5-10 | 诊断脚本会随 `cargo clean` 消失（B12 Step 0 的治理项） | 工具 | **已关闭（确认）** | 本批复用前确认 `tools/diag/{README.txt,export-vector.ps1,encode-vector.ps1,holes.py,diff.py}` 均已在版本控制中（B12 Step 0 纳管） |
 
 **R 段小计（B14）**：已关闭 6（X5-01、X5-06、X5-07、X5-08、X5-09、X5-10）· 记账 4（X5-02、X5-03、X5-04、X5-05）。
+
+---
+
+## S. B15 批次记账（矢量后端进 wasm，2026-10-23）
+
+> 计划《B15执行计划_矢量后端进wasm》。一句话：**让矢量后端在浏览器里真正出帧**——
+> 根因只有一处同步回读，而异步容器（rAF + `spawn_local`）早已存在。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X6-01 | Step 0：wasm 侧 adapter 能力此前是**推断**，不是实测（证据只有"Player 建起来了"） | 渲染 / wasm | **已关闭（B15 Step 0）** | `zela-web` 在 `create_display` 落一行 `[adapter-facts]`，并暴露 `adapter_facts()`（控制台 / 页面可复制、可 diff，不含时间 / 负载）。本机 Chrome 实测：`features=[0, ff8f] can_compute=true indirect_first_instance=true float32_blendable=true depth32float_stencil8=true adapter_specific_formats=false r32float_blendable=true rgba32float_storage=true rgba8unorm_storage=true surface_format=Bgra8Unorm`。required 全齐 ⇒ 矢量可用；`INDIRECT_FIRST_INSTANCE` 也有（TriMesh / LineMesh 二选一不受限） |
+| X6-02 | 乙的"零拷贝"口径会误导：计划 §1.5 称合成目标是 `Rgba32Float`，实测是 `Rgba8Unorm`（`zela_render_vector::render::COLOR`；`Rgba32Float` 只是 3D slab bounds 的中间纹理） | 文档 / 口径 | **已关闭（B15 Step 2）** | 事实：surface 是 `Bgra8Unorm`，WebGPU 核心不允许它当 storage texture ⇒ 矢量**永远无法直接写 surface**。乙的真实形态 = **零 CPU 往返**（去掉 1.2 MB 回读 + 1.2 MB `write_texture`），保留一步 GPU→GPU resolve（`Rgba8Unorm → surface`）。实现：`zela_render_vector::api::render_2d_to_texture[_async]` / `render_3d_to_texture[_async]` + `zela-web::VectorTarget` / `Blit` |
+| X6-03 | Trae 内嵌浏览器的 WebGPU 在 3D 长播后崩溃（`webgpu found no adapters`），曾阻断 compare / 切后端实测 | 验证 / 环境 | **已关闭（B15 补测：换独立 Edge）** | 现象：内嵌浏览器播放 `pbr_lights` 到 301/510 帧后，`navigator.gpu.requestAdapter()`（普通与 `forceFallbackAdapter`）都返回 `null`；重启其 GPU 进程、换 origin、开新标签页均未恢复。补测：用**独立 Edge + CDP**（同一份 wasm / 同一 URL）跑同一构建：① 2D/3D 矢量出帧，`pbr_lights` **510/510 帧**播完、零异常（截图 `out/b15-edge-3d-vector-50s.png`）；② `?compare=1` 输出 `3b94c49a…`（见 X4-04）；③ backend 双向切换（vector→wgpu→vector）均重播且只有一条循环。⇒ 崩溃属**内嵌浏览器环境**，不是应用缺陷 |
+| X6-04 | `--step wasm` 仍只 `cargo check`（X2-07） | 验证 | **记账（B15 §7）** | 本批把浏览器实测落成可复现检查点（`adapter_facts()` + 截图 + 状态栏），但**没有**接进 CI；本批只记账，不实现 |
+
+**S 段小计（B15）**：已关闭 3（X6-01、X6-02、X6-03）· 记账 1（X6-04）。
 
 ---
 

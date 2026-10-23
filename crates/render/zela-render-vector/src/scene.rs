@@ -20,7 +20,9 @@
 use ze_notion::{Color32, Path2D, PathCommand, Transform2D, Vec2};
 use ze_render_ir::{Shape2D, Style2D};
 
-use crate::api::{FilledPath, PathRecord, StrokedPath, render_2d};
+use crate::api::{FilledPath, PathRecord, StrokedPath};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::api::render_2d;
 
 /// 一条待映射的图元（与后端的 `DrawItem` 同构，但不依赖 `zela-render`）。
 #[derive(Debug, Clone)]
@@ -487,6 +489,10 @@ pub fn scene_records(
 }
 
 /// 离屏渲染一帧 zela 的 2D 图元（`scene_records` + [`render_2d`]）。
+///
+/// **B15**：`render_2d` 是同步读回的 native API ⇒ 本便捷入口也只服务 native；
+/// 浏览器用 `scene_records` + `render_2d_async`（`zela-playback` 已这样做）。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render_scene_2d(
     width: u32,
     height: u32,

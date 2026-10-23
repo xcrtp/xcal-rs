@@ -40,3 +40,7 @@ render = []
 python = []
 player = []
 export = []
+
+# B15（甲）：浏览器的异步回读用它接住 `map_async` 的回调（native 无此依赖）。
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-channel = "0.3"

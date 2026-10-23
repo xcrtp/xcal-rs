@@ -6969,6 +6969,7 @@ name = "zela-render-vector"
 version = "0.1.1"
 dependencies = [
  "bytemuck",
+ "futures-channel",
  "pollster 1.0.1",
  "serde",
  "thiserror 2.0.20",

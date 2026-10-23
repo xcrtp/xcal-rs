@@ -1321,6 +1321,7 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   强制重编后零新增 warning。
 > - **分镜表达同步改变**：分镜 3 / 6 从 `MorphShape`（整条曲线从一点"绽开"）改为
 >   `Reveal`（笔尖沿路径推进）—— 这才是 §0.1 要的 Write 类效果；形变管线仍在（GPU 用例覆盖）。
+
 >   **公式必须逐轮廓"依次"写**（第一版用了 `.parallel` ⇒ 全部轮廓共享同一 `ClockNode`，
 >   实测表现是"每个字符同时被画出来"，不是写字）：改为连续 `play`（顺序游标首尾相接），
 >   把分镜 6 的 1s 平摊给 N 个轮廓；判据 = `storyboard_declares_six_shots_with_declared_timing`
@@ -1440,3 +1441,37 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 >   （demo 里竖直错开）；③ `Opacity` 组件缺席时 `OpacityValue` **静默跳过**（动画静默失效）。
 
 待上游提供 workspace 模式后补充 `cargo archtest` 步骤。
+
+### B15 矢量后端进 wasm（浏览器出帧）
+
+> 一句话：**根因只有一处同步回读，异步容器（rAF + `spawn_local`）早已存在**。
+> 本批把矢量后端的公开面按目标切成"native 同步 / 浏览器异步"，并让显示路径不再经过 CPU。
+
+- **甲（异步回读）**：`Player::pixels` 里的 `map_async` → `poll(wait)` → `get_mapped_range`
+  三连只在 native 保留（`Player::pixels` / `Gpu::read_buffer` 两处都不再复制）；
+  浏览器走 `Player::pixels_async`——`map_async` 的回调接 `oneshot`，`await` 到完成后再
+  `get_mapped_range`。`Device::poll` 在 WebGPU 上是 no-op（设备自动 poll），因此浏览器侧不调用它。
+  native 的同步公开面（`render_2d[_with]` / `render_3d[_with]` / `render_scene_2d`）**逐位不变**；
+  浏览器只暴露 `*_async`（同步签名在 wasm 上不存在，消灭"第二颗雷"）。
+- **乙（GPU 内目标）**：矢量合成写的是 `Rgba8Unorm` **storage texture**（`render::COLOR`），
+  而 surface 是 `Bgra8Unorm`（WebGPU 核心不允许它当 storage）⇒ 矢量**无法直接写 surface**。
+  乙的真实形态 = **零 CPU 往返**：`render_2d/3d_to_texture[_async]` 把帧合成进宿主给的
+  `Rgba8Unorm` 纹理（`Player::encode_to` → `Canvas::covered`），再由宿主的 `Blit`
+  （全屏三角形 + `textureLoad`，1:1 像素）拷到 surface。
+  **口径**：消掉的是 1.2 MB 回读 + 1.2 MB `write_texture`；`Rgba8Unorm → surface` 的
+  GPU→GPU resolve 仍在 ⇒ **零 CPU 往返 ≠ 零拷贝**。
+  `present_vector_frame`（CPU 上传）保留，只服务 `?compare=1`（对拍必须拿像素）。
+- **路由**：`BackendKind::is_available_on_facts` 与 `unavailable_reason_for` 去掉
+  `cfg!(target_arch = "wasm32")` 的显式拒绝——矢量在两个目标上**只按能力判定**；
+  缺 required 仍由具体理由拒绝（C4 不变）。
+- **Step 0 实测（本机 Chrome）**：`zela-web` 在 `create_display` 落一行 `[adapter-facts]`，
+  并暴露 `adapter_facts()`。实测 `features=[0, ff8f]`、`can_compute=true`、
+  `indirect_first_instance=true`、`float32_blendable=true`、`depth32float_stencil8=true`、
+  `adapter_specific_formats=false`、`r32float_blendable=true`、`rgba32float_storage=true`、
+  `rgba8unorm_storage=true`、`surface_format=Bgra8Unorm` ⇒ required 全齐。
+- **验收状态**：浏览器实测（本地 `http.server`）：`vector_paths` 与 `pbr_lights` 由矢量后端出帧
+  （状态栏 `后端：选择 Vector`；2D 截图为矢量作品）。补测（独立 Edge + CDP，同一构建）：
+  `pbr_lights` **510/510 帧**播完、零异常；`?compare=1` 输出 `3b94c49a…`（浏览器内对拍可行）；
+  vector→wgpu→vector 双向切换各重播一次、无异常。3D 矢量与 wgpu 的画面差异肉眼可见
+  （矢量有 tone/bloom/IBL，wgpu 侧没有）。Trae 内嵌浏览器在 3D 长播后自身 GPU 进程崩溃
+  （`webgpu found no adapters`）——环境问题，换独立浏览器即复现不了（GAPS X6-03）。

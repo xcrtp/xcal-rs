@@ -132,19 +132,31 @@ impl VectorFrame {
             has_morphs: self.morph_count > 0,
         }
     }
+}
 
-    /// 用矢量后端渲染当前帧，返回 RGBA8。
-    ///
-    /// 调用前必须已经 `step_frame`（或等价地推进过一帧）；
-    /// 是否该用矢量由调用方按 [`Self::content`] + 路由决定（本函数不判断）。
-    pub fn render(
+/// 一帧的渲染输入：3D（view + 网格记录）或 2D（背景 + 记录），都已转成矢量后端的类型。
+///
+/// **B15**：同步 / 异步 / GPU 目标三条路径共用这一份准备，避免几何映射漂移。
+enum Prepared {
+    ThreeD {
+        view: zela_render_vector::View3,
+        records: Vec<zela_render_vector::PathRecord>,
+    },
+    TwoD {
+        background: [f32; 4],
+        records: Vec<zela_render_vector::PathRecord>,
+    },
+}
+
+impl VectorFrame {
+    fn prepare(
         &self,
         runtime: &Runtime,
         width: u32,
         height: u32,
         params: &zela_scene_bundle::RenderParams,
         background: [f32; 4],
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Prepared, String> {
         let camera3d = self.layers.iter().find_map(|layer| match &layer.kind {
             LayerKind::Viewport3D { camera } => Some(*camera),
             _ => None,
@@ -168,7 +180,7 @@ impl VectorFrame {
                 let mut view =
                     crate::vector3d::view3(&camera, (width, height), background, params)?;
                 view.lights = lights;
-                zela_render_vector::render_3d_with(width, height, 4, &view, &records)
+                Ok(Prepared::ThreeD { view, records })
             }
             None => {
                 let mut items: Vec<zela_render_vector::SceneItem<'_>> = self
@@ -197,7 +209,114 @@ impl VectorFrame {
                         style: *style,
                     }
                 }));
-                zela_render_vector::render_scene_2d(width, height, 4, background, &items)
+                // 与 `render_scene_2d` 同一条映射（只是把记录留下来给三条路径复用）。
+                let records = zela_render_vector::scene_records(&items, (width, height))
+                    .map_err(|error| error.to_string())?;
+                Ok(Prepared::TwoD {
+                    background,
+                    records,
+                })
+            }
+        }
+    }
+
+    /// 用矢量后端渲染当前帧，返回 RGBA8（native 同步读回）。
+    ///
+    /// 调用前必须已经 `step_frame`（或等价地推进过一帧）；
+    /// 是否该用矢量由调用方按 [`Self::content`] + 路由决定（本函数不判断）。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render(
+        &self,
+        runtime: &Runtime,
+        width: u32,
+        height: u32,
+        params: &zela_scene_bundle::RenderParams,
+        background: [f32; 4],
+    ) -> Result<Vec<u8>, String> {
+        match self.prepare(runtime, width, height, params, background)? {
+            Prepared::ThreeD { view, records } => {
+                zela_render_vector::render_3d_with(width, height, 4, &view, &records)
+            }
+            Prepared::TwoD {
+                background,
+                records,
+            } => zela_render_vector::render_2d(width, height, 4, background, &records),
+        }
+    }
+
+    /// **B15（甲）**：浏览器上的同一帧（异步回读）。
+    #[cfg(target_arch = "wasm32")]
+    pub async fn render_async(
+        &self,
+        runtime: &Runtime,
+        width: u32,
+        height: u32,
+        params: &zela_scene_bundle::RenderParams,
+        background: [f32; 4],
+    ) -> Result<Vec<u8>, String> {
+        match self.prepare(runtime, width, height, params, background)? {
+            Prepared::ThreeD { view, records } => {
+                zela_render_vector::render_3d_with_async(width, height, 4, &view, &records).await
+            }
+            Prepared::TwoD {
+                background,
+                records,
+            } => {
+                zela_render_vector::render_2d_async(width, height, 4, background, &records).await
+            }
+        }
+    }
+
+    /// **B15（乙）**：把当前帧直接合成进 `target`（native 同步版），像素不经过 CPU。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_to_texture(
+        &self,
+        runtime: &Runtime,
+        target: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        params: &zela_scene_bundle::RenderParams,
+        background: [f32; 4],
+    ) -> Result<(), String> {
+        match self.prepare(runtime, width, height, params, background)? {
+            Prepared::ThreeD { view, records } => zela_render_vector::render_3d_to_texture(
+                target, width, height, 4, &view, &records,
+            ),
+            Prepared::TwoD {
+                background,
+                records,
+            } => zela_render_vector::render_2d_to_texture(
+                target, width, height, 4, background, &records,
+            ),
+        }
+    }
+
+    /// **B15（乙）**：同 [`Self::render_to_texture`]，浏览器上的异步版。
+    #[cfg(target_arch = "wasm32")]
+    pub async fn render_to_texture_async(
+        &self,
+        runtime: &Runtime,
+        target: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        params: &zela_scene_bundle::RenderParams,
+        background: [f32; 4],
+    ) -> Result<(), String> {
+        match self.prepare(runtime, width, height, params, background)? {
+            Prepared::ThreeD { view, records } => {
+                zela_render_vector::render_3d_to_texture_async(
+                    target, width, height, 4, &view, &records,
+                )
+                .await
+            }
+            Prepared::TwoD {
+                background,
+                records,
+            } => {
+                zela_render_vector::render_2d_to_texture_async(
+                    target, width, height, 4, background, &records,
+                )
+                .await
             }
         }
     }

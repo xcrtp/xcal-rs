@@ -1144,6 +1144,39 @@ pub(crate) fn with_gpu<T>(f: impl FnOnce(&mut Gpu) -> T) -> Result<T, String> {
     GPU.with_borrow_mut(|gpu| gpu.as_mut().map(f).ok_or_else(|| "the GPU is not up: await init() first".to_string()))
 }
 
+/// **B15（甲）**：浏览器上的 GPU 借用，**专供 `await` 边界**（`RefMut` 不能跨 `await`）。
+///
+/// 取走 `thread_local` 里的 GPU，异步渲染期间由本句柄独占；`Drop` 一定放回去（成功/失败/被
+/// 丢弃都一样），因此不会出现"渲染错一次就永久丢 GPU"的状态。
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct GpuSlot(Option<Gpu>);
+
+#[cfg(target_arch = "wasm32")]
+impl GpuSlot {
+    pub(crate) fn take() -> Result<Self, String> {
+        let gpu = GPU
+            .with_borrow_mut(Option::take)
+            .ok_or_else(|| {
+                "the GPU is not up: await init() first (or another async render still holds it)"
+                    .to_string()
+            })?;
+        Ok(Self(Some(gpu)))
+    }
+
+    pub(crate) fn get(&mut self) -> &mut Gpu {
+        self.0.as_mut().expect("the GPU was taken by its slot")
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for GpuSlot {
+    fn drop(&mut self) {
+        if let Some(gpu) = self.0.take() {
+            GPU.with_borrow_mut(|slot| *slot = Some(gpu));
+        }
+    }
+}
+
 /// A shader: `source` after the paint both pipelines share and how light shows (`paint.wgsl`, `tone.wgsl`).
 fn shader(device: &wgpu::Device, label: &str, source: &str) -> wgpu::ShaderModule {
     let source = [include_str!("paint.wgsl"), include_str!("tone.wgsl"), source].concat();
@@ -1315,6 +1348,22 @@ impl Gpu {
             #[cfg(feature = "player")]
             adapter: adapter.clone(),
             device, queue, raster, image_layout, sampler, pipelines: HashMap::new(), max_samples, vector, shadow_compare, dfg, linear, no_environment, prefilter: None, occlusion: None, no_occlusion, bloom: None, blend: [None, None], shadow_passes: HashMap::new() })
+    }
+
+    /// Read `buffer` back in full, blocking (native).
+    ///
+    /// **B15**：这是本 crate 里唯一一处"同步三连"（`map_async` → `poll(wait)` →
+    /// `get_mapped_range`）。测试与诊断都走它，避免在别处复制一份；浏览器没有阻塞读回，
+    /// 走 [`Player::pixels_async`] / [`Player::render_to_async`]。
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn read_buffer(&self, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+        let mapped = buffer.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
+        let bytes = mapped.to_vec();
+        drop(mapped);
+        buffer.unmap();
+        Ok(bytes)
     }
 
     /// The raster pipeline's passes at `samples`, made when a view first draws rasters with them.
@@ -1564,6 +1613,14 @@ impl Canvas {
         Self { width, height, color: color.create_view(&Default::default()), raster: None, occluded: None, bloomed: None }
     }
 
+    /// B15（乙）：画布的颜色由调用方给（同一 view 承载合成输出），不再另建纹理。
+    ///
+    /// 调用方必须保证 `view` 是 `COLOR` 格式、尺寸与帧一致，并带
+    /// `RENDER_ATTACHMENT | STORAGE_BINDING | TEXTURE_BINDING`（公共入口会显式校验）。
+    fn covered(view: &wgpu::TextureView, width: u32, height: u32) -> Self {
+        Self { width, height, color: view.clone(), raster: None, occluded: None, bloomed: None }
+    }
+
     /// Give it the raster pipeline's attachments (once).
     /// Give it the raster pipeline's attachments (once; with `light`, the lit meshes' light's samples too, once).
     fn attach(&mut self, gpu: &Gpu, samples: u32, light: bool) {
@@ -1658,7 +1715,9 @@ impl Canvas {
 pub(crate) struct Targets {
     pub(crate) frame: Canvas,
     // Modified by Zela: 读回缓冲对本 crate 的离屏渲染始终需要（上游只在 python/export 下建）。
-    pub(crate) readback: wgpu::Buffer, // the frame's pixels, then the lists' count (see `Lists`)
+    // Modified by Zela（B15 乙）：显示路径直接用外部目标，不需要像素缓冲 ⇒ 按需创建
+    // （只有 3D see-through 列表的 4 字节计数会用到）。
+    pub(crate) readback: Option<wgpu::Buffer>, // the frame's pixels, then the lists' count (see `Lists`)
     pub(crate) padded: u32,
 }
 
@@ -1894,19 +1953,68 @@ impl Player {
     /// Draw `frames` and read the last one back into `into`: RGBA8 rows, top to bottom (drawn
     /// again while its see-through fragments overflow the lists).
     // Modified by Zela: 去掉 python feature 后，离屏读回是本 crate 的正式路径。
+    // Modified by Zela（B15 甲）：native 保持同步签名（`frame_loop` / `zela-verify` / `export`
+    // 都是同步调用方）；浏览器走 [`Self::pixels_async`]。
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pixels(&mut self, gpu: &mut Gpu, frames: &[Frame], into: &mut [u8]) -> Result<(), String> {
         loop {
             let (mut encoder, _, composited) = self.encode(gpu, frames)?;
             self.copy_pixels(&mut encoder);
-            let t = self.targets.as_ref().expect("targets");
-            let lists = self.lists.as_ref().filter(|_| composited);
-            if let Some(lists) = lists {
-                encoder.copy_buffer_to_buffer(&lists.appended, 0, &t.readback, t.padded as u64 * self.height as u64, Some(COUNT_BYTES));
-            }
-            let capacity = lists.map(|l| l.capacity);
+            let capacity = self.copy_list_count(gpu, &mut encoder, composited);
             gpu.queue.submit(Some(encoder.finish()));
             let appended = self.read_pixels(gpu, into)?;
             if !capacity.is_some_and(|capacity| self.overflowed(gpu, appended, capacity)) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// **B15（甲）**：浏览器上的同一件事——`map_async` 之后**等**它完成，再 `get_mapped_range`。
+    ///
+    /// `Device::poll` 在 WebGPU 上是 no-op（设备自动 poll），所以这里不调用它；
+    /// 之前的 `OperationError` 正是"没等 map 完成就读"造成的。
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn pixels_async(&mut self, gpu: &mut Gpu, frames: &[Frame], into: &mut [u8]) -> Result<(), String> {
+        loop {
+            let (mut encoder, _, composited) = self.encode(gpu, frames)?;
+            self.copy_pixels(&mut encoder);
+            let capacity = self.copy_list_count(gpu, &mut encoder, composited);
+            gpu.queue.submit(Some(encoder.finish()));
+            let appended = self.read_pixels_async(into).await?;
+            if !capacity.is_some_and(|capacity| self.overflowed(gpu, appended, capacity)) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// **B15（乙）**：把帧直接合成进调用方给的 `target`（native 同步版）。
+    ///
+    /// 不读回像素；只有 3D 的 see-through 列表需要把**4 字节计数**读回（判断列表装不装得下），
+    /// 否则这一帧**零 CPU 往返**。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn render_to(&mut self, gpu: &mut Gpu, frames: &[Frame], target: &wgpu::TextureView) -> Result<(), String> {
+        loop {
+            let (mut encoder, _, composited) = self.encode_to(gpu, frames, target)?;
+            let capacity = self.copy_list_count(gpu, &mut encoder, composited);
+            gpu.queue.submit(Some(encoder.finish()));
+            let Some(capacity) = capacity else { return Ok(()) };
+            let appended = self.read_count(gpu)?;
+            if !self.overflowed(gpu, appended, capacity) {
+                return Ok(());
+            }
+        }
+    }
+
+    /// **B15（乙）**：同 [`Self::render_to`]，浏览器上的异步版（计数的 map 要 `await`）。
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) async fn render_to_async(&mut self, gpu: &mut Gpu, frames: &[Frame], target: &wgpu::TextureView) -> Result<(), String> {
+        loop {
+            let (mut encoder, _, composited) = self.encode_to(gpu, frames, target)?;
+            let capacity = self.copy_list_count(gpu, &mut encoder, composited);
+            gpu.queue.submit(Some(encoder.finish()));
+            let Some(capacity) = capacity else { return Ok(()) };
+            let appended = self.read_count_async().await?;
+            if !self.overflowed(gpu, appended, capacity) {
                 return Ok(());
             }
         }
@@ -1916,33 +2024,126 @@ impl Player {
     // Modified by Zela: 同上（copy_pixels 供离屏读回使用）。
     pub(crate) fn copy_pixels(&self, encoder: &mut wgpu::CommandEncoder) {
         let t = self.targets.as_ref().expect("targets");
+        let readback = t.readback.as_ref().expect("readback buffer");
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo { texture: t.frame.color.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &t.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(t.padded), rows_per_image: Some(self.height) } },
+            wgpu::TexelCopyBufferInfo { buffer: readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(t.padded), rows_per_image: Some(self.height) } },
             wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
         );
+    }
+
+    /// Copy the lists' appended count after the pixels (when the frame composited see-through
+    /// layers), and return their capacity: the one thing that must be read back even when pixels
+    /// are not (B15 乙). The readback buffer is made here if the frame has no pixel copy (a
+    /// GPU-only display frame reads exactly these 4 bytes).
+    fn copy_list_count(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, composited: bool) -> Option<u64> {
+        let lists = self.lists.as_ref().filter(|_| composited)?;
+        let (capacity, appended) = (lists.capacity, &lists.appended);
+        let (height, padded) = (self.height, self.targets.as_ref().expect("targets").padded);
+        let t = self.targets.as_mut().expect("targets");
+        let readback = t.readback.get_or_insert_with(|| gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: (padded as u64) * (height as u64) + COUNT_BYTES,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        }));
+        encoder.copy_buffer_to_buffer(appended, 0, readback, padded as u64 * height as u64, Some(COUNT_BYTES));
+        Some(capacity)
+    }
+
+    /// A frame's bytes must hold exactly its pixels (before anything is read back).
+    fn expect_frame_len(&self, into: &[u8]) -> Result<(), String> {
+        let (row, height) = ((self.width * 4) as usize, self.height as usize);
+        if into.len() != row * height {
+            return Err(format!("a frame of {}x{} takes {} bytes, not {}", self.width, self.height, row * height, into.len()));
+        }
+        Ok(())
+    }
+
+    /// The mapped readback buffer's RGBA rows into `into`, returning the see-through count copied
+    /// after them (if one was).
+    fn copy_mapped(&self, mapped: &[u8], into: &mut [u8]) -> u64 {
+        let (row, height) = ((self.width * 4) as usize, self.height as usize);
+        let (padded, rows) = {
+            let t = self.targets.as_ref().expect("targets");
+            (t.padded as usize, t.padded as usize * height)
+        };
+        for (to, from) in into.chunks_exact_mut(row).zip(mapped[..rows].chunks_exact(padded)) {
+            to.copy_from_slice(&from[..row]);
+        }
+        count(&mapped[rows..])
     }
 
     /// The readback buffer, read once the GPU is done: the RGBA8 rows `copy_pixels` copied, top
     /// to bottom, into `into` (a frame's bytes); the see-through count copied after them (if one
     /// was).
     // Modified by Zela: 同上（read_pixels 供离屏读回使用）。
+    // Modified by Zela（B15 甲）：native 的**唯一**阻塞点集中在这里。
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn read_pixels(&self, gpu: &Gpu, into: &mut [u8]) -> Result<u64, String> {
-        let (row, height) = ((self.width * 4) as usize, self.height as usize);
-        if into.len() != row * height {
-            return Err(format!("a frame of {}x{} takes {} bytes, not {}", self.width, self.height, row * height, into.len()));
-        }
+        self.expect_frame_len(into)?;
         let t = self.targets.as_ref().expect("targets");
-        t.readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let readback = t.readback.as_ref().expect("readback buffer");
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         gpu.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
-        let mapped = t.readback.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
-        let (padded, rows) = (t.padded as usize, t.padded as usize * height);
-        for (to, from) in into.chunks_exact_mut(row).zip(mapped[..rows].chunks_exact(padded)) {
-            to.copy_from_slice(&from[..row]);
-        }
-        let appended = count(&mapped[rows..]);
+        let mapped = readback.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
+        let appended = self.copy_mapped(&mapped, into);
         drop(mapped);
-        t.readback.unmap();
+        readback.unmap();
+        Ok(appended)
+    }
+
+    /// **B15（甲）**：浏览器上的读回——`map_async` 的回调用 oneshot 接住，`await` 到它完成。
+    #[cfg(target_arch = "wasm32")]
+    async fn read_pixels_async(&self, into: &mut [u8]) -> Result<u64, String> {
+        self.expect_frame_len(into)?;
+        let t = self.targets.as_ref().expect("targets");
+        let readback = t.readback.as_ref().expect("readback buffer");
+        let (send, receive) = futures_channel::oneshot::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |mapped| {
+            let _ = send.send(mapped);
+        });
+        // 浏览器自动 poll（`Device::poll` 在 WebGPU 上是 no-op）⇒ 这里只等回调。
+        receive.await.map_err(|_| "readback 的 map 回调被丢弃".to_string())?.map_err(|e| e.to_string())?;
+        let mapped = readback.slice(..).get_mapped_range().map_err(|e| e.to_string())?;
+        let appended = self.copy_mapped(&mapped, into);
+        drop(mapped);
+        readback.unmap();
+        Ok(appended)
+    }
+
+    /// Only the lists' appended count (4 bytes), for the GPU-only path: whether they overflowed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_count(&self, gpu: &Gpu) -> Result<u64, String> {
+        let t = self.targets.as_ref().expect("targets");
+        let at = t.padded as u64 * self.height as u64;
+        let readback = t.readback.as_ref().expect("readback buffer");
+        let slice = readback.slice(at..at + COUNT_BYTES);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        gpu.device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
+        let mapped = slice.get_mapped_range().map_err(|e| e.to_string())?;
+        let appended = count(&mapped);
+        drop(mapped);
+        readback.unmap();
+        Ok(appended)
+    }
+
+    /// 同 [`Self::read_count`]，浏览器上的异步版。
+    #[cfg(target_arch = "wasm32")]
+    async fn read_count_async(&self) -> Result<u64, String> {
+        let t = self.targets.as_ref().expect("targets");
+        let at = t.padded as u64 * self.height as u64;
+        let readback = t.readback.as_ref().expect("readback buffer");
+        let slice = readback.slice(at..at + COUNT_BYTES);
+        let (send, receive) = futures_channel::oneshot::channel();
+        slice.map_async(wgpu::MapMode::Read, move |mapped| {
+            let _ = send.send(mapped);
+        });
+        receive.await.map_err(|_| "lists 计数的 map 回调被丢弃".to_string())?.map_err(|e| e.to_string())?;
+        let mapped = slice.get_mapped_range().map_err(|e| e.to_string())?;
+        let appended = count(&mapped);
+        drop(mapped);
+        readback.unmap();
         Ok(appended)
     }
 
@@ -2019,20 +2220,24 @@ impl Player {
         Ok(())
     }
 
-    pub(crate) fn targets(&mut self, gpu: &Gpu) -> &Targets {
+    pub(crate) fn targets(&mut self, gpu: &Gpu, target: Option<&wgpu::TextureView>) -> &Targets {
         let (width, height) = (self.width, self.height);
         self.targets.get_or_insert_with(|| {
-            // Modified by Zela: 读回缓冲始终创建（本 crate 的正式路径就是离屏读回）。
             let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             Targets {
-                frame: Canvas::new(gpu, width, height),
-                // read back natively (`render`); in the browser a frame goes to its canvas
-                readback: gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                // B15（乙）：外部给了目标 ⇒ 合成直接写它（零 CPU 往返），不建内部画布。
+                frame: match target {
+                    Some(view) => Canvas::covered(view, width, height),
+                    None => Canvas::new(gpu, width, height),
+                },
+                // read back natively (`render`); in the browser a frame goes to its canvas.
+                // B15（乙）：显示路径不读像素 ⇒ 不建（3D 列表的计数会在需要时补建）。
+                readback: target.is_none().then(|| gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("readback"),
                     size: (padded * height) as u64 + COUNT_BYTES,
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
-                }),
+                })),
                 padded,
             }
         })
@@ -2188,7 +2393,12 @@ impl Player {
     /// composited in more than one group (its objects overflowed the atlases), and whether a 3D
     /// view composited see-through layers through the lists (whose count tells if they held).
     pub(crate) fn encode(&mut self, gpu: &mut Gpu, frames: &[Frame]) -> Result<(wgpu::CommandEncoder, bool, bool), String> {
-        self.with_working_set(&gpu.device.limits(), frames, |player| player.encode_frame(gpu, frames))
+        self.with_working_set(&gpu.device.limits(), frames, |player| player.encode_frame(gpu, frames, None))
+    }
+
+    /// **B15（乙）**：同 [`Self::encode`]，但帧合成进调用方给的 `target`（不再建内部画布纹理）。
+    pub(crate) fn encode_to(&mut self, gpu: &mut Gpu, frames: &[Frame], target: &wgpu::TextureView) -> Result<(wgpu::CommandEncoder, bool, bool), String> {
+        self.with_working_set(&gpu.device.limits(), frames, |player| player.encode_frame(gpu, frames, Some(target)))
     }
 
     /// CPU residency includes nearby frames. Only the complete current frame must fit on the GPU.
@@ -2210,7 +2420,7 @@ impl Player {
         result
     }
 
-    fn encode_frame(&mut self, gpu: &mut Gpu, frames: &[Frame]) -> Result<(wgpu::CommandEncoder, bool, bool), String> {
+    fn encode_frame(&mut self, gpu: &mut Gpu, frames: &[Frame], target: Option<&wgpu::TextureView>) -> Result<(wgpu::CommandEncoder, bool, bool), String> {
         let samples = self.samples.clamp(1, gpu.max_samples);
         let mut instances: Vec<Instance> = Vec::new();
         let mut sprites: Vec<[u32; 2]> = Vec::new();
@@ -2341,7 +2551,7 @@ impl Player {
             }
         }
         self.prepare(gpu, instances.len(), frames.len(), sprites.len())?;
-        self.targets(gpu);
+        self.targets(gpu, target);
         for f in &frames[..frames.len() - 1] {
             self.canvas(gpu, f.key, f.width, f.height);
         }
@@ -3140,7 +3350,7 @@ mod buffer_contract {
             r.params[1] = 80.0;
             r.gradient_a[3] = 0.25;
             let frames = [f];
-            let (mut encoder, _, listed) = p.with_working_set(limits, &frames, |p| p.encode_frame(gpu, &frames)).unwrap();
+            let (mut encoder, _, listed) = p.with_working_set(limits, &frames, |p| p.encode_frame(gpu, &frames, None)).unwrap();
             assert!(!listed);
             let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64 * 64 * 4, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             encoder.copy_texture_to_buffer(
@@ -3149,9 +3359,7 @@ mod buffer_contract {
                 wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: 1 },
             );
             gpu.queue.submit(Some(encoder.finish()));
-            buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
-            gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            buffer.slice(..).get_mapped_range().unwrap().to_vec()
+            gpu.read_buffer(&buffer).unwrap()
         }
         with_gpu(|gpu| {
             let limits = wgpu::Limits { max_storage_buffer_binding_size: 2560, ..gpu.device.limits() };

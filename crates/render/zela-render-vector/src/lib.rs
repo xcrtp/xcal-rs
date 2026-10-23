@@ -36,15 +36,24 @@ mod mesh;
 mod render;
 
 pub mod api;
+pub use api::{FilledPath, Light, MeshRecord, PathRecord, StrokedPath, View3, ViewOptions};
+// B15：同步读回只在 native 存在；浏览器只有异步面（没有阻塞读回）。
+#[cfg(not(target_arch = "wasm32"))]
 pub use api::{
-    FilledPath, Light, MeshRecord, PathRecord, StrokedPath, View3, ViewOptions, render_2d,
-    render_2d_with, render_3d, render_3d_with,
+    render_2d, render_2d_to_texture, render_2d_with, render_3d, render_3d_to_texture,
+    render_3d_with,
+};
+#[cfg(target_arch = "wasm32")]
+pub use api::{
+    render_2d_async, render_2d_to_texture_async, render_3d_to_texture_async, render_3d_with_async,
 };
 // B11 Step 3：device 注入入口（native / wasm 同签名，内部绕开 `Gpu::new()`）。
 pub use render::init_gpu;
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
-pub use scene::{SceneItem, SceneMapError, fill_paths, render_scene_2d, scene_records};
+#[cfg(not(target_arch = "wasm32"))]
+pub use scene::render_scene_2d;
+pub use scene::{SceneItem, SceneMapError, fill_paths, scene_records};
 
 /// 内容 key：xxh3（64 位，0 保留）。等值内容只上传一次。
 pub fn digest<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> u64 {

@@ -154,11 +154,10 @@ impl BackendKind {
             // wgpu 三角化只依赖 device 本身；它的 features 需求是显式空集。
             BackendKind::Wgpu => true,
             BackendKind::Vector => {
-                // B11：wasm 上矢量后端**能编译**，但回读是同步的（`Player::pixels` 用
-                // `map_async` + `getMappedRange`，浏览器里 map 完成前就取 ⇒ OperationError）
-                // ⇒ 运行期不可用，路由必须显式拒绝（GAPS X2-03），不得假装可用。
-                !cfg!(target_arch = "wasm32")
-                    && facts.blends_float32
+                // B15：浏览器上也能出帧（异步回读 + GPU 内目标）⇒ 只按**能力**判定，
+                // 不再按目标平台拒绝（X2-03 关闭）。缺 required ⇒ 由
+                // `unavailable_reason_for` 给出具体理由。
+                facts.blends_float32
                     && facts
                         .features
                         .contains(wgpu::Features::DEPTH32FLOAT_STENCIL8)
@@ -180,11 +179,6 @@ impl BackendKind {
             BackendKind::Wgpu => None, // 恒可用，不会走到这里
             BackendKind::Vector => {
                 let mut why: Vec<&str> = Vec::new();
-                if cfg!(target_arch = "wasm32") {
-                    why.push(
-                        "浏览器侧矢量后端还没有异步回读（getMappedRange 在 map 完成前失败，GAPS X2-03）",
-                    );
-                }
                 if !facts.blends_float32 {
                     why.push("adapter 不能混合 R32Float（覆盖率在 float32 目标里累加）");
                 }

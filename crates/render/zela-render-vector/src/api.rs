@@ -483,14 +483,22 @@ fn view_3d(v: &View3) -> Vec<f32> {
     out
 }
 
-/// 用给定 view 渲染一帧（`view` 必须是 `VIEW_LENGTH` 个 float）。
-fn render_with_view(
+/// 一帧的 GPU 侧准备：记录已上传、view 与记录字节已就绪的 player。
+struct Prepared {
+    player: crate::render::Player,
+    view: Vec<u8>,
+    records: Vec<u8>,
+}
+
+/// 与 GPU 无关的准备（上传路径 + 记录打包）：同步 / 异步两条渲染路径共用这一份，
+/// 避免两套实现在几何映射上漂移（B15）。
+fn prepare_view(
     view: Vec<f32>,
     width: u32,
     height: u32,
     samples: u32,
     records: &[PathRecord],
-) -> Result<Vec<u8>, String> {
+) -> Result<Prepared, String> {
     if width == 0 || height == 0 {
         return Err(format!("canvas {width}x{height} is empty"));
     }
@@ -562,13 +570,132 @@ fn render_with_view(
         }
     }
     let record_bytes: Vec<u8> = bytemuck::cast_slice(&built).to_vec();
+    Ok(Prepared {
+        player,
+        view: view_bytes,
+        records: record_bytes,
+    })
+}
 
+/// 用给定 view 渲染一帧并读回（native）：同步 API 不变（`frame_loop` / `zela-verify` /
+/// `export` 都是同步调用方）。
+#[cfg(not(target_arch = "wasm32"))]
+fn render_with_view(
+    view: Vec<f32>,
+    width: u32,
+    height: u32,
+    samples: u32,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    let Prepared {
+        mut player,
+        view,
+        records,
+    } = prepare_view(view, width, height, samples, records)?;
     crate::render::with_gpu(|gpu| {
-        let frames = player.views(&view_bytes, &record_bytes, Vec::new())?;
+        let frames = player.views(&view, &records, Vec::new())?;
         let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
         player.pixels(gpu, &frames, &mut out)?;
         Ok(out)
     })?
+}
+
+/// **B15（甲）**：浏览器上的同一帧——回读用 `await`（不再同步三连）。
+#[cfg(target_arch = "wasm32")]
+async fn render_with_view_async(
+    view: Vec<f32>,
+    width: u32,
+    height: u32,
+    samples: u32,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    let Prepared {
+        mut player,
+        view,
+        records,
+    } = prepare_view(view, width, height, samples, records)?;
+    let mut slot = crate::render::GpuSlot::take()?;
+    let gpu = slot.get();
+    let frames = player.views(&view, &records, Vec::new())?;
+    let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+    player.pixels_async(gpu, &frames, &mut out).await?;
+    Ok(out)
+}
+
+/// **B15（乙）**：合成目标必须与帧同尺寸、`Rgba8Unorm`，并带渲染 / 存储 / 采样三种用法。
+///
+/// 为什么不接受 surface 格式：合成是 compute pass 写 **storage texture**，而 WebGPU 的
+/// surface 通常是不支持 `STORAGE_BINDING` 的 `Bgra8Unorm` ⇒ 必须"渲到 Rgba8Unorm，再
+/// GPU 内 blit 到 surface"。这正是"零 CPU 往返 ≠ 零拷贝"的口径。
+fn check_target(target: &wgpu::Texture, width: u32, height: u32) -> Result<(), String> {
+    let size = target.size();
+    if size.width != width || size.height != height || size.depth_or_array_layers != 1 {
+        return Err(format!(
+            "target is {}x{}x{}, not {width}x{height}x1",
+            size.width, size.height, size.depth_or_array_layers
+        ));
+    }
+    if target.format() != crate::render::COLOR {
+        return Err(format!(
+            "target format {:?} cannot take the vector composite (needs {:?} as a storage texture)",
+            target.format(),
+            crate::render::COLOR
+        ));
+    }
+    let need = wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::STORAGE_BINDING
+        | wgpu::TextureUsages::TEXTURE_BINDING;
+    let missing = need - target.usage();
+    if !missing.is_empty() {
+        return Err(format!("target is missing usages {missing:?}"));
+    }
+    Ok(())
+}
+
+/// **B15（乙）**：把一帧直接合成进 `target`（native 同步版），不经过 CPU。
+#[cfg(not(target_arch = "wasm32"))]
+fn render_to_texture(
+    view: Vec<f32>,
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    records: &[PathRecord],
+) -> Result<(), String> {
+    check_target(target, width, height)?;
+    let target_view = target.create_view(&Default::default());
+    let Prepared {
+        mut player,
+        view,
+        records,
+    } = prepare_view(view, width, height, samples, records)?;
+    crate::render::with_gpu(|gpu| {
+        let frames = player.views(&view, &records, Vec::new())?;
+        player.render_to(gpu, &frames, &target_view)
+    })?
+}
+
+/// **B15（乙）**：同 [`render_to_texture`]，浏览器上的异步版。
+#[cfg(target_arch = "wasm32")]
+async fn render_to_texture_async(
+    view: Vec<f32>,
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    records: &[PathRecord],
+) -> Result<(), String> {
+    check_target(target, width, height)?;
+    let target_view = target.create_view(&Default::default());
+    let Prepared {
+        mut player,
+        view,
+        records,
+    } = prepare_view(view, width, height, samples, records)?;
+    let mut slot = crate::render::GpuSlot::take()?;
+    let gpu = slot.get();
+    let frames = player.views(&view, &records, Vec::new())?;
+    player.render_to_async(gpu, &frames, &target_view).await
 }
 
 /// 上传一条路径并返回曲线数（填充与描边共用）。
@@ -593,12 +720,17 @@ fn upload_path(
 
 /// **3D 路径 / 网格渲染**（B6 Step 1.2 / B10 Step 2）：`View3`（含灯 / tone / bloom / AO）
 /// + 混合记录（路径与网格按声明顺序绘制）。
+///
+/// **B15**：同步读回的 API 只在 native 存在；浏览器用 [`render_3d_with_async`]
+/// （没有阻塞读回，同步签名会踩 `getMappedRange` 的 `OperationError`）。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render_3d(view: &View3, records: &[PathRecord]) -> Result<Vec<u8>, String> {
     render_3d_with(view.size.0, view.size.1, 1, view, records)
 }
 
 /// 同 [`render_3d`]，但显式给画布尺寸与**采样数**（`frame_loop` 的 3D 分支用 4，
 /// 与 2D 路径同口径；`render_3d` 固定 1 是 B6 遗留的调用约定）。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render_3d_with(
     width: u32,
     height: u32,
@@ -639,6 +771,9 @@ impl From<MeshRecord> for PathRecord {
 /// **离屏渲染一帧**：`records` 按顺序画到 `width×height` 的 RGBA8 缓冲并读回。
 ///
 /// 返回的字节是行优先 RGBA8（`width * height * 4`）。失败 ⇒ 显式错误（不静默）。
+///
+/// **B15**：同步版只在 native 存在（浏览器见 [`render_2d_async`]）。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render_2d(
     width: u32,
     height: u32,
@@ -659,6 +794,7 @@ pub fn render_2d(
 /// 同 [`render_2d`]，但可带着色栈选项（B6 Step 1.2）。
 ///
 /// `ViewOptions::default()` ⇒ 与 `render_2d` **逐位相同**（既有基线不受影响）。
+#[cfg(not(target_arch = "wasm32"))]
 pub fn render_2d_with(
     width: u32,
     height: u32,
@@ -677,6 +813,113 @@ pub fn render_2d_with(
         samples,
         records,
     )
+}
+
+/// **B15（甲）**：浏览器上的 2D 离屏渲染（异步回读；与 [`render_2d`] 逐位同口径）。
+#[cfg(target_arch = "wasm32")]
+pub async fn render_2d_async(
+    width: u32,
+    height: u32,
+    samples: u32,
+    background: [f32; 4],
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    render_with_view_async(
+        view_2d_with(width, height, background, ViewOptions::default()),
+        width,
+        height,
+        samples,
+        records,
+    )
+    .await
+}
+
+/// **B15（甲）**：浏览器上的 3D 离屏渲染（异步回读；与 [`render_3d_with`] 逐位同口径）。
+#[cfg(target_arch = "wasm32")]
+pub async fn render_3d_with_async(
+    width: u32,
+    height: u32,
+    samples: u32,
+    view: &View3,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    render_with_view_async(view_3d(view), width, height, samples, records).await
+}
+
+/// **B15（乙）**：2D 一帧直接合成进 `target`，像素**不经过 CPU**（native 同步版）。
+///
+/// `target` 必须是 `Rgba8Unorm`、与帧同尺寸，并带
+/// `RENDER_ATTACHMENT | STORAGE_BINDING | TEXTURE_BINDING`；不满足 ⇒ 显式报错。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_2d_to_texture(
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    background: [f32; 4],
+    records: &[PathRecord],
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("canvas {width}x{height} is empty"));
+    }
+    render_to_texture(
+        view_2d_with(width, height, background, ViewOptions::default()),
+        target,
+        width,
+        height,
+        samples,
+        records,
+    )
+}
+
+/// **B15（乙）**：3D 一帧直接合成进 `target`（native 同步版）。
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_3d_to_texture(
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    view: &View3,
+    records: &[PathRecord],
+) -> Result<(), String> {
+    render_to_texture(view_3d(view), target, width, height, samples, records)
+}
+
+/// **B15（乙）**：2D 一帧直接合成进 `target`（浏览器异步版）。
+#[cfg(target_arch = "wasm32")]
+pub async fn render_2d_to_texture_async(
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    background: [f32; 4],
+    records: &[PathRecord],
+) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("canvas {width}x{height} is empty"));
+    }
+    render_to_texture_async(
+        view_2d_with(width, height, background, ViewOptions::default()),
+        target,
+        width,
+        height,
+        samples,
+        records,
+    )
+    .await
+}
+
+/// **B15（乙）**：3D 一帧直接合成进 `target`（浏览器异步版）。
+#[cfg(target_arch = "wasm32")]
+pub async fn render_3d_to_texture_async(
+    target: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    samples: u32,
+    view: &View3,
+    records: &[PathRecord],
+) -> Result<(), String> {
+    render_to_texture_async(view_3d(view), target, width, height, samples, records).await
 }
 
 #[cfg(test)]
