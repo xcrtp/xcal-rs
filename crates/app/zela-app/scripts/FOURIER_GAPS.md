@@ -16,7 +16,7 @@
 | 缺口 | 解法 | 验证 |
 |---|---|---|
 | **G1** 多段绑定段前覆盖 | `BindingApplySystem` 按 `start` 升序应用，**段前不写**（`ClockForest::is_before_start`） | `later_segment_is_not_written_before_start`、`fourier_camera_push_pull_uses_segment_semantics` |
-| **G3** 没有旋转通道 | `TransformValue { channel: Auto/Position/Rotation/Scale }`；`scene.clip_transform` | `transform_rotation_channel_rotates_about_z`、`transform_channels_are_isolated` |
+| **G3** 没有旋转通道 | `scene.clip_transform(channel, curve)`（B7 起 `Target.TransformValue` 与 `TransformChannel.Auto` 已删除 —— 显式通道是写 `Transform` 的唯一入口） | `transform_rotation_channel_rotates_about_z`、`transform_channels_are_isolated` |
 | **G2** 脚本没有 Orbit / Keyframes | 脚本 `Curve.Orbit` / `Curve.Keyframes`；新增原生 `Curve::Orbit2D` | `orbit2d_is_a_circle_in_xy_plane`、`script_orbit_maps_to_2d_orbit`、`script_keyframes_map_to_scalar_keyframes` |
 | **G4** 静态折线 / Reveal 不消费 Transform | 脚本 `Polyline`（可见初态）；`RevealRecordSystem` 折算世界仿射 | `reveal_record_consumes_transform`、`fourier` 曲线/脉冲 |
 | **G13** Reveal 初态不可见 | `Polyline` 直接 `start=0,end=1` | `fourier` 静态曲线 |

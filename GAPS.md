@@ -420,8 +420,10 @@
 | W1-07 | `scene.despawn` **没有时间参数**：在 commit 期执行 ⇒ 只能表达"创建后取消"，无法表达"动画中途移除" | 脚本 API / 生命周期 | **记账（B7 Step 4）** | `scene_service::scene_despawn` → `SceneEncoder::despawn`，写入 SceneScript 的 `despawns`，commit 时一次性应用。作品用它做"条件性不生成"（对照实测见 W1-05）。触发：需要中途销毁时，得给 `despawn` 加时间轴参数（属动画语义扩展，不是补一个字段） |
 | W1-08 | A6「`zela.scene` 指纹只变一次」被 Step 4 打破（`@7→@8` 后又 `@8→@9`） | 验收口径 | **记账（用户明确豁免）** | 根因：计划 §6.1 把 `Group` / `Target.Phase` / `Target.MorphT` 当成"可达但零使用"，实际按代码是"不可达"（W1-05）；Step 1 已提交，无法合并。用户在 Step 4 明确选择"开 @8→@9，六项全补" ⇒ 本条只留痕，不作为违规 |
 | W1-09 | 「新增能力必须在作品中体现」只是一句口号，没有任何检查 —— 与 GAPS 行号腐烂、`optional_missing` 无人消费同类 | 测试 / 门禁 | **已关闭（B7 Step 5）** | 新 step `cargo verify --step coverage`：能力清单**从源码抽**（`SceneApi` / `ContentApi` 方法 + `Target` / `Curve` / `TransformChannel` 变体，不维护第二张手写表），与 manifest 作品脚本（**去注释**，否则一句注释就能把能力标成已用）比对。未覆盖 ⇒ 必须在 `demo/capability_exemptions.txt` 写 `kind:name -> W1-xx`，且该 `W1-xx` 必须是 GAPS 里真实存在的表格行；豁免过期（能力已被覆盖）也 fail。首次运行：**49/49 覆盖 · 豁免 0**。单测 6 条（抽取 / 两种写法 / 未覆盖点名 / 假 GAPS 行 / 过期豁免 / 格式） |
+| W1-10 | `Target.TransformValue` + `TransformChannel.Auto` 是**零使用**的静默兜底：按 `AnimValue` 类型猜写哪一列、猜不中静默跳过，且**没有 Rotation 分支**（想转的动画永远不动、还不报错） | 场景 API / 动画 | **已关闭（B7 Step 1，`zela.scene@7→@8`）** | 删除后唯一入口是显式的 `scene.clip_transform(channel, curve)`（Position / Rotation / Scale 三条通道互不覆盖）。六条既有基线**逐位不变**（`hashes` 全绿）⇒ 纯能力面收缩，不动像素。指纹常量**未变**（`FnSig` 是名字级，不覆盖枚举变体）⇒ 版本常量手动升 `@8` 并在 `api.rs` 留注释 |
+| W1-11 | manifest 里 7 个作品只有"像素好看"，没有任何回归门禁（fusion / pbr_materials / pbr_lights / pbr_scene / pendulum / orbit / spring） | 测试 / 门禁 | **已关闭（B7 Step 2）** | 全部进 `baselines.txt` 的 `[native]` 段（`HASHES_WORKS` 13 条，批量与独立两条路径**共用**一张表）；`--record` 的硬门禁要求每件 `--script == --bundle`。顺带修掉 `--record` 的**手写录制清单**会漏录新增作品的缺陷（改为从 `HASHES_WORKS` 派生）。`hashes` 19.53s（A5 ≤30s） |
 
-**M 段小计（B7）**：已关闭 4（W1-02、W1-03、W1-05、W1-09）· 记账 5（W1-01、W1-04、W1-06、W1-07、W1-08）。
+**M 段小计（B7）**：已关闭 6（W1-02、W1-03、W1-05、W1-09、W1-10、W1-11）· 记账 5（W1-01、W1-04、W1-06、W1-07、W1-08）。
 
 ---
 
