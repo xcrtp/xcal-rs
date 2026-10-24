@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -40,6 +41,104 @@ mod occlusion;
 mod shadow;
 #[path = "vector.rs"]
 mod vector;
+
+// ─── B17 Step 0：资源创建计数 ──────────────────────────────────────────────
+//
+// 为什么要有：B15 之前每帧新建一整套 `Player`，但全仓没有一处能证明"每帧建了多少"。
+// 判据（B17 §5）：**稳态下每帧新纹理 / 缓冲应为 0**；资源随帧数曲线持平 = churn 已修。
+//
+// 计数口只覆盖**本 crate**（矢量后端）。wgpu 后端有自己的 `diagnostics::textures_created`；
+// 两者语义不同（后端各自的纹理集合），不得合并成一个"全局"数。
+
+static RES_TEXTURES: AtomicUsize = AtomicUsize::new(0);
+static RES_TEXTURE_BYTES: AtomicUsize = AtomicUsize::new(0);
+static RES_BUFFERS: AtomicUsize = AtomicUsize::new(0);
+static RES_BUFFER_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// 矢量后端自进程启动以来创建的 GPU 资源（累计）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResourceTotals {
+    pub textures: usize,
+    pub texture_bytes: usize,
+    pub buffers: usize,
+    pub buffer_bytes: usize,
+}
+
+impl ResourceTotals {
+    /// 两项相加（逐帧累加成一遍的总量）。
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            textures: self.textures + other.textures,
+            texture_bytes: self.texture_bytes + other.texture_bytes,
+            buffers: self.buffers + other.buffers,
+            buffer_bytes: self.buffer_bytes + other.buffer_bytes,
+        }
+    }
+
+    /// 两个累计值之差（取走后不会为负；saturating 只是防御）。
+    pub fn since(self, earlier: Self) -> Self {
+        Self {
+            textures: self.textures.saturating_sub(earlier.textures),
+            texture_bytes: self.texture_bytes.saturating_sub(earlier.texture_bytes),
+            buffers: self.buffers.saturating_sub(earlier.buffers),
+            buffer_bytes: self.buffer_bytes.saturating_sub(earlier.buffer_bytes),
+        }
+    }
+
+    /// 一行 JSON（字段名与 `ZELA_FRAME_REPORT` 其余部分一致：全整数）。
+    pub fn json(&self) -> String {
+        format!(
+            "{{\"textures\":{},\"texture_bytes\":{},\"buffers\":{},\"buffer_bytes\":{}}}",
+            self.textures, self.texture_bytes, self.buffers, self.buffer_bytes
+        )
+    }
+}
+
+/// 矢量后端累计创建的资源（不取走）。
+pub fn resource_totals() -> ResourceTotals {
+    ResourceTotals {
+        textures: RES_TEXTURES.load(Ordering::Relaxed),
+        texture_bytes: RES_TEXTURE_BYTES.load(Ordering::Relaxed),
+        buffers: RES_BUFFERS.load(Ordering::Relaxed),
+        buffer_bytes: RES_BUFFER_BYTES.load(Ordering::Relaxed),
+    }
+}
+
+/// 取走累计计数（取走即清零 ⇒ 每次采样拿到"这段区间"的值）。
+pub fn take_resource_totals() -> ResourceTotals {
+    ResourceTotals {
+        textures: RES_TEXTURES.swap(0, Ordering::Relaxed),
+        texture_bytes: RES_TEXTURE_BYTES.swap(0, Ordering::Relaxed),
+        buffers: RES_BUFFERS.swap(0, Ordering::Relaxed),
+        buffer_bytes: RES_BUFFER_BYTES.swap(0, Ordering::Relaxed),
+    }
+}
+
+/// 一张纹理的字节数（块大小 × 宽 × 高 × 层 × mip 级 × 采样数；mip 按整层估算，偏大但可比）。
+fn texture_bytes(desc: &wgpu::TextureDescriptor<'_>) -> usize {
+    let block = desc.format.block_copy_size(None).unwrap_or(0) as usize;
+    let size = desc.size;
+    block
+        * size.width as usize
+        * size.height as usize
+        * size.depth_or_array_layers as usize
+        * desc.mip_level_count as usize
+        * desc.sample_count as usize
+}
+
+/// 建纹理并计数（本 crate 的**唯一**纹理创建口）。
+pub(crate) fn counted_texture(device: &wgpu::Device, desc: &wgpu::TextureDescriptor<'_>) -> wgpu::Texture {
+    RES_TEXTURES.fetch_add(1, Ordering::Relaxed);
+    RES_TEXTURE_BYTES.fetch_add(texture_bytes(desc), Ordering::Relaxed);
+    device.create_texture(desc)
+}
+
+/// 建缓冲并计数（本 crate 的**唯一**缓冲创建口；wgpu 的 `Buffer` 不暴露 size，故在此自存）。
+pub(crate) fn counted_buffer(device: &wgpu::Device, desc: &wgpu::BufferDescriptor<'_>) -> wgpu::Buffer {
+    RES_BUFFERS.fetch_add(1, Ordering::Relaxed);
+    RES_BUFFER_BYTES.fetch_add(desc.size as usize, Ordering::Relaxed);
+    device.create_buffer(desc)
+}
 
 pub(crate) const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// What a 3D view with lit meshes keeps their light in, beside its display paint (`blend.wgsl`'s `Base`).
@@ -485,6 +584,26 @@ impl Store {
                 self.dead += b.count as usize * 16;
             }
         }
+    }
+
+    /// Forget everything a frame uploaded, keeping the arrays' capacity (B17：逐帧复用 Player 的复位口）。
+    ///
+    /// 与 [`Self::evict`] 不同：它**不保留**逻辑键，也不依赖多帧在飞；`generation` 加一让 GPU
+    /// 把数组当成全新的一份（`Buffers.sent` 归零 ⇒ 内容逐字节重传，不继承上一帧的偏移）。
+    fn clear(&mut self) {
+        self.points.clear();
+        self.ctrl.clear();
+        self.ranges.clear();
+        self.vertices.clear();
+        self.extras.clear();
+        self.links.clear();
+        self.indices.clear();
+        self.rows.clear();
+        self.shapes.clear();
+        self.brushes.clear();
+        self.dead = 0;
+        self.dirty.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Pack the living once most of the arrays is dead, or a binding needs the space now.
@@ -1083,6 +1202,8 @@ pub(crate) struct Gpu {
     bloom: Option<bloom::Bloom>,             // a 3D view's bloom's passes, made when a view first has it
     blend: [Option<wgpu::ShaderModule>; 2], // single/multisample texture forms (the shadow passes share either)
     shadow_passes: HashMap<usize, wgpu::RenderPipeline>, // by the light's slot in its view, made when first cast
+    /// B17：按 (width, height, samples) 常驻的 player；逐帧只重传路径，不重建整套 GPU 资源。
+    players: HashMap<(u32, u32, u32), Player>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1331,15 +1452,15 @@ impl Gpu {
         // the split sum's DFG terms (with the multiple-scattering term: scripts/engine/dfg_table.py), NoV across,
         // perceptual roughness down: 64 KB, made once
         let size = wgpu::Extent3d { width: 128, height: 128, depth_or_array_layers: 1 };
-        let table = device.create_texture(&wgpu::TextureDescriptor { label: Some("dfg"), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rg16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        let table = counted_texture(&device, &wgpu::TextureDescriptor { label: Some("dfg"), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rg16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
         queue.write_texture(table.as_image_copy(), include_bytes!("dfg.bin"), wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(128 * 4), rows_per_image: Some(128) }, size);
         let dfg = table.create_view(&Default::default());
         let linear = device.create_sampler(&wgpu::SamplerDescriptor { label: Some("linear"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Linear, ..Default::default() });
-        let no_environment = device
-            .create_texture(&wgpu::TextureDescriptor { label: Some("no environment"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
+        let no_environment = counted_texture(&device,
+            &wgpu::TextureDescriptor { label: Some("no environment"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba16Float, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
             .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::Cube), ..Default::default() });
-        let no_occlusion = device
-            .create_texture(&wgpu::TextureDescriptor { label: Some("no occlusion"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R32Float, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
+        let no_occlusion = counted_texture(&device,
+            &wgpu::TextureDescriptor { label: Some("no occlusion"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::R32Float, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
             .create_view(&Default::default());
         Ok(Self {
             // 注入路径不建 `Instance`（wasm 上不合法）；player 构建由 `new()` 覆盖成真值。
@@ -1347,7 +1468,32 @@ impl Gpu {
             instance: wgpu::Instance::default(),
             #[cfg(feature = "player")]
             adapter: adapter.clone(),
-            device, queue, raster, image_layout, sampler, pipelines: HashMap::new(), max_samples, vector, shadow_compare, dfg, linear, no_environment, prefilter: None, occlusion: None, no_occlusion, bloom: None, blend: [None, None], shadow_passes: HashMap::new() })
+            device, queue, raster, image_layout, sampler, pipelines: HashMap::new(), max_samples, vector, shadow_compare, dfg, linear, no_environment, prefilter: None, occlusion: None, no_occlusion, bloom: None, blend: [None, None], shadow_passes: HashMap::new(), players: HashMap::new() })
+    }
+
+    /// **B17**：取一个常驻 player（按 `(width, height, samples)` 缓存）。
+    ///
+    /// 每帧只重传路径与记录，不重建画布 / 附件 / 缓冲 / 列表；`Player::reset` 清掉上一帧的
+    /// 逻辑内容、保留容量。取出期间由调用方独占，用完必须 [`Self::put_player`] 归还。
+    pub(crate) fn take_player(&mut self, width: u32, height: u32, samples: u32) -> Player {
+        match self.players.remove(&(width, height, samples)) {
+            Some(mut player) => {
+                player.reset();
+                player
+            }
+            None => Player::new(width, height, samples),
+        }
+    }
+
+    /// **B17**：归还 player。缓存上限 4 份（尺寸 / 采样数变化的诊断场景），超出时丢弃任意一份。
+    pub(crate) fn put_player(&mut self, width: u32, height: u32, samples: u32, player: Player) {
+        let key = (width, height, samples);
+        if self.players.len() >= 4 && !self.players.contains_key(&key) {
+            if let Some(victim) = self.players.keys().next().copied() {
+                self.players.remove(&victim);
+            }
+        }
+        self.players.insert(key, player);
     }
 
     /// Read `buffer` back in full, blocking (native).
@@ -1609,7 +1755,7 @@ impl Canvas {
         // written by the raster passes, and by the composite (a compute pass's storage texture)
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC;
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-        let color = gpu.device.create_texture(&wgpu::TextureDescriptor { label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: COLOR, usage, view_formats: &[] });
+        let color = counted_texture(&gpu.device, &wgpu::TextureDescriptor { label: None, size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: COLOR, usage, view_formats: &[] });
         Self { width, height, color: color.create_view(&Default::default()), raster: None, occluded: None, bloomed: None }
     }
 
@@ -1625,7 +1771,7 @@ impl Canvas {
     /// Give it the raster pipeline's attachments (once; with `light`, the lit meshes' light's samples too, once).
     fn attach(&mut self, gpu: &Gpu, samples: u32, light: bool) {
         let size = wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 };
-        let texture = |format, usage| gpu.device.create_texture(&wgpu::TextureDescriptor { label: None, size, mip_level_count: 1, sample_count: samples, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
+        let texture = |format, usage| counted_texture(&gpu.device, &wgpu::TextureDescriptor { label: None, size, mip_level_count: 1, sample_count: samples, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
         // read by shaders where a 3D view's see-through lists are (the appends test its depth, the composite lays its
         // samples)
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -1652,7 +1798,7 @@ impl Canvas {
             return;
         }
         let size = wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 };
-        let texture = |label, size, format, usage| gpu.device.create_texture(&wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
+        let texture = |label, size, format, usage| counted_texture(&gpu.device, &wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
         let bounds = texture("slab bounds", size, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
         let slabs = texture("slabs", wgpu::Extent3d { depth_or_array_layers: vector::SLABS as u32, ..size }, COLOR, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING);
         let layers = std::array::from_fn(|k| slabs.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2), base_array_layer: k as u32, array_layer_count: Some(1), ..Default::default() }));
@@ -1719,6 +1865,8 @@ pub(crate) struct Targets {
     // （只有 3D see-through 列表的 4 字节计数会用到）。
     pub(crate) readback: Option<wgpu::Buffer>, // the frame's pixels, then the lists' count (see `Lists`)
     pub(crate) padded: u32,
+    /// B17：这一份目标是否由调用方给（乙）——复用 Player 时模式变了就必须重建。
+    external: bool,
 }
 
 /// The see-through fragments of a frame's 3D views (see `blend.wgsl`): a list head per pixel of
@@ -1765,7 +1913,7 @@ struct ShadowMaps {
 impl ShadowMaps {
     fn new(gpu: &Gpu, size: u32, layers: u32, environment: (Option<u32>, &wgpu::TextureView)) -> Self {
         let device = &gpu.device;
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let texture = counted_texture(device, &wgpu::TextureDescriptor {
             label: Some("shadow maps"),
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: layers },
             mip_level_count: 1,
@@ -2041,7 +2189,7 @@ impl Player {
         let (capacity, appended) = (lists.capacity, &lists.appended);
         let (height, padded) = (self.height, self.targets.as_ref().expect("targets").padded);
         let t = self.targets.as_mut().expect("targets");
-        let readback = t.readback.get_or_insert_with(|| gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        let readback = t.readback.get_or_insert_with(|| counted_buffer(&gpu.device, &wgpu::BufferDescriptor {
             label: Some("readback"),
             size: (padded as u64) * (height as u64) + COUNT_BYTES,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -2167,10 +2315,10 @@ impl Player {
         let arrays = s.arrays();
         // (the passes read them as storage buffers; the indices are an index buffer too)
         let storage = wgpu::BufferUsages::STORAGE;
-        let buffer = |size: u64| device.create_buffer(&wgpu::BufferDescriptor { label: Some("store"), size, usage: storage | wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let instances = |capacity: usize| device.create_buffer(&wgpu::BufferDescriptor { label: Some("instances"), size: (capacity * size_of::<Instance>()) as u64, usage: storage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let view_buffer = |slots: usize| device.create_buffer(&wgpu::BufferDescriptor { label: Some("views"), size: (slots * VIEW_STRIDE) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let sprite_buffer = |room: usize| device.create_buffer(&wgpu::BufferDescriptor { label: Some("sprites"), size: (room * size_of::<[u32; 2]>()) as u64, usage: storage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let buffer = |size: u64| counted_buffer(device, &wgpu::BufferDescriptor { label: Some("store"), size, usage: storage | wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let instances = |capacity: usize| counted_buffer(device, &wgpu::BufferDescriptor { label: Some("instances"), size: (capacity * size_of::<Instance>()) as u64, usage: storage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let view_buffer = |slots: usize| counted_buffer(device, &wgpu::BufferDescriptor { label: Some("views"), size: (slots * VIEW_STRIDE) as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let sprite_buffer = |room: usize| counted_buffer(device, &wgpu::BufferDescriptor { label: Some("sprites"), size: (room * size_of::<[u32; 2]>()) as u64, usage: storage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut rebind = false;
         let buffers = self.buffers.get_or_insert_with(|| {
             let (views, instances, sprites, statics) = (view_buffer(slots), instances(capacity), sprite_buffer(room), [(); 7].map(|_| buffer(1024)));
@@ -2221,6 +2369,11 @@ impl Player {
     }
 
     pub(crate) fn targets(&mut self, gpu: &Gpu, target: Option<&wgpu::TextureView>) -> &Targets {
+        // B17：Player 复用期间，"读回"与"外部目标"两种模式互斥；模式变了就重建这一份目标
+        // （同一模式内的逐帧复用保留纹理，正是 churn 的修复点）。
+        if self.targets.as_ref().is_some_and(|t| t.external != target.is_some()) {
+            self.targets = None;
+        }
         let (width, height) = (self.width, self.height);
         self.targets.get_or_insert_with(|| {
             let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -2232,13 +2385,14 @@ impl Player {
                 },
                 // read back natively (`render`); in the browser a frame goes to its canvas.
                 // B15（乙）：显示路径不读像素 ⇒ 不建（3D 列表的计数会在需要时补建）。
-                readback: target.is_none().then(|| gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                readback: target.is_none().then(|| counted_buffer(&gpu.device, &wgpu::BufferDescriptor {
                     label: Some("readback"),
                     size: (padded * height) as u64 + COUNT_BYTES,
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 })),
                 padded,
+                external: target.is_some(),
             }
         })
     }
@@ -2873,7 +3027,7 @@ impl Player {
         if self.lists.as_ref().is_some_and(|l| l.pixels >= pixels && l.capacity >= self.list_capacity) {
             return;
         }
-        let buffer = |label, size: u64, usage| gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::STORAGE | usage, mapped_at_creation: false });
+        let buffer = |label, size: u64, usage| counted_buffer(&gpu.device, &wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::STORAGE | usage, mapped_at_creation: false });
         let heads = buffer("heads", pixels * 4, wgpu::BufferUsages::COPY_DST);
         let nodes = buffer("nodes", self.list_capacity * NODE_BYTES, wgpu::BufferUsages::empty());
         let appended = buffer("appended", 16, wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC);
@@ -3070,6 +3224,18 @@ impl Player {
             lists: None,
             list_capacity: 0,
         }
+    }
+
+    /// **B17**：逐帧复用前的复位（清空逻辑内容、保留 GPU 纹理与数组容量）。
+    ///
+    /// 保留的是 `canvases` / `image_groups` / `environments` / `lists` / `targets` / `buffers`
+    /// ——这些正是每帧重建整套资源的开销来源；清掉的是上一帧的几何、笔刷与待上传图像。
+    /// `store.clear` 会推进 `generation`，下一帧把数组当成全新一份逐字节重传（位置从 0 开始，
+    /// 不继承上一帧偏移）。键从 1 重新分配，因此不会残留上一帧的图形。
+    pub(crate) fn reset(&mut self) {
+        self.store.clear();
+        self.images.clear();
+        self.opaque_images.clear();
     }
 
     /// A path: its control points (float64 x, y, z; four per curve), its subpaths (u32 first
@@ -3352,7 +3518,7 @@ mod buffer_contract {
             let frames = [f];
             let (mut encoder, _, listed) = p.with_working_set(limits, &frames, |p| p.encode_frame(gpu, &frames, None)).unwrap();
             assert!(!listed);
-            let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64 * 64 * 4, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+            let buffer = counted_buffer(&gpu.device, &wgpu::BufferDescriptor { label: None, size: 64 * 64 * 4, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: p.targets.as_ref().unwrap().frame.color.texture(), mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(64) } },

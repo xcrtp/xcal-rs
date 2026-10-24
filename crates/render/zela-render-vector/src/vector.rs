@@ -594,7 +594,7 @@ fn fit<T>(groups: &mut Vec<Group>, fresh: impl Fn() -> Group, mut place: impl Fn
 
 /// A new texture's view (which keeps it).
 fn image(device: &wgpu::Device, label: &str, [width, height]: [u32; 2], format: wgpu::TextureFormat, usage: wgpu::TextureUsages) -> wgpu::TextureView {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    let texture = super::counted_texture(device, &wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         mip_level_count: 1,
@@ -608,7 +608,7 @@ fn image(device: &wgpu::Device, label: &str, [width, height]: [u32; 2], format: 
 }
 
 fn buffer(device: &wgpu::Device, label: &str, size: u64, usage: wgpu::BufferUsages) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false })
+    super::counted_buffer(device, &wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false })
 }
 
 /// An array the passes read: a storage buffer, and the bytes it has room for.
@@ -736,7 +736,7 @@ impl Vector {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: Some(entry), layout: Some(&pipeline_layout(&[Some(l)])), module: &depth_shader, entry_point: Some(entry), compilation_options: Default::default(), cache: None })
         });
         let no_samples = [1, 4].map(|samples| [(super::COLOR, None), (super::DEPTH, Some(wgpu::TextureAspect::DepthOnly))].map(|(format, aspect)| {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
+            let texture = super::counted_texture(device, &wgpu::TextureDescriptor {
                 label: Some("no samples"),
                 size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -749,7 +749,7 @@ impl Vector {
             texture.create_view(&wgpu::TextureViewDescriptor { aspect: aspect.unwrap_or_default(), ..Default::default() })
         }));
         let far = {
-            let t = device.create_texture(&wgpu::TextureDescriptor {
+            let t = super::counted_texture(device, &wgpu::TextureDescriptor {
                 label: Some("far"),
                 size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                 mip_level_count: 1,
@@ -780,8 +780,8 @@ impl Vector {
             no_samples,
             nearest: None,
             bounds: None,
-            no_slabs: device
-                .create_texture(&wgpu::TextureDescriptor { label: Some("no slabs"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: super::COLOR, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
+            no_slabs: super::counted_texture(device,
+                &wgpu::TextureDescriptor { label: Some("no slabs"), size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: super::COLOR, usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[] })
                 .create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() }),
             scene_layout,
             image_layout,

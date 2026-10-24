@@ -487,11 +487,11 @@
 | X3-06 | telemetry 自身成本**没有精确 A/B**：它是编译期 feature（`zela-schedule` 默认开），而 7 个 crate 依赖它 ⇒ cargo 特性合并使"单点关闭"无效 | 观测 / 成本 | **记账（Step 6）** | 上界实测（`ZELA_FRAME_TIMING=1`）：pendulum `advance` 0.058–0.074ms/帧（3.3–3.9%，总 1.75–1.88ms）、fourier 0.164–0.167ms/帧（7.0–7.1%，总 2.34ms）。telemetry 采集是 `advance` 的**子集** ⇒ 其成本低于该占比（B8 的 93% 在 hash+sink，不在采集）。触发：需要精确数字时，从 7 个 manifest 同时 `default-features = false` 再对比（跨 manifest 改动，未并入本批） |
 | X3-07 | `FrameCacheStats` 有定义、有填充、**零外部消费者** | 渲染 / 观测 | **已关闭（Step 5）** | `diagnostics::{CacheTotals, record_cache, take_cache_totals}`（取走即清零）；`scene_callback` 两个 2D finish 点上报；实测 pendulum 300 帧 `geom 600/600`（动画内容每帧几何都变，符合预期）、`reveal 600/297`（区间变化不触发 miss，与文档口径一致） |
 | X3-08 | 量级门禁只在 `ZELA_FRAME_TIMING=1` 时"呈报"，不进退出码 | 验证 / 门禁 | **已关闭（Step 6）** | `FrameStats::check()` 从 `report()` 拆出并**恒开**（单帧 > 500ms ⇒ 失败；首帧含建管线，按既有口径不计）；`zela-verify` 两遍渲染都接上，打印仍可选 |
-| X3-09 | **buffer 数与显存未计数**：wgpu 没有全局资源查询，要自己包一层 `create_buffer` / 纹理尺寸累加才拿得到 | 渲染 / 观测 | **记账（Step 5）** | 本批只接出 `textures_created`（2D color+msaa、3D msaa+depth 的**创建**次数；pendulum 300 帧 = 2 张 ⇒ B8 "每帧建纹理"有数为证）。触发：需要"显存占用"曲线时，在 `WgpuBackend2D` / `WgpuBackend3D` 的资源创建处统一记账（buffer 无 `size()` 端口，需自存） |
+| X3-09 | **buffer 数与显存未计数**：wgpu 没有全局资源查询，要自己包一层 `create_buffer` / 纹理尺寸累加才拿得到 | 渲染 / 观测 | **部分关闭（B17 Step 0：矢量侧已计数）** | 矢量的全部创建口收进 `render::counted_texture` / `counted_buffer`（纹理按 格式×尺寸×层×mip×采样数 估字节；buffer 自存 `desc.size`）。`ZELA_FRAME_REPORT` 新增 `vector_resources` 与逐帧 `vector_resource_curve`（first/last/峰值），页面状态栏显示累计。**仍记账**：wgpu 侧的 buffer 与两端"实际显存占用"（分配器口径）未做；触发：需要显存曲线时再包 wgpu 侧的 `create_buffer` |
 | X3-10 | xtask 自身不初始化 tracing subscriber | 验证 / 日志 | **记账（Step 1）** | xtask 只**拉起子进程**，每个子进程各自 `init_tracing_headless()`；xtask 自己的 `println!` 已足够。触发：xtask 内部需要 `tracing::warn!` 时再补（否则会静默丢） |
 | X3-11 | `t_verify` 字段恒 0：GPU 校验 pass 未实现（B8 占位） | 验证 / 计时 | **记账（Step 1）** | 保留字段（字段名与 B8 一致，前后可比），但 `FrameStats::report` 固定打印 `[timing-note] verify_ms 恒 0 是因为 GPU 校验 pass **未启用**`，结构化报告也带 `verify_note`。触发：实现 GPU 校验 pass 时删掉这两处提示 |
 
-**P 段小计（B12）**：已关闭 7（X3-01、X3-02、X3-03、X3-04、X3-05、X3-07、X3-08）· 记账 4（X3-06、X3-09、X3-10、X3-11）。
+**P 段小计（B12）**：已关闭 7（X3-01、X3-02、X3-03、X3-04、X3-05、X3-07、X3-08）· 部分关闭 1（X3-09）· 记账 3（X3-06、X3-10、X3-11）。
 
 ---
 
@@ -545,10 +545,27 @@
 |---|---|---|---|---|
 | X6-01 | Step 0：wasm 侧 adapter 能力此前是**推断**，不是实测（证据只有"Player 建起来了"） | 渲染 / wasm | **已关闭（B15 Step 0）** | `zela-web` 在 `create_display` 落一行 `[adapter-facts]`，并暴露 `adapter_facts()`（控制台 / 页面可复制、可 diff，不含时间 / 负载）。本机 Chrome 实测：`features=[0, ff8f] can_compute=true indirect_first_instance=true float32_blendable=true depth32float_stencil8=true adapter_specific_formats=false r32float_blendable=true rgba32float_storage=true rgba8unorm_storage=true surface_format=Bgra8Unorm`。required 全齐 ⇒ 矢量可用；`INDIRECT_FIRST_INSTANCE` 也有（TriMesh / LineMesh 二选一不受限） |
 | X6-02 | 乙的"零拷贝"口径会误导：计划 §1.5 称合成目标是 `Rgba32Float`，实测是 `Rgba8Unorm`（`zela_render_vector::render::COLOR`；`Rgba32Float` 只是 3D slab bounds 的中间纹理） | 文档 / 口径 | **已关闭（B15 Step 2）** | 事实：surface 是 `Bgra8Unorm`，WebGPU 核心不允许它当 storage texture ⇒ 矢量**永远无法直接写 surface**。乙的真实形态 = **零 CPU 往返**（去掉 1.2 MB 回读 + 1.2 MB `write_texture`），保留一步 GPU→GPU resolve（`Rgba8Unorm → surface`）。实现：`zela_render_vector::api::render_2d_to_texture[_async]` / `render_3d_to_texture[_async]` + `zela-web::VectorTarget` / `Blit` |
-| X6-03 | Trae 内嵌浏览器的 WebGPU 在 3D 长播后崩溃（`webgpu found no adapters`），曾阻断 compare / 切后端实测 | 验证 / 环境 | **已关闭（B15 补测：换独立 Edge）** | 现象：内嵌浏览器播放 `pbr_lights` 到 301/510 帧后，`navigator.gpu.requestAdapter()`（普通与 `forceFallbackAdapter`）都返回 `null`；重启其 GPU 进程、换 origin、开新标签页均未恢复。补测：用**独立 Edge + CDP**（同一份 wasm / 同一 URL）跑同一构建：① 2D/3D 矢量出帧，`pbr_lights` **510/510 帧**播完、零异常（截图 `out/b15-edge-3d-vector-50s.png`）；② `?compare=1` 输出 `3b94c49a…`（见 X4-04）；③ backend 双向切换（vector→wgpu→vector）均重播且只有一条循环。⇒ 崩溃属**内嵌浏览器环境**，不是应用缺陷 |
+| X6-03 | Trae 内嵌浏览器的 WebGPU 在 3D 长播后崩溃（`webgpu found no adapters`），曾阻断 compare / 切后端实测 | 验证 / 环境 | **已关闭（B15 补测：换独立 Edge）** | 现象：内嵌浏览器播放 `pbr_lights` 到 301/510 帧后，`navigator.gpu.requestAdapter()`（普通与 `forceFallbackAdapter`）都返回 `null`；重启其 GPU 进程、换 origin、开新标签页均未恢复。补测：用**独立 Edge + CDP**（同一份 wasm / 同一 URL）跑同一构建：① 2D/3D 矢量出帧，`pbr_lights` **510/510 帧**播完、零异常（截图 `out/b15-edge-3d-vector-50s.png`）；② `?compare=1` 输出 `3b94c49a…`（见 X4-04）；③ backend 双向切换（vector→wgpu→vector）均重播且只有一条循环。⇒ 崩溃属**内嵌浏览器环境**，不是应用缺陷。⚠️ "环境"结论只针对那次崩溃；**churn 候选根因并未被否定**，B17 把它单独实证并关闭（X7-01） |
 | X6-04 | `--step wasm` 仍只 `cargo check`（X2-07） | 验证 | **记账（B15 §7）** | 本批把浏览器实测落成可复现检查点（`adapter_facts()` + 截图 + 状态栏），但**没有**接进 CI；本批只记账，不实现 |
 
 **S 段小计（B15）**：已关闭 3（X6-01、X6-02、X6-03）· 记账 1（X6-04）。
+
+---
+
+## T. B17 批次记账（矢量后端资源生命周期，2026-10-24）
+
+> 计划《B17执行计划_矢量后端资源生命周期与移动端可用性》。一句话：**每帧重建整套 GPU 资源
+> （churn）才是移动端崩溃的嫌疑，先修生命周期、把"每帧建了多少"变成数，再谈移动端判定。**
+> 本批止于 Step 2；Step 3/4（移动端实测与按实测补判定）等设备数据。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X7-01 | **每帧新建一整套 `Player`**（`prepare_view` 内 `Player::new`）⇒ 画布 / 附件 / 缓冲 / 列表 / bloom / AO 每帧分配+释放；上游"常驻 Player + eviction/packing"的设计被架空 | 渲染 / 资源生命周期 | **已关闭（B17 Step 1）** | `Gpu` 新增 `players: HashMap<(w,h,samples), Player>`；`take_player` 取出并 `Player::reset`（清 `Store` / 待上传图像，保留画布 / 附件 / 缓冲 / 列表 / 目标），`put_player` 归还（上限 4 份）。`Store::clear` 推进 `generation` ⇒ 数组从 0 逐字节重传，键从 1 重分配（无上一帧残影）。`targets` 记录 `external`，读回/外部目标模式切换时重建。**25 条基线逐位不变**；实测 `pbr_lights`（510 帧，矢量）首帧 38 纹理 / 33.5 MB / 31 buffer，**第 2–510 帧全为 0**；浏览器同一构建 510/510 帧，状态栏 `tex 37 / buf 30（34.0 MB）` 从 421 帧到播完不变 |
+| X7-02 | **矢量后端资源计数静默零**：`textures_created` 只覆盖 wgpu 后端（`wgpu_2d.rs` / `wgpu_3d.rs` 三个点），走矢量时恒为 0，像是"零分配" | 渲染 / 观测 | **已关闭（B17 Step 0）** | 本 crate 的全部创建口收进 `counted_texture` / `counted_buffer`（28 处，含 vector / bloom / occlusion / shadow / environment）；出口 `resource_totals()` / `take_resource_totals()` / `ResourceTotals::{json,since,plus}`。`ZELA_FRAME_REPORT` 每作品每遍加 `vector_resources` + `vector_resource_curve`（frames / first / last / 峰值），并给旧字段加 `"textures_created_scope":"wgpu-only"`（不把两套语义混成一个"全局"数）。页面状态栏在矢量播放时显示 `矢量资源 tex/buf（MB）` |
+| X7-03 | 上游 `evict` / `pack_if_worthwhile` / `generation` 这套淘汰与打包机制**从未被真正执行**（每帧 `Player::new` ⇒ `dead` 永远 0） | 渲染 / 资源生命周期 | **已关闭（B17 Step 1）** | 复用后 `Store.dead` 仍是 0（本批逐帧复位，不启用多帧在飞的 `evict`——它依赖 `settle` 语义）；但 `generation` 第一次真正参与工作（每次复位 +1，驱动 `Buffers.sent` 归零）。**packing 未被首次触发**（`dead = 0`）⇒ 无新行为、无像素变化。`evict` 保留原样，不本批启用 |
+| X7-04 | 移动端可用性判定可能**过宽**：`rgba32float_storage` / `rgba8unorm_storage` / `r32float_blendable` 已探测但未进 `is_available_on_facts`；若移动端不支持某项，会"静默放行 ⇒ 创建存储纹理 ⇒ 卡死" | 路由 / 能力判定 | **记账（B17 Step 3/4，等设备数据）** | 硬约束 ③：移动端实测数据到达前**不得**凭猜测关闭矢量。需要用户提供 `[adapter-facts]` 一行 + "还卡不卡/第几帧/斑马纹是否还在" + 设备信息。三种结果对应：不卡 ⇒ 本批收尾、不补判定；仍卡且 `rgba32float_storage=false` ⇒ 把三项接进判定并带具体理由（状态栏 / `RoutingDecision.reject` / 报告环境指纹）；required 全 true 仍卡 ⇒ 降规格（另一批） |
+
+**T 段小计（B17）**：已关闭 3（X7-01、X7-02、X7-03）· 记账 1（X7-04）。
 
 ---
 

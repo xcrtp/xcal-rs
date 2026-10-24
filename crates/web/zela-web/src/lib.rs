@@ -490,6 +490,8 @@ async fn run_with(
     let mut scratch: Option<wgpu::Texture> = None;
     // B15（乙）：显示路径的离屏目标 + GPU 内 present（首次真正用矢量时建）。
     let mut vector_target: Option<VectorTarget> = None;
+    // B17 Step 0：本播放是否真的走过矢量（状态栏只在那时报资源数）。
+    let mut vector_used = false;
     // 状态栏常驻的后端决策行（B11 §7.4：选了谁、为什么、谁被拒）。
     let mut backend_line = String::new();
     // 矢量后端的默认渲染参数（`PostCaps::all()` ⇒ 着色栈默认开，与 native 同口径）。
@@ -576,6 +578,7 @@ async fn run_with(
         };
 
         if wanted == BackendKind::Vector {
+            vector_used = true;
             let snapshot = pending.take().expect("矢量路径已有快照");
             let background = [
                 clear.r as f32,
@@ -650,8 +653,9 @@ async fn run_with(
             set_status(
                 &document,
                 &format!(
-                    "{backend_line}帧 {index}/{frames} · {:.2}×",
-                    playback_speed(compare)
+                    "{backend_line}帧 {index}/{frames} · {:.2}×{}",
+                    playback_speed(compare),
+                    vector_resource_note(vector_used)
                 ),
             );
             next_status = index.saturating_add(30);
@@ -677,10 +681,29 @@ async fn run_with(
     } else {
         set_status(
             &document,
-            &format!("{backend_line}播放完成：{frames} 帧 · payload {payload_short}"),
+            &format!(
+                "{backend_line}播放完成：{frames} 帧 · payload {payload_short}{}",
+                vector_resource_note(vector_used)
+            ),
         );
     }
     Ok(())
+}
+
+/// **B17 Step 0**：矢量侧资源累计的一行后缀（只在本播放走过矢量时出现）。
+///
+/// 稳态（Player 复用生效）下它只在第一帧增长；之后数字不动 = churn 已修，可直接在页面上看。
+fn vector_resource_note(used: bool) -> String {
+    if !used {
+        return String::new();
+    }
+    let totals = zela_render_vector::resource_totals();
+    format!(
+        " · 矢量资源 tex {} / buf {}（{:.1} MB）",
+        totals.textures,
+        totals.buffers,
+        (totals.texture_bytes + totals.buffer_bytes) as f64 / 1e6
+    )
 }
 
 /// B15（乙）：显示路径的离屏合成目标 + GPU 内 present。

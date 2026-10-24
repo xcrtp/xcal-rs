@@ -483,20 +483,19 @@ fn view_3d(v: &View3) -> Vec<f32> {
     out
 }
 
-/// 一帧的 GPU 侧准备：记录已上传、view 与记录字节已就绪的 player。
+/// 一帧的记录字节（路径已上传进 player；view 与 records 供 `views` 用）。
 struct Prepared {
-    player: crate::render::Player,
     view: Vec<u8>,
     records: Vec<u8>,
 }
 
-/// 与 GPU 无关的准备（上传路径 + 记录打包）：同步 / 异步两条渲染路径共用这一份，
-/// 避免两套实现在几何映射上漂移（B15）。
+/// 把一帧的路径 / 网格上传进**常驻 player** 并打包记录：同步 / 异步两条渲染路径共用这一份，
+/// 避免两套实现在几何映射上漂移（B15）；player 由 [`crate::render::Gpu::take_player`] 复用（B17）。
 fn prepare_view(
+    player: &mut crate::render::Player,
     view: Vec<f32>,
     width: u32,
     height: u32,
-    samples: u32,
     records: &[PathRecord],
 ) -> Result<Prepared, String> {
     if width == 0 || height == 0 {
@@ -504,13 +503,12 @@ fn prepare_view(
     }
     let view_bytes: Vec<u8> = bytemuck::cast_slice(&view).to_vec();
 
-    let mut player = crate::render::Player::new(width, height, samples);
     let mut built: Vec<Record> = Vec::with_capacity(records.len());
     for (i, record) in records.iter().enumerate() {
         let key = i as u64 + 1;
         match record {
             PathRecord::Fill(path) => {
-                let curves = upload_path(&mut player, key, i, &path.points, &path.ranges)?;
+                let curves = upload_path(player, key, i, &path.points, &path.ranges)?;
                 built.push(Record::filled(
                     key,
                     curves,
@@ -521,7 +519,7 @@ fn prepare_view(
                 ));
             }
             PathRecord::Stroke(path) => {
-                let curves = upload_path(&mut player, key, i, &path.points, &path.ranges)?;
+                let curves = upload_path(player, key, i, &path.points, &path.ranges)?;
                 built.push(Record::stroked(
                     key,
                     curves,
@@ -571,7 +569,6 @@ fn prepare_view(
     }
     let record_bytes: Vec<u8> = bytemuck::cast_slice(&built).to_vec();
     Ok(Prepared {
-        player,
         view: view_bytes,
         records: record_bytes,
     })
@@ -587,16 +584,17 @@ fn render_with_view(
     samples: u32,
     records: &[PathRecord],
 ) -> Result<Vec<u8>, String> {
-    let Prepared {
-        mut player,
-        view,
-        records,
-    } = prepare_view(view, width, height, samples, records)?;
     crate::render::with_gpu(|gpu| {
-        let frames = player.views(&view, &records, Vec::new())?;
-        let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
-        player.pixels(gpu, &frames, &mut out)?;
-        Ok(out)
+        let mut player = gpu.take_player(width, height, samples);
+        let result = (|| {
+            let Prepared { view, records } = prepare_view(&mut player, view, width, height, records)?;
+            let frames = player.views(&view, &records, Vec::new())?;
+            let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
+            player.pixels(gpu, &frames, &mut out)?;
+            Ok(out)
+        })();
+        gpu.put_player(width, height, samples, player);
+        result
     })?
 }
 
@@ -609,13 +607,25 @@ async fn render_with_view_async(
     samples: u32,
     records: &[PathRecord],
 ) -> Result<Vec<u8>, String> {
-    let Prepared {
-        mut player,
-        view,
-        records,
-    } = prepare_view(view, width, height, samples, records)?;
     let mut slot = crate::render::GpuSlot::take()?;
     let gpu = slot.get();
+    let mut player = gpu.take_player(width, height, samples);
+    let result = frame_pixels_async(&mut player, gpu, view, width, height, records).await;
+    gpu.put_player(width, height, samples, player);
+    result
+}
+
+/// 异步读回一帧（调用方负责 player 的取 / 还；错误也归还，缓存不因一次失败丢失）。
+#[cfg(target_arch = "wasm32")]
+async fn frame_pixels_async(
+    player: &mut crate::render::Player,
+    gpu: &mut crate::render::Gpu,
+    view: Vec<f32>,
+    width: u32,
+    height: u32,
+    records: &[PathRecord],
+) -> Result<Vec<u8>, String> {
+    let Prepared { view, records } = prepare_view(player, view, width, height, records)?;
     let frames = player.views(&view, &records, Vec::new())?;
     let mut out = vec![0u8; (width as usize) * (height as usize) * 4];
     player.pixels_async(gpu, &frames, &mut out).await?;
@@ -664,14 +674,15 @@ fn render_to_texture(
 ) -> Result<(), String> {
     check_target(target, width, height)?;
     let target_view = target.create_view(&Default::default());
-    let Prepared {
-        mut player,
-        view,
-        records,
-    } = prepare_view(view, width, height, samples, records)?;
     crate::render::with_gpu(|gpu| {
-        let frames = player.views(&view, &records, Vec::new())?;
-        player.render_to(gpu, &frames, &target_view)
+        let mut player = gpu.take_player(width, height, samples);
+        let result = (|| {
+            let Prepared { view, records } = prepare_view(&mut player, view, width, height, records)?;
+            let frames = player.views(&view, &records, Vec::new())?;
+            player.render_to(gpu, &frames, &target_view)
+        })();
+        gpu.put_player(width, height, samples, player);
+        result
     })?
 }
 
@@ -687,15 +698,28 @@ async fn render_to_texture_async(
 ) -> Result<(), String> {
     check_target(target, width, height)?;
     let target_view = target.create_view(&Default::default());
-    let Prepared {
-        mut player,
-        view,
-        records,
-    } = prepare_view(view, width, height, samples, records)?;
     let mut slot = crate::render::GpuSlot::take()?;
     let gpu = slot.get();
+    let mut player = gpu.take_player(width, height, samples);
+    let result = frame_to_texture_async(&mut player, gpu, view, &target_view, width, height, records).await;
+    gpu.put_player(width, height, samples, player);
+    result
+}
+
+/// 异步把一帧合成进 `target`（调用方负责 player 的取 / 还）。
+#[cfg(target_arch = "wasm32")]
+async fn frame_to_texture_async(
+    player: &mut crate::render::Player,
+    gpu: &mut crate::render::Gpu,
+    view: Vec<f32>,
+    target: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+    records: &[PathRecord],
+) -> Result<(), String> {
+    let Prepared { view, records } = prepare_view(player, view, width, height, records)?;
     let frames = player.views(&view, &records, Vec::new())?;
-    player.render_to_async(gpu, &frames, &target_view).await
+    player.render_to_async(gpu, &frames, target).await
 }
 
 /// 上传一条路径并返回曲线数（填充与描边共用）。

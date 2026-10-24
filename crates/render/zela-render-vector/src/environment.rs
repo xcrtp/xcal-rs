@@ -431,10 +431,10 @@ impl Prefilter {
     /// importance sampling, but none coarser than `COARSEST`), level 0 the source's own.
     pub(crate) fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, env: &Environment) -> wgpu::TextureView {
         let size = wgpu::Extent3d { width: env.width, height: env.height, depth_or_array_layers: 1 };
-        let picture = device.create_texture(&wgpu::TextureDescriptor { label: Some("environment picture"), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Uint, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
+        let picture = crate::render::counted_texture(device, &wgpu::TextureDescriptor { label: Some("environment picture"), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Uint, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[] });
         queue.write_texture(picture.as_image_copy(), &env.rgbe, wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * env.width), rows_per_image: Some(env.height) }, size);
         let cube = |label, mips| {
-            device.create_texture(&wgpu::TextureDescriptor {
+            crate::render::counted_texture(device, &wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width: SIDE, height: SIDE, depth_or_array_layers: 6 },
                 mip_level_count: mips,
@@ -460,7 +460,7 @@ impl Prefilter {
         let groups = |side: u32| side.div_ceil(8);
         // the source: level 0 from the picture, then each mip the average of the one before
         let uniform = |params: [f32; 8]| {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some("prefilter"), size: 32, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            let buffer = crate::render::counted_buffer(device, &wgpu::BufferDescriptor { label: Some("prefilter"), size: 32, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&params));
             buffer
         };
@@ -602,7 +602,7 @@ mod tests {
                 .map(|level| {
                     let side = SIDE >> level;
                     let row = (8 * side).next_multiple_of(256);
-                    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * side * 6) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+                    let buffer = crate::render::counted_buffer(&gpu.device, &wgpu::BufferDescriptor { label: None, size: (row * side * 6) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
                     let mut encoder = gpu.device.create_command_encoder(&Default::default());
                     encoder.copy_texture_to_buffer(
                         wgpu::TexelCopyTextureInfo { texture: cube.texture(), mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },

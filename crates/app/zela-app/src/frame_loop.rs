@@ -365,6 +365,10 @@ pub struct FrameRun {
     pub cache: zela_render_backends::diagnostics::CacheTotals,
     /// 本次运行**创建**的渲染目标纹理数（稳态应远小于帧数 × 图层数）。
     pub textures_created: usize,
+    /// **B17 Step 0**：本次运行矢量后端创建的 GPU 资源（wgpu 后端不计数 ⇒ 全 0）。
+    pub vector_resources: zela_render_vector::ResourceTotals,
+    /// **B17 Step 0**：逐帧的资源增量（等长于 `timings`；wgpu 帧为 0）。稳态应每帧为 0。
+    pub resource_frames: Vec<zela_render_vector::ResourceTotals>,
 }
 
 impl FrameRun {
@@ -465,6 +469,11 @@ pub fn run_frames(
     // B12 Step 5：缓存 / 资源计数取本轮增量（计数是进程级累计，取走即清零）。
     let _ = zela_render_backends::diagnostics::take_cache_totals();
     let textures_before = zela_render_backends::diagnostics::textures_created();
+    // B17 Step 0：矢量侧资源计数逐帧取增量（本次运行从 0 开始）。
+    let _ = zela_render_vector::take_resource_totals();
+    let mut vector_resources = zela_render_vector::ResourceTotals::default();
+    let mut resource_frames: Vec<zela_render_vector::ResourceTotals> =
+        Vec::with_capacity(frames as usize);
 
     for index in 0..frames {
         let mut timing = FrameTiming::default();
@@ -647,6 +656,11 @@ pub fn run_frames(
         };
         gpu_ms.push(measured);
 
+        // B17 Step 0：这一帧创建的矢量资源（取走即清零；wgpu 帧为 0）。
+        let resources = zela_render_vector::take_resource_totals();
+        vector_resources = vector_resources.plus(resources);
+        resource_frames.push(resources);
+
         timings.push(timing);
     }
 
@@ -658,5 +672,7 @@ pub fn run_frames(
         cache: zela_render_backends::diagnostics::take_cache_totals(),
         textures_created: zela_render_backends::diagnostics::textures_created()
             .saturating_sub(textures_before),
+        vector_resources,
+        resource_frames,
     })
 }

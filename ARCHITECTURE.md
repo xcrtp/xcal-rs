@@ -1475,3 +1475,25 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
   vector→wgpu→vector 双向切换各重播一次、无异常。3D 矢量与 wgpu 的画面差异肉眼可见
   （矢量有 tone/bloom/IBL，wgpu 侧没有）。Trae 内嵌浏览器在 3D 长播后自身 GPU 进程崩溃
   （`webgpu found no adapters`）——环境问题，换独立浏览器即复现不了（GAPS X6-03）。
+
+### B17 矢量后端资源生命周期（Player 常驻）
+
+> 一句话：**`Player` 是常驻资源容器，不是逐帧对象。** 这条是上游的设计意图，此前无人写下，
+> 也正是它被逐帧新建的原因。本批把它写进契约，并补上"每帧建了多少"的计数。
+
+- **契约**：`Player` 持有画布、MSAA/深度附件、`rasters`、`buffers`、`targets`、`lists`、
+  bloom / AO 金字塔。这些**随 `(width, height, samples)` 常驻**（`Gpu::players` 缓存，
+  上限 4 份）；逐帧只重传路径、记录与视图。
+- **复位**：`Gpu::take_player` 取出后调 `Player::reset` —— `Store::clear` 清几何 / 笔刷 /
+  待上传图像并推进 `generation`（下一帧把数组当成全新一份、从 0 重传），保留画布 / 附件 /
+  缓冲 / 列表 / 目标。键从 1 重新分配 ⇒ 不会残留上一帧的图形。
+- **模式**：`targets` 记录 `external`（读回 vs 调用方目标）；两种模式互斥，切换时只重建这一份。
+- **计数**：本 crate 的全部纹理 / 缓冲创建口收进 `counted_texture` / `counted_buffer`；
+  `ResourceTotals` 经 `ZELA_FRAME_REPORT` 的 `vector_resources` 与逐帧
+  `vector_resource_curve` 输出（旧字段 `textures_created` 显式标 `wgpu-only`）。页面状态栏
+  在矢量播放时显示累计资源。
+- **实测（判据 = 曲线持平）**：`pbr_lights` 510 帧矢量：首帧 **38 纹理 / 33.5 MB / 31 buffer**，
+  **第 2–510 帧全为 0**；浏览器同一构建 510/510 帧，状态栏 `tex 37 / buf 30（34.0 MB）` 从
+  421 帧到播完不变。25 条基线逐位不变。
+- **未做**：`evict`（多帧在飞 + `settle` 语义）仍不启用；移动端可用性判定等设备实测
+  （GAPS X7-04）。

@@ -665,8 +665,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
     // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）、N 段（B10）、O 段（B11）、
-    // P 段（B12）、Q 段（B13）、R 段（B14）与 S 段（B15）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q.", "## R.", "## S."] {
+    // P 段（B12）、Q 段（B13）、R 段（B14）、S 段（B15）与 T 段（B17）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q.", "## R.", "## S.", "## T."] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
@@ -687,7 +687,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
                     || id.starts_with("X3-")
                     || id.starts_with("X4-")
                     || id.starts_with("X5-")
-                    || id.starts_with("X6-"));
+                    || id.starts_with("X6-")
+                    || id.starts_with("X7-"));
             if !is_item {
                 continue;
             }

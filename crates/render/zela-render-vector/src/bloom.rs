@@ -70,13 +70,13 @@ impl Bloom {
         let image = |label: &str, [w, h]: [u32; 2], format| {
             let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
             let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
-            device.create_texture(&wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] }).create_view(&Default::default())
+            super::counted_texture(device, &wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] }).create_view(&Default::default())
         };
         let (paint, light) = (image("bloom paint", [width, height], super::COLOR), image("bloom light", [width, height], super::RADIANCE));
         // each level's share, and (but the coarsest's) the coarser levels added to it
         let down: Vec<wgpu::TextureView> = sizes.iter().map(|&s| image("bloom level", s, super::RADIANCE)).collect();
         let up: Vec<wgpu::TextureView> = sizes[..sizes.len() - 1].iter().map(|&s| image("bloom level added up", s, super::RADIANCE)).collect();
-        let params = device.create_buffer(&wgpu::BufferDescriptor { label: Some("bloom"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let params = super::counted_buffer(device, &wgpu::BufferDescriptor { label: Some("bloom"), size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let bind = |k: usize, entries: &[(u32, wgpu::BindingResource)]| {
             let entries: Vec<wgpu::BindGroupEntry> = entries.iter().map(|(binding, resource)| wgpu::BindGroupEntry { binding: *binding, resource: resource.clone() }).collect();
             device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.layouts[k], entries: &entries })

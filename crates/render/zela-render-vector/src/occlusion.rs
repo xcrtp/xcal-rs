@@ -89,7 +89,7 @@ impl Occlusion {
         let sizes: Vec<[u32; 2]> = (0..levels).map(|l| [(width >> l).max(1), (height >> l).max(1)]).collect();
         let texture = |label: &str, [w, h]: [u32; 2], levels: u32, format, usage| {
             let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
-            device.create_texture(&wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] })
+            super::counted_texture(device, &wgpu::TextureDescriptor { label: Some(label), size, mip_level_count: levels, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] })
         };
         let written = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
         let r32 = |label| texture(label, sizes[0], 1, wgpu::TextureFormat::R32Float, written).create_view(&Default::default());
@@ -98,7 +98,7 @@ impl Occlusion {
         let pyramid = texture("distances' pyramid", sizes[1], levels - 1, wgpu::TextureFormat::R32Float, written);
         let level: Vec<wgpu::TextureView> = (0..levels - 1).map(|l| pyramid.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })).collect();
         let mips = pyramid.create_view(&Default::default());
-        let params = device.create_buffer(&wgpu::BufferDescriptor { label: Some("occlusion"), size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let params = super::counted_buffer(device, &wgpu::BufferDescriptor { label: Some("occlusion"), size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let bind = |k: usize, entries: &[(u32, wgpu::BindingResource)]| {
             let entries: Vec<wgpu::BindGroupEntry> = entries.iter().map(|(binding, resource)| wgpu::BindGroupEntry { binding: *binding, resource: resource.clone() }).collect();
             device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.layouts[k], entries: &entries })

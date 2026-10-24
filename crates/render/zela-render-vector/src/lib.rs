@@ -49,6 +49,8 @@ pub use api::{
 };
 // B11 Step 3：device 注入入口（native / wasm 同签名，内部绕开 `Gpu::new()`）。
 pub use render::init_gpu;
+// B17 Step 0：矢量后端的资源创建计数（纹理 / 缓冲；取走即清零）。
+pub use render::{ResourceTotals, resource_totals, take_resource_totals};
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
 #[cfg(not(target_arch = "wasm32"))]
