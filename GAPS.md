@@ -578,14 +578,73 @@
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| X8-01 | 移动端 3D 出现规则横向条纹：**根因待定**（H1「4x MSAA 不被支持」已被源码证据证伪，见 X8-06） | 渲染 / MSAA | **记账（B18：等 `?msaa=1` 判别）** | 判别开关：`?msaa=1` 强制 1x。条纹消失 ⇒ 与 MSAA 有关（采样表/驱动）；仍在 ⇒ 非 MSAA（行分块 H2 / 链表溢出 H3，X8-04 已可观测）。`[adapter-facts]` 已带 `max_samples` / `max_storage_buffer_binding_size`，无需再靠拍屏 |
+| X8-01 | 移动端 3D 出现规则横向条纹：**根因待定**（H1「4x MSAA 不被支持」已被源码证据证伪，见 X8-06） | 渲染 / MSAA | **已关闭（B18 收尾，见 X8-07）** | 判别开关：`?msaa=1` 强制 1x。条纹消失 ⇒ 与 MSAA 有关（采样表/驱动）；仍在 ⇒ 非 MSAA（行分块 H2 / 链表溢出 H3，X8-04 已可观测）。`[adapter-facts]` 已带 `max_samples` / `max_storage_buffer_binding_size`，无需再靠拍屏。**实测：`?msaa=1` 条纹不变 ⇒ 与 MSAA 无关；最终根因是 AO 低通的 workgroup 内存读回（X8-07）** |
 | X8-02 | `max_samples` 两条路径判据不一致：未启用 specific 时**硬编码 4**，启用时才查格式能力 | 渲染 / 能力判定 | **已关闭（B18 Step 1）** | `Gpu::from_parts` 改调 `msaa_samples(adapter)`（只查 `get_texture_format_features(COLOR/DEPTH)` 的 `MULTISAMPLE_X4/X8`），不再有无条件常量分支。单测：x8 ⇒ 8、x4 ⇒ 4、空 ⇒ 1。⚠️ 在 WebGPU 上与旧值同为 4（X8-06）；native 启用 specific 时行为不变（25 条基线逐位不变） |
 | X8-03 | 移动端 3D 可能降为 **1x MSAA**（边缘锯齿变明显） | 渲染 / 画质 | **记账（B18 Step 1 取舍）** | 若 `?msaa=1` 能消条纹，则移动端需要在"1x 有锯齿"与"4x 出条纹"之间取舍。该 feature 由 adapter 决定是否提供，**不是应用能请求的**；取舍需设备实测后定 |
 | X8-04 | 链表溢出静默：`overflowed()` 在容量已到 device 上限时直接 `return false`，该帧装不下的 see-through 片元被丢弃且无任何出口 | 渲染 / 观测 | **已关闭（B18 Step 2）** | 新增 `OverflowTotals`（events / appended / capacity / most），`overflowed` 撞上限时记录最坏一次；`ZELA_FRAME_REPORT` 新增 `vector_overflow`；浏览器播放结束落 `[vector-overflow]`（vConsole 可见）。单测覆盖 `plus` 的最坏值合并 |
 | X8-05 | `[adapter-facts]` 完全不打印 limits（本轮最大的观测盲区：`max_samples` / 溢出上限都看不见） | 观测 / 能力 | **已关闭（B18 Step 0）** | 一行内新增 `max_samples`（与 `Gpu` 同源）、`max_storage_buffer_binding_size`（溢出上限 = 该值 / 16）、`max_texture_dimension_2d` |
 | X8-06 | 计划 H1 的因果链不成立："没有 `adapter_specific_formats` ⇒ 查询退化为规范最小集 ⇒ 1x" | 渲染 / 依据 | **已关闭（B18 Step 0 源码证据）** | wgpu 30 的 WebGPU 后端 `get_texture_format_features` 直接返回 `format.guaranteed_format_features(adapter.features())`（`backend/webgpu.rs`）；`Rgba8Unorm` 与 `Depth32FloatStencil8` 的保证位都含 `MULTISAMPLE_X4`。⇒ 移动端 `max_samples` **本来就是 4**，旧硬编码 4 在 WebGPU 上与查询同值。H1 就此排除，条纹根因转 H2（行分块）/ H3（溢出）或驱动 |
+| X8-07 | **横向条纹的根因**：AO 低通（`occlusion.wgsl` 原 `blur`）把水平结果暂存到 `var<workgroup> rows`，`workgroupBarrier()` 之后再按行读回；在 Adreno 660（`ro.board.platform=lahaina`，骁龙 888）上该读回不可靠——读到的行错乱/未初始化，于是 AO 每 16 行（tile 高 `T`）分带，最终表现为物体表面的横向明暗条纹 | 渲染 / AO（`occlusion.wgsl`） | **已关闭（B18 收尾）** | 逐层判据见下方「X8-07 调试纪要」。修复：可分离低通改为**两趟独立 compute**（`blur_h` 写中间纹理、`blur_v` 读它写 `occlusion`），新增一张 R32Float `occlusion across`；不再使用 workgroup 内存与 barrier。数学同序（先水平后垂直、同一高斯核与深度权重），桌面像素不变 |
 
-**U 段小计（B18）**：已关闭 4（X8-02、X8-04、X8-05、X8-06）· 记账 2（X8-01、X8-03）。
+**U 段小计（B18）**：已关闭 6（X8-01、X8-02、X8-04、X8-05、X8-06、X8-07）· 记账 1（X8-03）。
+
+### X8-07 调试纪要：移动端 3D 横向条纹（AO 低通）
+
+**设备与现象**
+
+- 设备：vivo V2270A，`ro.board.platform=lahaina`（骁龙 888 / Adreno 660），Android + Edge/Chromium。
+- 现象：矢量后端 3D 场景（`pbr_lights`，PBR 光照实验室）所有物体表面出现**规则横向明暗条纹**，跨物体在同一屏幕行上对齐。
+- 对照：同一份 wasm 在桌面 Edge 强制矢量后端干净；同机 wgpu 后端干净。
+- 量化：截图自相关峰值 **27 物理像素 = 16.00 逻辑像素**（画布 640×480，CSS 放大 1.6875）。
+
+**排查过程（每一步的判据与结论）**
+
+| 判据 | 做法 | 结论 |
+|---|---|---|
+| 调度 | 合成 compute 的 `@workgroup_size` 由 16×16 改 16×4，dispatch 同步改 | 周期仍 16 ⇒ 与 compute 调度无关 |
+| tile 表 | 强制 `bare()` 恒 false（全像素走 `composite`） | 条纹仍在 ⇒ 与 tile 列表 / `keep` 分支无关 |
+| 输出存储 | 向 `view_out` 写已知平滑渐变 | 无条带 ⇒ 该纹理写入/读取正常 |
+| 通道定位 | 分别只输出 `m[0]`（paint）/ `m[1]`（light） | paint 全黑（lit 网格的 paint 本就置 0）；light 有彩色条纹 ⇒ **条纹在 light 通道** |
+| 值与存储 | light 通道写常量 0.5 vs 写真实值 | 常量无条纹、真实值有条纹 ⇒ 与**值**相关，不是格式/存储 |
+| 着色入口 | `fs_mesh_with_light` 直接返回洋红 | 物体全变洋红 ⇒ 确认 raster base 的 MRT 着色入口 |
+| 计算层 | `lit_light` 的 radiance 换常量 | 无条纹 ⇒ 在 `reflected` 内 |
+| AO | `textureLoad(occlusion, …)` 不采样 | **条纹消失** |
+| 阴影 / DFG / 法线 / 世界坐标 / `dpdx`+`dpdy` | 逐项替换成常量或直出 | 条纹均仍在 ⇒ 逐个排除 |
+| AO 纹理内容 | 把 AO 值当颜色直出 | 物体上明暗交替、周期 16 ⇒ **AO 纹理本身有问题** |
+| AO 分趟 | 跳过低通直接用 `sao` 输出 | 平滑 ⇒ 条纹由低通引入 |
+| 低通内部 | 只做水平段 / 直出共享内存里装载的原始 AO | 前者仍有条纹；后者平滑（装载正确） |
+| 写读通路 | 把行号写进 `rows` 再读回 | 出现 16 行周期而**不是**平滑渐变 ⇒ `rows` 写读错乱 |
+| 坐实 | 每像素直接从 `tile_ao`/`tile_z` 重算二维低通（不经 `rows`） | 平滑 ⇒ 根因确认 |
+
+**根因**
+
+`occlusion.wgsl` 的低通是"tile + apron 装进 `var<workgroup>` → 水平加权写 `rows` → `workgroupBarrier()` → 垂直段读 `rows`"。在 Adreno 660 上，**barrier 之后从 workgroup 内存按行读回不可靠**：部分行读到错位/未初始化的值。因为 `rows` 是逐行暂存，错乱就按 tile 高（`T = 16`）分带，正好解释了 16 逻辑像素的周期。与 MSAA、能力判定、tile 列表、compute 调度、输出纹理格式**都无关**。
+
+**修复**
+
+- `occlusion.wgsl`：删掉 tile/apron 与 `var<workgroup>`，把低通拆成两趟独立 compute：`blur_h`（读 `sao` 结果，横向加权写中间纹理）与 `blur_v`（读中间纹理，纵向加权写 `occlusion`）。
+- `occlusion.rs`：新增一张 R32Float `occlusion across`；`blur` 的 pipeline 拆成 `blur_h` / `blur_v`（复用同一 bind group layout），`encode` 里 `dispatch(3)` 与 `dispatch(4)` 各一次。
+- 权重与顺序与原实现一致（同一高斯核、同一深度权重、先水平后垂直），桌面像素不变。
+
+**可复用的调试手段**
+
+- **adb 全链路**：`adb reverse tcp:8080 tcp:8080` 让手机用 `localhost`（`navigator.gpu` 只在 https/localhost 存在，局域网 http 会直接报"不支持 WebGPU"）；`adb shell am start -a android.intent.action.VIEW -d <url>` 打开页面；`adb shell screencap -p /sdcard/x.png` + `adb pull` 取图。
+- **屏幕必须常亮**：`adb shell svc power stayon usb`、`adb shell settings put system screen_off_timeout 1800000`；否则测试跑到一半息屏，截图是纯黑，会被误读成"渲染全黑"。
+- **周期测量**：Python + PIL 取一列亮度做自相关，峰值 lag ÷ 1.6875 得逻辑像素，直接把条纹周期与代码里的 tile/workgroup 尺寸对上。
+- **判据开关形态**：一律写成 shader 里的 `const DEBUG_*: bool`，一次只翻一个；每轮构建后先看"画面是否仍正常"，再读结论。写洋红/常量是最快的"新代码确实在跑"的存活证明。
+- **二分顺序**：先证通道（paint/light）→ 再证"存储 vs 内容"（常量/渐变 vs 真实值）→ 最后才进算法；每一步都要有一个**能看见**的输出，不靠推理。
+
+**缓存与环境坑（下次先排这三项，别再浪费时间）**
+
+1. **wasm 被浏览器缓存**：`python -m http.server` 不发 `Cache-Control`，Chrome 会按 `Last-Modified` 启发式缓存，重编后**仍跑旧 wasm**。本轮多次"改动看似无效"甚至"洋红也不出现"都是它造成的误判。对策：起一个带 `Cache-Control: no-store` 的临时静态服务器；并用 `adb reverse tcp:8080 tcp:8081` **保持 origin 仍是 `localhost:8080`**，否则 `localStorage` 里的 `zela-backend=vector` 会丢，页面会静默路由到 wgpu 后端，测的就不是矢量路径了。
+2. **手机息屏/锁屏**：截图纯黑（PNG 仅 ~15 KB）先怀疑屏幕状态，不要怀疑渲染。查 `adb shell dumpsys power | Select-String mWakefulness`（要 `Awake`）与 `adb shell dumpsys window | Select-String mDreamingLockscreen`（要 `false`）。有密码/图案时 adb 无法代解锁，需人工解锁一次。
+3. **target 缓存损坏 / rustc ICE**：`cargo verify` 出现过 `no entry found for key` 与 dep-info 写不进去（`.fingerprint` 目录损坏）。删 `target/debug/.fingerprint` 并设 `CARGO_INCREMENTAL=0` 即可恢复；`--full` 不是有效参数（`cargo verify` 默认即 full）。
+
+**下次的直觉**
+
+- "移动端独有 + 固定周期（8/16/32）+ 只出现在某个 pass 的输出上" ⇒ **先怀疑 workgroup 共享内存 + `workgroupBarrier()`**，尤其当周期正好等于代码里的 tile 尺寸时；MSAA、纹理格式、compute 调度的优先级都排在它之后。
+- 同一段 shader 里"用共享内存做可分离滤波"在桌面成立、在移动端不成立时，最稳的替代是**多趟 pass + 中间纹理**，而不是继续调整 tile 尺寸或 barrier 数量。
+
 
 ---
 

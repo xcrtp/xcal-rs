@@ -23,11 +23,11 @@ const BIAS: f32 = 0.0005;
 const SAME_SURFACE: f32 = 1.0 / 6.0;
 
 /// The passes: a mesh's depth as its view sees it (the raster pipeline's `vs_depth`), and the occlusion's: distances,
-/// a level of the pyramid, the occlusion, its low-pass.
+/// a level of the pyramid, the occlusion, its low-pass across and down.
 pub(crate) struct Occlusion {
     pub(crate) depth: wgpu::RenderPipeline,
     layouts: [wgpu::BindGroupLayout; 4],
-    passes: [wgpu::ComputePipeline; 4],
+    passes: [wgpu::ComputePipeline; 5],
 }
 
 /// Where a view's occlusion is found (made for its canvas, at its size): its opaque depth, drawn by the view's passes,
@@ -73,13 +73,14 @@ impl Occlusion {
             let pass = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: Some(label), layout: Some(&pipeline_layout), module: &shader, entry_point: Some(label), compilation_options: options, cache: None });
             (layout, pass)
         };
-        let [(l0, p0), (l1, p1), (l2, p2), (l3, p3)] = [
+        let [(l0, p0), (l1, p1), (l2, p2), (l3, ph), (_, pv)] = [
             make("linearize", &[params, depth_in, out]),
             make("depth_mip", &[texture(7), out]),
             make("sao", &[params, texture(3), texture(4), out]),
-            make("blur", &[params, texture(3), texture(5), out]),
+            make("blur_h", &[params, texture(3), texture(5), out]),
+            make("blur_v", &[params, texture(3), texture(5), out]),
         ];
-        Self { depth, layouts: [l0, l1, l2, l3], passes: [p0, p1, p2, p3] }
+        Self { depth, layouts: [l0, l1, l2, l3], passes: [p0, p1, p2, ph, pv] }
     }
 
     /// Where a view of `size` finds its occlusion.
@@ -94,7 +95,7 @@ impl Occlusion {
         let written = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
         let r32 = |label| texture(label, sizes[0], 1, wgpu::TextureFormat::R32Float, written).create_view(&Default::default());
         let depth = texture("occlusion depth", sizes[0], 1, wgpu::TextureFormat::Depth32Float, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
-        let (distances, raw, out) = (r32("distances"), r32("occlusion"), r32("occlusion low-passed"));
+        let (distances, raw, horizontal, out) = (r32("distances"), r32("occlusion"), r32("occlusion across"), r32("occlusion low-passed"));
         let pyramid = texture("distances' pyramid", sizes[1], levels - 1, wgpu::TextureFormat::R32Float, written);
         let level: Vec<wgpu::TextureView> = (0..levels - 1).map(|l| pyramid.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })).collect();
         let mips = pyramid.create_view(&Default::default());
@@ -111,7 +112,9 @@ impl Occlusion {
             groups.push(bind(1, &[(7, view(finer)), (6, view(&level[l - 1]))]));
         }
         groups.push(bind(2, &[(0, params.as_entire_binding()), (3, view(&distances)), (4, view(&mips)), (6, view(&raw))]));
-        groups.push(bind(3, &[(0, params.as_entire_binding()), (3, view(&distances)), (5, view(&raw)), (6, view(&out))]));
+        // the low-pass: across into its own image, then down into `out`
+        groups.push(bind(3, &[(0, params.as_entire_binding()), (3, view(&distances)), (5, view(&raw)), (6, view(&horizontal))]));
+        groups.push(bind(3, &[(0, params.as_entire_binding()), (3, view(&distances)), (5, view(&horizontal)), (6, view(&out))]));
         Occluded { depth, out, params, groups, sizes }
     }
 
@@ -141,7 +144,8 @@ impl Occlusion {
         for (l, size) in o.sizes.iter().enumerate().skip(1) {
             dispatch(1, &o.groups[l], *size, 8);
         }
-        dispatch(2, &o.groups[n - 2], [width, height], 8);
-        dispatch(3, &o.groups[n - 1], [width, height], 16);
+        dispatch(2, &o.groups[n - 3], [width, height], 8);
+        dispatch(3, &o.groups[n - 2], [width, height], 16);
+        dispatch(4, &o.groups[n - 1], [width, height], 16);
     }
 }

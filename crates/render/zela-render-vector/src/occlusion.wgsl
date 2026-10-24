@@ -5,7 +5,7 @@
 
 // A 3D view's ambient occlusion (`occlusion.rs`): scalable ambient obscurance, over the view's opaque depth: as
 // distances along the view (`linearize`), a pyramid of them (`depth_mip`), the occlusion (`sao`), and its low-pass,
-// which stops where depth jumps (`blur`).
+// which stops where depth jumps (`blur_h`, `blur_v`).
 
 // The view: its half extent at unit distance (x, y), its near plane's distance, its pyramid's coarsest level; the
 // occlusion's radius, twice its power, its intensity's share a tap, its bias; its peak squared, one over its radius
@@ -160,18 +160,13 @@ fn sao(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(out, id.xy, vec4<f32>(visibility(id.xy)));
 }
 
-// ── its low-pass: a separable Gaussian (sigma 2.5 pixels) over the neighbours on the pixel's own surface — each
-//    weighted by how far its distance is from the surface's plane through the pixel, 1 - (off / threshold)^2, so
-//    a slope keeps its neighbours and no occlusion bleeds across a jump in depth; both 1-D passes in one dispatch, a
-//    tile and its apron in workgroup memory ─────────────────────────────────────────────────────────
+// ── its low-pass: a Gaussian (sigma 2.5 pixels) over the neighbours on the pixel's own surface — each weighted by
+//    how far its distance is from the surface's plane through the pixel, 1 - (off / threshold)^2, so a slope keeps its
+//    neighbours and no occlusion bleeds across a jump in depth. Separable, one pass across (`blur_h`) and one down
+//    (`blur_v`), each reading its neighbours from the distances and the pass before: no workgroup memory, whose reads
+//    after a barrier some mobile drivers return scrambled, banding the result every tile row ─────────
 
-const T: i32 = 16; // the tile
-const A: i32 = 5; // its apron
-const S: i32 = 26; // T + 2 A
-const GAUSS = array<f32, 6>(1.0, 0.92311635, 0.72614904, 0.48675226, 0.27803730, 0.13533528); // exp(-i^2 / 12.5)
-var<workgroup> tile_ao: array<f32, 676>; // S x S
-var<workgroup> tile_z: array<f32, 676>;
-var<workgroup> rows: array<f32, 416>; // S rows of the tile's T columns, low-passed across
+const APRON: i32 = 5; // how far a pixel's neighbours reach
 
 // Along a line of distances with z0 at the centre and zm, zp either side: d(1 / z) a step on the pixel's surface,
 // the side's that changes least (the other may be across an edge; none where neither is a surface).
@@ -189,53 +184,58 @@ fn weight(z0: f32, s: f32, i: f32, z: f32, g: f32) -> f32 {
     return select(0.0, g * max(0.0, 1.0 - off * off), z > 0.0);
 }
 
+// The Gaussian's weight i steps out (exp(-i^2 / 12.5)).
+fn gauss(i: i32) -> f32 {
+    var g = 0.92311635;
+    switch i {
+        case 2: { g = 0.72614904; }
+        case 3: { g = 0.48675226; }
+        case 4: { g = 0.27803730; }
+        case 5: { g = 0.13533528; }
+        default: {}
+    }
+    return g;
+}
+
+fn ao_texel(p: vec2<i32>) -> f32 {
+    return textureLoad(ao_src, clamp(p, vec2<i32>(0), vec2<i32>(textureDimensions(ao_src)) - 1), 0).x;
+}
+
+// The pixel p low-passed along `step`: its own value and its neighbours' either side, weighted by the Gaussian and by
+// how far each lies from the surface's plane.
+fn blurred(z0: f32, p: vec2<i32>, step: vec2<i32>) -> f32 {
+    var sum = ao_texel(p);
+    if (z0 <= 0.0) {
+        return sum;
+    }
+    let s = slope(z0, depth_texel(p - step), depth_texel(p + step));
+    var total = 1.0;
+    for (var i = 1; i <= APRON; i++) {
+        let g = gauss(i);
+        let near = p + step * i;
+        let far = p - step * i;
+        let wf = weight(z0, s, -f32(i), depth_texel(far), g);
+        let wn = weight(z0, s, f32(i), depth_texel(near), g);
+        sum += ao_texel(far) * wf + ao_texel(near) * wn;
+        total += wf + wn;
+    }
+    return sum / total;
+}
+
 @compute @workgroup_size(16, 16)
-fn blur(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    let size = vec2<i32>(textureDimensions(depth0));
-    let origin = vec2<i32>(wg.xy) * T;
-    for (var k = i32(li); k < S * S; k += 256) {
-        let q = clamp(origin - A + vec2<i32>(k % S, k / S), vec2<i32>(0), size - 1);
-        tile_ao[k] = textureLoad(ao_src, q, 0).x;
-        tile_z[k] = textureLoad(depth0, q, 0).x;
-    }
-    workgroupBarrier();
-    for (var k = i32(li); k < T * S; k += 256) {
-        let c = (k / T) * S + k % T + A;
-        let z = tile_z[c];
-        var sum = tile_ao[c];
-        if (z > 0.0) {
-            let s = slope(z, tile_z[c - 1], tile_z[c + 1]);
-            var total = 1.0;
-            for (var i = 1; i <= A; i++) {
-                let wl = weight(z, s, -f32(i), tile_z[c - i], GAUSS[i]);
-                let wr = weight(z, s, f32(i), tile_z[c + i], GAUSS[i]);
-                sum += tile_ao[c - i] * wl + tile_ao[c + i] * wr;
-                total += wl + wr;
-            }
-            sum /= total;
-        }
-        rows[k] = sum;
-    }
-    workgroupBarrier();
-    let p = origin + vec2<i32>(lid.xy);
-    if (any(p >= size)) {
+fn blur_h(@builtin(global_invocation_id) id: vec3<u32>) {
+    let p = vec2<i32>(id.xy);
+    if (any(p >= vec2<i32>(textureDimensions(out)))) {
         return;
     }
-    let x = i32(lid.x);
-    let y = i32(lid.y) + A;
-    let c = y * S + x + A;
-    let z = tile_z[c];
-    var sum = rows[y * T + x];
-    if (z > 0.0) {
-        let s = slope(z, tile_z[c - S], tile_z[c + S]);
-        var total = 1.0;
-        for (var i = 1; i <= A; i++) {
-            let wu = weight(z, s, -f32(i), tile_z[c - i * S], GAUSS[i]);
-            let wd = weight(z, s, f32(i), tile_z[c + i * S], GAUSS[i]);
-            sum += rows[(y - i) * T + x] * wu + rows[(y + i) * T + x] * wd;
-            total += wu + wd;
-        }
-        sum /= total;
+    textureStore(out, p, vec4<f32>(blurred(depth_texel(p), p, vec2<i32>(1, 0))));
+}
+
+@compute @workgroup_size(16, 16)
+fn blur_v(@builtin(global_invocation_id) id: vec3<u32>) {
+    let p = vec2<i32>(id.xy);
+    if (any(p >= vec2<i32>(textureDimensions(out)))) {
+        return;
     }
-    textureStore(out, p, vec4<f32>(sum));
+    textureStore(out, p, vec4<f32>(blurred(depth_texel(p), p, vec2<i32>(0, 1))));
 }
