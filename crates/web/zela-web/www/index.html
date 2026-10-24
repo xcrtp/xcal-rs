@@ -58,6 +58,27 @@
 
   <div id="zela-status">初始化…</div>
 
+  <!-- vConsole v3.15.1（MIT，Tencent）本地内置：移动端没有桌面控制台时也能看日志。
+       默认只在移动端自动打开；?vconsole=1 强制打开、?vconsole=0 关闭（桌面调试同法）。 -->
+  <script src="./vendor/vconsole.min.js"></script>
+  <script>
+    (() => {
+      const forced = new URLSearchParams(location.search).get('vconsole');
+      const mobile = /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(navigator.userAgent)
+        || (navigator.maxTouchPoints > 1 && window.matchMedia
+            && window.matchMedia('(pointer: coarse)').matches);
+      if (forced === '0' || !window.VConsole || !(forced === '1' || mobile)) return;
+      // 不装 network 插件（列表里只留 system / element / storage）：它会包装
+      // window.fetch，导致 wasm-bindgen 的 `instantiateStreaming` 拿到不可用的
+      // Response（实测报 "compile ... must be a Response or Promise<Response>"）。
+      window.__vconsole = new window.VConsole({
+        theme: 'dark',
+        defaultPlugins: ['system', 'element', 'storage'],
+        log: { maxLogNumber: 2000 },
+      });
+    })();
+  </script>
+
   <script type="module">
     import init, { start, start_with_bytes, set_speed, set_backend } from './pkg/zela_web.js';
 

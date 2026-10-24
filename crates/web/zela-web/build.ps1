@@ -10,6 +10,12 @@
 #   python -m http.server 8080 -d crates/web/zela-web/www
 #   http://localhost:8080/index.html                # 播放（作品列表来自 demos.json）
 #   http://localhost:8080/index.html?compare=1      # 对拍（输出帧序列哈希）
+#   http://localhost:8080/index.html?vconsole=1     # 打开页面内控制台（移动端默认自动打开）
+#
+# 自动化 / 移动端实测：用**独立 profile** 启动 Edge，并加 `--disable-sync` 与
+# `--disable-features=msEdgeFirstRunExperience,msEdgeSyncPromo,EdgeSigninPromo`，
+# 否则会弹“同步浏览数据”首启提示。**不要**加 `--disable-gpu-sandbox` /
+# `--enable-unsafe-webgpu`：会触发“不受支持的命令行标记”警告条（当前 Edge 默认已开 WebGPU）。
 #
 # 铁律：**不得另写 bash 版**。ubuntu runner 预装 pwsh，CI 直接
 # `pwsh crates/web/zela-web/build.ps1` —— 与本地跑同一份定义。
