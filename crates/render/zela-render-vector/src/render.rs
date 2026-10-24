@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -112,6 +112,101 @@ pub fn take_resource_totals() -> ResourceTotals {
         buffers: RES_BUFFERS.swap(0, Ordering::Relaxed),
         buffer_bytes: RES_BUFFER_BYTES.swap(0, Ordering::Relaxed),
     }
+}
+
+// ─── B18 Step 2：链表溢出的显式记录 ────────────────────────────────────────
+//
+// 为什么要有：`overflowed` 在"容量已到 device 上限"时直接 `return false`，该帧装不下的
+// see-through 片元被丢弃却没有任何出口（静默失败）。这里把最坏一次的
+// `appended / capacity / most` 落成数，由 `ZELA_FRAME_REPORT` 与控制台各自接住。
+
+static OVERFLOW_EVENTS: AtomicUsize = AtomicUsize::new(0);
+static OVERFLOW_APPENDED: AtomicU64 = AtomicU64::new(0);
+static OVERFLOW_CAPACITY: AtomicU64 = AtomicU64::new(0);
+static OVERFLOW_MOST: AtomicU64 = AtomicU64::new(0);
+
+/// 一次运行里链表溢出的最坏一次（`events` = 发生了多少帧）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OverflowTotals {
+    pub events: usize,
+    pub appended: u64,
+    pub capacity: u64,
+    pub most: u64,
+}
+
+impl OverflowTotals {
+    /// 两次采样合并（逐帧累加成一遍；各字段取最坏）。
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            events: self.events + other.events,
+            appended: self.appended.max(other.appended),
+            capacity: self.capacity.max(other.capacity),
+            most: self.most.max(other.most),
+        }
+    }
+
+    /// 一行 JSON（全整数，字段名与 `ZELA_FRAME_REPORT` 其余部分一致）。
+    pub fn json(&self) -> String {
+        format!(
+            "{{\"events\":{},\"appended\":{},\"capacity\":{},\"most\":{}}}",
+            self.events, self.appended, self.capacity, self.most
+        )
+    }
+}
+
+/// 取走累计的溢出记录（取走即清零）。
+pub fn take_overflow_totals() -> OverflowTotals {
+    OverflowTotals {
+        events: OVERFLOW_EVENTS.swap(0, Ordering::Relaxed),
+        appended: OVERFLOW_APPENDED.swap(0, Ordering::Relaxed),
+        capacity: OVERFLOW_CAPACITY.swap(0, Ordering::Relaxed),
+        most: OVERFLOW_MOST.swap(0, Ordering::Relaxed),
+    }
+}
+
+fn record_overflow(appended: u64, capacity: u64, most: u64) {
+    OVERFLOW_EVENTS.fetch_add(1, Ordering::Relaxed);
+    OVERFLOW_APPENDED.fetch_max(appended, Ordering::Relaxed);
+    OVERFLOW_CAPACITY.fetch_max(capacity, Ordering::Relaxed);
+    OVERFLOW_MOST.fetch_max(most, Ordering::Relaxed);
+}
+
+/// **B18 Step 0（判别实验）**：把所有帧的采样数上限压到该值（0 = 不覆盖）。
+///
+/// 只用于"条纹是否与 MSAA 有关"的一次性判别：`?msaa=1` ⇒ 强制 1x，`=4` ⇒ 恢复。
+/// 不是产品能力开关，默认 0（不改变任何行为）。
+static SAMPLE_OVERRIDE: AtomicU32 = AtomicU32::new(0);
+
+/// 设置采样数上限（0 = 清除覆盖）。见 [`SAMPLE_OVERRIDE`]。
+pub fn set_sample_override(samples: u32) {
+    SAMPLE_OVERRIDE.store(samples, Ordering::Relaxed);
+}
+
+/// **B18 排查**：按位关掉矢量 3D 的某项输入（0 = 全开）。
+///
+/// 只用于在移动端逐项定位（页面 `?skip=ao|shadow|bloom|env`），不是产品开关；
+/// 默认 0 ⇒ 不改变任何行为。
+static SKIP: AtomicU32 = AtomicU32::new(0);
+
+pub const SKIP_AO: u32 = 1;
+pub const SKIP_SHADOW: u32 = 2;
+pub const SKIP_BLOOM: u32 = 4;
+pub const SKIP_ENVIRONMENT: u32 = 8;
+/// 关掉材质光照：网格按"无光"管线画，只有一个颜色目标（没有 MRT 的 light 目标，也没有合成里的光）。
+pub const SKIP_LIGHT: u32 = 16;
+/// 关掉深度测试与写入（比较恒通过）：用来分辨"横向条纹"是否来自深度。
+pub const SKIP_DEPTH: u32 = 32;
+/// 不给 pass 挂 stencil 操作（不清、不丢弃）：Depth32FloatStencil8 的模板面在部分移动驱动上
+/// 可能与深度面共用 tile 内存，丢弃模板会连带破坏深度。用来验证这条假设。
+pub const SKIP_STENCIL: u32 = 64;
+
+/// 设置要跳过的输入。见 [`SKIP`]。
+pub fn set_skip(mask: u32) {
+    SKIP.store(mask, Ordering::Relaxed);
+}
+
+fn skipping() -> u32 {
+    SKIP.load(Ordering::Relaxed)
 }
 
 /// 一张纹理的字节数（块大小 × 宽 × 高 × 层 × mip 级 × 采样数；mip 按整层估算，偏大但可比）。
@@ -1334,6 +1429,26 @@ pub(crate) fn blends_float32(adapter: &wgpu::Adapter) -> bool {
     adapter.get_texture_format_features(wgpu::TextureFormat::R32Float).flags.contains(wgpu::TextureFormatFeatureFlags::BLENDABLE)
 }
 
+/// The highest sample count both the color and depth formats can take (1 = no multisampling).
+///
+/// **B18**：`MULTISAMPLE_X4` / `MULTISAMPLE_X8` 属于规范保证的 `TextureFormatFeatureFlags`，
+/// 查询它**不依赖** `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`（后者只让查询多返回 adapter 私有
+/// 扩展）。此前"没启用该 feature 就假定 4"会在移动端给不支持的格式组合建 4x 附件（横向条纹）；
+/// 能力只能由 adapter 自述，不能猜。
+pub fn msaa_samples(adapter: &wgpu::Adapter) -> u32 {
+    pick_max_samples(
+        adapter.get_texture_format_features(COLOR).flags
+            & adapter.get_texture_format_features(DEPTH).flags,
+    )
+}
+
+fn pick_max_samples(both: wgpu::TextureFormatFeatureFlags) -> u32 {
+    [(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8, 8), (wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4, 4)]
+        .into_iter()
+        .find(|(flag, _)| both.contains(*flag))
+        .map_or(1, |(_, n)| n)
+}
+
 /// An instance's high-performance adapter: float32 coverage blending and floating-point depth
 /// with stencil, which its reversed-Z projection and stroke coverage require.
 async fn adapter(instance: &wgpu::Instance) -> Result<wgpu::Adapter, String> {
@@ -1396,18 +1511,8 @@ impl Gpu {
         queue: wgpu::Queue,
         adapter: &wgpu::Adapter,
     ) -> Result<Self, String> {
-        let specific = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        // 已启用的 features（不是"adapter 有"）—— 注入的 device 可能只申请了并集。
-        let enabled = device.features();
-        let both = adapter.get_texture_format_features(COLOR).flags & adapter.get_texture_format_features(DEPTH).flags;
-        let max_samples = if !enabled.contains(specific) {
-            4
-        } else {
-            [(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8, 8), (wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4, 4)]
-                .into_iter()
-                .find(|(flag, _)| both.contains(*flag))
-                .map_or(1, |(_, n)| n)
-        };
+        // B18：两条路径都问同一个源（adapter 自述）；不再有"没启用 specific 就假定 4"的常量分支。
+        let max_samples = msaa_samples(adapter);
         let image_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("image"),
             entries: &[
@@ -1551,6 +1656,8 @@ impl Gpu {
             };
             let targets = targets_for(if color { wgpu::ColorWrites::ALL } else { wgpu::ColorWrites::empty() });
             let fs = fs.map(entry);
+            // B18 排查：`skip=depth` ⇒ 恒通过、不写深度（管线在建时读开关，运行中不可切换）。
+            let no_depth = skipping() & SKIP_DEPTH != 0;
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(vs),
                 layout: Some(&layout),
@@ -1559,8 +1666,8 @@ impl Gpu {
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH,
-                    depth_write_enabled: Some(write),
-                    depth_compare: Some(C::GreaterEqual), // (reversed Z: nearer is greater)
+                    depth_write_enabled: Some(write && !no_depth),
+                    depth_compare: Some(if no_depth { C::Always } else { C::GreaterEqual }), // (reversed Z: nearer is greater)
                     stencil: wgpu::StencilState { front, back, read_mask: 0xff, write_mask: 0xff },
                     // (a face's edges lie on its plane, a hair nearer: `ribbon`; faces keep their depth, which
                     // the composite compares paths against)
@@ -1835,7 +1942,7 @@ impl Canvas {
             }
         }
         let cleared = |store| Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store }); // (reversed Z: far)
-        let stencil = Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard });
+        let stencil = if skipping() & SKIP_STENCIL != 0 { None } else { Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Discard }) };
         let (depth_ops, stencil_ops) = match depth {
             Depth::Fresh => (cleared(wgpu::StoreOp::Discard), stencil),
             Depth::Kept => (cleared(wgpu::StoreOp::Store), stencil),
@@ -2575,7 +2682,9 @@ impl Player {
     }
 
     fn encode_frame(&mut self, gpu: &mut Gpu, frames: &[Frame], target: Option<&wgpu::TextureView>) -> Result<(wgpu::CommandEncoder, bool, bool), String> {
+        let cap = SAMPLE_OVERRIDE.load(Ordering::Relaxed);
         let samples = self.samples.clamp(1, gpu.max_samples);
+        let samples = if cap == 0 { samples } else { samples.min(cap).max(1) };
         let mut instances: Vec<Instance> = Vec::new();
         let mut sprites: Vec<[u32; 2]> = Vec::new();
         let mut drawings: Vec<Drawing> = Vec::with_capacity(frames.len());
@@ -2690,7 +2799,7 @@ impl Player {
         if drawings.iter().any(rasters) {
             for d in &drawings {
                 match d {
-                    Drawing::Raster { light, .. } => gpu.pipelines(samples, *light),
+                    Drawing::Raster { light, .. } => gpu.pipelines(samples, *light && skipping() & SKIP_LIGHT == 0),
                     Drawing::Vector(..) if rasters(d) => gpu.pipelines(samples, false),
                     Drawing::Vector(..) => {}
                 }
@@ -2714,19 +2823,20 @@ impl Player {
         let mut need = [0u32; 2];
         for (f, d) in frames.iter().zip(&drawings) {
             match d {
-                Drawing::Raster { light, glow, slabs, .. } => {
+                Drawing::Raster { light, glow, slabs, plan, .. } => {
+                    let light = *light && skipping() & SKIP_LIGHT == 0;
                     let canvas = if f.key == 0 { &mut self.targets.as_mut().expect("targets").frame } else { self.canvases.get_mut(&f.key).expect("canvas") };
-                    canvas.attach(gpu, samples, *light);
+                    canvas.attach(gpu, samples, light);
                     if *slabs {
                         canvas.attach_slabs(gpu, samples);
                     }
                     // and where its ambient occlusion is found, if it has some
-                    if occlusion_of(&f.view).is_some() && canvas.occluded.is_none() {
+                    if skipping() & SKIP_AO == 0 && occlusion_of(&f.view).is_some() && canvas.occluded.is_none() {
                         let occlusion = gpu.occlusion.get_or_insert_with(|| occlusion::Occlusion::new(&gpu.device, gpu.blend[(samples > 1) as usize].as_ref().expect("the raster pipeline's shader"), &gpu.raster.scene));
                         canvas.occluded = Some(occlusion.occluded(&gpu.device, [canvas.width, canvas.height]));
                     }
                     // and where its glow is made, if it has some
-                    if glow.is_some() && canvas.bloomed.is_none() {
+                    if skipping() & SKIP_BLOOM == 0 && glow.is_some() && canvas.bloomed.is_none() {
                         let bloom = gpu.bloom.get_or_insert_with(|| bloom::Bloom::new(&gpu.device));
                         canvas.bloomed = Some(bloom.bloomed(&gpu.device, &gpu.linear, &canvas.color, [canvas.width, canvas.height]));
                     }
@@ -2762,7 +2872,7 @@ impl Player {
         }
         let layers = drawings.iter().map(|d| if let Drawing::Raster { shadows, .. } = d { shadows.len() } else { 0 }).max().unwrap_or(0);
         // the frame's environment (its first view's that has one: they share its cube), prefiltered when first shown
-        let shown = frames.iter().find_map(|f| environment_of(&f.view));
+        let shown = if skipping() & SKIP_ENVIRONMENT != 0 { None } else { frames.iter().find_map(|f| environment_of(&f.view)) };
         if let Some(id) = shown {
             let env = self.environments.get_mut(&id).ok_or_else(|| format!("unknown environment {id}"))?;
             if env.cube.is_none() {
@@ -2796,8 +2906,8 @@ impl Player {
             };
             let head: [f32; 8] = [w, h, samples as f32, 0.0, v[36], v[37], v[38], v[39]];
             let shadows = match d {
-                Drawing::Raster { shadows, .. } => &shadows[..],
-                Drawing::Vector(..) => &[],
+                Drawing::Raster { shadows, .. } if skipping() & SKIP_SHADOW == 0 => &shadows[..],
+                _ => &[],
             };
             let mut light = lighting(v, shadows, self.environment_light(v));
             light[3] = v[43]; // (the raster passes': the stroke depth bias)
@@ -2819,6 +2929,8 @@ impl Player {
             let slot = [(i * VIEW_STRIDE) as u32];
             match d {
                 Drawing::Raster { offset, draws, listed, sprites, lists: listing, slabs, light, glow, plan, shadows, cast } => {
+                    // B18 排查：`skip=lit` 强制无光管线（单目标，无 MRT 的 light）。
+                    let light = *light && skipping() & SKIP_LIGHT == 0;
                     // its lights' shadow maps first: its meshes' depth seen from each, then its paths' where nearer
                     for (layer, s) in shadows.iter().enumerate() {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2848,7 +2960,7 @@ impl Player {
                     }
                     // its ambient occlusion: its opaque depth (its opaque meshes', then its opaque paths' where nearer),
                     // then how much of the light from all around reaches each pixel's surface; its lit passes read it
-                    let occluded = canvas.occluded.as_ref().zip(occlusion_of(&f.view));
+                    let occluded = if skipping() & SKIP_AO != 0 { None } else { canvas.occluded.as_ref().zip(occlusion_of(&f.view)) };
                     let own_lighting = occluded.map(|(o, (amount, radius))| {
                         let occlusion = gpu.occlusion.as_ref().expect("the occlusion's passes");
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2887,7 +2999,7 @@ impl Player {
                     let base_light = light.then(|| gpu.vector.base_light(&gpu.device, [canvas.width, canvas.height]));
                     let background = if plan.is_some() { [0.0; 4] } else { [0, 1, 2, 3].map(|k| f.view[VIEW_FLOATS + k] as f64) };
                     let cleared = clear([background[0] * background[3], background[1] * background[3], background[2] * background[3], background[3]]);
-                    let pipelines = &gpu.pipelines[&(samples, *light)];
+                    let pipelines = &gpu.pipelines[&(samples, light)];
                     // sprites, six vertices each, drawn with `pipeline`
                     let draw_sprites = |pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline, range: &Range<u32>| {
                         if !range.is_empty() {
@@ -2898,7 +3010,7 @@ impl Player {
                     // its composite: its paths in depth order with the base (its depth one float a pixel) and its
                     // listed fragments; then, where it glows, its glow spread from the light it leaves, and its pixels
                     // shown with it
-                    let bloomed = canvas.bloomed.as_ref().zip(*glow);
+                    let bloomed = if skipping() & SKIP_BLOOM != 0 { None } else { canvas.bloomed.as_ref().zip(*glow) };
                     let layered = |encoder: &mut wgpu::CommandEncoder, vector: &mut vector::Vector, listed: Option<&vector::Listed>, slabs: Option<&Slabs>| {
                         let Some(plan) = plan else { return };
                         let statics = buffers.vector_statics();
@@ -3039,7 +3151,12 @@ impl Player {
     /// for them, and the frame must be drawn again) — never past the most a buffer can bind.
     pub(crate) fn overflowed(&mut self, gpu: &Gpu, appended: u64, capacity: u64) -> bool {
         let most = gpu.device.limits().max_storage_buffer_binding_size / NODE_BYTES;
-        if appended <= capacity || capacity >= most {
+        if appended <= capacity {
+            return false;
+        }
+        if capacity >= most {
+            // B18：装不下且已到 device 上限 ⇒ 本帧有片元被丢弃；不得静默。
+            record_overflow(appended, capacity, most);
             return false;
         }
         self.list_capacity = self.list_capacity.max(appended.next_power_of_two()).min(most);
@@ -3388,6 +3505,23 @@ pub(crate) fn count(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod buffer_contract {
     use super::*;
+
+    #[test]
+    fn msaa_is_picked_from_format_flags_without_a_feature_gate() {
+        use wgpu::TextureFormatFeatureFlags as F;
+        assert_eq!(pick_max_samples(F::MULTISAMPLE_X8 | F::MULTISAMPLE_X4), 8);
+        assert_eq!(pick_max_samples(F::MULTISAMPLE_X4), 4);
+        assert_eq!(pick_max_samples(F::empty()), 1);
+    }
+
+    #[test]
+    fn overflow_totals_keep_the_worst_event() {
+        let a = OverflowTotals { events: 1, appended: 10, capacity: 8, most: 16 };
+        let b = OverflowTotals { events: 2, appended: 14, capacity: 12, most: 16 };
+        let sum = a.plus(b);
+        assert_eq!(sum.events, 3);
+        assert_eq!((sum.appended, sum.capacity, sum.most), (14, 12, 16));
+    }
 
     #[test]
     fn growth_never_exposes_more_than_the_binding_allows() {

@@ -91,10 +91,12 @@ fn storage_bindable(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> boo
 fn probe_adapter_facts(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> String {
     let downlevel = adapter.get_downlevel_capabilities();
     let bits = adapter.features().bits().0;
+    let limits = adapter.limits();
     format!(
         "features={:x?} can_compute={} indirect_first_instance={} float32_blendable={} \
          depth32float_stencil8={} adapter_specific_formats={} r32float_blendable={} \
-         rgba32float_storage={} rgba8unorm_storage={} surface_format={:?}",
+         rgba32float_storage={} rgba8unorm_storage={} surface_format={:?} \
+         max_samples={} max_storage_buffer_binding_size={} max_texture_dimension_2d={}",
         bits,
         downlevel
             .flags
@@ -113,6 +115,9 @@ fn probe_adapter_facts(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFor
         storage_bindable(adapter, wgpu::TextureFormat::Rgba32Float),
         storage_bindable(adapter, wgpu::TextureFormat::Rgba8Unorm),
         surface_format,
+        zela_render_vector::msaa_samples(adapter),
+        limits.max_storage_buffer_binding_size,
+        limits.max_texture_dimension_2d,
     )
 }
 
@@ -159,6 +164,10 @@ pub fn set_backend(kind: &str) -> Result<(), JsValue> {
 /// 播放速度（0.1×–8×）。帧循环每个 rAF 读取一次，因此播放中可即时调速。
 /// compare 模式强制 1×（见 [`playback_speed`]），不参与调速。
 static SPEED_BITS: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+
+/// **B18 排查**：`?copy=1` ⇒ 矢量目标与 surface 同格式时用 `copy_texture_to_texture`
+/// 直接呈现，绕过全屏 blit 渲染通道。用来分辨条纹在合成侧还是呈现侧。
+static PRESENT_COPY: AtomicBool = AtomicBool::new(false);
 
 const MIN_SPEED: f32 = 0.1;
 const MAX_SPEED: f32 = 8.0;
@@ -381,6 +390,41 @@ async fn run() -> Result<(), JsValue> {
         .get("zsb")
         .unwrap_or_else(|| "./fourier.zsb".to_string());
     let compare = params.get("compare").as_deref() == Some("1");
+    // B18 Step 0（判别实验）：?msaa=1 强制 1x、?msaa=4 恢复；0 或省略 = 不覆盖。
+    if let Some(samples) = params.get("msaa").and_then(|value| value.parse::<u32>().ok()) {
+        zela_render_vector::set_sample_override(samples);
+        web_sys::console::log_1(&JsValue::from_str(&format!(
+            "[msaa] override={samples}（0 = 关闭）"
+        )));
+    }
+    // B18 排查：?skip=ao,shadow,bloom,env 逐项关掉矢量 3D 的输入（默认全开）。
+    if let Some(list) = params.get("skip") {
+        let mut mask = 0;
+        for name in list.split(',').map(str::trim) {
+            mask |= match name {
+                "ao" => zela_render_vector::SKIP_AO,
+                "shadow" => zela_render_vector::SKIP_SHADOW,
+                "bloom" => zela_render_vector::SKIP_BLOOM,
+                "env" => zela_render_vector::SKIP_ENVIRONMENT,
+                "lit" => zela_render_vector::SKIP_LIGHT,
+                "depth" => zela_render_vector::SKIP_DEPTH,
+                "stencil" => zela_render_vector::SKIP_STENCIL,
+                other => {
+                    web_sys::console::warn_1(&JsValue::from_str(&format!(
+                        "[skip] 未知项 {other}（只认 ao | shadow | bloom | env | lit | depth | stencil）"
+                    )));
+                    0
+                }
+            };
+        }
+        zela_render_vector::set_skip(mask);
+        web_sys::console::log_1(&JsValue::from_str(&format!("[skip] mask={mask:#x}")));
+    }
+    // B18 排查：?copy=1 绕过呈现侧的全屏 blit。
+    if params.get("copy").as_deref() == Some("1") {
+        PRESENT_COPY.store(true, Ordering::Relaxed);
+        web_sys::console::log_1(&JsValue::from_str("[copy] 呈现改用 copy_texture_to_texture"));
+    }
 
     let loading = format!("加载 {zsb_url} …");
     set_status(&document, &loading);
@@ -492,6 +536,9 @@ async fn run_with(
     let mut vector_target: Option<VectorTarget> = None;
     // B17 Step 0：本播放是否真的走过矢量（状态栏只在那时报资源数）。
     let mut vector_used = false;
+    // B18 Step 2：链表溢出累计（0 = 没有片元被丢弃；播放结束在控制台落一行）。
+    let _ = zela_render_vector::take_overflow_totals();
+    let mut vector_overflow = zela_render_vector::OverflowTotals::default();
     // 状态栏常驻的后端决策行（B11 §7.4：选了谁、为什么、谁被拒）。
     let mut backend_line = String::new();
     // 矢量后端的默认渲染参数（`PostCaps::all()` ⇒ 着色栈默认开，与 native 同口径）。
@@ -647,6 +694,7 @@ async fn run_with(
         }
 
         end_frame(&runtime);
+        vector_overflow = vector_overflow.plus(zela_render_vector::take_overflow_totals());
         index += 1;
 
         if index >= next_status {
@@ -686,6 +734,13 @@ async fn run_with(
                 vector_resource_note(vector_used)
             ),
         );
+    }
+    if vector_overflow.events > 0 {
+        // 静默失败不得静默：装不下的片元被丢弃时，明确落一行（vConsole 可直接看到）。
+        web_sys::console::warn_1(&JsValue::from_str(&format!(
+            "[vector-overflow] {}",
+            vector_overflow.json()
+        )));
     }
     Ok(())
 }
@@ -743,7 +798,20 @@ impl VectorTarget {
     }
 
     fn present(&self, ctx: &RenderContext, output: &wgpu::SurfaceTexture) {
-        self.blit.draw(ctx, &self.texture, output);
+        // B18 排查：?copy=1 且格式相同 ⇒ 直接拷贝（不经过 blit 渲染通道）。
+        if PRESENT_COPY.load(Ordering::Relaxed) && self.texture.format() == output.texture.format() {
+            let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("zela-vector-copy"),
+            });
+            encoder.copy_texture_to_texture(
+                self.texture.as_image_copy(),
+                output.texture.as_image_copy(),
+                wgpu::Extent3d { width: WIDTH, height: HEIGHT, depth_or_array_layers: 1 },
+            );
+            ctx.queue.submit([encoder.finish()]);
+        } else {
+            self.blit.draw(ctx, &self.texture, output);
+        }
     }
 }
 

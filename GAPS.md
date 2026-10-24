@@ -569,6 +569,26 @@
 
 ---
 
+## U. B18 批次记账（移动端 3D 条纹与 MSAA 能力判据，2026-10-24）
+
+> 计划《B18执行计划_移动端3D条纹与MSAA能力判据》。一句话：**移动端因为没有
+> `adapter_specific_formats`，`max_samples` 走了"不查硬件、硬编码 4"的分支，从而在不支持
+> 4x MSAA 的设备上创建了 4x 附件（规则横向条纹）。** 修法是删掉常量分支，两条路径问同一个源。
+> 本批代码已就位；条纹是否消失需移动端复测。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| X8-01 | 移动端 3D 出现规则横向条纹：**根因待定**（H1「4x MSAA 不被支持」已被源码证据证伪，见 X8-06） | 渲染 / MSAA | **记账（B18：等 `?msaa=1` 判别）** | 判别开关：`?msaa=1` 强制 1x。条纹消失 ⇒ 与 MSAA 有关（采样表/驱动）；仍在 ⇒ 非 MSAA（行分块 H2 / 链表溢出 H3，X8-04 已可观测）。`[adapter-facts]` 已带 `max_samples` / `max_storage_buffer_binding_size`，无需再靠拍屏 |
+| X8-02 | `max_samples` 两条路径判据不一致：未启用 specific 时**硬编码 4**，启用时才查格式能力 | 渲染 / 能力判定 | **已关闭（B18 Step 1）** | `Gpu::from_parts` 改调 `msaa_samples(adapter)`（只查 `get_texture_format_features(COLOR/DEPTH)` 的 `MULTISAMPLE_X4/X8`），不再有无条件常量分支。单测：x8 ⇒ 8、x4 ⇒ 4、空 ⇒ 1。⚠️ 在 WebGPU 上与旧值同为 4（X8-06）；native 启用 specific 时行为不变（25 条基线逐位不变） |
+| X8-03 | 移动端 3D 可能降为 **1x MSAA**（边缘锯齿变明显） | 渲染 / 画质 | **记账（B18 Step 1 取舍）** | 若 `?msaa=1` 能消条纹，则移动端需要在"1x 有锯齿"与"4x 出条纹"之间取舍。该 feature 由 adapter 决定是否提供，**不是应用能请求的**；取舍需设备实测后定 |
+| X8-04 | 链表溢出静默：`overflowed()` 在容量已到 device 上限时直接 `return false`，该帧装不下的 see-through 片元被丢弃且无任何出口 | 渲染 / 观测 | **已关闭（B18 Step 2）** | 新增 `OverflowTotals`（events / appended / capacity / most），`overflowed` 撞上限时记录最坏一次；`ZELA_FRAME_REPORT` 新增 `vector_overflow`；浏览器播放结束落 `[vector-overflow]`（vConsole 可见）。单测覆盖 `plus` 的最坏值合并 |
+| X8-05 | `[adapter-facts]` 完全不打印 limits（本轮最大的观测盲区：`max_samples` / 溢出上限都看不见） | 观测 / 能力 | **已关闭（B18 Step 0）** | 一行内新增 `max_samples`（与 `Gpu` 同源）、`max_storage_buffer_binding_size`（溢出上限 = 该值 / 16）、`max_texture_dimension_2d` |
+| X8-06 | 计划 H1 的因果链不成立："没有 `adapter_specific_formats` ⇒ 查询退化为规范最小集 ⇒ 1x" | 渲染 / 依据 | **已关闭（B18 Step 0 源码证据）** | wgpu 30 的 WebGPU 后端 `get_texture_format_features` 直接返回 `format.guaranteed_format_features(adapter.features())`（`backend/webgpu.rs`）；`Rgba8Unorm` 与 `Depth32FloatStencil8` 的保证位都含 `MULTISAMPLE_X4`。⇒ 移动端 `max_samples` **本来就是 4**，旧硬编码 4 在 WebGPU 上与查询同值。H1 就此排除，条纹根因转 H2（行分块）/ H3（溢出）或驱动 |
+
+**U 段小计（B18）**：已关闭 4（X8-02、X8-04、X8-05、X8-06）· 记账 2（X8-01、X8-03）。
+
+---
+
 ## 统计与维护约定
 
 > **口径（B14 §7.2）**：下表只统计 A / B / C 三段（最初 44 条）。D 段及之后（D–R，按批次追加）

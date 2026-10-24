@@ -369,6 +369,7 @@ fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) 
          \"cache\":{},\"textures_created\":{},\"textures_created_scope\":\"wgpu-only\",\
          \"vector_resources\":{},\"vector_resource_curve\":{{\"frames\":{},\"first\":{},\"last\":{},\
          \"max_textures\":{},\"max_texture_bytes\":{},\"max_buffers\":{},\"max_buffer_bytes\":{}}},\
+         \"vector_overflow\":{},\
          \"verify_note\":\"verify_ms 未启用（GPU 校验 pass 未实现，B12 Step 1.3）\",\
          \"decisions\":[{}]}}",
         work.name,
@@ -387,6 +388,7 @@ fn report_work(work: &Work, pass: &str, frames: u32, env: &str, run: &FrameRun) 
         peak(|r| r.texture_bytes),
         peak(|r| r.buffers),
         peak(|r| r.buffer_bytes),
+        run.vector_overflow.json(),
         decisions.join(","),
     );
     match std::fs::OpenOptions::new()

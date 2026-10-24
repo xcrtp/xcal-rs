@@ -51,6 +51,10 @@ pub use api::{
 pub use render::init_gpu;
 // B17 Step 0：矢量后端的资源创建计数（纹理 / 缓冲；取走即清零）。
 pub use render::{ResourceTotals, resource_totals, take_resource_totals};
+// B18：MSAA 能力查询（adapter 自述）、判别实验的采样覆盖、链表溢出的显式记录。
+pub use render::{OverflowTotals, msaa_samples, set_sample_override, take_overflow_totals};
+// B18：移动端条纹的逐项排查开关（页面 `?skip=`；默认 0 = 全开）。
+pub use render::{SKIP_AO, SKIP_BLOOM, SKIP_DEPTH, SKIP_ENVIRONMENT, SKIP_LIGHT, SKIP_SHADOW, SKIP_STENCIL, set_skip};
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
 #[cfg(not(target_arch = "wasm32"))]

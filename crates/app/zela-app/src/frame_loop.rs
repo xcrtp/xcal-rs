@@ -369,6 +369,8 @@ pub struct FrameRun {
     pub vector_resources: zela_render_vector::ResourceTotals,
     /// **B17 Step 0**：逐帧的资源增量（等长于 `timings`；wgpu 帧为 0）。稳态应每帧为 0。
     pub resource_frames: Vec<zela_render_vector::ResourceTotals>,
+    /// **B18 Step 2**：本次运行链表溢出（装不下且已到 device 上限）的最坏一次。
+    pub vector_overflow: zela_render_vector::OverflowTotals,
 }
 
 impl FrameRun {
@@ -474,6 +476,9 @@ pub fn run_frames(
     let mut vector_resources = zela_render_vector::ResourceTotals::default();
     let mut resource_frames: Vec<zela_render_vector::ResourceTotals> =
         Vec::with_capacity(frames as usize);
+    // B18 Step 2：链表溢出逐帧取增量（0 = 没有片元被丢弃）。
+    let _ = zela_render_vector::take_overflow_totals();
+    let mut vector_overflow = zela_render_vector::OverflowTotals::default();
 
     for index in 0..frames {
         let mut timing = FrameTiming::default();
@@ -660,6 +665,8 @@ pub fn run_frames(
         let resources = zela_render_vector::take_resource_totals();
         vector_resources = vector_resources.plus(resources);
         resource_frames.push(resources);
+        // B18 Step 2：这一帧的链表溢出（取走即清零；wgpu 帧为 0）。
+        vector_overflow = vector_overflow.plus(zela_render_vector::take_overflow_totals());
 
         timings.push(timing);
     }
@@ -674,5 +681,6 @@ pub fn run_frames(
             .saturating_sub(textures_before),
         vector_resources,
         resource_frames,
+        vector_overflow,
     })
 }

@@ -1497,3 +1497,22 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
   421 帧到播完不变。25 条基线逐位不变。
 - **未做**：`evict`（多帧在飞 + `settle` 语义）仍不启用；移动端可用性判定等设备实测
   （GAPS X7-04）。
+
+### B18 移动端 3D 条纹与 MSAA 能力判据
+
+> 一句话：**能力判据不得有无条件常量分支**，但"统一判据"不等于"条纹已修"。
+> 源码证据表明：wgpu 的 WebGPU 后端只返回规范保证的格式能力，`Rgba8Unorm` /
+> `Depth32FloatStencil8` 都保证 `MULTISAMPLE_X4` ⇒ 移动端 `max_samples` 本来就是 4。
+> 因此计划里的 H1（"没有 adapter-specific formats ⇒ 不支持 4x"）**被证伪**，条纹根因仍待判别。
+
+- **判据**：`msaa_samples(adapter)` 只查 `get_texture_format_features(COLOR / DEPTH)` 的
+  `MULTISAMPLE_X4` / `MULTISAMPLE_X8`；`Gpu::from_parts` 与浏览器 `[adapter-facts]` 共用
+  这一源。桌面/移动在 WebGPU 上都得到 4（保证位），旧硬编码分支与查询同值；改动只是删掉
+  静默常量分支，25 条基线逐位不变。
+- **判别实验**：`?msaa=1` 把所有帧的采样数压到 1（`set_sample_override`，默认 0 不生效）。
+  条纹消失 ⇒ 与 MSAA 路径有关（`depth.wgsl` / `blend_lists.wgsl` 的采样表或驱动）；
+  仍在 ⇒ 非 MSAA（行分块 / 链表溢出 / 阴影等）。
+- **观测**：`[adapter-facts]` 新增 `max_samples` / `max_storage_buffer_binding_size` /
+  `max_texture_dimension_2d`；链表溢出（容量已到 device 上限、片元被丢弃）经
+  `OverflowTotals` 进入 `ZELA_FRAME_REPORT.vector_overflow` 与浏览器 `[vector-overflow]`。
+- **验收**：等移动端 `?msaa=1` 复测（条纹是否消失 + `[adapter-facts]` 的 `max_samples`）。
