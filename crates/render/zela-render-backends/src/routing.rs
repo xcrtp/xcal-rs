@@ -169,8 +169,11 @@ fn order_of(preference: LoopBackend) -> &'static [BackendKind] {
         LoopBackend::Wgpu => &[BackendKind::Wgpu],
         // 偏好矢量：先矢量，被拒才回退（回退**打印理由**，不是静默）。
         LoopBackend::Vector => &[BackendKind::Vector, BackendKind::Wgpu],
-        // 自动默认 wgpu：保住现有 16 条基线（C3），矢量只在 wgpu 拒绝时接手。
-        LoopBackend::Auto | LoopBackend::AutoFrame => &[BackendKind::Wgpu, BackendKind::Vector],
+        // B19 Step 3：自动默认矢量 —— B10~B18 建的整套东西（解析 AA、着色栈、资源常驻）
+        // 终于走默认路径；被拒（内容纹理 / 混排 / 线框 / morph / 能力不足）才回退冻结的 wgpu，
+        // 且回退**必带理由**。基线不受影响：`cargo verify --step hashes` 用显式 (作品, 后端)
+        // 对表，根本不经过这里。
+        LoopBackend::Auto | LoopBackend::AutoFrame => &[BackendKind::Vector, BackendKind::Wgpu],
     }
 }
 
@@ -299,12 +302,15 @@ mod tests {
         }
     }
 
-    /// 默认（自动）路径：wgpu 能画 ⇒ 选 wgpu，且没有后端被拒。
-    /// 这是 16 条基线不变的**决策级**理由。
+    /// 默认（自动）路径：矢量能画 ⇒ 选矢量，且没有后端被拒。
+    ///
+    /// B19 Step 3 把默认顺序从 `[Wgpu, Vector]` 换成 `[Vector, Wgpu]`：B10~B18 的能力
+    /// 必须走默认路径才算生效。25 条基线**不受影响**——`cargo verify --step hashes`
+    /// 用显式的 (作品, 后端) 对表，不经过 Auto 路由。
     #[test]
-    fn auto_prefers_wgpu_so_baselines_stay_put() {
+    fn auto_prefers_vector_now_that_it_is_the_default() {
         let decision = route(LoopBackend::Auto, plain_2d(), capable()).unwrap();
-        assert_eq!(decision.backend, BackendKind::Wgpu);
+        assert_eq!(decision.backend, BackendKind::Vector);
         assert!(decision.rejected.is_empty());
         assert!(decision.reason.contains("自动"));
     }

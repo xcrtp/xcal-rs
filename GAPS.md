@@ -12,7 +12,7 @@
 > 同目标可复现 ✅（最硬）· 跨端结构一致 ✅ · 跨端逐位相同 ❌（已知可接受）。
 > 本文件谈「确定性」时沿用这三层，不混用。
 
-## 状态定义（四类 + 两个补充）
+## 状态定义（四类 + 两个补充 + 落档）
 
 | 状态 | 含义 | 判定要求 |
 |---|---|---|
@@ -22,6 +22,7 @@
 | **升格 / 降格** | 成为前置阻塞（P0）或降为工效项 | 写清理由 |
 | 范围外 | 本仓库/浏览器路线明确不做 | 写清替代路线 |
 | 待定 | 证据不足或依赖未定决策 | 不得为了清而清 |
+| **落档** | 实现选择不同，**两边都对**（B19 V-08） | 写清参照物、不再收敛的理由，并声明不构成门禁失败 |
 
 ---
 
@@ -29,7 +30,7 @@
 
 | 编号 | 缺口 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| **G-101** | `WorldTransforms` 只有 2D 仿射；3D 录制只读 local `Transform`，3D 父子层级未接线 | 场景层 → 渲染层 | **升格（原 F-02）→ S1 已关闭** | 关闭于 S1：结构层提交 `84cabeb`（[`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs#L39-L65) 改存 `Transform3D` + `get2d` 投影）、消费方接线提交 `3ed493f`（[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs) 3D 录制 `Reads = (WorldTransforms,)`）；像素对拍 fourier / storyboard 与基线逐位一致（冻结态通过） |
+| **G-101** | `WorldTransforms` 只有 2D 仿射；3D 录制只读 local `Transform`，3D 父子层级未接线 | 场景层 → 渲染层 | **升格（原 F-02）→ S1 已关闭** | 关闭于 S1：结构层提交 `84cabeb`（[`transform_hierarchy.rs`](crates/scene/zela-scene-ecs/src/transform_hierarchy.rs#L39-L65) 改存 `Transform3D` + `get2d` 投影）、消费方接线提交 `3ed493f`（[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs) 3D 录制 `Reads = (WorldTransforms,)`）；像素对拍 fourier / storyboard 与基线逐位一致（冻结态通过） |
 | **G-101 补证（S0-1，2026-10-20）** | S1 零扰动已实证：h_after（HEAD `ba75687`，S1 后）== h_before（`ff2751d`，S1 前）== 同一对哈希 fourier `b6eaa864933847ff…` / storyboard `6de42d6b15943c…`（均用当前 ZELA 口径重跑）。注：计划原定 h_before 取 `84cabeb^`，但该中间提交 `3ed493f` 不可编译（record_systems 已接线而 draw.rs 仍传 Mat3），故取真正可编译的 S1 前 `ff2751d`（`3ed493f^`）—— 以代码为准，见执行报告 §六.4 |
 
 > **消息误标注明（S0-4）**：`3ed493f` 的提交消息写「WorldTransforms 换型为 3D（结构层）」，实际内容只是 `record_systems.rs` 的消费方接线（结构层本体在 `84cabeb`）。该提交已在 `origin/feat/2d3d-fusion` 上（共享分支），故不改写历史，仅在此记账。
@@ -49,20 +50,20 @@
 
 | 编号 | 一句话描述 | 影响层 | 状态 | 证据 / 说明 |
 |---|---|---|---|---|
-| F-01 | 脚本 `Curve.Keyframes` 只有标量 | 脚本层 | **描述不准，已改写** | 内核 [`AnimValue`](crates/kernel/ze-time/src/curve.rs#L16-L23) 已支持 `Scalar/Vec2/Vec3/Color/Path`，`Curve::Keyframes` 也用 `AnimValue`；缺口只在脚本入口 [`pod/types.rs`](crates/scene/zela-scene/src/pod/types.rs#L259-L275) 的 `Vec<ScalarKey>` |
+| F-01 | 脚本 `Curve.Keyframes` 只有标量 | 脚本层 | **描述不准，已改写** | 内核 [`AnimValue`](crates/kernel/ze-time/src/curve.rs#L16-L23) 已支持 `Scalar/Vec2/Vec3/Color/Path`，`Curve::Keyframes` 也用 `AnimValue`；缺口只在脚本入口 [`types.rs`](crates/scene/ze-scene-api/src/types.rs#L468) 的 `Vec<ScalarKey>` |
 | F-02 | `WorldTransforms` 只有 2D 仿射 | 场景/渲染 | **升格 P0（G-101）** | 同上 |
 | F-03 | `MorphRecordSystem` / `ContentTextureRecordSystem` 不消费世界变换 | 渲染 | 仍成立 | [`record_systems.rs`](crates/render/zela-render/src/record_systems.rs#L133-L175)、[`L249-L272`](crates/render/zela-render/src/record_systems.rs#L249-L272) 的 `Reads` 均无 `WorldTransforms` |
 | F-04 | `Opacity` 不沿 `Parent` 传播 | 渲染 | 仍成立 | [`draw.rs`](crates/render/zela-render/src/draw.rs#L482-L487) 只读对象自身组件；无祖先链查询 |
 | F-05 | 父子环路只写 `TransformHierarchyError` 资源 | 场景 | 仍成立 | 生产侧仅 [`zela-playback`](crates/app/zela-playback/src/lib.rs#L196-L198) 插入默认值；无宿主升级为帧错误 |
 | F-06 | `Reveal` 世界变换在 CPU 侧逐帧折算路径 | 渲染性能 | 仍成立 | [`record_systems.rs`](crates/render/zela-render/src/record_systems.rs#L216-L235) 每帧 `path.transformed(...)`（克隆 + 变换） |
-| F-07 | `clip_transform` 是独立函数，不是 `Target.Transform` 形态 | 脚本 API | **可清** | 能力已由 [`pod/api.rs`](crates/scene/zela-scene/src/pod/api.rs#L79-L83) 提供；计划中的枚举形态从未落地，语义等价且可并行写不同通道 |
-| F-08 | Text 缺颜色 / 对齐 / 尺寸回读 | 内容/脚本 | 仍成立 | [`Text`](crates/scene/zela-scene/src/pod/types.rs#L227-L232) 只有 `source/font_size/x/y`；[`ContentApi`](crates/scene/zela-scene/src/pod/api.rs#L105-L111) 返回 `PathList`，无排版度量回读 |
-| F-09 | `Axes2D` 无刻度标签 | 对象层 | 仍成立 | [`axes.rs`](crates/object/ze-object/src/axes.rs#L200-L221) 只产 `x_ticks/y_ticks/grid_lines/axis_lines`，无文字 |
-| F-10 | 无 ZOrder 脚本入口 | 脚本层 | 仍成立 | `ZOrder` 组件存在（[`ze-object`](crates/object/ze-object/src)），[`SceneApi`](crates/scene/zela-scene/src/pod/api.rs#L27-L93) 无构造器 |
-| F-11 | 无 `fit_bounds` 脚本入口 | 脚本层 | 仍成立 | [`Camera2D::fit_bounds`](crates/object/ze-object/src/camera.rs#L117) 已存在；脚本 API 无对应函数 |
+| F-07 | `clip_transform` 是独立函数，不是 `Target.Transform` 形态 | 脚本 API | **可清** | 能力已由 [`api.rs`](crates/scene/ze-scene-api/src/api.rs#L108) 提供；计划中的枚举形态从未落地，语义等价且可并行写不同通道 |
+| F-08 | Text 缺颜色 / 对齐 / 尺寸回读 | 内容/脚本 | 仍成立 | [`Text`](crates/scene/ze-scene-api/src/types.rs#L421-L426) 只有 `source/font_size/x/y`；[`ContentApi`](crates/scene/ze-scene-api/src/api.rs#L142) 返回 `PathList`，无排版度量回读 |
+| F-09 | `Axes2D` 无刻度标签 | 对象层 | 仍成立 | [`axes.rs`](crates/scene/ze-scene-core/src/object/axes.rs#L204-L221) 只产 `x_ticks/y_ticks/grid_lines/axis_lines`，无文字 |
+| F-10 | 无 ZOrder 脚本入口 | 脚本层 | 仍成立 | `ZOrder` 组件存在（[`draw.rs`](crates/kernel/ze-render-ir/src/draw.rs#L23)），[`SceneApi`](crates/scene/ze-scene-api/src/api.rs#L37) 无构造器 |
+| F-11 | 无 `fit_bounds` 脚本入口 | 脚本层 | 仍成立 | [`Camera2D::fit_bounds`](crates/scene/ze-scene-core/src/object/camera.rs#L117) 已存在；脚本 API 无对应函数 |
 | F-12 | Python `from` 关键字迫使位置参数 | 语言适配器 | 仍成立 | 脚本内注明：[`fourier.py`](crates/app/zela-app/scripts/fourier.py#L18) |
 | F-13 | 无虚线 / 线帽 / 渐变 | 渲染 IR | 仍成立 | [`Style2D`](crates/kernel/ze-render-ir/src/shape.rs#L181-L194) 只有 fill/stroke/width/space |
-| F-14 | `Parent` 只接受脚本句柄 | 脚本层 | 仍成立 | [`Parent`](crates/scene/zela-scene/src/pod/types.rs#L75-L80) 为 `Handle`；无按名字/路径重挂 API |
+| F-14 | `Parent` 只接受脚本句柄 | 脚本层 | 仍成立 | [`Parent`](crates/scene/ze-scene-api/src/types.rs#L238-L240) 为 `Handle`；无按名字/路径重挂 API |
 
 **A 段小计**：可清 1 · 描述不准 1 · 升格 P0 1 · 仍成立 11。
 
@@ -78,7 +79,7 @@
 | W-04 | P1-4 导出 fs / ffmpeg | 范围外 | 浏览器不导出；ZSB 路线绕开 |
 | W-05 | P1-5 `zela-gui` 关不掉下层默认 features | **降格** | `zela-gui` 不进浏览器 ⇒ 与浏览器无关，仅工效项 |
 | W-06 | P2-1 `gpu_test` 的 libc / sleep / spawn | **可清** | 归入 `blocking` feature；wasm 构建不编译 |
-| W-07 | P2-2 `Receipt::wait` 忙等 | **可清** | [`DriverPod::submit`](crates/scene/zela-scene/src/driver.rs#L200-L207) 同步跑完 `run_frames` 后 `complete()`，`yield_now` 走不到 |
+| W-07 | P2-2 `Receipt::wait` 忙等 | **可清** | [`DriverPod::submit`](crates/scene/zela-scene-ecs/src/driver.rs#L132) 同步跑完 `run_frames` 后 `complete()`，`yield_now` 走不到 |
 | W-08 | P2-3 CI wasm gate 未覆盖 | **可清** | [`.github/workflows/architecture.yml`](.github/workflows/architecture.yml) 的 Playback runtime gate |
 | W-09 | P2-4 `ze-pod-py` wasm | 范围外 | 浏览器不启用 Python Pod |
 
@@ -98,7 +99,7 @@
 | R-02 | `ObjectId::is_stale` 无生产消费方 | `ze-scene-contract` README | 仍成立 | 仅单测；销毁-重建流程未引入 |
 | R-03 | `record_scene` 不消费 `Descriptors` | `ze-scene-contract` README | 仍成立 | 消费方是构造期 `apply`；录制层直接吃 `Style2D` |
 | R-04 | `Shape2D` 无 `Text/Image` 变体 | `zela-render` README | 仍成立 | 内容以路径形式进入 `Path/Polyline` |
-| R-05 | `Parent` 零生产消费方 | `ze-scene-contract` README / `ARCHITECTURE.md` | **可清（文档已修）** | S5 已接线：[`transform_hierarchy.rs`](crates/scene/zela-scene/src/transform_hierarchy.rs)、[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs#L86) |
+| R-05 | `Parent` 零生产消费方 | `ze-scene-contract` README / `ARCHITECTURE.md` | **可清（文档已修）** | S5 已接线：[`transform_hierarchy.rs`](crates/scene/zela-scene-ecs/src/transform_hierarchy.rs)、[`record_systems.rs`](crates/render/zela-render/src/record_systems.rs#L86) |
 | R-06 | `Path3D` 零消费方 | `ARCHITECTURE.md` | 仍成立 | 与 `Path2D` 不同构，接入是破坏性变更 |
 | R-07 | `glam::` 未完全收敛到 `ze-notion` | `ARCHITECTURE.md` | 仍成立 | 2026-10-19 实测 **25 次**（口径：`*.rs` 中 `glam::` 出现次数，含注释、含 3 个豁免 crate；不含 `.md` 与根 `Cargo.toml`）；`zela-scene` 代码引用已归零 |
 | R-08 | 节点编辑器冻结（已排期） | `ARCHITECTURE.md` | 仍成立（排期项） | 零生产消费方；等 UI 接口稳定 |
@@ -362,7 +363,7 @@
 | V2-09 | 双后端对拍的**口径**问题（B4 验收 P1-1/2/3）：① MAE 12.18 无法区分"AA 方式不同"与"色彩管线不同"；② 矢量自测在起不来 GPU 时静默 `return`（仍然 passed）；③ 对拍注释声称"验证注册机制"，实际绕过 `BackendRegistry` | 测试 / 对拍 | **已关闭（B4 验收）** | ① MAE 拆「内部区 / 边缘带」并输出计数，内部区门禁 ≤ 2/255；**诊断出真 bug**：斜边夹具把屏幕坐标（y 向下）当成世界坐标（y 向上）⇒ 比的是镜像形状。修正后实测全图 MAE 0.09（内部区 0.00、边缘带 3.44），全局阈值由 24 收紧到 8。② `api.rs` 起不来即 `panic!`（与对拍同口径）。③ 注释改为"本对拍不经过 `BackendRegistry`，注册机制由 `registry.rs` 单测覆盖" |
 
 | V2-10 | 描边 `cap` / `join` 曾是 **lyon 的隐默默认**（不在任何契约里）：换后端 / 换 lyon 版本都会静默改画面 | 渲染 IR | **已关闭（B5 Step 1）** | `StrokeCap` / `StrokeJoin` / `StrokeShape` 进 `ze-render-ir::style`；`StrokeSolid` 带 `#[serde(default)]`（默认 butt + miter ⇒ 旧 ZSB 逐位不变）；`Style2D.stroke_shape` 是**后端唯一消费点**；`tessellate.rs` 的 `stroke_options()` 显式驱动 lyon（`StrokeOptions::default()` 不再裸用）。实测钉住 `lyon_tessellation 1.0.22` 默认 `Butt / Miter / 4.0`，测试断言"默认选项逐字段相等 + 改 cap/join 真的改变顶点数" |
-| V2-11 | miter limit 两边不一致：lyon 默认 **4.0**，上游矢量**硬编码 10**（`vector.wgsl:497` / `render.rs:330`） | 渲染后端 | **记账（B5 §1.3）** | 即使两边都声明 `Miter`，极端尖角表现仍不同。改它要动上游 wgsl 语义 ⇒ 本批不改。**触发条件：矢量后端成为默认 2D 路径之前必须关闭** |
+| V2-11 | miter limit 两边不一致：lyon 默认 **4.0**，上游矢量**硬编码 10**（`vector.wgsl:497` / `render.rs:330`） | 渲染后端 | **记账（B5 §1.3；B19 Step 3 已触发）** | 即使两边都声明 `Miter`，极端尖角表现仍不同。改它要动上游 wgsl 语义 ⇒ 本批不改。**触发条件：矢量后端成为默认 2D 路径之前必须关闭**。⚠️ **B19 Step 3 已把默认切成矢量 ⇒ 触发条件命中**，本条转为"已触发，需评估"；评估后若必须关，单列一批（会影响 2D 描边画面），本批不强行关闭 |
 | V2-12 | `zela.render.shapes` 签名只有 `capabilities` / `submit_shapes`：**没有** `create_target` / `upload`；且 `PathList` 表达不了 `Circle` / `Rect` / `Group` | 能力契约 / 装配 | **未执行（B6 复核后仍不改）** | 改签名必须同步 `PINNED_FINGERPRINTS`（`shapes = 1_097_982_529_554_556_752`）。**为什么不改**：`submit_shapes` 在仓库里**没有任何实现也没有任何调用点**（`IMPLEMENTED_NAMESPACES` 不含它、wgpu 协商 shapes 本就显式失败），脚本层也没有 `create_target` / `upload` 的绑定表；此时把入参改成尚不存在的 `ShapeList` 只会得到一个**没有实现可校验的 ABI 字符串**（违反"不得为凑可注册而填未验证的编码"）。触发：真正要接 `shapes` 时，先定 target 生命周期与 `Shape2D` 列表的宿主载体，再一次性改签名 + 指纹 |
 | V2-13 | 渐变笔刷行 / 纹理图片 / dash 未映射（**缺概念**，不是缺映射） | 渲染后端 | **记账（B5 §七）** | 渐变需先定义色标 + 轴向与 `Style2D` 的关系；图片需给 `Shape2D` 加 `Image` 变体（R-04）；dash 需先有 dash 概念（上游是 `dash[3]` 周期/占空/相位）。触发：作品需要时 |
 | V2-14 | 矢量后端的**描边记录**未接 | 渲染后端 | **已关闭（B6 Step 2.1）** | ⚠️ B5 的阻塞理由**不成立**：`Curves.miter` 由 `render.rs:476 Store::add_path` 自动计算，与 `vector.rs` 无关；真正缺的只是 `Record` 的描边构造。现在 `Record::stroked`（`stroke` + `params.z` = **宽度** + `flags >> STYLE` = `cap \| joint << 2`）已落地，`scene::scene_records` 按"先填充后描边"产出。**事实更正**：`params.w` 是背景描边的宽度，不是 miter；miter limit 硬编码在 wgsl（见 V2-11）。宽度语义由实测钉住（传半宽会画出一半宽）。对拍：描边三角形 934 vs 954 像素、MAE 0.20/255、内部区 0.29 |
@@ -522,17 +523,17 @@
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
 | X5-01 | **`LightQueue` 资源从未注入**：`SceneRecord3DSystem` 的 `with_world_and_resource_mut::<LightQueue>` 在资源缺席时静默不生效 ⇒ 脚本里的 `Light` 组件被两个后端**一起忽略**，一直只用默认灯（`default_light_bytes` / 桥的默认 Sun） | 装配 / 3D 光照 | **已关闭（B14 Step 2）** | 实测证据：`zela-parity` 在两处 dump `resources().get::<LightQueue>()` 都是 `None`（wgpu 输入侧与矢量 `VectorFrame::take`/`render` 侧）；`fn zela_playback::assemble_runtime` 的资源注入只插了 DrawQueue/DrawQueue3D/MorphQueue/RevealQueue，**漏了 LightQueue**。修法：该函数补 `LightQueue::new()`。影响（用户明确豁免 §1.1）：含 `Light` 的 **7 件 `[native]`**（demo3d / atlas / fusion / pbr_materials / pbr_lights / pbr_scene / …）与 **5 件 `[vector]`** 基线一并重录；不含灯的作品逐位不变 |
-| X5-02 | **3D 取景不一致**：同一相机（eye/target/up/fov）下，矢量侧的物体比 wgpu 大约 8%、并整体偏移（≈35px） | 渲染后端 / 相机映射 | **记账（B14 Step 2 残差）** | `shaded_meshes` 最差帧：亮立方体 bbox wgpu x 204..337（133 px）vs 矢量 236..380（144 px），中心 270 vs 308；墙面左缘 y=60 行 102 vs 122。亮度已对齐（中位 Δ=0.33、有符号偏差≈0）⇒ 残差来自**几何位置**，不是颜色。候选（未定）：`vector3d::view3` 的 frame/center 与 `Camera3D::view_projection(aspect)` 的差异。触发：要让 3D 作品进 MAE ≤2 门限时 |
-| X5-03 | **点光衰减与高光实现不同**：wgpu 点光 `att = clamp(1−d²/r²,0,1)` 再乘 `(1−ambient)`；矢量是 `window²/max(d²,1e-4)`；高光虽同为 GGX 但 `spec` 归一化、能量补偿不同 | 渲染后端 / 3D 光照 | **记账（B14 Step 2 残差）** | 含点光/低粗糙度的作品残差明显大于只有方向光的作品：pbr_scene 内部区 7.63、pbr_lights 4.59（近门限）vs pbr_materials 24.33、shaded_meshes 23.83（低粗糙亮立方体/金属材质）。方向光部分已对齐（pbr_scene MAE 0.73） |
-| X5-04 | 2D 细笔画 / 字形边缘的内部区残差 | 渲染后端 / 2D AA | **记账（B14 Step 1 残差）** | fourier 内部区 3.01、storyboard 6.96（门限 2；全图 MAE 0.54 / 0.62 已达标），pendulum 2.00 卡线。覆盖率已全部 ≤0.026。原因：reveal 曲线按弧长裁剪 vs wgpu 预细分 + 着色器丢弃、以及解析 AA vs MSAA 在 1–2px 笔画上的差异 |
-| X5-05 | `fusion` 的**透明面板合成**差异（内部区 MAE ≈136，全图 13.8） | 渲染后端 / 2D-3D 合成 | **记账（B14 Step 2 残差）** | 落档图 `fusion-*`：几何/构图一致，半透明色块的颜色与叠加强度明显不同——与"灯"和"取景"都无关（其它 3D 作品同帧已收敛），属 see-through 合成口径 |
+| X5-02 | **3D 取景不一致**：同一相机（eye/target/up/fov）下，矢量侧的物体比 wgpu 大约 8%、并整体偏移（≈35px） | 渲染后端 / 相机映射 | **落档·参数性（B19 Step 1；非缺陷）** | `shaded_meshes` 最差帧：亮立方体 bbox wgpu x 204..337（133 px）vs 矢量 236..380（144 px），中心 270 vs 308；墙面左缘 y=60 行 102 vs 122。亮度已对齐（中位 Δ=0.33、有符号偏差≈0）⇒ 残差来自**几何位置**，不是颜色；两边相机映射不同（`vector3d::view3` 的 frame/center vs `Camera3D::view_projection(aspect)`），均自洽。<br>**类别**：落档（参数性差异，非缺陷）。<br>**参照物**：wgpu —— 已按 V-04 **冻结**，不再改动。<br>**处置**：不再收敛。若将来 wgpu 解冻或矢量成为唯一后端，本条重新评估。<br>**门禁**：`zela-parity` 不进 `cargo verify` 七步，本条**不构成任何门禁失败** |
+| X5-03 | **点光衰减与高光实现不同**：wgpu 点光 `att = clamp(1−d²/r²,0,1)` 再乘 `(1−ambient)`；矢量是 `window²/max(d²,1e-4)`；高光虽同为 GGX 但 `spec` 归一化、能量补偿不同 | 渲染后端 / 3D 光照 | **落档·参数性（B19 Step 1；非缺陷）** | 含点光/低粗糙度的作品残差明显大于只有方向光的作品：pbr_scene 内部区 7.63、pbr_lights 4.59（近门限）vs pbr_materials 24.33、shaded_meshes 23.83（低粗糙亮立方体/金属材质）。方向光部分已收敛（pbr_scene MAE 0.73）。两个衰减模型**都对**，只是选择不同。<br>**类别**：落档（参数性差异，非缺陷）。<br>**参照物**：wgpu —— 已按 V-04 **冻结**，不再改动。<br>**处置**：不再收敛。若将来 wgpu 解冻或矢量成为唯一后端，本条重新评估。<br>**门禁**：`zela-parity` 不进 `cargo verify` 七步，本条**不构成任何门禁失败** |
+| X5-04 | 2D 细笔画 / 字形边缘的内部区残差 | 渲染后端 / 2D AA | **落档·参数性（B19 Step 1；非缺陷）** | fourier 内部区 3.01、storyboard 6.96（门限 2；全图 MAE 0.54 / 0.62 已达标），pendulum 2.00 卡线。覆盖率已全部 ≤0.026。原因：reveal 曲线按弧长裁剪 vs wgpu 预细分 + 着色器丢弃、以及**解析 AA vs MSAA** 在 1–2px 笔画上的差异——两者都对。<br>**类别**：落档（参数性差异，非缺陷）。<br>**参照物**：wgpu —— 已按 V-04 **冻结**，不再改动。<br>**处置**：不再收敛。若将来 wgpu 解冻或矢量成为唯一后端，本条重新评估。<br>**门禁**：`zela-parity` 不进 `cargo verify` 七步，本条**不构成任何门禁失败** |
+| X5-05 | `fusion` 的**透明面板合成**差异（内部区 MAE ≈136，全图 13.8） | 渲染后端 / 2D-3D 合成 | **落档·参数性（B19 Step 1；非缺陷）** | 落档图 `fusion-*`：几何/构图一致，半透明色块的颜色与叠加强度明显不同——与"灯"和"取景"都无关（其它 3D 作品同帧已收敛），属 see-through 合成口径。<br>**类别**：落档（参数性差异，非缺陷）。<br>**参照物**：wgpu —— 已按 V-04 **冻结**，不再改动。<br>**处置**：不再收敛。若将来 wgpu 解冻或矢量成为唯一后端，本条重新评估。<br>**门禁**：`zela-parity` 不进 `cargo verify` 七步，本条**不构成任何门禁失败** |
 | X5-06 | `LightQueue.direction` 的**注释口径错误**：文档写"传播方向"，而代码（wgpu `dot(n, dirs)`）按"指向光源"消费；桥据此多做一次取反 | 文档 / 光照 | **已关闭（B14 Step 2）** | 与 B10 的 `params.z` 半宽、B14 的 `scene.rs` 注释是同一型（"注释宣称与另一侧一致"）。改法：`vector3d` 头注与 `lights()` 改为"指向光源、原样透传"，并加单测 `lights_pass_direction_through_and_scale_intensity` 钉住方向与 `(1−ambient)/π` 强度换算 |
 | X5-07 | `scene.rs` 里"线段没有面积：填充语义为空（**与 wgpu 侧三角化一致**）"是错误注释 | 文档 / 2D 映射 | **已关闭（B14 Step 1）** | wgpu 的 `contour_of(pts, false)` 对 `Line`/`Polyline` **有开放轮廓几何**（描边用），只是填充面积为 0。注释改为指向可执行证据（`open_path` + 4 条单测 + 1 条 GPU 用例），不再写"与 X 侧一致" |
 | X5-08 | GAPS「统计与维护约定」的总表只统计 A/B/C 段，未纳入 D–Q | 文档 | **已关闭（B14 §7.2）** | 在总表前明确标注"总表只统计 A/B/C；D 及之后见各段自己的汇总"，不再假装覆盖全文件 |
 | X5-09 | `cargo_command` 的约束写得太宽（"不得在别处直接 `Command::new`"），而 `cargo_capture`（只跑 `cargo metadata`）并不需要字体注入 | 工具 / 文档 | **已关闭（B14 §7.3）** | 收窄为"**涉及对拍 / 渲染的子进程**不得直接 `Command::new`；只读工具不受此限" |
 | X5-10 | 诊断脚本会随 `cargo clean` 消失（B12 Step 0 的治理项） | 工具 | **已关闭（确认）** | 本批复用前确认 `tools/diag/{README.txt,export-vector.ps1,encode-vector.ps1,holes.py,diff.py}` 均已在版本控制中（B12 Step 0 纳管） |
 
-**R 段小计（B14）**：已关闭 6（X5-01、X5-06、X5-07、X5-08、X5-09、X5-10）· 记账 4（X5-02、X5-03、X5-04、X5-05）。
+**R 段小计（B14）**：已关闭 6（X5-01、X5-06、X5-07、X5-08、X5-09、X5-10）· 落档 4（X5-02、X5-03、X5-04、X5-05；B19 Step 1 定性为参数性差异，不再收敛）。
 
 ---
 
@@ -560,7 +561,7 @@
 
 | 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
 |---|---|---|---|---|
-| X7-01 | **每帧新建一整套 `Player`**（`prepare_view` 内 `Player::new`）⇒ 画布 / 附件 / 缓冲 / 列表 / bloom / AO 每帧分配+释放；上游"常驻 Player + eviction/packing"的设计被架空 | 渲染 / 资源生命周期 | **已关闭（B17 Step 1）** | `Gpu` 新增 `players: HashMap<(w,h,samples), Player>`；`take_player` 取出并 `Player::reset`（清 `Store` / 待上传图像，保留画布 / 附件 / 缓冲 / 列表 / 目标），`put_player` 归还（上限 4 份）。`Store::clear` 推进 `generation` ⇒ 数组从 0 逐字节重传，键从 1 重分配（无上一帧残影）。`targets` 记录 `external`，读回/外部目标模式切换时重建。**25 条基线逐位不变**；实测 `pbr_lights`（510 帧，矢量）首帧 38 纹理 / 33.5 MB / 31 buffer，**第 2–510 帧全为 0**；浏览器同一构建 510/510 帧，状态栏 `tex 37 / buf 30（34.0 MB）` 从 421 帧到播完不变 |
+| X7-01 | **每帧新建一整套 `Player`**（`prepare_view` 内 `Player::new`）⇒ 画布 / 附件 / 缓冲 / 列表 / bloom / AO 每帧分配+释放；上游"常驻 Player + eviction/packing"的设计被架空 | 渲染 / 资源生命周期 | **已关闭（B17 Step 1）** | `Gpu` 新增 `players: HashMap<(w,h,samples), Player>`；`take_player` 取出并 `Player::reset`（清 `Store` / 待上传图像，保留画布 / 附件 / 缓冲 / 列表 / 目标），`put_player` 归还（上限 4 份）。`Store::clear` 推进 `generation` ⇒ 数组从 0 逐字节重传，键从 1 重分配（无上一帧残影）。`targets` 记录 `external`，读回/外部目标模式切换时重建。**25 条基线逐位不变**；实测 `pbr_lights`（510 帧，矢量）首帧 38 纹理 / 33.5 MB / 31 buffer，**第 2–510 帧全为 0**；浏览器同一构建 510/510 帧，状态栏 `tex 37 / buf 30（34.0 MB）` 从 421 帧到播完不变。⚠️ 本条只覆盖 `Targets` 的"外部/内部"切换；**同一目标身份不同**（重播换 surface）是另一层，见 V-09 |
 | X7-02 | **矢量后端资源计数静默零**：`textures_created` 只覆盖 wgpu 后端（`wgpu_2d.rs` / `wgpu_3d.rs` 三个点），走矢量时恒为 0，像是"零分配" | 渲染 / 观测 | **已关闭（B17 Step 0）** | 本 crate 的全部创建口收进 `counted_texture` / `counted_buffer`（28 处，含 vector / bloom / occlusion / shadow / environment）；出口 `resource_totals()` / `take_resource_totals()` / `ResourceTotals::{json,since,plus}`。`ZELA_FRAME_REPORT` 每作品每遍加 `vector_resources` + `vector_resource_curve`（frames / first / last / 峰值），并给旧字段加 `"textures_created_scope":"wgpu-only"`（不把两套语义混成一个"全局"数）。页面状态栏在矢量播放时显示 `矢量资源 tex/buf（MB）` |
 | X7-03 | 上游 `evict` / `pack_if_worthwhile` / `generation` 这套淘汰与打包机制**从未被真正执行**（每帧 `Player::new` ⇒ `dead` 永远 0） | 渲染 / 资源生命周期 | **已关闭（B17 Step 1）** | 复用后 `Store.dead` 仍是 0（本批逐帧复位，不启用多帧在飞的 `evict`——它依赖 `settle` 语义）；但 `generation` 第一次真正参与工作（每次复位 +1，驱动 `Buffers.sent` 归零）。**packing 未被首次触发**（`dead = 0`）⇒ 无新行为、无像素变化。`evict` 保留原样，不本批启用 |
 | X7-04 | 移动端可用性判定可能**过宽**：`rgba32float_storage` / `rgba8unorm_storage` / `r32float_blendable` 已探测但未进 `is_available_on_facts`；若移动端不支持某项，会"静默放行 ⇒ 创建存储纹理 ⇒ 卡死" | 路由 / 能力判定 | **记账（B17 Step 3/4，等设备数据）** | 硬约束 ③：移动端实测数据到达前**不得**凭猜测关闭矢量。需要用户提供 `[adapter-facts]` 一行 + "还卡不卡/第几帧/斑马纹是否还在" + 设备信息。三种结果对应：不卡 ⇒ 本批收尾、不补判定；仍卡且 `rgba32float_storage=false` ⇒ 把三项接进判定并带具体理由（状态栏 / `RoutingDecision.reject` / 报告环境指纹）；required 全 true 仍卡 ⇒ 降规格（另一批） |
@@ -580,13 +581,13 @@
 |---|---|---|---|---|
 | X8-01 | 移动端 3D 出现规则横向条纹：**根因待定**（H1「4x MSAA 不被支持」已被源码证据证伪，见 X8-06） | 渲染 / MSAA | **已关闭（B18 收尾，见 X8-07）** | 判别开关：`?msaa=1` 强制 1x。条纹消失 ⇒ 与 MSAA 有关（采样表/驱动）；仍在 ⇒ 非 MSAA（行分块 H2 / 链表溢出 H3，X8-04 已可观测）。`[adapter-facts]` 已带 `max_samples` / `max_storage_buffer_binding_size`，无需再靠拍屏。**实测：`?msaa=1` 条纹不变 ⇒ 与 MSAA 无关；最终根因是 AO 低通的 workgroup 内存读回（X8-07）** |
 | X8-02 | `max_samples` 两条路径判据不一致：未启用 specific 时**硬编码 4**，启用时才查格式能力 | 渲染 / 能力判定 | **已关闭（B18 Step 1）** | `Gpu::from_parts` 改调 `msaa_samples(adapter)`（只查 `get_texture_format_features(COLOR/DEPTH)` 的 `MULTISAMPLE_X4/X8`），不再有无条件常量分支。单测：x8 ⇒ 8、x4 ⇒ 4、空 ⇒ 1。⚠️ 在 WebGPU 上与旧值同为 4（X8-06）；native 启用 specific 时行为不变（25 条基线逐位不变） |
-| X8-03 | 移动端 3D 可能降为 **1x MSAA**（边缘锯齿变明显） | 渲染 / 画质 | **记账（B18 Step 1 取舍）** | 若 `?msaa=1` 能消条纹，则移动端需要在"1x 有锯齿"与"4x 出条纹"之间取舍。该 feature 由 adapter 决定是否提供，**不是应用能请求的**；取舍需设备实测后定 |
+| X8-03 | 移动端 3D 可能降为 **1x MSAA**（边缘锯齿变明显） | 渲染 / 画质 | **已关闭（B19 V-10：触发条件已证伪）** | 原取舍是"若 `?msaa=1` 能消条纹，则移动端要在 1x 锯齿与 4x 条纹之间选"。B18 实测 **`?msaa=1` 条纹不变**，且 X8-06 证明移动端 `max_samples` 本来就是 4 ⇒ 这个取舍**不存在**；条纹根因是 AO 低通（X8-07）。该 feature 由 adapter 决定是否提供，不是应用能请求的 |
 | X8-04 | 链表溢出静默：`overflowed()` 在容量已到 device 上限时直接 `return false`，该帧装不下的 see-through 片元被丢弃且无任何出口 | 渲染 / 观测 | **已关闭（B18 Step 2）** | 新增 `OverflowTotals`（events / appended / capacity / most），`overflowed` 撞上限时记录最坏一次；`ZELA_FRAME_REPORT` 新增 `vector_overflow`；浏览器播放结束落 `[vector-overflow]`（vConsole 可见）。单测覆盖 `plus` 的最坏值合并 |
 | X8-05 | `[adapter-facts]` 完全不打印 limits（本轮最大的观测盲区：`max_samples` / 溢出上限都看不见） | 观测 / 能力 | **已关闭（B18 Step 0）** | 一行内新增 `max_samples`（与 `Gpu` 同源）、`max_storage_buffer_binding_size`（溢出上限 = 该值 / 16）、`max_texture_dimension_2d` |
 | X8-06 | 计划 H1 的因果链不成立："没有 `adapter_specific_formats` ⇒ 查询退化为规范最小集 ⇒ 1x" | 渲染 / 依据 | **已关闭（B18 Step 0 源码证据）** | wgpu 30 的 WebGPU 后端 `get_texture_format_features` 直接返回 `format.guaranteed_format_features(adapter.features())`（`backend/webgpu.rs`）；`Rgba8Unorm` 与 `Depth32FloatStencil8` 的保证位都含 `MULTISAMPLE_X4`。⇒ 移动端 `max_samples` **本来就是 4**，旧硬编码 4 在 WebGPU 上与查询同值。H1 就此排除，条纹根因转 H2（行分块）/ H3（溢出）或驱动 |
 | X8-07 | **横向条纹的根因**：AO 低通（`occlusion.wgsl` 原 `blur`）把水平结果暂存到 `var<workgroup> rows`，`workgroupBarrier()` 之后再按行读回；在 Adreno 660（`ro.board.platform=lahaina`，骁龙 888）上该读回不可靠——读到的行错乱/未初始化，于是 AO 每 16 行（tile 高 `T`）分带，最终表现为物体表面的横向明暗条纹 | 渲染 / AO（`occlusion.wgsl`） | **已关闭（B18 收尾）** | 逐层判据见下方「X8-07 调试纪要」。修复：可分离低通改为**两趟独立 compute**（`blur_h` 写中间纹理、`blur_v` 读它写 `occlusion`），新增一张 R32Float `occlusion across`；不再使用 workgroup 内存与 barrier。数学同序（先水平后垂直、同一高斯核与深度权重），桌面像素不变 |
 
-**U 段小计（B18）**：已关闭 6（X8-01、X8-02、X8-04、X8-05、X8-06、X8-07）· 记账 1（X8-03）。
+**U 段小计（B18）**：已关闭 7（X8-01、X8-02、X8-03、X8-04、X8-05、X8-06、X8-07）。
 
 ### X8-07 调试纪要：移动端 3D 横向条纹（AO 低通）
 
@@ -648,10 +649,38 @@
 
 ---
 
+## V. B19 跨批补记（讨论过但没进账的东西，2026-10-24）
+
+> 计划《B19执行计划_渲染后端收尾与转向》Step 0。**本段不新增缺陷**：三条静默默认值
+> （V-01..V-03）、五条已拍板的定位（V-04..V-08）、四处滞后记账（V-09..V-12）与一次计划
+> 失误（V-13）。之所以单列一段，是因为这些都是"已经发生、却没进 GAPS"的事——
+> 没进这里的东西，下一批会重新被讨论一遍。
+
+| 编号 | 缺口 / 变更 | 影响层 | 类别 | 证据 |
+|---|---|---|---|---|
+| V-01 | **阴影整块被关**（能力消失，不是参数丢失）：桥给 `Light::Sun` / `Light::Spot` 一律写 `shadows: false`，而后端侧阴影是完整实现 | 渲染 / 3D 光照 | **记账（B19 Step 0）** | 字面量在 `fn zela_playback::vector3d::lights` 的 Sun / Spot 两支与默认 Sun 兜底处；能力侧 `const zela_render_vector::shadow::SIZE = 2048`、`MOST = 4`，3×3 PCF、法线偏移 1.5 texel、半径按 2^(1/4) 取整 + 中心对齐整纹素（防逐帧闪烁）；`crates/render/zela-render-vector/src/api.rs` 的 GPU 用例里存在 `shadows: true`（≈:1128）。⇒ 有实现、有单测、有防闪烁设计的能力在生产路径被一个字面量关掉。本批不修的理由：开启会让 `ShadowMaps`（在 `Buffers` 内）新增 2048²×4 ≈ **67 MiB/帧**，必须先评估，且会重录基线 |
+| V-02 | **bloom 三参只接一个**：`Bloom { threshold, intensity, radius }` 里只有 `intensity` 被透传，threshold / radius 静默丢弃 | 渲染 / 后处理 | **记账（B19 Step 0）** | `fn zela_playback::vector3d::view3` 里 `params.bloom` 经 `map` 只取 `intensity` 一个字段（threshold / radius 连读都没读）；矢量着色器 `bloom_of(view)` 只看 `strength > 0`，**没有阈值概念** ⇒ 实际语义是"把画面受光部分的 60% 扩散出去"，而非"只有高光发光"；`radius` 同样无效（扩散范围由固定 8 级金字塔决定）。处置三选一（本批只记账不定）：(a) 后端补 threshold/radius（改 wgsl ⇒ 可能重录 11 条 `[vector]`）；(b) 承认"我们的 bloom 就是全画面扩散"，删掉契约里那两个字段；(c) 契约保留，不支持就显式报错。倾向 (a)，做不到就 (c) |
+| V-03 | **其余失效契约字段**：`RenderParams` 共 8 个字段，矢量侧真正生效的只有 `tone.exposure`、`tone.curve`、`bloom.intensity`、`ao` | 渲染 / 契约 | **记账（B19 Step 0，与 X1-04 合流）** | 失效六个：`bloom.threshold`、`bloom.radius`（见 V-02）、`env`、`msaa`、`supersample`、`filter`。其中 `env`（IBL）最重——**没有它金属材质是死黑的**；它与 X1-04（环境图无脚本入口）合流指向同一件事。定义见 `ze_render_ir::params::RenderParams`；`msaa` / `supersample` / `filter` 在矢量侧由 `Gpu` 自身能力与固定采样决定，宿主传值不参与 |
+| V-04 | **wgpu 冻结定位**（已拍板，从未落账）：能力扩张一律不补；只修正确性；契约变更时仍被动跟随 | 架构 / 后端关系 | **记账（B19 Step 0）** | wgpu 角色降为"抽象的第二消费者"——它的义务是证明同一套抽象能容纳异构后端，而不是继续追功能。**冻结 ≠ 放任编译不过**：仍须跟 Rust / wgpu 版本与契约变更。由此 X5-02/03/04/05 的参照物被固定，不再驱动矢量收敛（见 Step 1 落档） |
+| V-05 | **E1/E2 结论**（辩了三轮，结论从未落账）：矢量为主 + wgpu 冻结兼容 ⇒ 融合/分立之争消解 | 架构 / 路由 | **记账（B19 Step 0）** | 5 件作品（demo3d Lines / surface_matrix 与其 `_js` / atlas ContentTexture / capability_gaps 的 2D3D 混排）矢量被拒 ⇒ 走冻结的 wgpu，画面差一档；**接受并记账**。基线锁的是"冻结的弱后端"，这是有意的口径，不是待修项 |
+| V-06 | **不做兼容渲染器**（WebGL2） | 架构 / 路线 | **记账（B19 Step 0）** | 解析 AA 依赖**每像素链表**（`atomic` storage buffer），WebGL2 无法表达 ⇒ "矢量画质 + 全兼容"这个组合**不存在**；compute 是 WebGPU 核心功能，去掉它也换不来兼容性。故 B16 的 WebGL 接线不以"兼容"为目标（见 §7 本批不做） |
+| V-07 | **产品化三问**冻结为"成人礼"，非路线图项 | 路线 | **记账（B19 Step 0）** | 24/7 功耗、陌生人脚本安全、画面值不值钱——三者都要真实用户与真实负载才能回答，当前数据不足，不作为待办 |
+| V-08 | **分层判据**（结构性 vs 参数性）只停在上一轮讨论，未落成文字与工具行为 | 验收 / 对拍 | **已关闭（B19 Step 1）** | 判据：**结构性**（内容缺失 / 系统性错误）必修；**参数性**（实现选择不同、两边都对）落档不修。落地为 X5-02/03/04/05 的"落档·参数性"终态 + `zela-parity` 输出的 `kind` 列（见 R 段与 §3.3） |
+| V-09 | **B18 批次二完全未记账**：重播黑屏与切换作品重复初始化 WebGPU 的修复在 GAPS 里 grep 零命中 | 文档 / 记账 | **已关闭（B19 Step 0 补记）** | 已修已验（提交 `6dfdebc`）。补记两条**可复用病因**：① "只比有没有、不比是哪一个"——`Targets` 缓存只比较是否存在外部目标，不比较是哪一个，重播换了 surface 仍复用旧目标 ⇒ 黑屏；修法是全局目标代数 `TARGET_GENERATION` + `zela_render_vector::forget_player_targets`。② "资源看起来与目标无关，但绑定里藏着目标"——`Bloomed` 的最后一组 bind group 在创建时绑死了当时的 `canvas.color`，随目标一起搬运就会指向旧纹理；修法是只搬 `raster` / `occluded`，bloom 重建。③ 网页侧删掉 `reloadWith()`，切换作品走同一个 device |
+| V-10 | 三处描述已过时 | 文档 | **已关闭（B19 Step 0/4 改写）** | ① T 段 `X7-01` 未含"目标代数"（现补进 V-09 并回指）；② U 段 `X8-03` 的触发条件已失效——`?msaa=1` 实测条纹不变 + 移动端 `max_samples` 本来就是 4 ⇒ "1x 锯齿 vs 4x 条纹"的取舍**不存在**（X8-06 / X8-07 已证）；③ `ARCHITECTURE.md` 的 B18 节仍写"等复测"，Step 4 改为"已复测通过" |
+| V-11 | 统计表口径注仍写 **D–R**，而实际已有 S / T / U 三段 | 文档 | **已关闭（B19 Step 0）** | 口径注扩到 D–V，并注明 `check_gaps_subtotals` 的实际覆盖段（K…V） |
+| V-12 | 页面状态栏「矢量资源 tex 38 → 51」是**累计创建数**不是当前占用（重播 +13 是稳定的一次性开销，不是泄漏），但极易被读成泄漏 | 文档 / 观测 | **已关闭（B19 Step 0 改文案）** | `fn zela_web::vector_resource_note` 的文案改为"累计创建"，与 `zela_render_vector::resource_totals` 的文档口径一致；数字本身不动（它仍是 churn 的判据） |
+| V-13 | **计划自身的失误**：B18 计划把 H1（MSAA 能力判据）列为"强候选"并给了三处吻合（只在移动端 / 只在 3D / 规则横向），三处都成立却**没有一处是因果**——X8-06 的源码证据在第一环就打断链条。B19 计划又犯了同型的一处：§5.4 断言"换默认不需要重录任何基线"，只看了 `HASHES_WORKS` 的显式对表，**漏了 smoke**（它调 `zela-render` 时不传 `--backend` ⇒ 吃默认值） | 流程 / 计划 | **记账（B19 Step 0）** | 对比：计划的形态是"强候选 + 三处吻合"，执行的形态是"判别实验 + 逐层收敛"；前者照此改一遍还得重录基线，后者每步都能证伪。smoke 的处置见 ARCHITECTURE B19（显式钉 `--backend wgpu`，基线 2847735c 逐位不变）。**规则**：① 计划中的根因候选**必须**配一个能证伪它的判别开关，否则只能写"待验证"；② 声称"不需要重录基线"时，必须列出**所有**吃默认值的入口，不只是显式对表 |
+
+**V 段小计（B19）**：已关闭 5（V-08、V-09、V-10、V-11、V-12）· 记账 8（V-01、V-02、V-03、V-04、V-05、V-06、V-07、V-13）。
+
+---
+
 ## 统计与维护约定
 
-> **口径（B14 §7.2）**：下表只统计 A / B / C 三段（最初 44 条）。D 段及之后（D–R，按批次追加）
-> **不并入本表**，见各段自己的小计（由 `check_gaps_subtotals` 自动核对，含"部分关闭"）。
+> **口径（B14 §7.2，B19 V-11 扩）**：下表只统计 A / B / C 三段（最初 44 条）。D 段及之后
+> （**D–V**，按批次追加）**不并入本表**，见各段自己的小计（由 `check_gaps_subtotals`
+> 自动核对 K–V 段，含"部分关闭"与"落档"）。
 
 | 类别 | 数量 |
 |---|---|

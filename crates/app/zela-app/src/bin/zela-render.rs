@@ -73,7 +73,8 @@ impl Args {
         let mut fps = 30.0f64;
         let mut out = PathBuf::from("out.mp4");
         let mut size = (640u32, 480u32);
-        let mut backend = LoopBackend::Wgpu;
+        // B19 Step 3：默认从 `Wgpu` 换成 `Auto` —— 默认路径走矢量，被拒才回退 wgpu。
+        let mut backend = LoopBackend::Auto;
 
         let mut i = 0;
         while i < raw.len() {
@@ -197,6 +198,9 @@ fn run() -> Result<(), String> {
     // ── B11：注册表 → device features 并集 →（矢量可用时）注入同一块 device ──
     //
     // 显式 `--backend wgpu` 与改动前**逐位相同**：注册表只有 wgpu ⇒ features 为空集。
+    // B19 Step 3 起默认是 `--backend auto` ⇒ 矢量也被注册 ⇒ **device features 取并集**
+    // （矢量要 `FLOAT32_BLENDABLE`）。这是并集机制本来的设计，属预期；它对 wgpu 侧
+    // 画质的影响由 25 条基线逐位守住。`--backend wgpu` 仍可复现旧的纯 wgpu 路径。
     let mut registry = zela_render_backends::BackendRegistry::with_standard();
     if args.backend != LoopBackend::Wgpu {
         registry

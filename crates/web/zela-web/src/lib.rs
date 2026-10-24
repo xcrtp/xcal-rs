@@ -757,7 +757,7 @@ fn vector_resource_note(used: bool) -> String {
     }
     let totals = zela_render_vector::resource_totals();
     format!(
-        " · 矢量资源 tex {} / buf {}（{:.1} MB）",
+        " · 矢量资源累计 tex {} / buf {}（{:.1} MB，累计创建数，非当前占用）",
         totals.textures,
         totals.buffers,
         (totals.texture_bytes + totals.buffer_bytes) as f64 / 1e6

@@ -91,10 +91,15 @@
     const commitLink = document.getElementById('zela-commit');
 
     // B11：后端偏好（auto / wgpu / vector）。切换 = Rust 侧重播，不整页重载。
+    // B19：默认已切成矢量（auto 的首选）。**残留值必须校验回落**：不认识的旧值
+    // 直接丢弃并退回 `auto`，否则老用户会静默停在某个旧后端上。
     const BACKEND_KEY = 'zela-backend';
     const savedBackend = localStorage.getItem(BACKEND_KEY);
     if (savedBackend && ['auto', 'wgpu', 'vector'].includes(savedBackend)) {
       backendSelect.value = savedBackend;
+    } else if (savedBackend) {
+      localStorage.removeItem(BACKEND_KEY);
+      backendSelect.value = 'auto';
     }
 
     const REPO_URL = 'https://github.com/xcrtp/zela';

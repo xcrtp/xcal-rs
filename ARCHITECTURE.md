@@ -1503,7 +1503,9 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 > 一句话：**能力判据不得有无条件常量分支**，但"统一判据"不等于"条纹已修"。
 > 源码证据表明：wgpu 的 WebGPU 后端只返回规范保证的格式能力，`Rgba8Unorm` /
 > `Depth32FloatStencil8` 都保证 `MULTISAMPLE_X4` ⇒ 移动端 `max_samples` 本来就是 4。
-> 因此计划里的 H1（"没有 adapter-specific formats ⇒ 不支持 4x"）**被证伪**，条纹根因仍待判别。
+> 因此计划里的 H1（"没有 adapter-specific formats ⇒ 不支持 4x"）**被证伪**。
+> **条纹真正根因是 AO 低通的 `var<workgroup>` 读回（GAPS X8-07），已改为两趟独立 compute，
+> 移动端实测通过。**
 
 - **判据**：`msaa_samples(adapter)` 只查 `get_texture_format_features(COLOR / DEPTH)` 的
   `MULTISAMPLE_X4` / `MULTISAMPLE_X8`；`Gpu::from_parts` 与浏览器 `[adapter-facts]` 共用
@@ -1515,4 +1517,41 @@ render pass viewport 设为**回调自身矩形**（`set_viewport`，到下一�
 - **观测**：`[adapter-facts]` 新增 `max_samples` / `max_storage_buffer_binding_size` /
   `max_texture_dimension_2d`；链表溢出（容量已到 device 上限、片元被丢弃）经
   `OverflowTotals` 进入 `ZELA_FRAME_REPORT.vector_overflow` 与浏览器 `[vector-overflow]`。
-- **验收**：等移动端 `?msaa=1` 复测（条纹是否消失 + `[adapter-facts]` 的 `max_samples`）。
+- **验收（已复测）**：移动端 `?msaa=1` 条纹**不变** ⇒ 与 MSAA 无关（`[adapter-facts]` 的
+  `max_samples=4` 与判据同源）；根因转到 AO 低通，修复后移动端实测无条纹（X8-07）。
+
+### B19 渲染后端收尾与转向
+
+> 一句话：**渲染后端阶段到此结束。** B10~B18 建的能力第一次走**默认路径**（Auto 首选矢量），
+> 参照物 wgpu 冻结为"第二消费者"，四条参数性残差落档不再收敛。结束是有判据的，不是感觉。
+
+- **默认后端**：`routing::order_of` 的 `Auto` 从 `[Wgpu, Vector]` 换成 `[Vector, Wgpu]`；
+  `zela-render` 默认 `--backend auto`。矢量被拒（内容纹理 / 2D3D 混排 / 线框 / morph /
+  能力不足）才回退 wgpu，**回退必带理由**。25 条基线不受影响：`cargo verify --step hashes`
+  用显式的 (作品, 后端) 对表，不经过 Auto 路由。页面 `localStorage` 的后端残留值校验回落。
+- **smoke 是第二个吃默认值的入口**（计划 §5.4 漏了）：它调 `zela-render` 不传 `--backend`。
+  B19 把 smoke 显式钉在 `--backend wgpu`（录制时的口径）⇒ `[smoke]` 的 `2847735c…`
+  逐位不变；新默认路径由 `hashes` 的 11 条 `[vector]` 与 routing 单测守护，
+  不靠 smoke 这条 15 帧的短跑。
+- **参照物冻结（GAPS V-04）**：wgpu 只修正确性、不补能力；它作为第二消费者的义务是
+  证明抽象能容纳异构后端。X5-02/03/04/05 因此**落档为参数性差异**（两边都对），
+  `zela-parity` 输出新增 `kind: structural | parametric, filed`。
+- **门禁**：GAPS 新增 V 段 13 条（讨论过但没进账的定位与失效契约）；锚点检查从只认
+  `crate::mod::Item` 扩到 `crates/...` 路径形态，**存量 7 条死链清零**（此前门禁全绿）。
+
+**可用**
+
+- 矢量：2D 完整（开放折线、reveal）、3D 几何对齐、着色栈生效、资源常驻；桌面 + 移动端
+  均无已知错误画面。
+- 路由：拒绝必带理由，无静默默认值；对拍 25 条 + 差异分类；资源计数 + GPU 三态计时。
+
+**明确不可用（已记账，不掩盖）**
+
+- 5 件作品矢量被拒（demo3d Lines / surface_matrix 与其 `_js` / atlas ContentTexture /
+  capability_gaps 的 2D3D 混排）⇒ 走冻结的 wgpu，画面差一档（V-05）。
+- 阴影整块关闭（V-01）、IBL / `env` 无脚本入口（V-03）、bloom 无阈值（V-02）。
+- 四条参数性残差落档（X5-02/03/04/05）；wgpu 无后处理栈 / IBL（冻结，不补）。
+- miter limit 两边不一致（V2-11）：默认切矢量后**触发条件已命中**，待评估。
+
+**转向后的第一批**：内容表达力 + Render Attachment 三层（L1 画面语义进产物 / L2 宿主能力 /
+L3 执行旋钮**绝不进产物**，否则同一作品在不同机器上会产出不同 payload）。

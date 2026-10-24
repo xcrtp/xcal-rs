@@ -26,6 +26,10 @@
 //!
 //! 另报差异 bbox、差异像素占比、平均有符号偏差（系统性偏移 vs 局部差异的判据）。
 //!
+//! 自 B19（V-08）起，每条结果还带 `kind`：`structural`（覆盖率/全图 MAE 超限 ⇒ 内容缺失或
+//! 系统性错误，需修）/ `parametric, filed`（只有内部区超限 ⇒ 实现选择不同，落档即终态）/
+//! `ok`。门限数值不变，`kind` 只回答"这条该不该修"。
+//!
 //! # 输出
 //!
 //! `--out` 目录下每件作品一个 `<work>.json`（逐采样帧指标 + 决策日志），
@@ -85,6 +89,24 @@ struct FrameMetrics {
 }
 
 impl FrameMetrics {
+    /// **B19 Step 1（V-08 / §3.3）**：这条差异"该修还是不该修"，由工具说出来。
+    ///
+    /// - `structural`：覆盖率或全图 MAE 超限 ⇒ 内容缺失 / 系统性错误，视为缺陷；
+    /// - `parametric, filed`：只有内部区 MAE 超限 ⇒ 实现选择不同（AA 口径、取景、衰减曲线），
+    ///   落档即终态（GAPS 的 X5-02/03/04/05）；
+    /// - `ok`：三项都在门限内。
+    ///
+    /// 门限本身**不放宽**（B13 §5.2）：`parametric` 仍照常报出超限数字，只是不再要求收敛。
+    fn kind(&self) -> &'static str {
+        if self.coverage_rel > COVERAGE_REL_MAX || self.mae > MAE_MAX {
+            "structural"
+        } else if self.interior_mae > INTERIOR_MAE_MAX {
+            "parametric, filed"
+        } else {
+            "ok"
+        }
+    }
+
     fn failures(&self) -> Vec<String> {
         let mut out = Vec::new();
         if self.coverage_rel > COVERAGE_REL_MAX {
@@ -453,13 +475,14 @@ fn run() -> Result<(), String> {
             decisions_json(&vector.decisions)
         );
         println!(
-            "[parity] {{\"work\":\"{}\",\"status\":\"{status}\",\"post\":\"{}\",\
+            "[parity] {{\"work\":\"{}\",\"status\":\"{status}\",\"kind\":\"{}\",\"post\":\"{}\",\
              \"size\":\"{}x{}\",\
              \"frames\":{},\"sampled\":{},\"worst_frame\":{},\"coverage_rel\":{:.4},\
              \"mae\":{:.2},\"interior_mae\":{:.2},\"edge_mae\":{:.2},\
              \"diff_px_pct\":{:.2},\"bbox\":{},\"bias\":[{:.2},{:.2},{:.2}],\
              \"decisions\":{decisions}}}",
             work.name,
+            worst.kind(),
             args.post.name(),
             work.width,
             work.height,
@@ -654,7 +677,7 @@ fn write_work_json(
         .collect();
     let json = format!(
         "{{\"work\":\"{}\",\"post\":\"{post}\",\"size\":\"{}x{}\",\"frames\":{},\
-         \"status\":\"{status}\",\
+         \"status\":\"{status}\",\"kind\":\"{}\",\
          \"criteria\":{{\"coverage_rel_max\":{COVERAGE_REL_MAX},\"mae_max\":{MAE_MAX},\
          \"interior_mae_max\":{INTERIOR_MAE_MAX}}},\
          \"worst_frame\":{},\"decisions\":{decisions},\"samples\":[{}]}}",
@@ -662,6 +685,7 @@ fn write_work_json(
         work.width,
         work.height,
         frames,
+        worst.kind(),
         worst.frame,
         samples.join(","),
     );
@@ -679,8 +703,11 @@ fn write_summary(
          判据：覆盖率相对差 ≤ 10% / 全图 MAE ≤ 8 / 内部区 MAE ≤ 2（不得放宽）。\n\
          `worst` 取采样帧里全图 MAE 最大的那一帧。post = `{post}`\n\
          （`match` = 两侧同一份 `RenderParams::default()`；`backend-default` = 各按自身能力取默认）。\n\n\
-         | work | frames | sampled | worst# | cov_rel | MAE | interior | edge | diff% | bbox | bias RGB | status |\n\
-         |---|---|---|---|---|---|---|---|---|---|---|---|\n",
+         `kind`（B19 Step 1）：`structural` = 覆盖率/全图 MAE 超限（内容缺失或系统性错误，需修）；\
+         `parametric, filed` = 只有内部区超限（实现选择不同，落档即终态，见 GAPS X5-02/03/04/05）；\
+         `ok` = 全部在门限内。\n\n\
+         | work | frames | sampled | worst# | cov_rel | MAE | interior | edge | diff% | bbox | bias RGB | kind | status |\n\
+         |---|---|---|---|---|---|---|---|---|---|---|---|---|\n",
     );
     for (name, frames, sampled, worst, ok, reason) in rows {
         let bbox = worst
@@ -689,7 +716,7 @@ fn write_summary(
             .unwrap_or_else(|| "—".to_string());
         text.push_str(&format!(
             "| {name} | {frames} | {sampled} | {} | {:.3} | {:.2} | {:.2} | {:.2} | {:.2}% | {bbox} | \
-             {:.1}/{:.1}/{:.1} | {} |\n",
+             {:.1}/{:.1}/{:.1} | {} | {} |\n",
             worst.frame,
             worst.coverage_rel,
             worst.mae,
@@ -699,6 +726,7 @@ fn write_summary(
             worst.bias[0],
             worst.bias[1],
             worst.bias[2],
+            worst.kind(),
             if *ok { "ok" } else { "FAIL" },
         ));
         if !ok {

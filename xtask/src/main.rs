@@ -300,7 +300,9 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
     println!("[xtask] --record：检测到 ZELA_RECORD_DEVICE={device}，仅录制设备可执行");
 
     // 1) 硬门禁：同一跑次 script == bundle 必须绿（smoke + hashes 全量）。
-    let smoke_hash = compare_script_vs_bundle(root, "smoke", "320x240", None)?;
+    // B19 Step 3：与 `step_smoke` 同口径 —— smoke 钉 wgpu，否则重录会把矢量默认写进 `[smoke]`。
+    let smoke_hash =
+        compare_script_vs_bundle(root, "smoke", "320x240", None, Some("wgpu"))?;
     // B9 Step 3：完整对拍走批量模式（`--independent` 可切回独立进程做对照）。
     let hashes: std::collections::BTreeMap<String, String> = if options.independent {
         println!("[xtask] 对拍模式：独立进程（--independent 诊断路径）");
@@ -309,7 +311,7 @@ fn run_record(root: &Path, options: &Options) -> Result<(), String> {
             // 标签而不是作品名：同一作品两个后端各要一条（B13 Step 3）。
             map.insert(
                 work_label(work, *backend),
-                compare_script_vs_bundle_with_backend(root, work, "640x480", None, *backend)?,
+                compare_script_vs_bundle(root, work, "640x480", None, *backend)?,
             );
         }
         map
@@ -665,13 +667,17 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("读取 {} 失败：{error}", path.display()))?;
     // K 段（B4+B5+B6）、L 段（B8+B9）、M 段（B7）、N 段（B10）、O 段（B11）、
-    // P 段（B12）、Q 段（B13）、R 段（B14）、S 段（B15）、T 段（B17）与 U 段（B18）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
-    for prefix in ["## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q.", "## R.", "## S.", "## T.", "## U."] {
+    // P 段（B12）、Q 段（B13）、R 段（B14）、S 段（B15）、T 段（B17）、U 段（B18）
+    // 与 V 段（B19 跨批补记）都是"编号 | 缺口 | 影响层 | 类别 | 证据"。
+    for prefix in [
+        "## K.", "## L.", "## M.", "## N.", "## O.", "## P.", "## Q.", "## R.", "## S.", "## T.",
+        "## U.", "## V.",
+    ] {
         let Some(body) = gaps_section(&text, prefix) else {
             continue;
         };
-        // 0 = 已关闭，1 = 部分关闭，2 = 记账，3 = 未执行
-        let mut counts = [0usize; 4];
+        // 0 = 已关闭，1 = 部分关闭，2 = 记账，3 = 未执行，4 = 落档（参数性差异，终态）
+        let mut counts = [0usize; 5];
         for line in body.lines() {
             let cells = table_cells(line);
             if cells.len() < 4 {
@@ -698,6 +704,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
                 1
             } else if status.contains("已关闭") {
                 0
+            } else if status.contains("落档") {
+                4
             } else if status.contains("记账") {
                 2
             } else if status.contains("未执行") {
@@ -717,6 +725,7 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
             ("部分关闭", 1),
             ("记账", 2),
             ("未执行", 3),
+            ("落档", 4),
         ];
         for (label, bucket) in labels {
             match number_after(summary, label) {
@@ -740,8 +749,8 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
             }
         }
         println!(
-            "[xtask] GAPS {prefix} 小计一致：已关闭 {} · 部分关闭 {} · 记账 {} · 未执行 {}",
-            counts[0], counts[1], counts[2], counts[3]
+            "[xtask] GAPS {prefix} 小计一致：已关闭 {} · 部分关闭 {} · 记账 {} · 未执行 {} · 落档 {}",
+            counts[0], counts[1], counts[2], counts[3], counts[4]
         );
     }
     Ok(())
@@ -756,6 +765,10 @@ fn check_gaps_subtotals(root: &Path) -> Result<(), String> {
 ///
 /// 为什么用符号名而不是行号：行号腐烂是**静默**的（永远指向某一行，只是不是你要的那行），
 /// 符号名腐烂是**响亮**的（grep 0 命中）。
+///
+/// **B19 Step 2**：除符号锚点外，还要校验 markdown 链接里的 `crates/...` **路径**形态
+/// （`crates/.../file.rs#L259-L275`）。此前只认 `::`，A/C 段的路径引用**全部被静默过滤**，
+/// 于是 7 条死链在门禁全绿的情况下存在了三批。`#L` 只是提示，**不参与定位**。
 fn check_gaps_anchors(root: &Path) -> Result<(), String> {
     let mut crates: Vec<(String, PathBuf)> = Vec::new();
     collect_crates(&root.join("crates"), &mut crates)?;
@@ -789,6 +802,27 @@ fn check_gaps_anchors(root: &Path) -> Result<(), String> {
         checked += 1;
     }
     println!("[xtask] GAPS 锚点：{checked} 条 crate 限定引用全部有定义");
+
+    let mut linked = 0usize;
+    let mut missing: Vec<String> = Vec::new();
+    for token in linked_crate_paths(&text) {
+        if !root.join(&token).exists() {
+            missing.push(token);
+            continue;
+        }
+        linked += 1;
+    }
+    if !missing.is_empty() {
+        // 一次列全（只报第一条会让人以为改完就绿了）。
+        return Err(format!(
+            "GAPS 链接有 {} 条指向不存在的路径：\n  {}\n  \
+             修法：改指向新位置；能力确实没了就改指向**可执行证据**（单测名 / 对拍用例），\
+             不要删掉引用。",
+            missing.len(),
+            missing.join("\n  ")
+        ));
+    }
+    println!("[xtask] GAPS 链接：{linked} 条 `crates/` 路径全部存在");
     Ok(())
 }
 
@@ -846,6 +880,29 @@ fn backticked_anchor_tokens(text: &str) -> Vec<String> {
         if ok {
             out.push(if clean { format!("{body}()") } else { body.to_string() });
         }
+    }
+    out
+}
+
+/// GAPS 里的 markdown 链接目标 → 只保留 `crates/...` 形态的仓库内路径。
+///
+/// `#Lxx-Lyy` 只是提示，**不参与定位**（行号会腐烂且静默；路径不存在才是响亮的）。
+fn linked_crate_paths(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find("](") {
+        let after = &rest[open + 2..];
+        let Some(close) = after.find(')') else { break };
+        let target = after[..close].trim();
+        rest = &after[close + 1..];
+        let Some(tail) = target.strip_prefix("crates/") else {
+            continue;
+        };
+        let path = tail.split('#').next().unwrap_or_default().trim_end_matches('/');
+        if path.is_empty() {
+            continue;
+        }
+        out.push(format!("crates/{path}"));
     }
     out
 }
@@ -932,13 +989,14 @@ fn number_after(line: &str, label: &str) -> Option<usize> {
 }
 
 /// 重算后的小计片段（用于报错文案）。
-fn subtotal_line(counts: &[usize; 4]) -> String {
+fn subtotal_line(counts: &[usize; 5]) -> String {
     let mut parts = Vec::new();
     for (label, count) in [
         ("已关闭", counts[0]),
         ("部分关闭", counts[1]),
         ("记账", counts[2]),
         ("未执行", counts[3]),
+        ("落档", counts[4]),
     ] {
         if count > 0 {
             parts.push(format!("{label} {count}"));
@@ -1171,7 +1229,10 @@ fn step_smoke(root: &Path, skip_baseline: bool) -> Result<(), String> {
                 .as_str(),
         )
     };
-    let _ = compare_script_vs_bundle(root, "smoke", "320x240", expected)?;
+    // B19 Step 3：smoke 的 `[smoke]` 序列哈希是**在旧默认（wgpu）下录的**。默认切成矢量后
+    // 不传 `--backend` 会走到矢量 ⇒ 这里显式钉 wgpu，保住"25 条 + smoke 基线逐位不变"的硬约束。
+    // 新默认路径本身由 `--step hashes` 的 11 条 `[vector]` 与 routing 单测守护，不是没人看。
+    let _ = compare_script_vs_bundle(root, "smoke", "320x240", expected, Some("wgpu"))?;
     Ok(())
 }
 
@@ -1199,7 +1260,7 @@ fn step_hashes(root: &Path, skip_baseline: bool, independent: bool) -> Result<()
             } else {
                 Some(baseline_for(&baselines, work, *backend)?)
             };
-            let hash = compare_script_vs_bundle_with_backend(
+            let hash = compare_script_vs_bundle(
                 root,
                 work,
                 "640x480",
@@ -1475,20 +1536,11 @@ fn assert_sink_bypass(root: &Path) -> Result<(), String> {
 ///
 /// `expected = None`（`--skip-baseline`）只做同机自洽断言：
 /// 用于 CI 的软件 Vulkan（lavapipe），它与基线录制设备不同，像素哈希不可比。
-fn compare_script_vs_bundle(
-    root: &Path,
-    work: &str,
-    size: &str,
-    expected: Option<&str>,
-) -> Result<String, String> {
-    compare_script_vs_bundle_with_backend(root, work, size, expected, None)
-}
-
-/// 同 [`compare_script_vs_bundle`]，但可指定后端（`--backend wgpu|vector`）。
 ///
-/// B6 V2-07：矢量后端作品与 wgpu 基线共用同一套"脚本 == bundle == 基线"门禁，
+/// `backend`：显式 `--backend wgpu|vector`，`None` = 走 CLI 默认（B19 起为 `auto`）。
+/// B6 V2-07：矢量作品与 wgpu 基线共用同一套"脚本 == bundle == 基线"门禁，
 /// 只是出帧后端不同 —— 两条路径都必须逐位一致。
-fn compare_script_vs_bundle_with_backend(
+fn compare_script_vs_bundle(
     root: &Path,
     work: &str,
     size: &str,
