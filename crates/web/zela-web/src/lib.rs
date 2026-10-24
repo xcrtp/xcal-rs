@@ -461,6 +461,9 @@ async fn run_with(
 
     // ── 1. canvas + WebGPU（只建一次；切后端重播时复用同一块 device）──────
     let display = display_for(&document).await?;
+    // B17：这一次播放会新建离屏目标；复用中的 player 必须丢掉上一份目标缓存，
+    // 否则它会继续往上一代那张已弃用的纹理里画（进度照走、画面全黑）。
+    zela_render_vector::forget_player_targets();
     let display_ctx = display.ctx.clone();
     let surface = &display.surface;
 

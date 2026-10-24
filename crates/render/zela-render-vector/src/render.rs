@@ -177,6 +177,19 @@ fn record_overflow(appended: u64, capacity: u64, most: u64) {
 /// 不是产品能力开关，默认 0（不改变任何行为）。
 static SAMPLE_OVERRIDE: AtomicU32 = AtomicU32::new(0);
 
+/// **B17**：离屏目标的代数。新一次播放会换一张离屏纹理，`Player` 取用时比对它并重建 `Targets`
+/// （见 [`forget_targets`]）——只比较"有没有外部目标"会漏掉"换了一张"。
+static TARGET_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// **B17**：下一次取用 player 时丢掉它的 `Targets`（新一次播放要换离屏目标时调用）。
+///
+/// `take_player` 让画布 / 附件跨播放保留，但"外部目标"那一份 `Targets` 绑定的是**上一次
+/// 播放**新建的离屏纹理；重播换了纹理后不重建就会继续写进已弃用的那张，新目标永远为空
+/// （进度照走、画面全黑）。递增代数而不是当场清缓存：旧播放的异步渲染可能还占着 `Gpu`。
+pub(crate) fn forget_targets() {
+    TARGET_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// 设置采样数上限（0 = 清除覆盖）。见 [`SAMPLE_OVERRIDE`]。
 pub fn set_sample_override(samples: u32) {
     SAMPLE_OVERRIDE.store(samples, Ordering::Relaxed);
@@ -2164,6 +2177,8 @@ pub(crate) struct Player {
     pub(crate) export: Option<crate::export::Export>, // the video being written, if any
     pub(crate) lists: Option<Lists>,
     list_capacity: u64, // nodes the lists are made with (grown when a frame needs more)
+    /// **B17**：`targets` 是哪一代的目标（见 `TARGET_GENERATION`）。
+    target_generation: u64,
 }
 
 // pixels, light, toward, eye, lighting; the lights (`light.wgsl`), each its 16 floats from the view and its shadow map's
@@ -2476,20 +2491,31 @@ impl Player {
     }
 
     pub(crate) fn targets(&mut self, gpu: &Gpu, target: Option<&wgpu::TextureView>) -> &Targets {
-        // B17：Player 复用期间，"读回"与"外部目标"两种模式互斥；模式变了就重建这一份目标
-        // （同一模式内的逐帧复用保留纹理，正是 churn 的修复点）。
-        if self.targets.as_ref().is_some_and(|t| t.external != target.is_some()) {
-            self.targets = None;
-        }
-        let (width, height) = (self.width, self.height);
-        self.targets.get_or_insert_with(|| {
+        // B17：Player 复用期间，"读回"与"外部目标"两种模式互斥；外部目标换了一张纹理（重播时
+        // 新建离屏目标，代数变化）也必须重建（同一模式内的逐帧复用保留纹理，正是 churn 的修复点）。
+        let generation = TARGET_GENERATION.load(Ordering::Relaxed);
+        let rebuild = self.targets.is_none()
+            || self.target_generation != generation
+            || self.targets.as_ref().is_some_and(|t| t.external != target.is_some());
+        if rebuild {
+            // 与目标无关的附件（raster 的 MSAA、AO 只依赖尺寸与视图内容）留下来复用，
+            // 免得每次重播都重建一批纹理。**bloom 不能搬**：它的最后一组绑定在创建时就指向
+            // 当时的 `canvas.color`，搬过来会继续写进上一代的目标。
+            let carried = self.targets.take().map(|t| (t.frame.raster, t.frame.occluded));
+            self.target_generation = generation;
+            let (width, height) = (self.width, self.height);
             let padded = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-            Targets {
-                // B15（乙）：外部给了目标 ⇒ 合成直接写它（零 CPU 往返），不建内部画布。
-                frame: match target {
-                    Some(view) => Canvas::covered(view, width, height),
-                    None => Canvas::new(gpu, width, height),
-                },
+            // B15（乙）：外部给了目标 ⇒ 合成直接写它（零 CPU 往返），不建内部画布。
+            let mut frame = match target {
+                Some(view) => Canvas::covered(view, width, height),
+                None => Canvas::new(gpu, width, height),
+            };
+            if let Some((raster, occluded)) = carried {
+                frame.raster = raster;
+                frame.occluded = occluded;
+            }
+            self.targets = Some(Targets {
+                frame,
                 // read back natively (`render`); in the browser a frame goes to its canvas.
                 // B15（乙）：显示路径不读像素 ⇒ 不建（3D 列表的计数会在需要时补建）。
                 readback: target.is_none().then(|| counted_buffer(&gpu.device, &wgpu::BufferDescriptor {
@@ -2500,8 +2526,9 @@ impl Player {
                 })),
                 padded,
                 external: target.is_some(),
-            }
-        })
+            });
+        }
+        self.targets.as_ref().expect("the targets")
     }
 
     /// A camera's view as a texture: its canvas, (re)made at the size asked for, sampled under `key`.
@@ -3340,6 +3367,7 @@ impl Player {
             export: None,
             lists: None,
             list_capacity: 0,
+            target_generation: TARGET_GENERATION.load(Ordering::Relaxed),
         }
     }
 

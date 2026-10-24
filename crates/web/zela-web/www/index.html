@@ -126,14 +126,6 @@
       console.error(error);
     }
 
-    // 切换作品：改 `?zsb=` 并重载（Rust 入口统一从 URL 取路径）。
-    function reloadWith(zsb) {
-      const url = new URL(location.href);
-      url.search = '';
-      url.searchParams.set('zsb', zsb);
-      location.href = url.toString();
-    }
-
     async function loadDemos() {
       try {
         const response = await fetch('./demos.json', { cache: 'no-store' });
@@ -165,9 +157,24 @@
       select.disabled = demos.length === 0;
     }
 
-    select.addEventListener('change', () => {
-      // 播放中切换：直接重载到新作品（旧的 wasm 帧循环由导航终止，无需先 stop）。
-      reloadWith(select.value);
+    // 切换作品：只改 `?zsb=` 再重播，**不整页重载** —— Display（surface / device / adapter）
+    // 是页面级单例，重载等于把 WebGPU 整套重新初始化一遍。
+    select.addEventListener('change', async () => {
+      if (!wasmReady) return;
+      const url = new URL(location.href);
+      url.searchParams.set('zsb', select.value);
+      history.replaceState(null, '', url);
+      lastKind = 'demo';
+      setBusy(true);
+      status.textContent = '切换作品…';
+      try {
+        // Rust 入口从（已更新的）URL 取 zsb；旧帧循环按 GENERATION 在下一帧退出。
+        await start();
+      } catch (error) {
+        fail(error);
+      } finally {
+        setBusy(false);
+      }
     });
 
     fileInput.addEventListener('change', async () => {

@@ -55,6 +55,14 @@ pub use render::{ResourceTotals, resource_totals, take_resource_totals};
 pub use render::{OverflowTotals, msaa_samples, set_sample_override, take_overflow_totals};
 // B18：移动端条纹的逐项排查开关（页面 `?skip=`；默认 0 = 全开）。
 pub use render::{SKIP_AO, SKIP_BLOOM, SKIP_DEPTH, SKIP_ENVIRONMENT, SKIP_LIGHT, SKIP_SHADOW, SKIP_STENCIL, set_skip};
+
+/// **B17**：让复用的 player 丢掉上一次播放的离屏目标。
+///
+/// 重播会新建一张离屏目标；player 的 `Targets` 仍绑定着上一张已弃用的纹理时会继续画进去，
+/// 新目标永远为空（进度照走、画面全黑）。每次新播放开始时调用一次。
+pub fn forget_player_targets() {
+    render::forget_targets();
+}
 // B4 场景适配（V2-06）：`Shape2D` / `Style2D` → 填充 + 描边记录（只依赖 kernel 层）。
 pub mod scene;
 #[cfg(not(target_arch = "wasm32"))]
